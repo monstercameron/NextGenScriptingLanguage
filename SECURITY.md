@@ -16,28 +16,49 @@ reparse points are rejected. Unix cache opens use no-follow, nonblocking flags
 and check the opened file again, so a FIFO or device cannot become a cache
 stream. Cache directories and entries on Unix must belong to the effective
 user and their mode bits must not grant group/other writes. New Unix cache
-directories use mode 0700; new result files use mode 0600. Existing valid cache
-keys and raw result bytes remain compatible. Unsafe state fails closed rather than silently
-executing the cached applet again. Cache publication retains its private
-temporary file, file sync and atomic rename.
+directories use mode 0700; new result files use mode 0600. Cache key derivation
+and result payload encoding remain unchanged. Unsafe state fails closed rather
+than silently executing the cached applet again. Cache entries are authenticated with
+HMAC-SHA-256 under the per-user key at the what-if key location; the tag binds
+the cache key and exact result bytes. Missing, malformed or mismatched tags abort
+reuse, and consumers read the exact byte snapshot whose tag was verified. On
+Unix the validated cache directory is held open and cache entries, tags, locks, and
+publication are opened relative to that descriptor, so replacing a parent after
+it is pinned cannot redirect those operations. Cache publication retains a
+private temporary file, file sync and atomic rename. The HMAC detects rewritten
+entry bytes when the tag is unchanged; a process running as the same user can
+read the per-user key and can therefore forge a replacement tag. Existing
+entries without a valid tag, including entries written before authenticated
+cache support, are rejected and must be removed explicitly before recomputation.
 
 Existing symlinked cache paths must be replaced with their real directory path.
 An existing group/world-writable cache needs an owner-reviewed private location
 or permissions repair before reuse. Execute does not chmod rejected paths.
-Checkpoint state has separate no-follow/regular-file checks, private permissions,
-checksummed state and an exclusive writer lock.
+On Unix, checkpoint journals, logs, blobs and record files are opened or
+published relative to pinned directory descriptors after the configured leaf
+directory is validated. This prevents a parent replacement after pinning from
+redirecting those operations. Checkpoint state also has no-follow/regular-file
+checks, private permissions, checksummed state and an exclusive writer lock.
+Replay parses the program bytes captured from the pinned record descriptor and
+uses the canonical source identity captured while opening that directory; it
+does not re-resolve a replaced record pathname or gain access to called files.
 
 Security-sensitive policy, key, answers, and live-token files on Windows must
 be owned by the current user and have an explicit, non-inherited DACL with no
 allow entries for other principals. SYSTEM and local Administrators are trusted
 exceptions. An unreadable or unverifiable ACL fails closed and names the file.
 
-Cache/checkpoint parent directories must be trusted. These checks do not pin
-every ancestor against concurrent replacement, authenticate data against another
-process of the same user, provide cache integrity envelopes, or enforce Windows
-cache ownership/ACL policy. Unix extended ACLs are not inspected. Windows cache
-reparse checks are implemented; cache UID/mode checks have no Windows equivalent. Ordinary explicitly requested
-file reads, saves and executable aliases retain their normal path semantics.
+On Unix the canonical target path is walked from the filesystem root with
+no-follow directory opens, and each opened ancestor anchors the next lookup.
+Missing cache, checkpoint, and record directory components are created with
+`mkdirat` relative to a pinned existing ancestor; they are not recursively
+created by pathname and accepted from a later first stat.
+Same-user processes that can read the per-user key can forge cache tags, and
+checksummed checkpoint/record state is not authenticated against such processes.
+Windows continues to use path-based state operations. Unix extended ACLs are not
+inspected. Windows cache reparse checks are implemented; cache UID/mode checks
+have no Windows equivalent. Ordinary explicitly requested file reads, saves and
+executable aliases retain their normal path semantics.
 
 ## Live control and model applets
 
@@ -250,12 +271,16 @@ capability policy does not supply those data-flow grants.
 The cache security regressions cover ordinary cache reuse, exact binary bytes,
 output limits, symlinked files/directories including trailing separators,
 FIFOs, sockets and Unix write permissions. Real CLI tests require no output,
-no later save and no native launch when an invalid cache is encountered.
+no later save and no native launch when an invalid cache is encountered. Unit
+regressions also cover same-user cache-byte tampering, malformed integrity tags,
+and a parent replacement after the Unix cache directory descriptor is pinned.
 [The security evidence](benchmarks/security-2026-10-14-cache.json) retains
 baseline reproductions and the fixed results using owned synthetic fixtures.
 
-Complete ancestor-race protection, cache authentication, filesystem-operation
-deadlines and broad platform fault injection remain open. Capability policy and
+Same-user isolation of the persisted cache key, filesystem-operation deadlines
+and broad platform fault injection remain open. Windows state operations remain
+path-based.
+Capability policy and
 OS sandboxing are source-candidate features; tests do not establish resistance
 to every same-user attack or certify every platform/package combination.
 Supported native child deadlines do not bound arbitrary filesystem operations.

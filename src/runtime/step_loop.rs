@@ -194,7 +194,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         || (journal.is_some() && !resume::checkpoint_jobs_supported(program)))
         && (has_job_operations(program) || module_session.has_background_job_operations())
     {
-        bail!("finite-scope background job handles are unsupported in this execution lifetime, including imported program modules");
+        bail!(
+            "finite-scope background job handles are unsupported in this execution lifetime, including imported program modules"
+        );
     }
     let mut job_supervisor = jobs::Supervisor::new(signals, options.max_output_bytes)?;
     let last_job_uses = job_last_uses(&program.steps);
@@ -1714,10 +1716,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             };
                             let mut hit = if let Some(cache_key) = key.as_deref() {
                                 match cache::open(&directory, cache_key)? {
-                                    Some(file) => {
-                                        read_cached_output(manifest, file, options.max_output_bytes)
-                                            .ok()
-                                    }
+                                    Some(file) => Some(read_cached_output(
+                                        manifest,
+                                        file,
+                                        options.max_output_bytes,
+                                    )?),
                                     None => None,
                                 }
                             } else {

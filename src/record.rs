@@ -26,9 +26,15 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+#[cfg(any(not(unix), test))]
+use std::fs;
+use std::fs::File;
+#[cfg(not(unix))]
+use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -49,6 +55,8 @@ pub const STDERR_TAIL_BYTES: usize = 2048;
 /// Maximum trace size. Further steps are counted but not written after this bound.
 pub const MAX_TRACE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RUN_BYTES: usize = 1024 * 1024;
+#[cfg(unix)]
+static RECORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -78,7 +86,12 @@ pub struct RecordStart<'a> {
 
 /// Writes one finite run's record. Install it with `runtime::observe::install`.
 pub struct Recorder {
+    #[cfg(not(unix))]
     directory: PathBuf,
+    #[cfg(unix)]
+    directory_handle: File,
+    #[cfg(unix)]
+    blobs_handle: File,
     redactor: Arc<SecretRedactor>,
     /// Consulted for the data-flow persistence policy before any output is kept.
     registry: Registry,
@@ -146,9 +159,21 @@ impl Recorder {
         if start.program_source.len() > MAX_PROGRAM_BYTES {
             bail!("program is larger than the {MAX_PROGRAM_BYTES}-byte record limit");
         }
-        create_private_directory(start.directory)?;
+        #[cfg(unix)]
+        let directory_handle = create_private_directory(start.directory)?;
+        #[cfg(not(unix))]
+        let _ = create_private_directory(start.directory)?;
+        #[cfg(unix)]
+        write_private_at(&directory_handle, PROGRAM_FILE, start.program_source)?;
+        #[cfg(not(unix))]
         write_private(&start.directory.join(PROGRAM_FILE), start.program_source)?;
+        #[cfg(unix)]
+        let trace = BufWriter::new(create_private_at(&directory_handle, TRACE_FILE)?);
+        #[cfg(not(unix))]
         let trace = BufWriter::new(create_private(&start.directory.join(TRACE_FILE))?);
+        #[cfg(unix)]
+        let blobs_handle = create_private_subdirectory(&directory_handle, BLOB_DIR)?;
+        #[cfg(not(unix))]
         create_private_directory(&start.directory.join(BLOB_DIR))?;
         // Declared secret values are registered before any step runs, so they are
         // redacted from the first byte written.
@@ -158,7 +183,12 @@ impl Recorder {
         let redactor = security::secret_redactor(start.registry);
         let (plan_text, plan_sha256) = prepare_plan(&redactor, start.plan);
         let recorder = Self {
+            #[cfg(not(unix))]
             directory: start.directory.to_path_buf(),
+            #[cfg(unix)]
+            directory_handle,
+            #[cfg(unix)]
+            blobs_handle,
             registry: start.registry.clone(),
             started: Instant::now(),
             started_unix_ms: unix_ms(),
@@ -245,7 +275,7 @@ impl Recorder {
             "finished": finished,
             "program": {
                 "file": PROGRAM_FILE,
-                "sha256": sha256_hex(&fs::read(self.directory.join(PROGRAM_FILE))?),
+                "sha256": sha256_hex(&self.read_program()?),
             },
             "plan": {
                 "sha256": self.plan_sha256,
@@ -278,7 +308,23 @@ impl Recorder {
             },
         });
         let text = serde_json::to_string_pretty(&document)?;
-        atomic_write_private(&self.directory.join(RUN_FILE), text.as_bytes())
+        #[cfg(unix)]
+        atomic_write_private_at(&self.directory_handle, RUN_FILE, text.as_bytes())?;
+        #[cfg(not(unix))]
+        atomic_write_private(&self.directory.join(RUN_FILE), text.as_bytes())?;
+        Ok(())
+    }
+
+    fn read_program(&self) -> Result<Vec<u8>> {
+        #[cfg(unix)]
+        {
+            read_regular_no_follow_at(&self.directory_handle, PROGRAM_FILE)
+                .context("reading recorded program")
+        }
+        #[cfg(not(unix))]
+        {
+            fs::read(self.directory.join(PROGRAM_FILE)).context("reading recorded program")
+        }
     }
 
     /// Store bytes as a content-addressed blob and describe them. `bytes` must
@@ -306,9 +352,11 @@ impl Recorder {
                 "truncated": true,
             }));
         }
-        let path = self.directory.join(BLOB_DIR).join(&hash);
         if state.blobs_written.insert(hash.clone()) {
-            write_private(&path, bytes)?;
+            #[cfg(unix)]
+            write_private_at(&self.blobs_handle, &hash, bytes)?;
+            #[cfg(not(unix))]
+            write_private(&self.directory.join(BLOB_DIR).join(&hash), bytes)?;
             state.blob_bytes += bytes.len();
         }
         Ok(json!({
@@ -485,24 +533,55 @@ pub struct StoredStep {
 /// A record directory opened for reading.
 pub struct StoredRecord {
     pub directory: PathBuf,
+    program_directory: PathBuf,
+    #[cfg(unix)]
+    _directory_handle: File,
+    #[cfg(unix)]
+    blobs_handle: Option<File>,
     pub run: Json,
     pub steps: Vec<StoredStep>,
 }
 
 impl StoredRecord {
     pub fn open(directory: &Path) -> Result<Self> {
-        let mut run: Json = serde_json::from_slice(
-            &read_regular_no_follow(&directory.join(RUN_FILE))
-                .with_context(|| format!("{} is not a run record", directory.display()))?,
-        )
-        .context("run.json is not valid JSON")?;
+        #[cfg(unix)]
+        let (directory_handle, program_directory) =
+            crate::runtime::checkpoint::open_pinned_directory_with_path(directory)?;
+        #[cfg(not(unix))]
+        let program_directory = fs::canonicalize(directory)
+            .with_context(|| format!("resolving record directory {}", directory.display()))?;
+        #[cfg(unix)]
+        let blobs_handle = match open_private_subdirectory(&directory_handle, BLOB_DIR) {
+            Ok(handle) => Some(handle),
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                }) =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        #[cfg(unix)]
+        let run_bytes = read_regular_no_follow_at(&directory_handle, RUN_FILE)
+            .with_context(|| format!("{} is not a run record", directory.display()))?;
+        #[cfg(not(unix))]
+        let run_bytes = read_regular_no_follow(&directory.join(RUN_FILE))
+            .with_context(|| format!("{} is not a run record", directory.display()))?;
+        let mut run: Json =
+            serde_json::from_slice(&run_bytes).context("run.json is not valid JSON")?;
         if run["protocol"] != PROTOCOL {
             bail!("unsupported record protocol {}", run["protocol"]);
         }
-        let trace = String::from_utf8(
-            read_regular_no_follow(&directory.join(TRACE_FILE)).context("reading trace.jsonl")?,
-        )
-        .context("reading trace.jsonl")?;
+        #[cfg(unix)]
+        let trace_bytes = read_regular_no_follow_at(&directory_handle, TRACE_FILE)
+            .context("reading trace.jsonl")?;
+        #[cfg(not(unix))]
+        let trace_bytes =
+            read_regular_no_follow(&directory.join(TRACE_FILE)).context("reading trace.jsonl")?;
+        let trace = String::from_utf8(trace_bytes).context("reading trace.jsonl")?;
         let trace_line_count = trace.lines().count();
         let has_torn_final_line = run["finished"] == false && !trace.ends_with('\n');
         let mut steps = Vec::new();
@@ -511,7 +590,7 @@ impl StoredRecord {
                 Ok(value) => value,
                 Err(_) if number + 1 == trace_line_count && has_torn_final_line => break,
                 Err(error) => {
-                    return Err(error).with_context(|| format!("trace.jsonl line {}", number + 1))
+                    return Err(error).with_context(|| format!("trace.jsonl line {}", number + 1));
                 }
             };
             if value["event"] != "step" {
@@ -539,9 +618,35 @@ impl StoredRecord {
         }
         Ok(Self {
             directory: directory.to_path_buf(),
+            program_directory,
+            #[cfg(unix)]
+            _directory_handle: directory_handle,
+            #[cfg(unix)]
+            blobs_handle,
             run,
             steps,
         })
+    }
+
+    /// Return the canonical source identity captured when this record directory
+    /// was opened. The path is for parsing and location defaults; source bytes are
+    /// always read through the retained directory handle on Unix.
+    pub fn program_path(&self) -> PathBuf {
+        self.program_directory.join(PROGRAM_FILE)
+    }
+
+    /// Read the stored program from the directory handle retained by this record.
+    pub fn program_source(&self) -> Result<Vec<u8>> {
+        #[cfg(unix)]
+        {
+            read_regular_no_follow_at(&self._directory_handle, PROGRAM_FILE)
+                .context("reading recorded program")
+        }
+        #[cfg(not(unix))]
+        {
+            read_regular_no_follow(&self.directory.join(PROGRAM_FILE))
+                .context("reading recorded program")
+        }
     }
 
     /// Read a stored blob and check its hash. A missing or truncated blob is an error.
@@ -560,6 +665,17 @@ impl StoredRecord {
         if !valid_blob_name(name) {
             bail!("recorded blob name {name:?} is not a blob of this record");
         }
+        #[cfg(unix)]
+        let blob_name = name.strip_prefix("blobs/").expect("validated blob name");
+        #[cfg(unix)]
+        let blobs_handle = self
+            .blobs_handle
+            .as_ref()
+            .context("record blob directory is missing")?;
+        #[cfg(unix)]
+        let bytes = read_regular_no_follow_at(blobs_handle, blob_name)
+            .with_context(|| format!("reading recorded blob {name}"))?;
+        #[cfg(not(unix))]
         let bytes = read_regular_no_follow(&self.directory.join(name))
             .with_context(|| format!("reading recorded blob {name}"))?;
         if sha256_hex(&bytes) != expected {
@@ -584,6 +700,7 @@ fn valid_blob_name(name: &str) -> bool {
 /// Read a record file without following a link in its final component, and require a
 /// regular file. A record is read from its own directory, so a link planted there must
 /// not redirect the read elsewhere.
+#[cfg(any(not(unix), test))]
 fn read_regular_no_follow(path: &Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let mut options = fs::OpenOptions::new();
@@ -628,6 +745,123 @@ fn read_regular_no_follow(path: &Path) -> std::io::Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
+}
+
+#[cfg(unix)]
+fn create_private_at(directory: &File, name: &str) -> Result<File> {
+    crate::runtime::checkpoint::open_child_at(
+        directory,
+        std::ffi::OsStr::new(name),
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+    )
+    .with_context(|| format!("creating record file {name}"))
+}
+
+#[cfg(unix)]
+fn write_private_at(directory: &File, name: &str, bytes: &[u8]) -> Result<()> {
+    let mut file = create_private_at(directory, name)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_subdirectory(directory: &File, name: &str) -> Result<File> {
+    let name_c = std::ffi::CString::new(name.as_bytes())?;
+    // SAFETY: directory is a live descriptor and name is a fixed single component.
+    if unsafe {
+        libc::mkdirat(
+            std::os::fd::AsRawFd::as_raw_fd(directory),
+            name_c.as_ptr(),
+            0o700,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error()).context("creating record blob directory");
+    }
+    open_private_subdirectory(directory, name)
+}
+
+#[cfg(unix)]
+fn open_private_subdirectory(directory: &File, name: &str) -> Result<File> {
+    crate::runtime::checkpoint::open_child_at(
+        directory,
+        std::ffi::OsStr::new(name),
+        libc::O_RDONLY | libc::O_DIRECTORY,
+        0,
+    )
+    .with_context(|| format!("opening record subdirectory {name}"))
+}
+
+#[cfg(unix)]
+fn read_regular_no_follow_at(directory: &File, name: &str) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = crate::runtime::checkpoint::open_child_at(
+        directory,
+        std::ffi::OsStr::new(name),
+        libc::O_RDONLY | libc::O_NONBLOCK,
+        0,
+    )?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(format!(
+            "{name} is not a regular record file"
+        )));
+    }
+    let limit = match name {
+        RUN_FILE => MAX_RUN_BYTES,
+        TRACE_FILE => MAX_TRACE_BYTES,
+        PROGRAM_FILE => MAX_PROGRAM_BYTES,
+        _ => MAX_BLOB_BYTES,
+    };
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{name} exceeds the {limit}-byte record file limit"),
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn atomic_write_private_at(directory: &File, name: &str, bytes: &[u8]) -> Result<()> {
+    if bytes.len() > MAX_RUN_BYTES {
+        bail!("run.json exceeds the {MAX_RUN_BYTES}-byte record file limit");
+    }
+    for _ in 0..100 {
+        let sequence = RECORD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temporary = format!(".{name}-{}-{sequence}.tmp", std::process::id());
+        let mut file = match create_private_at(directory, &temporary) {
+            Ok(file) => file,
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists)
+                }) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            crate::runtime::checkpoint::unlink_at(directory, std::ffi::OsStr::new(&temporary));
+            return Err(error).context("writing record temporary file");
+        }
+        drop(file);
+        crate::runtime::checkpoint::rename_at(
+            directory,
+            std::ffi::OsStr::new(&temporary),
+            std::ffi::OsStr::new(name),
+        )
+        .context("publishing record file")?;
+        directory.sync_all()?;
+        return Ok(());
+    }
+    bail!("could not allocate a private record temporary file")
 }
 
 fn strings(value: &Json) -> Vec<String> {
@@ -825,36 +1059,57 @@ fn unix_ms() -> u128 {
 }
 
 /// Create a directory that only the owner can read, or confirm an empty one.
-fn create_private_directory(path: &Path) -> Result<()> {
-    if path.exists() {
-        if !path.is_dir() {
-            bail!("{} exists and is not a directory", path.display());
-        }
-        if fs::read_dir(path)?.next().is_some() {
-            bail!(
-                "record directory {} is not empty; choose a new directory",
-                path.display()
-            );
-        }
-        return Ok(());
+#[cfg(unix)]
+fn create_private_directory(path: &Path) -> Result<File> {
+    let (directory, _created) =
+        crate::runtime::checkpoint::open_or_create_directory_tree(path, true, 0o700)?
+            .context("creating record directory")?;
+    if !crate::runtime::checkpoint::pinned_directory_names(&directory)?.is_empty() {
+        bail!(
+            "record directory {} is not empty; choose a new directory",
+            path.display()
+        );
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(path)
-            .with_context(|| format!("creating record directory {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir_all(path)
-            .with_context(|| format!("creating record directory {}", path.display()))?;
-    }
-    Ok(())
+    Ok(directory)
 }
 
+#[cfg(not(unix))]
+fn create_private_directory(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                bail!("{} exists and is not a real directory", path.display());
+            }
+            if fs::read_dir(path)?.next().is_some() {
+                bail!(
+                    "record directory {} is not empty; choose a new directory",
+                    path.display()
+                );
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(path)
+                    .with_context(|| format!("creating record directory {}", path.display()))?;
+            }
+            #[cfg(not(unix))]
+            fs::create_dir_all(path)
+                .with_context(|| format!("creating record directory {}", path.display()))?;
+            Ok(())
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("checking record directory {}", path.display()))
+        }
+    }
+}
+
+#[cfg(not(unix))]
 fn create_private(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -868,6 +1123,7 @@ fn create_private(path: &Path) -> Result<File> {
         .with_context(|| format!("creating {}", path.display()))
 }
 
+#[cfg(not(unix))]
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = create_private(path)?;
     file.write_all(bytes)?;
@@ -875,6 +1131,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(unix))]
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     if bytes.len() > MAX_RUN_BYTES {
         bail!("run.json exceeds the {MAX_RUN_BYTES}-byte record file limit");
@@ -891,6 +1148,49 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn record_start_validation_identity_rejects_parent_swap_before_pin() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let directory = parent.join("record");
+        fs::create_dir_all(&directory).unwrap();
+        let expected = create_private_directory(&directory)
+            .unwrap()
+            .metadata()
+            .unwrap();
+        let displaced = temp.path().join("displaced-parent");
+        fs::rename(&parent, &displaced).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+
+        assert!(
+            crate::runtime::checkpoint::open_pinned_directory_expected(&directory, &expected,)
+                .is_err()
+        );
+        assert!(displaced.join("record").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn record_file_publication_stays_in_pinned_directory_after_parent_swap() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let directory = parent.join("record");
+        fs::create_dir_all(&directory).unwrap();
+        let pinned = crate::runtime::checkpoint::open_pinned_directory(&directory).unwrap();
+        let displaced = temp.path().join("displaced-parent");
+        fs::rename(&parent, &displaced).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+
+        atomic_write_private_at(&pinned, RUN_FILE, b"pinned record").unwrap();
+
+        assert_eq!(
+            fs::read(displaced.join("record").join(RUN_FILE)).unwrap(),
+            b"pinned record"
+        );
+        assert!(!directory.join(RUN_FILE).exists());
+    }
 
     #[test]
     fn long_plans_are_cut_on_a_character_boundary() {

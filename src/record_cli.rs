@@ -123,13 +123,18 @@ pub fn replay(arguments: &[String]) -> Result<()> {
     }
     let directory = directory.context("usage: execute replay RECORD [--until LINE]")?;
     let record = StoredRecord::open(&directory)?;
-    let source_path = program_path.unwrap_or_else(|| replay::stored_program_path(&directory));
-    let source = fs::read(&source_path)
-        .with_context(|| format!("reading program {}", source_path.display()))?;
+    let source_path = if let Some(path) = program_path.as_ref() {
+        fs::canonicalize(path).with_context(|| format!("resolving program {}", path.display()))?
+    } else {
+        record.program_path()
+    };
+    let source = if let Some(path) = program_path {
+        fs::read(&path).with_context(|| format!("reading program {}", path.display()))?
+    } else {
+        record.program_source()?
+    };
     let edited = !replay::program_matches_record(&record, &source);
-    let text = std::str::from_utf8(&source).context("the program is not UTF-8")?;
-    let program = flow::program_files::parse_source(&source_path, text, None)
-        .with_context(|| format!("parsing {}", source_path.display()))?;
+    let program = parse_replay_program(&source_path, &source)?;
     if let Some(reason) = replay::unsupported_reason(&program) {
         bail!("replay does not support {reason}");
     }
@@ -241,6 +246,22 @@ pub fn replay(arguments: &[String]) -> Result<()> {
     }
 }
 
+/// Parse captured source bytes using the stable path identity resolved before
+/// the record directory was pinned. Replay has no file-read access, so the
+/// parser must not canonicalize this path after the parent can be replaced.
+fn parse_replay_program(source_path: &Path, source: &[u8]) -> Result<Program> {
+    let source_path = if source_path.is_absolute() {
+        source_path.to_path_buf()
+    } else {
+        env::current_dir()
+            .context("could not determine current directory")?
+            .join(source_path)
+    };
+    let text = std::str::from_utf8(source).context("the program is not UTF-8")?;
+    flow::program_files::parse_source_resolved(&source_path, text, None)
+        .with_context(|| format!("parsing {}", source_path.display()))
+}
+
 /// Write the record as a test for `execute test`: the program, its recorded inputs,
 /// and the recorded exit status and stdout. Existing files are not overwritten.
 fn write_test_fixture(target: &Path, source: &[u8], record: &StoredRecord) -> Result<()> {
@@ -285,4 +306,65 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
         .with_context(|| format!("creating {} (it must not exist)", path.display()))?;
     file.write_all(bytes)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod replay_source_tests {
+    #[cfg(unix)]
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
+    #[cfg(unix)]
+    #[test]
+    fn replay_keeps_canonical_source_identity_after_record_parent_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        let directory = target.join("record");
+        fs::create_dir_all(&directory).unwrap();
+        let original_source = b"accept where as text from program path\naccept folder as text from program directory\n";
+        fs::write(directory.join(record::PROGRAM_FILE), original_source).unwrap();
+        fs::write(
+            directory.join(record::RUN_FILE),
+            br#"{"protocol":"execute.record/1","finished":false,"steps":0}"#,
+        )
+        .unwrap();
+        fs::write(directory.join(record::TRACE_FILE), b"").unwrap();
+        let alias = temp.path().join("alias");
+        symlink(&target, &alias).unwrap();
+        let stored = StoredRecord::open(&alias.join("record")).unwrap();
+        let expected_source_path = fs::canonicalize(&directory)
+            .unwrap()
+            .join(record::PROGRAM_FILE);
+        let source_path = stored.program_path();
+        assert_eq!(source_path, expected_source_path);
+
+        let displaced = temp.path().join("displaced-target");
+        fs::rename(&target, &displaced).unwrap();
+        fs::create_dir(&target).unwrap();
+        let replacement = temp.path().join("replacement");
+        fs::create_dir(&replacement).unwrap();
+        fs::remove_file(&alias).unwrap();
+        symlink(&replacement, &alias).unwrap();
+
+        let source = stored.program_source().unwrap();
+        assert_eq!(source, original_source);
+        let program = parse_replay_program(&source_path, &source).unwrap();
+        assert_eq!(
+            program.inputs[0].default,
+            Some(Value::String(source_path.to_string_lossy().into_owned()))
+        );
+        assert_eq!(
+            program.inputs[1].default,
+            Some(Value::String(
+                source_path.parent().unwrap().to_string_lossy().into_owned()
+            ))
+        );
+        let error = parse_replay_program(&source_path, b"run program file \"callee.program\"\n")
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("needs the program's capability policy"),
+            "{error:#}"
+        );
+    }
 }

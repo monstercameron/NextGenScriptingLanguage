@@ -192,6 +192,20 @@ fn ordinary_existing_cache_is_reused_without_launching_or_changing_key_bytes() {
 }
 
 #[test]
+fn rewritten_cache_bytes_fail_closed_without_native_launch_or_later_save() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.entry, b"rewritten cached output").unwrap();
+    fixture.rejects(None, "integrity verification failed");
+}
+
+#[test]
+fn missing_cache_tag_fails_closed_without_native_launch_or_later_save() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.entry.with_extension("hmac")).unwrap();
+    fixture.rejects(None, "no integrity tag");
+}
+
+#[test]
 fn cache_symlink_never_exposes_target_or_runs_later_save() {
     let fixture = Fixture::new();
     let canary = fixture.root().join("private-canary");

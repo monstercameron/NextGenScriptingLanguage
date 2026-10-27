@@ -55,6 +55,10 @@ pub(super) fn journal() -> (tempfile::TempDir, CheckpointOptions, Journal) {
     fs::create_dir(&options.directory).unwrap();
     let blobs_directory = options.directory.join("blobs");
     fs::create_dir(&blobs_directory).unwrap();
+    #[cfg(unix)]
+    let directory_handle = super::open_pinned_directory(&options.directory).unwrap();
+    #[cfg(unix)]
+    let blobs_handle = super::open_pinned_directory(&blobs_directory).unwrap();
     let lock = File::create(options.directory.join("lock")).unwrap();
     #[cfg(windows)]
     crate::platform::windows::lock(&lock).unwrap();
@@ -68,7 +72,11 @@ pub(super) fn journal() -> (tempfile::TempDir, CheckpointOptions, Journal) {
     // Exercise persistence independently of directory ACL changes, which the sandbox denies.
     let mut journal = Journal {
         directory: options.directory.clone(),
+        #[cfg(unix)]
+        directory_handle,
         blobs_directory,
+        #[cfg(unix)]
+        blobs_handle,
         max_output_bytes: 1024 * 1024,
         retry_uncertain: false,
         resuming: false,
@@ -157,7 +165,10 @@ fn journal_memory_microbenchmark() {
                     }
                 }
             });
-            eprintln!("journal bindings={bindings} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes", started.elapsed());
+            eprintln!(
+                "journal bindings={bindings} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes",
+                started.elapsed()
+            );
         }
     }
 }
@@ -223,11 +234,13 @@ fn envelope_limit_failure_preserves_durable_journal() {
         fs::read(options.directory.join("journal.json")).unwrap(),
         before
     );
-    assert!(!fs::read_dir(options.directory).unwrap().any(|entry| entry
-        .unwrap()
-        .file_name()
-        .to_string_lossy()
-        .ends_with(".tmp")));
+    assert!(!fs::read_dir(options.directory).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
 }
 
 #[test]

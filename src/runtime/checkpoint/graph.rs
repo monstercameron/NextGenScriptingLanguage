@@ -7,19 +7,25 @@
 //! line past the committed prefix is ignored on open, and the next append truncates it.
 
 use super::{
-    hex_digest, lock_directory, open_regular, real_directory, restrict_directory, restrict_file,
-    serialized_digest, sync_directory, write_envelope, JournalEnvelope, JOURNAL_VERSION,
+    hex_digest, lock_directory, open_regular, restrict_file, serialized_digest, write_envelope,
+    JournalEnvelope, JOURNAL_VERSION,
 };
+#[cfg(not(unix))]
+use super::{real_directory, sync_directory};
 use crate::graph::{CompletedNode, GraphCheckpointState, GraphCheckpointStore, InterruptedNode};
 use crate::security::SensitivitySet;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The `kind` every graph journal body carries. Program readers refuse it.
+#[cfg(not(unix))]
+use super::restrict_directory;
 use super::{is_graph_body, GRAPH_KIND};
 const GRAPH_LOG: &str = "graph.jsonl";
 const GRAPH_CHAIN_START: &str = "execute-graph-completed-log/v5";
@@ -55,6 +61,8 @@ struct GraphState {
 /// An open graph journal. It holds the directory lock for its whole life.
 pub(crate) struct GraphJournal {
     directory: PathBuf,
+    #[cfg(unix)]
+    directory_handle: File,
     authorize: PersistenceAuthorizer,
     state: Mutex<GraphState>,
     _lock: File,
@@ -70,33 +78,76 @@ pub(crate) fn open_graph_journal(
     authorize: PersistenceAuthorizer,
 ) -> Result<GraphJournal> {
     let requested: PathBuf = directory.components().collect();
+    #[cfg(unix)]
+    let (directory_handle, existed) = {
+        let Some((handle, created)) =
+            super::open_or_create_directory_tree(&requested, !resume, 0o700)?
+        else {
+            bail!("checkpoint directory does not exist for resume");
+        };
+        (handle, !created)
+    };
+    #[cfg(windows)]
     let existed = fs::symlink_metadata(&requested).is_ok();
-    real_directory(&requested, "checkpoint", !resume)?;
+    #[cfg(windows)]
+    let original = real_directory(&requested, "checkpoint", !resume)?;
     if !resume && existed {
         super::refuse_nonempty_fresh_directory(&requested)?;
     }
     let directory = fs::canonicalize(&requested)
         .with_context(|| format!("resolving checkpoint directory {}", requested.display()))?;
+    #[cfg(unix)]
+    {
+        let resolved = fs::metadata(&directory)?;
+        let pinned = directory_handle.metadata()?;
+        if !resolved.is_dir() || resolved.dev() != pinned.dev() || resolved.ino() != pinned.ino() {
+            bail!("checkpoint directory changed while resolving its path");
+        }
+    }
+    #[cfg(windows)]
+    let resolved = real_directory(&directory, "checkpoint", false)?;
+    #[cfg(windows)]
+    let _ = (original, resolved);
     // Same rule as program checkpoints: a created or empty fresh directory is made
     // private; a resumed one keeps its permissions; a non-empty one was refused.
     if !resume || !existed {
+        #[cfg(unix)]
+        directory_handle.set_permissions(fs::Permissions::from_mode(0o700))?;
+        #[cfg(not(unix))]
         restrict_directory(&directory)?;
     }
+    #[cfg(not(unix))]
     if !resume && !existed {
         if let Some(parent) = directory.parent() {
             sync_directory(parent)?;
         }
     }
-    let lock = lock_directory(&directory)?;
+    let lock = lock_directory(
+        &directory,
+        #[cfg(unix)]
+        &directory_handle,
+    )?;
     let journal_path = directory.join("journal.json");
     if resume {
+        #[cfg(unix)]
+        let disk = read_disk_at(&directory_handle, &journal_path)?;
+        #[cfg(not(unix))]
         let disk = read_disk(&journal_path)?;
         if disk.identity != identity {
             bail!("graph checkpoint belongs to a different graph, directory, or inputs");
         }
+        #[cfg(unix)]
+        let (completed, log) = read_log_at(
+            &directory_handle,
+            disk.completed_count,
+            &disk.completed_chain,
+        )?;
+        #[cfg(not(unix))]
         let (completed, log) = read_log(&directory, disk.completed_count, &disk.completed_chain)?;
         return Ok(GraphJournal {
             directory,
+            #[cfg(unix)]
+            directory_handle,
             authorize,
             state: Mutex::new(GraphState {
                 identity: identity.to_owned(),
@@ -108,11 +159,18 @@ pub(crate) fn open_graph_journal(
             _lock: lock,
         });
     }
+    #[cfg(unix)]
+    if super::checkpoint_child_exists(&directory_handle, "journal.json")? {
+        bail!("checkpoint already exists; use resume explicitly");
+    }
+    #[cfg(not(unix))]
     if fs::symlink_metadata(&journal_path).is_ok() {
         bail!("checkpoint already exists; use resume explicitly");
     }
     let journal = GraphJournal {
         directory,
+        #[cfg(unix)]
+        directory_handle,
         authorize,
         state: Mutex::new(GraphState {
             identity: identity.to_owned(),
@@ -127,6 +185,8 @@ pub(crate) fn open_graph_journal(
         let state = journal.locked();
         write_disk(
             &journal.directory,
+            #[cfg(unix)]
+            &journal.directory_handle,
             &journal.disk(&state, state.in_flight.clone()),
         )?;
     }
@@ -188,7 +248,12 @@ impl GraphCheckpointStore for GraphJournal {
         });
         // Durable before the node's first effect, so an interruption after this point
         // leaves the node in flight.
-        write_disk(&self.directory, &self.disk(&state, in_flight.clone()))?;
+        write_disk(
+            &self.directory,
+            #[cfg(unix)]
+            &self.directory_handle,
+            &self.disk(&state, in_flight.clone()),
+        )?;
         state.in_flight = in_flight;
         Ok(())
     }
@@ -213,7 +278,13 @@ impl GraphCheckpointStore for GraphJournal {
         let bytes = state.bytes + line.len() as u64 + 1;
         // The line is durable before the journal names it, and a crash in between leaves
         // the node in flight, so it is rerun.
-        append_line(&self.directory, state.bytes, &line)?;
+        append_line(
+            &self.directory,
+            #[cfg(unix)]
+            &self.directory_handle,
+            state.bytes,
+            &line,
+        )?;
         let in_flight: Vec<InterruptedNode> = state
             .in_flight
             .iter()
@@ -228,7 +299,12 @@ impl GraphCheckpointStore for GraphJournal {
             completed_chain: chain.clone(),
             in_flight: in_flight.clone(),
         };
-        write_disk(&self.directory, &disk)?;
+        write_disk(
+            &self.directory,
+            #[cfg(unix)]
+            &self.directory_handle,
+            &disk,
+        )?;
         state.completed.push(record);
         state.chain = chain;
         state.bytes = bytes;
@@ -244,6 +320,7 @@ pub(crate) fn fuzz_read_disk(path: &Path) -> Result<()> {
     read_disk(path).map(|_| ())
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
     let file = super::open_journal_for_read(path).context("graph checkpoint journal is missing")?;
     restrict_file(&file)?;
@@ -270,8 +347,54 @@ fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
     Ok(disk)
 }
 
+#[cfg(unix)]
+fn read_disk_at(directory: &File, path: &Path) -> Result<GraphJournalDisk> {
+    let name = path
+        .file_name()
+        .context("graph checkpoint journal has no file name")?;
+    let file = super::open_journal_for_read_at(directory, name)
+        .context("graph checkpoint journal is missing")?;
+    read_disk_file(file)
+}
+
+#[cfg(unix)]
+fn read_disk_file(file: File) -> Result<GraphJournalDisk> {
+    restrict_file(&file)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_JOURNAL_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_JOURNAL_BYTES {
+        bail!("checkpoint journal is too large");
+    }
+    let envelope: JournalEnvelope =
+        serde_json::from_slice(&bytes).context("checkpoint journal is malformed or corrupt")?;
+    let body = envelope.data.get();
+    if !is_graph_body(body) {
+        bail!("this checkpoint holds a program run, not a graph run");
+    }
+    let disk: GraphJournalDisk =
+        serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
+    if disk.version != JOURNAL_VERSION {
+        bail!("unsupported graph checkpoint version {}", disk.version);
+    }
+    if serialized_digest(&disk)? != envelope.checksum {
+        bail!("checkpoint journal checksum mismatch");
+    }
+    Ok(disk)
+}
+
 /// Write the journal atomically, with a checksum over its body.
-fn write_disk(directory: &Path, disk: &GraphJournalDisk) -> Result<()> {
+fn write_disk(directory: &Path, #[cfg(unix)] pinned: &File, disk: &GraphJournalDisk) -> Result<()> {
+    #[cfg(unix)]
+    return write_envelope(
+        directory,
+        pinned,
+        disk,
+        "graph checkpoint journal",
+        "checkpoint.graph.journal.write",
+        None,
+    );
+    #[cfg(not(unix))]
     write_envelope(
         directory,
         disk,
@@ -297,6 +420,7 @@ fn chain_step(previous: &str, line: &[u8]) -> String {
 
 /// Read the committed prefix of `graph.jsonl`. Lines past `count` are uncommitted and
 /// ignored. The prefix must match the journal's chain exactly.
+#[cfg_attr(unix, allow(dead_code))]
 fn read_log(
     directory: &Path,
     count: usize,
@@ -316,6 +440,14 @@ fn read_log(
     }
     let file = open_regular(&directory.join(GRAPH_LOG), "graph completed log", false)
         .context("graph completed log is missing")?;
+    read_log_file(file, count, expected_chain)
+}
+
+fn read_log_file(
+    file: File,
+    count: usize,
+    expected_chain: &str,
+) -> Result<(Vec<CompletedNode>, GraphLog)> {
     let mut reader = io::BufReader::new(file);
     let mut nodes = Vec::with_capacity(count.min(4096));
     let mut chain = chain_start();
@@ -345,10 +477,43 @@ fn read_log(
     Ok((nodes, GraphLog { chain, bytes }))
 }
 
+#[cfg(unix)]
+fn read_log_at(
+    directory: &File,
+    count: usize,
+    expected_chain: &str,
+) -> Result<(Vec<CompletedNode>, GraphLog)> {
+    if count == 0 {
+        if expected_chain != chain_start() {
+            bail!("graph completed log checksum mismatch");
+        }
+        return Ok((
+            Vec::new(),
+            GraphLog {
+                chain: chain_start(),
+                bytes: 0,
+            },
+        ));
+    }
+    let file = super::open_regular_at(directory, GRAPH_LOG, "graph completed log", false)
+        .context("graph completed log is missing")?;
+    read_log_file(file, count, expected_chain)
+}
+
 /// Append one committed line, first dropping any uncommitted tail beyond the chain.
-fn append_line(directory: &Path, committed_bytes: u64, line: &[u8]) -> Result<()> {
+fn append_line(
+    directory: &Path,
+    #[cfg(unix)] pinned: &File,
+    committed_bytes: u64,
+    line: &[u8],
+) -> Result<()> {
     #[cfg(feature = "failpoints")]
     crate::failpoint::hit("checkpoint.append")?;
+    #[cfg(unix)]
+    let _ = directory;
+    #[cfg(unix)]
+    let mut file = super::open_regular_at(pinned, GRAPH_LOG, "graph completed log", true)?;
+    #[cfg(not(unix))]
     let mut file = open_regular(&directory.join(GRAPH_LOG), "graph completed log", true)?;
     restrict_file(&file)?;
     #[cfg(feature = "failpoints")]
@@ -385,8 +550,16 @@ mod lane_v3_tests {
             completed_chain: chain_start(),
             in_flight: Vec::new(),
         };
-        let (result, _, bytes) =
-            super::super::lane_v3_tests::measured(|| write_disk(directory.path(), &disk));
+        #[cfg(unix)]
+        let pinned = super::super::open_pinned_directory(directory.path()).unwrap();
+        let (result, _, bytes) = super::super::lane_v3_tests::measured(|| {
+            write_disk(
+                directory.path(),
+                #[cfg(unix)]
+                &pinned,
+                &disk,
+            )
+        });
         result.unwrap();
         assert!(bytes < 64 * 1024, "allocated {bytes} bytes");
         let data = serde_json::to_vec(&disk).unwrap();

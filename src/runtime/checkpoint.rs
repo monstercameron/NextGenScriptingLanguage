@@ -384,6 +384,7 @@ impl<W: Write> Write for CountingWriter<W> {
     }
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 fn collect_log_blob_refs(
     path: &Path,
     limit: usize,
@@ -395,6 +396,41 @@ fn collect_log_blob_refs(
         Err(error) => return Err(error).context("inspecting checkpoint reference log"),
     }
     let file = open_regular_readonly(path, "checkpoint reference log")?;
+    let mut reader = io::BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if read_bounded_line(&mut reader, &mut line, limit)? == 0 {
+            return Ok(());
+        }
+        if line.last() != Some(&b'\n') {
+            bail!("checkpoint reference log has an incomplete line");
+        }
+        let value: serde_json::Value = serde_json::from_slice(&line)?;
+        collect_value_blob_refs(&value, retained)?;
+    }
+}
+
+#[cfg(unix)]
+fn collect_log_blob_refs_at(
+    directory: &File,
+    name: &str,
+    limit: usize,
+    retained: &mut std::collections::BTreeSet<String>,
+) -> Result<()> {
+    let file = match open_child_at(
+        directory,
+        std::ffi::OsStr::new(name),
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
+        0,
+    ) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("opening checkpoint reference log"),
+    };
+    if !file.metadata()?.is_file() {
+        bail!("checkpoint reference log must be a regular file");
+    }
     let mut reader = io::BufReader::new(file);
     let mut line = Vec::new();
     loop {
@@ -446,7 +482,11 @@ fn collect_value_blob_refs(
 /// exclusive lock for its entire lifetime.
 pub(super) struct Journal {
     directory: PathBuf,
+    #[cfg(unix)]
+    directory_handle: File,
     blobs_directory: PathBuf,
+    #[cfg(unix)]
+    blobs_handle: File,
     max_output_bytes: usize,
     retry_uncertain: bool,
     resuming: bool,
@@ -531,7 +571,18 @@ impl Journal {
         // Normalize trailing separators/dot components before checking the leaf:
         // symlink_metadata("link/") would otherwise follow the link on Unix.
         let requested_directory: PathBuf = options.directory.components().collect();
+        #[cfg(unix)]
+        let (directory_handle, checkpoint_dir_existed) = {
+            let Some((handle, created)) =
+                open_or_create_directory_tree(&requested_directory, !options.resume, 0o700)?
+            else {
+                bail!("checkpoint directory does not exist for resume");
+            };
+            (handle, !created)
+        };
+        #[cfg(windows)]
         let checkpoint_dir_existed = fs::symlink_metadata(&requested_directory).is_ok();
+        #[cfg(windows)]
         let original = real_directory(&requested_directory, "checkpoint", !options.resume)?;
         let mut recovering_fresh = false;
         if !options.resume && checkpoint_dir_existed {
@@ -550,20 +601,31 @@ impl Journal {
                 requested_directory.display()
             )
         })?;
-        let resolved = real_directory(&directory, "checkpoint", false)?;
         #[cfg(unix)]
-        if original.dev() != resolved.dev() || original.ino() != resolved.ino() {
-            bail!("checkpoint directory changed while resolving its path");
+        {
+            let resolved = fs::metadata(&directory)?;
+            let pinned = directory_handle.metadata()?;
+            if !resolved.is_dir()
+                || resolved.dev() != pinned.dev()
+                || resolved.ino() != pinned.ino()
+            {
+                bail!("checkpoint directory changed while resolving its path");
+            }
         }
         #[cfg(windows)]
         {
+            let resolved = real_directory(&directory, "checkpoint", false)?;
             let _ = (original, resolved);
             if crate::platform::windows::directory_identity(&directory)? != original_identity {
                 bail!("checkpoint directory changed while resolving its path");
             }
         }
         if !options.resume && !recovering_fresh {
+            #[cfg(unix)]
+            directory_handle.set_permissions(fs::Permissions::from_mode(0o700))?;
+            #[cfg(not(unix))]
             restrict_directory(&directory)?;
+            #[cfg(not(unix))]
             if !checkpoint_dir_existed {
                 if let Some(parent) = directory.parent() {
                     sync_directory(parent)?;
@@ -571,24 +633,49 @@ impl Journal {
             }
         }
 
-        let lock = lock_directory(&directory)?;
+        let lock = lock_directory(
+            &directory,
+            #[cfg(unix)]
+            &directory_handle,
+        )?;
         let lock_acquired_at = std::time::SystemTime::now();
         let journal_path = directory.join("journal.json");
         let blobs_directory = directory.join("blobs");
+        #[cfg(unix)]
+        let blobs_handle =
+            open_checkpoint_blobs_directory(&directory_handle, &blobs_directory, !options.resume)?;
         if recovering_fresh {
             // Only previously private, initialization-shaped directories can reach here.
             // Recheck after locking, remove old atomic-write leftovers, then refuse if
             // anything else remains. Never modify an unrelated nonempty directory.
             if !fresh_initialization_artifacts_only(&directory, true)? {
-                bail!("checkpoint directory exists and is not empty; choose an absent or empty directory");
+                bail!(
+                    "checkpoint directory exists and is not empty; choose an absent or empty directory"
+                );
             }
-            clean_checkpoint_temporaries(&directory, &blobs_directory, lock_acquired_at);
+            clean_checkpoint_temporaries(
+                &directory,
+                &blobs_directory,
+                #[cfg(unix)]
+                &directory_handle,
+                #[cfg(unix)]
+                &blobs_handle,
+                lock_acquired_at,
+            );
             if !fresh_initialization_artifacts_only(&directory, false)? {
-                bail!("checkpoint directory exists and is not empty; choose an absent or empty directory");
+                bail!(
+                    "checkpoint directory exists and is not empty; choose an absent or empty directory"
+                );
             }
+            #[cfg(unix)]
+            directory_handle.set_permissions(fs::Permissions::from_mode(0o700))?;
+            #[cfg(not(unix))]
             restrict_directory(&directory)?;
         }
         if options.resume {
+            #[cfg(unix)]
+            let (mut data, log) = read_journal_parts_at(&directory_handle, &journal_path)?;
+            #[cfg(not(unix))]
             let (mut data, log) = read_journal_parts(&journal_path)?;
             // Only a legacy journal with an unkeyed digest may need a key created to
             // upgrade it; any other resume reads the existing key or fails naming it.
@@ -660,14 +747,25 @@ impl Journal {
             let migrate_inline = data.version <= INLINE_JOURNAL_VERSION;
             let migrate_legacy = data.version != JOURNAL_VERSION;
             data.version = JOURNAL_VERSION;
+            #[cfg(not(unix))]
             real_directory(&blobs_directory, "checkpoint blob", false)?;
+            #[cfg(unix)]
+            blobs_handle.set_permissions(fs::Permissions::from_mode(0o700))?;
+            #[cfg(not(unix))]
             restrict_directory(&blobs_directory)?;
             // A prior attempt may have installed a blob and failed its directory sync.
             // Make any surviving entries durable before they can be referenced again.
+            #[cfg(unix)]
+            blobs_handle.sync_all()?;
+            #[cfg(not(unix))]
             sync_directory(&blobs_directory)?;
             let mut journal = Self {
                 directory,
+                #[cfg(unix)]
+                directory_handle,
                 blobs_directory,
+                #[cfg(unix)]
+                blobs_handle,
                 max_output_bytes,
                 retry_uncertain: options.retry_uncertain,
                 resuming: options.resume,
@@ -699,6 +797,16 @@ impl Journal {
                 // The log is written before the journal that counts its lines, so a
                 // crash in between leaves the inline journal valid.
                 let (lines, _) = encode_completed_log(&journal.data.completed)?;
+                #[cfg(unix)]
+                atomic_write_pinned(
+                    &journal.directory_handle,
+                    &journal.directory,
+                    COMPLETED_LOG,
+                    "",
+                    &lines,
+                    "checkpoint.completed_log.migration.write",
+                )?;
+                #[cfg(not(unix))]
                 atomic_write(
                     &journal.directory,
                     COMPLETED_LOG,
@@ -718,16 +826,31 @@ impl Journal {
             clean_checkpoint_temporaries(
                 &journal.directory,
                 &journal.blobs_directory,
+                #[cfg(unix)]
+                &journal.directory_handle,
+                #[cfg(unix)]
+                &journal.blobs_handle,
                 lock_acquired_at,
             );
             Ok(journal)
         } else {
-            if fs::symlink_metadata(&journal_path).is_ok() {
+            #[cfg(unix)]
+            let already_exists = checkpoint_child_exists(&directory_handle, "journal.json")?;
+            #[cfg(not(unix))]
+            let already_exists = fs::symlink_metadata(&journal_path).is_ok();
+            if already_exists {
                 bail!("checkpoint already exists; use resume explicitly");
             }
             let input_signature = input_signature(super::InputKey::CreateIfMissing)?;
+            #[cfg(not(unix))]
             real_directory(&blobs_directory, "checkpoint blob", true)?;
+            #[cfg(unix)]
+            blobs_handle.set_permissions(fs::Permissions::from_mode(0o700))?;
+            #[cfg(not(unix))]
             restrict_directory(&blobs_directory)?;
+            #[cfg(unix)]
+            directory_handle.sync_all()?;
+            #[cfg(not(unix))]
             sync_directory(&directory)?;
             let identity = Identity {
                 program_path: EncodedPath::from_path(&program_path),
@@ -741,6 +864,10 @@ impl Journal {
                 output: Vec::new(),
                 bindings: BTreeMap::new(),
             };
+            #[cfg(unix)]
+            let snapshot =
+                store_snapshot_at(&blobs_directory, &blobs_handle, &initial, max_output_bytes)?;
+            #[cfg(not(unix))]
             let snapshot = store_snapshot(&blobs_directory, &initial, max_output_bytes)?;
             let data = JournalData {
                 version: JOURNAL_VERSION,
@@ -758,7 +885,11 @@ impl Journal {
             };
             let mut journal = Self {
                 directory,
+                #[cfg(unix)]
+                directory_handle,
                 blobs_directory,
+                #[cfg(unix)]
+                blobs_handle,
                 max_output_bytes,
                 retry_uncertain: options.retry_uncertain,
                 resuming: options.resume,
@@ -788,6 +919,14 @@ impl Journal {
     }
 
     pub fn restored_state(&self) -> Result<ExecutionState> {
+        #[cfg(unix)]
+        return load_snapshot_at(
+            &self.blobs_directory,
+            &self.blobs_handle,
+            &self.data.snapshot,
+            self.max_output_bytes,
+        );
+        #[cfg(not(unix))]
         load_snapshot(
             &self.blobs_directory,
             &self.data.snapshot,
@@ -921,6 +1060,8 @@ impl Journal {
         };
         let snapshot = store_snapshot_parts(
             &self.blobs_directory,
+            #[cfg(unix)]
+            &self.blobs_handle,
             cwd,
             output,
             bindings,
@@ -1112,6 +1253,8 @@ impl Journal {
         let completed = completed.completed();
         let snapshot = match store_snapshot_parts(
             &self.blobs_directory,
+            #[cfg(unix)]
+            &self.blobs_handle,
             cwd,
             output,
             bindings,
@@ -1247,6 +1390,7 @@ impl Journal {
         Ok(())
     }
 
+    #[cfg(not(unix))]
     fn collect_unreferenced_blobs(&self) {
         let mut retained = std::collections::BTreeSet::new();
         retained.insert(self.data.snapshot.output.sha256.clone());
@@ -1309,11 +1453,82 @@ impl Journal {
         }
     }
 
+    #[cfg(unix)]
+    fn collect_unreferenced_blobs(&self) {
+        let mut retained = std::collections::BTreeSet::new();
+        retained.insert(self.data.snapshot.output.sha256.clone());
+        for blob in self.data.snapshot.bindings.values() {
+            retained.insert(blob.sha256.clone());
+        }
+        if let Some(cache) = self.element_state_cache.as_ref() {
+            for blob in cache.refs.values() {
+                retained.insert(blob.sha256.clone());
+            }
+        }
+        for name in [COMPLETED_LOG, "elements.jsonl"] {
+            let limit = if name == COMPLETED_LOG {
+                MAX_CHECKPOINT_LOG_LINE
+            } else {
+                elements::element_line_limit(self.max_output_bytes)
+            };
+            if let Err(error) =
+                collect_log_blob_refs_at(&self.directory_handle, name, limit, &mut retained)
+            {
+                eprintln!("warning: checkpoint blob collection skipped: {error:#}");
+                return;
+            }
+        }
+        let names = match pinned_directory_names(&self.blobs_handle) {
+            Ok(names) => names,
+            Err(error) => {
+                eprintln!("warning: checkpoint blob collection skipped: {error}");
+                return;
+            }
+        };
+        for name in names {
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            if name_str.len() != 64
+                || !name_str.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || retained.contains(name_str)
+            {
+                continue;
+            }
+            let file = match open_child_at(
+                &self.blobs_handle,
+                &name,
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
+                0,
+            ) {
+                Ok(file) => file,
+                Err(_) => continue,
+            };
+            if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+                continue;
+            }
+            #[cfg(feature = "failpoints")]
+            if let Err(error) = crate::failpoint::hit("checkpoint.blob_gc.remove") {
+                eprintln!("warning: checkpoint blob collection stopped: {error}");
+                return;
+            }
+            unlink_at(&self.blobs_handle, &name);
+        }
+    }
+
     /// Append one completed-node line. Bytes past the committed prefix, left by an
     /// earlier failed append, are discarded first.
     fn append_completed_line(&mut self, line: &[u8]) -> Result<()> {
         #[cfg(feature = "failpoints")]
         crate::failpoint::hit("checkpoint.append")?;
+        #[cfg(unix)]
+        let mut file = open_regular_at(
+            &self.directory_handle,
+            COMPLETED_LOG,
+            "checkpoint completed log",
+            true,
+        )?;
+        #[cfg(not(unix))]
         let mut file = open_regular(
             &self.directory.join(COMPLETED_LOG),
             "checkpoint completed log",
@@ -1367,6 +1582,8 @@ impl Journal {
         };
         if let Err(error) = write_envelope(
             &self.directory,
+            #[cfg(unix)]
+            &self.directory_handle,
             &body,
             "checkpoint journal",
             "checkpoint.journal.body.write",
@@ -1381,6 +1598,7 @@ impl Journal {
 
 fn write_envelope(
     directory: &Path,
+    #[cfg(unix)] pinned_directory: &File,
     body: &impl Serialize,
     label: &str,
     write_point: &'static str,
@@ -1400,7 +1618,7 @@ fn write_envelope(
     }
     let buffer_capacity = (counter.bytes + 87).min(8192);
     let checksum = format!("{:x}", digest.0.finalize());
-    atomic_write_with(directory, "journal", "json", &[], |file, _| {
+    let write_envelope = |file: &mut File, _: &[u8]| {
         // A second serialization pass avoids both journal-sized byte buffers.
         // The borrowed body cannot change between the digest and write passes.
         if let Some(header_point) = header_point {
@@ -1429,14 +1647,37 @@ fn write_envelope(
         writer.flush()?;
         drop(writer);
         file.sync_all()
-    })
-    .with_context(|| format!("persisting {label}"))
+    };
+    #[cfg(unix)]
+    atomic_write_with_pinned(
+        pinned_directory,
+        directory,
+        "journal",
+        "json",
+        &[],
+        write_envelope,
+    )
+    .with_context(|| format!("persisting {label}"))?;
+    #[cfg(not(unix))]
+    atomic_write_with(directory, "journal", "json", &[], write_envelope)
+        .with_context(|| format!("persisting {label}"))?;
+    Ok(())
 }
 
 /// Take the exclusive lock of a checkpoint directory. Every journal mode, program or
 /// graph, holds it for as long as the journal is open.
-fn lock_directory(directory: &Path) -> Result<File> {
+fn lock_directory(directory: &Path, #[cfg(unix)] pinned_directory: &File) -> Result<File> {
+    #[cfg(not(unix))]
     let lock_path = directory.join("lock");
+    #[cfg(unix)]
+    let lock = open_child_at(
+        pinned_directory,
+        std::ffi::OsStr::new("lock"),
+        libc::O_RDWR | libc::O_CREAT | libc::O_NONBLOCK | libc::O_NOCTTY,
+        0o600,
+    )
+    .context("opening checkpoint lock relative to pinned directory")?;
+    #[cfg(not(unix))]
     let lock = open_regular(&lock_path, "checkpoint lock", true)?;
     restrict_file(&lock)?;
     #[cfg(windows)]
@@ -1536,6 +1777,7 @@ fn encode_envelope(checksum: &str, data: &[u8]) -> Vec<u8> {
     bytes
 }
 
+#[cfg(not(unix))]
 fn real_directory(path: &Path, label: &str, create: bool) -> Result<fs::Metadata> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -1563,6 +1805,48 @@ fn open_regular(path: &Path, label: &str, create: bool) -> Result<File> {
     open_regular_with_permissions(path, label, create, true)
 }
 
+#[cfg(unix)]
+pub(crate) fn open_regular_at(
+    directory: &File,
+    name: &str,
+    label: &str,
+    create: bool,
+) -> Result<File> {
+    let flags = if create {
+        libc::O_RDWR | libc::O_CREAT
+    } else {
+        libc::O_RDONLY
+    };
+    let file = open_child_at(
+        directory,
+        std::ffi::OsStr::new(name),
+        flags | libc::O_NONBLOCK | libc::O_NOCTTY,
+        0o600,
+    )
+    .with_context(|| format!("opening {label} relative to checkpoint directory"))?;
+    if !file.metadata()?.is_file() {
+        bail!("{label} must be a regular file");
+    }
+    restrict_file(&file)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+pub(super) fn checkpoint_child_exists(directory: &File, name: &str) -> Result<bool> {
+    match open_child_at(
+        directory,
+        std::ffi::OsStr::new(name),
+        libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY,
+        0,
+    ) {
+        Ok(file) if file.metadata()?.is_file() => Ok(true),
+        Ok(_) => bail!("checkpoint state entry {name} must be a regular file"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("checking checkpoint state entry {name}")),
+    }
+}
+
+#[cfg_attr(unix, allow(dead_code))]
 fn open_regular_readonly(path: &Path, label: &str) -> Result<File> {
     open_regular_with_permissions(path, label, false, false)
 }
@@ -1681,7 +1965,37 @@ pub(crate) fn fuzz_read_journal(path: &Path) -> Result<()> {
 }
 
 fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
-    let file = open_journal_for_read(path)?;
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .context("checkpoint journal has no directory")?;
+        let pinned = open_pinned_directory(parent)?;
+        read_journal_parts_at(&pinned, path)
+    }
+    #[cfg(not(unix))]
+    {
+        let file = open_journal_for_read(path)?;
+        read_journal_parts_file(file, path)
+    }
+}
+
+#[cfg(unix)]
+fn read_journal_parts_at(directory: &File, path: &Path) -> Result<(JournalData, CompletedLog)> {
+    let name = path
+        .file_name()
+        .context("checkpoint journal has no file name")?;
+    let file = open_journal_for_read_at(directory, name)?;
+    read_journal_parts_file(file, path, Some(directory))
+}
+
+fn read_journal_parts_file(
+    file: File,
+    path: &Path,
+    #[cfg(unix)] pinned_directory: Option<&File>,
+) -> Result<(JournalData, CompletedLog)> {
+    #[cfg(unix)]
+    let _ = path;
     restrict_file(&file)?;
     let mut bytes = Vec::new();
     file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
@@ -1695,7 +2009,9 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
         .context("checkpoint journal is malformed or corrupt")?
         .version;
     if is_graph_body(body) {
-        bail!("this checkpoint holds a graph run; resume it with `execute resume GRAPH --checkpoint DIR`");
+        bail!(
+            "this checkpoint holds a graph run; resume it with `execute resume GRAPH --checkpoint DIR`"
+        );
     }
     let (data, log) = if version == LEGACY_JOURNAL_VERSION || version == INLINE_JOURNAL_VERSION {
         let data: JournalData =
@@ -1714,9 +2030,17 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
         if serialized_digest(&disk)? != envelope.checksum {
             bail!("checkpoint journal checksum mismatch");
         }
+        #[cfg(not(unix))]
         let directory = path
             .parent()
             .context("checkpoint journal has no directory")?;
+        #[cfg(unix)]
+        let (completed, log) = read_completed_log_at(
+            pinned_directory.context("checkpoint directory is not pinned")?,
+            disk.completed_count,
+            &disk.completed_chain,
+        )?;
+        #[cfg(not(unix))]
         let (completed, log) =
             read_completed_log(directory, disk.completed_count, &disk.completed_chain)?;
         let data = JournalData {
@@ -1774,6 +2098,7 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
     Ok((data, log))
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 pub(super) fn open_journal_for_read(path: &Path) -> Result<File> {
     for attempt in 0..6 {
         match open_regular(path, "checkpoint journal", false) {
@@ -1786,6 +2111,29 @@ pub(super) fn open_journal_for_read(path: &Path) -> Result<File> {
                 });
                 if !missing || attempt == 5 {
                     return Err(error);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5 << attempt));
+            }
+        }
+    }
+    bail!("checkpoint journal could not be opened after retries")
+}
+
+#[cfg(unix)]
+pub(crate) fn open_journal_for_read_at(directory: &File, name: &std::ffi::OsStr) -> Result<File> {
+    for attempt in 0..6 {
+        match open_child_at(
+            directory,
+            name,
+            libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY,
+            0,
+        ) {
+            Ok(file) if file.metadata()?.is_file() => return Ok(file),
+            Ok(_) => bail!("checkpoint journal must be a regular file"),
+            Err(error) => {
+                if error.kind() != io::ErrorKind::NotFound || attempt == 5 {
+                    return Err(error)
+                        .context("opening checkpoint journal relative to pinned directory");
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5 << attempt));
             }
@@ -1844,29 +2192,64 @@ pub(crate) fn fuzz_read_completed_log(directory: &Path, bytes: &[u8]) -> Result<
 #[cfg(feature = "fuzzing")]
 pub(crate) use elements::fuzz_replay_element_log;
 
+#[cfg_attr(unix, allow(dead_code))]
 fn read_completed_log(
     directory: &Path,
     count: usize,
     expected_chain: &str,
 ) -> Result<(Vec<CompletedNode>, CompletedLog)> {
-    if count == 0 {
-        if expected_chain != chain_start() {
-            bail!("checkpoint completed log checksum mismatch");
-        }
-        return Ok((
-            Vec::new(),
-            CompletedLog {
-                chain: chain_start(),
-                bytes: 0,
-            },
-        ));
+    #[cfg(unix)]
+    {
+        let pinned = open_pinned_directory(directory)?;
+        read_completed_log_at(&pinned, count, expected_chain)
     }
-    let file = open_regular(
-        &directory.join(COMPLETED_LOG),
-        "checkpoint completed log",
-        false,
-    )
-    .context("checkpoint completed log is missing")?;
+    #[cfg(not(unix))]
+    {
+        if count == 0 {
+            return empty_completed_log(expected_chain);
+        }
+        let file = open_regular(
+            &directory.join(COMPLETED_LOG),
+            "checkpoint completed log",
+            false,
+        )
+        .context("checkpoint completed log is missing")?;
+        read_completed_log_file(file, count, expected_chain)
+    }
+}
+
+#[cfg(unix)]
+fn read_completed_log_at(
+    directory: &File,
+    count: usize,
+    expected_chain: &str,
+) -> Result<(Vec<CompletedNode>, CompletedLog)> {
+    if count == 0 {
+        return empty_completed_log(expected_chain);
+    }
+    let file = open_regular_at(directory, COMPLETED_LOG, "checkpoint completed log", false)
+        .context("checkpoint completed log is missing")?;
+    read_completed_log_file(file, count, expected_chain)
+}
+
+fn empty_completed_log(expected_chain: &str) -> Result<(Vec<CompletedNode>, CompletedLog)> {
+    if expected_chain != chain_start() {
+        bail!("checkpoint completed log checksum mismatch");
+    }
+    Ok((
+        Vec::new(),
+        CompletedLog {
+            chain: chain_start(),
+            bytes: 0,
+        },
+    ))
+}
+
+fn read_completed_log_file(
+    file: File,
+    count: usize,
+    expected_chain: &str,
+) -> Result<(Vec<CompletedNode>, CompletedLog)> {
     let mut reader = io::BufReader::new(file);
     let mut nodes = Vec::with_capacity(count.min(4096));
     let mut chain = chain_start();
@@ -1952,6 +2335,7 @@ pub(crate) fn read_bounded_line<R: BufRead>(
     }
 }
 
+#[cfg(not(unix))]
 fn store_snapshot(
     blobs_directory: &Path,
     state: &ExecutionState,
@@ -1970,8 +2354,30 @@ fn store_snapshot(
     )
 }
 
+#[cfg(unix)]
+fn store_snapshot_at(
+    blobs_directory: &Path,
+    pinned: &File,
+    state: &ExecutionState,
+    max_output_bytes: usize,
+) -> Result<SnapshotRef> {
+    store_snapshot_parts(
+        blobs_directory,
+        pinned,
+        &state.cwd,
+        &state.output,
+        state
+            .bindings
+            .iter()
+            .map(|(name, value)| (name.as_str(), value)),
+        max_output_bytes,
+        &mut Vec::new(),
+    )
+}
+
 fn store_snapshot_parts<'a>(
     blobs_directory: &Path,
+    #[cfg(unix)] blobs_handle: &File,
     cwd: &Path,
     output_bytes: &[u8],
     bindings: impl IntoIterator<Item = (&'a str, &'a Value)>,
@@ -1981,6 +2387,14 @@ fn store_snapshot_parts<'a>(
     if output_bytes.len() > max_output_bytes {
         bail!("checkpoint output exceeds maximum of {max_output_bytes} bytes");
     }
+    #[cfg(unix)]
+    let output = store_blob_at(
+        blobs_directory,
+        blobs_handle,
+        output_bytes,
+        max_output_bytes,
+    )?;
+    #[cfg(not(unix))]
     let output = store_blob(blobs_directory, output_bytes, max_output_bytes)?;
     let mut binding_refs = BTreeMap::new();
     for (name, value) in bindings {
@@ -1988,10 +2402,14 @@ fn store_snapshot_parts<'a>(
             bail!("checkpoint binding {name:?} exceeds maximum of {max_output_bytes} bytes");
         }
         let encoded_limit = max_output_bytes.saturating_mul(6).saturating_add(16);
+        #[cfg(unix)]
+        let reference =
+            store_value_blob_at(blobs_directory, blobs_handle, value, encoded_limit, buffer);
+        #[cfg(not(unix))]
+        let reference = store_value_blob(blobs_directory, value, encoded_limit, buffer);
         binding_refs.insert(
             name.to_owned(),
-            store_value_blob(blobs_directory, value, encoded_limit, buffer)
-                .with_context(|| format!("encoding checkpoint binding {name:?}"))?,
+            reference.with_context(|| format!("encoding checkpoint binding {name:?}"))?,
         );
     }
     Ok(SnapshotRef {
@@ -2016,6 +2434,24 @@ fn store_value_blob(
     result
 }
 
+#[cfg(unix)]
+fn store_value_blob_at(
+    directory: &Path,
+    pinned: &File,
+    value: &Value,
+    limit: usize,
+    buffer: &mut Vec<u8>,
+) -> Result<BlobRef> {
+    buffer.clear();
+    let result = serde_json::to_writer(&mut *buffer, value)
+        .map_err(anyhow::Error::from)
+        .and_then(|()| store_blob_at(directory, pinned, buffer, limit));
+    buffer.fill(0);
+    buffer.clear();
+    result
+}
+
+#[cfg_attr(unix, allow(dead_code))]
 fn load_snapshot(
     blobs_directory: &Path,
     snapshot: &SnapshotRef,
@@ -2026,6 +2462,33 @@ fn load_snapshot(
     let mut bindings = BTreeMap::new();
     for (name, reference) in &snapshot.bindings {
         let bytes = load_blob(blobs_directory, reference, encoded_limit)
+            .with_context(|| format!("loading checkpoint binding {name:?}"))?;
+        let value: Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("decoding checkpoint binding {name:?}"))?;
+        if value_size(&value) > max_output_bytes {
+            bail!("checkpoint binding {name:?} exceeds maximum of {max_output_bytes} bytes");
+        }
+        bindings.insert(name.clone(), value);
+    }
+    Ok(ExecutionState {
+        cwd: snapshot.cwd.to_path(),
+        output,
+        bindings,
+    })
+}
+
+#[cfg(unix)]
+fn load_snapshot_at(
+    blobs_directory: &Path,
+    pinned: &File,
+    snapshot: &SnapshotRef,
+    max_output_bytes: usize,
+) -> Result<ExecutionState> {
+    let output = load_blob_at(blobs_directory, pinned, &snapshot.output, max_output_bytes)?;
+    let encoded_limit = max_output_bytes.saturating_mul(6).saturating_add(16);
+    let mut bindings = BTreeMap::new();
+    for (name, reference) in &snapshot.bindings {
+        let bytes = load_blob_at(blobs_directory, pinned, reference, encoded_limit)
             .with_context(|| format!("loading checkpoint binding {name:?}"))?;
         let value: Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("decoding checkpoint binding {name:?}"))?;
@@ -2149,6 +2612,50 @@ fn store_blob(directory: &Path, bytes: &[u8], limit: usize) -> Result<BlobRef> {
     })
 }
 
+#[cfg(unix)]
+fn store_blob_at(directory: &Path, pinned: &File, bytes: &[u8], limit: usize) -> Result<BlobRef> {
+    if bytes.len() > limit {
+        bail!("checkpoint blob exceeds maximum of {limit} bytes");
+    }
+    let digest = hex_digest(bytes);
+    match open_child_at(
+        pinned,
+        std::ffi::OsStr::new(&digest),
+        libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY,
+        0,
+    ) {
+        Ok(file) => {
+            if !file.metadata()?.is_file() {
+                bail!("checkpoint blob must be a regular file");
+            }
+            let mut existing = Vec::new();
+            file.take(limit.saturating_add(1).try_into().unwrap_or(u64::MAX))
+                .read_to_end(&mut existing)?;
+            if existing.len() > limit || existing != bytes || hex_digest(&existing) != digest {
+                bail!(
+                    "checkpoint blob collision or corruption at {}",
+                    directory.join(&digest).display()
+                );
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let write_point = if bytes.is_empty() {
+                "checkpoint.atomic.write"
+            } else {
+                "checkpoint.blob.write"
+            };
+            atomic_write_pinned(pinned, directory, &digest, "blob", bytes, write_point)?;
+        }
+        Err(error) => {
+            return Err(error).context("opening checkpoint blob relative to pinned directory");
+        }
+    }
+    Ok(BlobRef {
+        sha256: digest,
+        length: bytes.len().try_into()?,
+    })
+}
+
 fn verify_existing_blob(
     directory: &Path,
     reference: &BlobRef,
@@ -2232,6 +2739,46 @@ fn load_blob(directory: &Path, reference: &BlobRef, limit: usize) -> Result<Vec<
     Ok(bytes)
 }
 
+#[cfg(unix)]
+fn load_blob_at(
+    directory: &Path,
+    pinned: &File,
+    reference: &BlobRef,
+    limit: usize,
+) -> Result<Vec<u8>> {
+    if reference.length > limit.try_into()? {
+        bail!("checkpoint blob exceeds maximum of {limit} bytes");
+    }
+    if reference.sha256.len() != 64
+        || !reference
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("checkpoint contains an invalid blob digest");
+    }
+    let file = open_regular_at(pinned, &reference.sha256, "checkpoint blob", false)?;
+    if file.metadata()?.len() != reference.length {
+        bail!(
+            "checkpoint blob length mismatch at {}",
+            directory.join(&reference.sha256).display()
+        );
+    }
+    let mut bytes = Vec::with_capacity(reference.length.try_into()?);
+    file.take(limit.saturating_add(1).try_into().unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        bail!("checkpoint blob exceeds maximum of {limit} bytes");
+    }
+    if bytes.len() as u64 != reference.length || hex_digest(&bytes) != reference.sha256 {
+        bail!(
+            "checkpoint blob checksum mismatch at {}",
+            directory.join(&reference.sha256).display()
+        );
+    }
+    Ok(bytes)
+}
+
 fn checkpoint_temporary_name(name: &std::ffi::OsStr, blob_folder: bool) -> bool {
     let Some(name) = name.to_str() else {
         return false;
@@ -2304,6 +2851,7 @@ fn fresh_initialization_artifacts_only(_directory: &Path, _allow_temps: bool) ->
 }
 
 /// Remove only our recognized atomic-write leftovers while holding the checkpoint lock.
+#[cfg(not(unix))]
 fn clean_checkpoint_temporaries(directory: &Path, blobs: &Path, acquired: std::time::SystemTime) {
     for (folder, blob_folder) in [(directory, false), (blobs, true)] {
         let entries = match fs::read_dir(folder) {
@@ -2346,6 +2894,94 @@ fn clean_checkpoint_temporaries(directory: &Path, blobs: &Path, acquired: std::t
     }
 }
 
+#[cfg(unix)]
+fn clean_checkpoint_temporaries(
+    directory: &Path,
+    blobs: &Path,
+    directory_handle: &File,
+    blobs_handle: &File,
+    acquired: std::time::SystemTime,
+) {
+    for (handle, blob_folder) in [(directory_handle, false), (blobs_handle, true)] {
+        let names = match pinned_directory_names(handle) {
+            Ok(names) => names,
+            Err(error) => {
+                eprintln!("warning: checkpoint temporary cleanup skipped: {error}");
+                continue;
+            }
+        };
+        for name in names {
+            if !checkpoint_temporary_name(&name, blob_folder) {
+                continue;
+            }
+            let Some(name_text) = name.to_str() else {
+                continue;
+            };
+            let file = match open_child_at(
+                handle,
+                &name,
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
+                0,
+            ) {
+                Ok(file) => file,
+                Err(_) => continue,
+            };
+            let Ok(metadata) = file.metadata() else {
+                continue;
+            };
+            if !metadata.is_file() || metadata.modified().map_or(true, |time| time > acquired) {
+                continue;
+            }
+            unlink_at(handle, std::ffi::OsStr::new(name_text));
+        }
+    }
+    let _ = (directory, blobs);
+}
+
+#[cfg(unix)]
+pub(crate) fn pinned_directory_names(directory: &File) -> io::Result<Vec<std::ffi::OsString>> {
+    use std::ffi::CStr;
+    use std::os::fd::IntoRawFd;
+    use std::os::unix::ffi::OsStringExt;
+    // openat(".") gets an independent directory stream; dup would share the
+    // directory offset with the pinned descriptor and make later scans empty.
+    let stream = open_child_at(
+        directory,
+        std::ffi::OsStr::new("."),
+        libc::O_RDONLY | libc::O_DIRECTORY,
+        0,
+    )?;
+    let stream_fd = stream.into_raw_fd();
+    // SAFETY: stream_fd is an owned descriptor for the open directory.
+    let listing = unsafe { libc::fdopendir(stream_fd) };
+    if listing.is_null() {
+        let error = io::Error::last_os_error();
+        // SAFETY: fdopendir failed and did not consume stream_fd.
+        unsafe {
+            libc::close(stream_fd);
+        }
+        return Err(error);
+    }
+    let mut names = Vec::new();
+    loop {
+        // SAFETY: listing remains live and returned entries stay valid until next call.
+        let entry = unsafe { libc::readdir(listing) };
+        if entry.is_null() {
+            break;
+        }
+        // SAFETY: d_name is nul-terminated in the live dirent.
+        let bytes = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if bytes != b"." && bytes != b".." {
+            names.push(std::ffi::OsString::from_vec(bytes.to_vec()));
+        }
+    }
+    // SAFETY: listing was returned by fdopendir and is closed exactly once.
+    unsafe {
+        libc::closedir(listing);
+    }
+    Ok(names)
+}
+
 fn atomic_write(
     directory: &Path,
     stem: &str,
@@ -2366,12 +3002,98 @@ fn atomic_write(
     })
 }
 
+#[cfg(unix)]
+fn atomic_write_pinned(
+    pinned_directory: &File,
+    directory: &Path,
+    stem: &str,
+    suffix: &str,
+    bytes: &[u8],
+    write_point: &'static str,
+) -> Result<()> {
+    atomic_write_with_pinned(
+        pinned_directory,
+        directory,
+        stem,
+        suffix,
+        bytes,
+        |file, bytes| {
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::write_all(write_point, file, bytes)?;
+            #[cfg(not(feature = "failpoints"))]
+            {
+                let _ = write_point;
+                file.write_all(bytes)?;
+            }
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::hit("checkpoint.atomic.sync")?;
+            file.sync_all()
+        },
+    )
+}
+
 fn atomic_write_with(
     directory: &Path,
     stem: &str,
     suffix: &str,
     bytes: &[u8],
-    mut write_and_sync: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
+    write_and_sync: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
+) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let pinned_directory = open_pinned_directory(directory)?;
+        atomic_write_with_pinned(
+            &pinned_directory,
+            directory,
+            stem,
+            suffix,
+            bytes,
+            write_and_sync,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        atomic_write_with_pinned(directory, stem, suffix, bytes, write_and_sync)
+    }
+}
+
+#[cfg(unix)]
+fn atomic_write_with_pinned(
+    pinned_directory: &File,
+    directory: &Path,
+    stem: &str,
+    suffix: &str,
+    bytes: &[u8],
+    write_and_sync: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
+) -> Result<()> {
+    atomic_write_with_inner(
+        Some(pinned_directory),
+        directory,
+        stem,
+        suffix,
+        bytes,
+        write_and_sync,
+    )
+}
+
+#[cfg(not(unix))]
+fn atomic_write_with_pinned(
+    directory: &Path,
+    stem: &str,
+    suffix: &str,
+    bytes: &[u8],
+    write_and_sync: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
+) -> Result<()> {
+    atomic_write_with_inner(directory, stem, suffix, bytes, write_and_sync)
+}
+
+fn atomic_write_with_inner(
+    #[cfg(unix)] pinned_directory: Option<&File>,
+    directory: &Path,
+    stem: &str,
+    suffix: &str,
+    bytes: &[u8],
+    write_and_sync: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
 ) -> Result<()> {
     #[cfg(feature = "failpoints")]
     crate::failpoint::hit("checkpoint.atomic")?;
@@ -2384,11 +3106,19 @@ fn atomic_write_with(
     for _ in 0..100 {
         let number = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = directory.join(format!(".{stem}-{}-{number}.tmp", std::process::id()));
-        match crate::platform::private_options()
+        #[cfg(unix)]
+        let opened = open_child_at(
+            pinned_directory.expect("pinned checkpoint directory"),
+            path.file_name().expect("checkpoint temporary basename"),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        );
+        #[cfg(not(unix))]
+        let opened = crate::platform::private_options()
             .write(true)
             .create_new(true)
-            .open(&path)
-        {
+            .open(&path);
+        match opened {
             Ok(mut file) => {
                 let write_result = write_and_sync(&mut file, bytes);
                 #[cfg(feature = "failpoints")]
@@ -2397,6 +3127,12 @@ fn atomic_write_with(
                 if let Err(error) = write_result {
                     // Close before unlinking so cleanup also works on Windows.
                     drop(file);
+                    #[cfg(unix)]
+                    unlink_at(
+                        pinned_directory.expect("pinned checkpoint directory"),
+                        path.file_name().expect("checkpoint temporary basename"),
+                    );
+                    #[cfg(not(unix))]
                     let _ = fs::remove_file(&path);
                     return Err(error).with_context(|| {
                         format!("writing checkpoint temporary {}", path.display())
@@ -2413,14 +3149,367 @@ fn atomic_write_with(
         temporary.ok_or_else(|| anyhow!("could not allocate checkpoint temporary file"))?;
     #[cfg(feature = "failpoints")]
     crate::failpoint::hit("checkpoint.atomic.rename")?;
-    if let Err(error) = crate::platform::replace_file(&temporary, &target) {
+    #[cfg(unix)]
+    let publish = rename_at(
+        pinned_directory.expect("pinned checkpoint directory"),
+        temporary
+            .file_name()
+            .expect("checkpoint temporary basename"),
+        target.file_name().expect("checkpoint target basename"),
+    );
+    #[cfg(not(unix))]
+    let publish = crate::platform::replace_file(&temporary, &target);
+    if let Err(error) = publish {
+        #[cfg(unix)]
+        unlink_at(
+            pinned_directory.expect("pinned checkpoint directory"),
+            temporary
+                .file_name()
+                .expect("checkpoint temporary basename"),
+        );
+        #[cfg(not(unix))]
         let _ = fs::remove_file(&temporary);
         return Err(error)
             .with_context(|| format!("publishing checkpoint file {}", target.display()));
     }
     #[cfg(feature = "failpoints")]
     crate::failpoint::hit("checkpoint.atomic.renamed")?;
-    sync_directory(directory)
+    #[cfg(unix)]
+    {
+        pinned_directory
+            .expect("pinned checkpoint directory")
+            .sync_all()
+            .with_context(|| format!("syncing directory {}", directory.display()))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        sync_directory(directory)
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn open_pinned_directory(directory: &Path) -> Result<File> {
+    open_pinned_directory_with_path(directory).map(|(directory, _canonical)| directory)
+}
+
+#[cfg(unix)]
+pub(crate) fn open_pinned_directory_with_path(directory: &Path) -> Result<(File, PathBuf)> {
+    let expected = fs::symlink_metadata(directory)?;
+    open_pinned_directory_expected_with_path(directory, &expected)
+}
+
+/// Open an existing directory tree or create its missing suffix relative to a
+/// pinned existing ancestor. The returned bool says whether this call created
+/// the final directory. Path-based recursive creation followed by a first stat
+/// can adopt a replacement parent; this helper pins before making anything.
+#[cfg(unix)]
+pub(crate) fn open_or_create_directory_tree(
+    path: &Path,
+    create: bool,
+    mode: libc::mode_t,
+) -> Result<Option<(File, bool)>> {
+    open_or_create_directory_tree_with_hook(path, create, mode, || {})
+}
+
+#[cfg(unix)]
+fn open_or_create_directory_tree_with_hook(
+    path: &Path,
+    create: bool,
+    mode: libc::mode_t,
+    after_ancestor_pin: impl FnOnce(),
+) -> Result<Option<(File, bool)>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let requested = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let initial_leaf = match fs::symlink_metadata(&requested) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                bail!("state path must be a real directory");
+            }
+            Some(metadata)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !create => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).context("checking state directory"),
+    };
+
+    // Pin the parent of an existing leaf, rather than the leaf itself, so the
+    // descriptor-relative walk can revalidate that leaf after the pin.
+    let mut ancestor = if initial_leaf.is_some() {
+        requested
+            .parent()
+            .map(Path::to_path_buf)
+            .filter(|parent| parent != &requested)
+            .unwrap_or_else(|| requested.clone())
+    } else {
+        requested.clone()
+    };
+    let ancestor_metadata = loop {
+        match fs::symlink_metadata(&ancestor) {
+            Ok(metadata) => {
+                if ancestor == requested && initial_leaf.is_none() {
+                    bail!("state directory appeared while it was being validated");
+                }
+                if ancestor == requested && metadata.file_type().is_symlink() {
+                    bail!("state path cannot be a symbolic link");
+                }
+                if metadata.file_type().is_symlink() {
+                    bail!("state directory ancestor cannot be a symbolic link");
+                }
+                break metadata;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
+                let Some(parent) = ancestor.parent() else {
+                    bail!("state path has no existing ancestor");
+                };
+                if parent == ancestor {
+                    bail!("state path has no existing ancestor");
+                }
+                ancestor = parent.to_path_buf();
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("finding state directory ancestor"),
+        }
+    };
+
+    // An existing final leaf was inspected above without following a symlink.
+    // For a missing suffix, metadata follows a symlink ancestor intentionally,
+    // matching normal path semantics before pinning its canonical target.
+    let expected = fs::metadata(&ancestor)?;
+    if !expected.is_dir() {
+        bail!("state directory ancestor is not a directory");
+    }
+    if ancestor_metadata.dev() != expected.dev() || ancestor_metadata.ino() != expected.ino() {
+        bail!("state directory ancestor changed while validating it");
+    }
+    if ancestor == requested {
+        if let Some(initial) = initial_leaf.as_ref() {
+            if initial.dev() != expected.dev() || initial.ino() != expected.ino() {
+                bail!("state directory changed while validating it");
+            }
+        }
+    }
+    let canonical_ancestor = fs::canonicalize(&ancestor)?;
+    let mut directory = open_pinned_directory_expected(&canonical_ancestor, &expected)?;
+    after_ancestor_pin();
+
+    let suffix = requested
+        .strip_prefix(&ancestor)
+        .context("state directory suffix is outside its ancestor")?;
+    let components: Vec<_> = suffix.components().collect();
+    if components.is_empty() {
+        return Ok(Some((directory, false)));
+    }
+
+    let mut created_leaf = false;
+    for (index, component) in components.iter().enumerate() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                directory = open_child_at(
+                    &directory,
+                    std::ffi::OsStr::new(".."),
+                    libc::O_RDONLY | libc::O_DIRECTORY,
+                    0,
+                )?;
+            }
+            std::path::Component::Normal(name) => {
+                let c_name = std::ffi::CString::new(name.as_bytes())?;
+                // SAFETY: directory is a live descriptor and c_name is a valid,
+                // nul-terminated single path component for this mkdirat call.
+                let created =
+                    unsafe { libc::mkdirat(directory.as_raw_fd(), c_name.as_ptr(), mode) } == 0;
+                if !created {
+                    let error = io::Error::last_os_error();
+                    if error.kind() != io::ErrorKind::AlreadyExists {
+                        return Err(error).context("creating state directory component");
+                    }
+                    if initial_leaf.is_none() && index + 1 == components.len() {
+                        bail!("state directory appeared while it was being created");
+                    }
+                } else {
+                    if initial_leaf.is_some() && index + 1 == components.len() {
+                        // The validated leaf disappeared. Leave the new empty
+                        // directory in place rather than unlinking a name that
+                        // an attacker could replace before cleanup.
+                        bail!("state directory disappeared while it was being opened");
+                    }
+                    directory
+                        .sync_all()
+                        .context("syncing state directory parent")?;
+                }
+                directory = open_child_at(&directory, name, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+                if index + 1 == components.len() {
+                    created_leaf = created;
+                    if let Some(initial) = initial_leaf.as_ref() {
+                        let actual = directory.metadata()?;
+                        if initial.dev() != actual.dev() || initial.ino() != actual.ino() {
+                            bail!("state directory changed while opening it");
+                        }
+                    }
+                }
+            }
+            std::path::Component::Prefix(_) => {
+                bail!("state directory path contains an unsupported prefix")
+            }
+        }
+    }
+    if !directory.metadata()?.is_dir() {
+        bail!("state path is not a directory");
+    }
+    Ok(Some((directory, created_leaf)))
+}
+
+#[cfg(unix)]
+fn open_checkpoint_blobs_directory(checkpoint: &File, path: &Path, create: bool) -> Result<File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(b"blobs".as_slice())?;
+    if create {
+        // SAFETY: checkpoint is a live directory descriptor; name is a fixed
+        // single component and mkdirat creates only within that directory.
+        if unsafe { libc::mkdirat(checkpoint.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error).context("creating checkpoint blob directory");
+            }
+        }
+    }
+    let expected = fs::symlink_metadata(path)?;
+    if !expected.is_dir() || expected.file_type().is_symlink() {
+        bail!("checkpoint blob path must be a real directory");
+    }
+    let directory = open_child_at(
+        checkpoint,
+        std::ffi::OsStr::from_bytes(b"blobs"),
+        libc::O_RDONLY | libc::O_DIRECTORY,
+        0,
+    )?;
+    let actual = directory.metadata()?;
+    if !actual.is_dir() || expected.dev() != actual.dev() || expected.ino() != actual.ino() {
+        bail!("checkpoint blob directory changed while opening it");
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+pub(crate) fn open_pinned_directory_expected(
+    directory: &Path,
+    expected: &fs::Metadata,
+) -> Result<File> {
+    open_pinned_directory_expected_with_path(directory, expected)
+        .map(|(directory, _canonical)| directory)
+}
+
+#[cfg(unix)]
+pub(crate) fn open_pinned_directory_expected_with_path(
+    directory: &Path,
+    expected: &fs::Metadata,
+) -> Result<(File, PathBuf)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if !expected.is_dir() {
+        bail!("state path is not a real directory");
+    }
+    // Resolve user supplied aliases once, then walk the canonical absolute path
+    // one descriptor at a time. Once an ancestor has been opened, renaming or
+    // replacing its pathname cannot redirect the remaining lookups through it.
+    let canonical = fs::canonicalize(directory)?;
+    if !canonical.is_absolute() {
+        bail!("state directory did not resolve to an absolute path");
+    }
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open("/")?;
+    for component in canonical.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => {
+                file = open_child_at(&file, name, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+            }
+            std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                bail!("state directory path is not canonical")
+            }
+        }
+    }
+    let actual = file.metadata()?;
+    if !actual.is_dir() || expected.dev() != actual.dev() || expected.ino() != actual.ino() {
+        bail!("state directory changed while opening it");
+    }
+    Ok((file, canonical))
+}
+
+#[cfg(unix)]
+pub(crate) fn open_child_at(
+    directory: &File,
+    name: &std::ffi::OsStr,
+    flags: i32,
+    mode: libc::mode_t,
+) -> io::Result<File> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid checkpoint file name"))?;
+    // SAFETY: directory is a live descriptor and name is a nul-terminated single
+    // path component; openat reads only that CString.
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            mode as libc::c_uint,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat returned a new owned descriptor.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+pub(crate) fn rename_at(
+    directory: &File,
+    from: &std::ffi::OsStr,
+    to: &std::ffi::OsStr,
+) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let from = std::ffi::CString::new(from.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid source name"))?;
+    let to = std::ffi::CString::new(to.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid target name"))?;
+    // SAFETY: both names are single path components and directory is live.
+    if unsafe {
+        libc::renameat(
+            directory.as_raw_fd(),
+            from.as_ptr(),
+            directory.as_raw_fd(),
+            to.as_ptr(),
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn unlink_at(directory: &File, name: &std::ffi::OsStr) {
+    use std::os::unix::ffi::OsStrExt;
+    if let Ok(name) = std::ffi::CString::new(name.as_bytes()) {
+        // SAFETY: name is a single path component and directory is live.
+        unsafe {
+            libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0);
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -2447,6 +3536,105 @@ fn serialized_digest<T: Serialize>(value: &T) -> Result<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn creation_after_parent_swap_stays_under_pinned_ancestor() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+        let requested = parent.join("nested/checkpoint");
+        let displaced = temp.path().join("displaced-parent");
+
+        let (pinned, created) =
+            open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
+                fs::rename(&parent, &displaced).unwrap();
+                fs::create_dir(&parent).unwrap();
+            })
+            .unwrap()
+            .unwrap();
+
+        assert!(created);
+        assert!(pinned.metadata().unwrap().is_dir());
+        assert!(displaced.join("nested/checkpoint").is_dir());
+        assert!(!requested.exists());
+    }
+
+    #[test]
+    fn directory_appearing_during_creation_is_rejected() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+        let requested = parent.join("nested/checkpoint");
+
+        let result = open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
+            fs::create_dir_all(&requested).unwrap();
+        });
+
+        assert!(result.is_err());
+        assert!(requested.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_ancestor_is_rejected_before_creating_missing_suffix() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let alias = temp.path().join("alias");
+        symlink(&target, &alias).unwrap();
+        let requested = alias.join("new-checkpoint");
+
+        assert!(open_or_create_directory_tree(&requested, true, 0o700).is_err());
+        assert!(!target.join("new-checkpoint").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn intermediate_symlink_parent_swap_cannot_redirect_creation() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        fs::create_dir_all(first.join("sub")).unwrap();
+        fs::create_dir_all(second.join("sub")).unwrap();
+        let alias = temp.path().join("alias");
+        symlink(&first, &alias).unwrap();
+        let requested = alias.join("sub/new-checkpoint");
+
+        let (pinned, created) =
+            open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
+                fs::remove_file(&alias).unwrap();
+                symlink(&second, &alias).unwrap();
+            })
+            .unwrap()
+            .unwrap();
+
+        assert!(created);
+        assert!(pinned.metadata().unwrap().is_dir());
+        assert!(first.join("sub/new-checkpoint").is_dir());
+        assert!(!second.join("sub/new-checkpoint").exists());
+    }
+
+    #[test]
+    fn existing_leaf_replacement_after_parent_pin_is_rejected() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let requested = parent.join("checkpoint");
+        fs::create_dir_all(&requested).unwrap();
+        let displaced_leaf = temp.path().join("displaced-checkpoint");
+
+        let result = open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
+            fs::rename(&requested, &displaced_leaf).unwrap();
+            fs::create_dir(&requested).unwrap();
+        });
+
+        assert!(result.is_err());
+        assert!(displaced_leaf.is_dir());
+        assert!(requested.is_dir());
+    }
 
     #[test]
     fn fresh_checkpoint_refuses_nonempty_existing_directory_without_chmod() {
@@ -2487,7 +3675,8 @@ mod tests {
             .join(format!(".{}-123-8.tmp", "a".repeat(64)));
         fs::write(&stale_journal, b"incomplete").unwrap();
         fs::write(&stale_blob, b"incomplete").unwrap();
-        let held = lock_directory(&options.directory).unwrap();
+        let directory_handle = open_pinned_directory(&options.directory).unwrap();
+        let held = lock_directory(&options.directory, &directory_handle).unwrap();
         assert!(Journal::open(&options, &cwd, "finite", 1024).is_err());
         assert!(stale_journal.exists());
         assert!(stale_blob.exists());
@@ -2538,7 +3727,8 @@ mod tests {
         )
         .unwrap();
         options.resume = true;
-        let held = lock_directory(&options.directory).unwrap();
+        let directory_handle = open_pinned_directory(&options.directory).unwrap();
+        let held = lock_directory(&options.directory, &directory_handle).unwrap();
         assert!(Journal::open(&options, &cwd, "finite", 1024).is_err());
         assert!(
             stale_journal.exists(),
@@ -3325,6 +4515,7 @@ mod tests {
     }
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 fn restrict_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -3499,5 +4690,35 @@ mod atomic_write_tests {
         assert!(format!("{error:#}").contains("writing checkpoint temporary"));
         assert_eq!(fs::read(&target).unwrap(), b"previous journal");
         assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_atomic_target_stays_in_pinned_directory_after_parent_swap() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let directory = parent.join("checkpoint");
+        fs::create_dir_all(&directory).unwrap();
+        let displaced = temp.path().join("displaced-parent");
+
+        atomic_write_with(
+            &directory,
+            "journal",
+            "json",
+            b"pinned journal",
+            |file, bytes| {
+                file.write_all(bytes)?;
+                fs::rename(&parent, &displaced)?;
+                fs::create_dir_all(&directory)?;
+                file.sync_all()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(displaced.join("checkpoint/journal.json")).unwrap(),
+            b"pinned journal"
+        );
+        assert!(!directory.join("journal.json").exists());
     }
 }

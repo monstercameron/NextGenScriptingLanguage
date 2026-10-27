@@ -2262,7 +2262,7 @@ const VERSIONED_CACHE_MAGIC: &[u8] = b"FLOW-CONTRACT-CACHE\0\x01";
 
 fn read_cached_output(
     manifest: &Manifest,
-    file: File,
+    file: impl Read,
     limit: usize,
 ) -> Result<(Vec<u8>, Option<i32>)> {
     if manifest.execution_contract().is_none() {

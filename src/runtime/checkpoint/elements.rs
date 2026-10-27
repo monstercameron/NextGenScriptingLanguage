@@ -27,6 +27,7 @@ use std::collections::BTreeSet;
 const ELEMENT_LOG: &str = "elements.jsonl";
 
 // The directory entry must be durable before any begin record is relied on.
+#[cfg_attr(unix, allow(dead_code))]
 fn open_synced_element_file(
     directory: &Path,
     sync: impl FnOnce(&Path) -> Result<()>,
@@ -261,7 +262,10 @@ mod lane_v3_tests {
                         });
                     }
                 });
-                eprintln!("fingerprint size={size} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes", started.elapsed());
+                eprintln!(
+                    "fingerprint size={size} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes",
+                    started.elapsed()
+                );
                 let (_temp, _options, mut journal) = journal();
                 open_elements(&mut journal);
                 let entry = ElementLine::Begin {
@@ -282,7 +286,10 @@ mod lane_v3_tests {
                     }
                 });
                 journal.sync_elements().unwrap();
-                eprintln!("element size={size} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes", started.elapsed());
+                eprintln!(
+                    "element size={size} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes",
+                    started.elapsed()
+                );
             }
         }
     }
@@ -774,11 +781,24 @@ impl Journal {
         _inject_failpoints: bool,
     ) -> Result<()> {
         self.elements_file = None;
+        #[cfg(not(unix))]
+        #[cfg(not(unix))]
         let path = self.directory.join(ELEMENT_LOG);
-        if path
+        #[cfg(unix)]
+        let exists = super::checkpoint_child_exists(&self.directory_handle, ELEMENT_LOG)?;
+        #[cfg(not(unix))]
+        let exists = path
             .try_exists()
-            .context("checking checkpoint element log")?
-        {
+            .context("checking checkpoint element log")?;
+        if exists {
+            #[cfg(unix)]
+            let file = super::open_regular_at(
+                &self.directory_handle,
+                ELEMENT_LOG,
+                "checkpoint element log",
+                true,
+            )?;
+            #[cfg(not(unix))]
             let file = open_regular(&path, "checkpoint element log", true)?;
             #[cfg(feature = "failpoints")]
             if _inject_failpoints {
@@ -830,11 +850,24 @@ impl Journal {
             commits: Vec::new(),
             pending: Vec::new(),
         };
+        #[cfg(not(unix))]
+        #[cfg(not(unix))]
         let path = self.directory.join(ELEMENT_LOG);
-        if path
+        #[cfg(unix)]
+        let exists = super::checkpoint_child_exists(&self.directory_handle, ELEMENT_LOG)?;
+        #[cfg(not(unix))]
+        let exists = path
             .try_exists()
-            .context("checking checkpoint element log")?
-        {
+            .context("checking checkpoint element log")?;
+        if exists {
+            #[cfg(unix)]
+            let file = super::open_regular_at(
+                &self.directory_handle,
+                ELEMENT_LOG,
+                "checkpoint element log",
+                false,
+            )?;
+            #[cfg(not(unix))]
             let file = open_regular(&path, "checkpoint element log", false)?;
             restrict_file(&file)?;
             let mut reader = io::BufReader::new(file);
@@ -1019,7 +1052,25 @@ impl Journal {
         durable: bool,
         sync: impl FnOnce(&Path) -> Result<()>,
     ) -> Result<()> {
+        #[cfg(all(unix, not(test)))]
+        let _ = &sync;
         if self.elements_file.is_none() {
+            #[cfg(unix)]
+            let mut file = {
+                let file = super::open_regular_at(
+                    &self.directory_handle,
+                    ELEMENT_LOG,
+                    "checkpoint element log",
+                    true,
+                )?;
+                restrict_file(&file)?;
+                #[cfg(test)]
+                sync(&self.directory)?;
+                #[cfg(not(test))]
+                self.directory_handle.sync_all()?;
+                file
+            };
+            #[cfg(not(unix))]
             let mut file = open_synced_element_file(&self.directory, sync)?;
             // Bytes past the verified prefix, left by an interrupted append, go first.
             #[cfg(feature = "failpoints")]

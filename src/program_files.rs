@@ -69,6 +69,35 @@ pub fn parse_source_resolved(
 pub(crate) struct SourceScope<'a> {
     pub root: &'a Path,
     pub open_documents: &'a BTreeMap<PathBuf, &'a str>,
+    loaded_sources: std::cell::RefCell<BTreeMap<PathBuf, String>>,
+    capture_sources: bool,
+}
+
+#[cfg(feature = "lsp")]
+impl<'a> SourceScope<'a> {
+    pub(crate) fn new(root: &'a Path, open_documents: &'a BTreeMap<PathBuf, &'a str>) -> Self {
+        Self {
+            root,
+            open_documents,
+            loaded_sources: std::cell::RefCell::new(BTreeMap::new()),
+            capture_sources: false,
+        }
+    }
+
+    /// Enable source capture for diagnostics that need callee provenance. Kept opt-in
+    /// so ordinary LSP checks do not retain a second copy of every called file.
+    #[allow(dead_code)]
+    pub(crate) fn with_source_snapshots(mut self) -> Self {
+        self.capture_sources = true;
+        self
+    }
+
+    /// Exact source bytes authorized and used by the loader, including editor overlays.
+    /// Consumed by callee-provenance diagnostics (#474) rather than rereading files.
+    #[allow(dead_code)]
+    pub(crate) fn loaded_source(&self, canonical: &Path) -> Option<String> {
+        self.loaded_sources.borrow().get(canonical).cloned()
+    }
 }
 
 fn parse_source_resolved_inner<'a>(
@@ -214,6 +243,13 @@ impl Loader<'_> {
         } else {
             disk_source.as_str()
         };
+        #[cfg(feature = "lsp")]
+        if let Some(scope) = self.scope.filter(|scope| scope.capture_sources) {
+            scope
+                .loaded_sources
+                .borrow_mut()
+                .insert(canonical.clone(), source.to_owned());
+        }
         let mut raw = parser::parse_raw(source).map_err(|error| {
             anyhow::anyhow!(
                 "line {}: called program file {shown} is not valid program text",

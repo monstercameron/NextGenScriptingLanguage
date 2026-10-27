@@ -562,10 +562,9 @@ fn diagnostics_with_overlays<'a>(
     let document = &documents[uri];
     let path = local_file_path(uri).and_then(|path| fs::canonicalize(path).ok());
     let root = path.as_deref().and_then(|path| workspace.root_for(path));
-    let scope = root.as_ref().map(|root| crate::program_files::SourceScope {
-        root,
-        open_documents,
-    });
+    let scope = root
+        .as_ref()
+        .map(|root| crate::program_files::SourceScope::new(root, open_documents));
     let usable_path = if scope.is_some() {
         path.as_deref()
     } else {
@@ -1656,6 +1655,30 @@ mod tests {
     }
 
     #[test]
+    fn scoped_loader_snapshots_exact_authorized_overlay_even_on_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let caller = root.join("caller.program");
+        let callee = root.join("callee.program");
+        fs::write(&caller, "run program file \"callee.program\"\n").unwrap();
+        fs::write(&callee, "use value \"disk\"\n").unwrap();
+        let mut overlays = BTreeMap::new();
+        overlays.insert(callee.clone(), "run\n");
+        let scope =
+            crate::program_files::SourceScope::new(&root, &overlays).with_source_snapshots();
+        let diagnostics = analyze_source_scoped(
+            "run program file \"callee.program\"\n",
+            Some(&caller),
+            &Registry::default(),
+            Some(&scope),
+        );
+        assert!(diagnostics
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error));
+        assert_eq!(scope.loaded_source(&callee).as_deref(), Some("run\n"));
+    }
+
+    #[test]
     fn unsaved_transitive_callee_change_rechecks_top_level_caller() {
         let dir = tempfile::tempdir().unwrap();
         let caller = dir.path().join("caller.program");
@@ -1874,6 +1897,13 @@ mod tests {
             "{diagnostics:#?}"
         );
         assert!(!format!("{diagnostics:?}").contains("secret"));
+        let root = fs::canonicalize(workspace_dir.path()).unwrap();
+        let outside_path = fs::canonicalize(outside.path().join("outside.program")).unwrap();
+        let overlays = BTreeMap::new();
+        let scope =
+            crate::program_files::SourceScope::new(&root, &overlays).with_source_snapshots();
+        let _ = analyze_source_scoped(source, Some(&caller), &Registry::default(), Some(&scope));
+        assert!(scope.loaded_source(&outside_path).is_none());
     }
 
     #[test]

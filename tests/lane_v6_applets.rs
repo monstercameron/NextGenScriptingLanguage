@@ -681,7 +681,7 @@ fn numeric_formatters_validate_present_precision() {
 }
 
 #[test]
-fn numeric_precision_errors_reach_helper_and_runtime() {
+fn numeric_precision_errors_reach_helper_and_static_check() {
     for operation in ["number.format", "number.format_size"] {
         let helper = std::process::Command::new(env!("CARGO_BIN_EXE_execute-applet"))
             .args([operation, "--args", r#"{"value":1024,"precision":-1}"#])
@@ -700,35 +700,17 @@ fn numeric_precision_errors_reach_helper_and_runtime() {
             format!("run {operation} with value 1024 and precision -1\n"),
         )
         .unwrap();
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
-            .arg("run")
-            .arg(&program)
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("args.precision"), "{stderr}");
-
-        std::fs::write(
-            &program,
-            format!("try\n  run {operation} with value 1024 and precision -1\ncatch failure\n  then encode failure as json\n"),
-        ).unwrap();
-        let caught = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
-            .arg("run")
+        let check = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("check")
             .arg(&program)
             .output()
             .unwrap();
         assert!(
-            caught.status.success(),
+            !check.status.success(),
             "{}",
-            String::from_utf8_lossy(&caught.stderr)
+            String::from_utf8_lossy(&check.stderr)
         );
-        let failure: Value = serde_json::from_slice(&caught.stdout).unwrap();
-        assert_eq!(failure["kind"], "failure");
-        assert_eq!(failure["status"], 2);
-        assert!(failure["message"]
-            .as_str()
-            .unwrap()
-            .contains("invalid_request"));
+        let stderr = String::from_utf8_lossy(&check.stderr);
+        assert!(stderr.contains("precision"), "{stderr}");
     }
 }

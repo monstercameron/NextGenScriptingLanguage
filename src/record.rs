@@ -11,16 +11,22 @@
 //!   and the bounded policy-decision audit: what effects were allowed or
 //!   denied and why. Each kept decision carries a link in a hash chain headed
 //!   by `audit_head`, and the head plus the truncation accounting carry a
-//!   keyed seal (`audit_mac`, an HMAC under the per-user key). The seal also
-//!   binds the record identity (`record_id`, the program and plan hashes) and
-//!   the policy context, so copying an audit into another record — or editing
-//!   the recorded policy, program or plan — breaks the seal. `show-run` is
-//!   warn-open: it always presents the audit and labels anything short of a
-//!   fully verified chain and seal as unsealed or untrusted, so a tampered
-//!   record stays reviewable instead of hiding its own evidence. The chain
-//!   evidences edits made without recomputing it; the seal raises the bar to
-//!   key holders, but a same-user forger with key access can still rewrite
-//!   the audit and reseal it. Whole-record tamper evidence belongs to the
+//!   keyed seal (`audit_mac`, an HMAC under the per-user key, versioned by
+//!   `audit_seal_version`). The v2 seal also binds the record identity
+//!   (`record_id`, the program and plan hashes) and the policy context, so
+//!   copying an audit into another record — or editing the recorded policy,
+//!   program or plan — breaks the seal. The retired v1 seal bound only the
+//!   total, the flag and the head: it is still checked so old records stay
+//!   readable, but a match is shown as an explicitly weak legacy seal and
+//!   never as verified. `show-run` is warn-open: it always presents the audit
+//!   and labels anything short of a fully verified chain and seal as unsealed
+//!   or untrusted, so a tampered record stays reviewable instead of hiding
+//!   its own evidence. `audit_verified` covers the policy audit only — never
+//!   the result, steps, trace or blobs, which are shown as recorded. The
+//!   chain evidences edits made without recomputing it; the seal raises the
+//!   bar to key holders, but a same-user forger with key access can still
+//!   rewrite the audit and reseal it, and key rotation is indistinguishable
+//!   from tampering. Whole-record tamper evidence belongs to the
 //!   record-integrity work.
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
@@ -230,9 +236,11 @@ fn audit_link(previous_head_hex: &str, decision: &Json) -> String {
 const AUDIT_SEAL_DOMAIN: &str = "execute.policy-audit-seal/2";
 
 /// The retired v1 seal domain: total, flag and head only, with no record
-/// binding. Records sealed before the record identity are still verified
-/// against this encoding so they stay verifiable; its binding is weaker (a
-/// copied audit verifies under it), and new records never use it.
+/// binding. Records sealed before the record identity are still readable and
+/// their chain is still checked, but they are never reported as verified: the
+/// binding is weaker by construction (a copied audit verifies under it), so a
+/// matching v1 seal is shown as an explicitly weak legacy seal, not as a v2
+/// verification. New records never use this encoding.
 const AUDIT_SEAL_DOMAIN_V1: &str = "execute.policy-audit-seal/1";
 
 /// The values a v2 seal binds an audit to: the identity of this record (a
@@ -308,8 +316,9 @@ fn audit_seal_encoding(
 }
 
 /// The retired v1 encoding: the lifetime total, the truncation flag, and the
-/// chain head, with no record binding. Only verification of records sealed
-/// before the record identity uses this; nothing new is sealed with it.
+/// chain head, with no record binding. Only the legacy-weak check for records
+/// sealed before the record identity uses this; nothing new is sealed with it,
+/// and a match never reports the audit as verified.
 fn audit_seal_encoding_v1(total: u64, truncated: bool, head_hex: &str) -> Vec<u8> {
     let mut encoding = Vec::new();
     push_audit_field(&mut encoding, AUDIT_SEAL_DOMAIN_V1);
@@ -583,10 +592,14 @@ impl AuditVerification {
 /// removed from the middle (sequence gap), a reordered audit (same sequences,
 /// wrong order), a dropped prefix or suffix (first/last sequence against the
 /// total), a truncation flag that disagrees with the total, an audit copied
-/// from another record or policy (seal binding mismatch), and a seal that
-/// does not match under the given key. Nothing here fails the read: a failed
-/// check labels the audit untrusted or unsealed and the audit is still shown,
-/// so a tampered record stays reviewable instead of hiding its own evidence.
+/// from another record or policy (seal binding mismatch), a downgraded audit
+/// with its record identity stripped (legacy-weak, never verified), and a
+/// seal that does not match under the given key. Nothing here fails the
+/// read: a failed check labels the audit untrusted or unsealed and the audit
+/// is still shown, so a tampered record stays reviewable instead of hiding
+/// its own evidence. Verification covers the policy audit only: the result,
+/// steps, trace and blobs are shown as recorded and are never covered by the
+/// seal.
 ///
 /// Trust boundary: the chain is unanchored — it lives in the same file it
 /// protects — and the seal is keyed under a per-user key that a same-user
@@ -673,27 +686,42 @@ fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
         };
     };
     // Records sealed before the record identity bind only the total, the
-    // flag and the head: a copied audit still verifies under that retired
-    // encoding. Records with an identity bind the record and its policy
-    // context too, so a transplant or a policy, program or plan edit breaks
-    // the seal.
-    let expected = match run.get("record_id").and_then(Json::as_str) {
-        Some(record_id) => {
-            let Some(binding) = seal_binding(run, record_id) else {
-                return AuditVerification::untrusted(
-                    decisions,
-                    "policy audit has no program or policy binding to check its seal against; the record may have been modified after the run".into(),
-                );
+    // flag and the head: a copied audit still matches under that retired
+    // encoding, so it is never reported as verified. Records with an identity
+    // bind the record and its policy context too, so a transplant or a
+    // policy, program or plan edit breaks the seal. A v2 mismatch is either
+    // tampering or a different key (rotation has no key identifier, so the
+    // two are indistinguishable here); a legacy mismatch is tampering or a
+    // different key under the retired encoding.
+    let record_id = run.get("record_id").and_then(Json::as_str);
+    let Some(record_id) = record_id else {
+        let expected_v1 = audit_seal_hex_v1(&key, total, truncated, head);
+        if expected_v1 != stored_seal {
+            return AuditVerification::Untrusted {
+                approved,
+                denied,
+                error: "policy audit seal does not match its total, truncation flag and head under the retired v1 encoding; the audit was modified after the run or sealed under a different key"
+                    .to_owned(),
             };
-            audit_seal_hex(&key, &binding, total, truncated, head)
         }
-        None => audit_seal_hex_v1(&key, total, truncated, head),
+        return AuditVerification::Unsealed {
+            approved,
+            denied,
+            reason: "this record uses the retired v1 audit seal without record binding; its audit is shown as recorded but could have been copied from another record — re-record for a verifiable audit",
+        };
     };
+    let Some(binding) = seal_binding(run, record_id) else {
+        return AuditVerification::untrusted(
+            decisions,
+            "policy audit has no program or policy binding to check its seal against; the record may have been modified after the run".into(),
+        );
+    };
+    let expected = audit_seal_hex(&key, &binding, total, truncated, head);
     if expected != stored_seal {
         return AuditVerification::Untrusted {
             approved,
             denied,
-            error: "policy audit seal does not match its total, truncation flag, head, record identity and policy context; the audit was transplanted from another record, modified after the run, or sealed under a different key or retired seal version"
+            error: "policy audit seal does not match its record identity, policy context, total, truncation flag and head; the audit was transplanted from another record, modified after the run, or sealed under a different key (key rotation is indistinguishable from tampering)"
                 .to_owned(),
         };
     }
@@ -962,6 +990,7 @@ impl Recorder {
             "decisions_truncated": decisions_truncated,
             "audit_head": audit_head,
             "audit_mac": audit_mac,
+            "audit_seal_version": 2,
             "limits": {
                 "loop_iterations_max": state.loop_limit,
                 "loop_iterations_scope": state.loop_scope.map(|scope| match scope {
@@ -1583,6 +1612,8 @@ pub fn show_run_with_key(
             "audit_mac": record.run.get("audit_mac").cloned().unwrap_or(Json::Null),
             "audit_verified": audit_verified,
             "audit_error": audit_error,
+            "audit_scope": "policy-decisions-only",
+            "record_verified": false,
         });
         return Ok(serde_json::to_string_pretty(&document)? + "\n");
     }
@@ -1592,6 +1623,13 @@ pub fn show_run_with_key(
         directory.display(),
         if ok { "ok" } else { "failed" }
     ));
+    // The seal covers the policy audit, the record identity and the policy
+    // context only. Result, steps, trace and blobs are shown as recorded and
+    // are never covered by `audit_verified`: a verified audit still leaves
+    // whole-record tamper evidence to the record-integrity work (issue #414).
+    text.push_str(
+        "trust scope: the audit seal covers policy decisions, record identity and policy context only; result, steps, trace and blobs are shown as recorded\n",
+    );
     if let Some(error) = record.run["result"]["error"].as_str() {
         text.push_str(&format!("error: {error}\n"));
     }
@@ -3062,5 +3100,124 @@ mod policy_audit_tests {
                 .unwrap();
         assert_eq!(report["audit_verified"], true);
         assert_eq!(report["decisions"][0]["outcome"], flipped);
+    }
+
+    /// Downgrade: stripping `record_id` and resealing under the retired v1
+    /// encoding must never verify as v2. The audit stays readable but is
+    /// explicitly weak, so a copied v1 audit cannot pass as a bound seal.
+    #[test]
+    fn stripped_record_id_with_v1_seal_is_legacy_weak_not_verified() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        let total = document["decision_count"].as_u64().unwrap();
+        let truncated = document["decisions_truncated"].as_bool().unwrap();
+        let head = document["audit_head"].as_str().unwrap().to_owned();
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove("record_id");
+        document["audit_mac"] =
+            json!(super::audit_seal_hex_v1(&TEST_AUDIT_KEY, total, truncated, &head));
+        rewrite_run_document(&directory, &document);
+
+        let (text, report) = warn_open_output(&directory);
+        assert_eq!(report["audit_verified"], false);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("retired v1")),
+            "{report}"
+        );
+        assert!(!text.contains("untrusted"), "{text}");
+        assert!(text.contains("unsealed"), "{text}");
+        assert!(text.contains("could have been copied"), "{text}");
+    }
+
+    /// A legacy audit whose v1 seal does not match is tampering or a wrong
+    /// key under the retired encoding — never a v2 record-identity failure.
+    #[test]
+    fn legacy_seal_mismatch_is_untrusted_without_record_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove("record_id");
+        document["audit_mac"] = json!("0".repeat(64));
+        rewrite_run_document(&directory, &document);
+
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "retired v1");
+        assert!(
+            !report["audit_error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("record identity"),
+            "{report}"
+        );
+    }
+
+    /// Rotation and tampering stay indistinguishable under v2, and that limit
+    /// is stated: a wrong key reports the rotation ambiguity, never the
+    /// legacy-weak wording.
+    #[test]
+    fn wrong_key_reports_rotation_ambiguity_distinct_from_legacy() {
+        let directory = tempfile::tempdir().unwrap();
+        audited_document(&directory);
+        let other_key = [0x44; 32];
+
+        let report: Value = serde_json::from_str(
+            &show_run_with_key(directory.path(), true, SealKey::Explicit(&other_key)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["audit_verified"], false);
+        let error = report["audit_error"].as_str().unwrap_or_default().to_owned();
+        assert!(error.contains("different key"), "{report}");
+        assert!(error.contains("indistinguishable"), "{report}");
+        assert!(!error.contains("retired v1"), "{report}");
+    }
+
+    /// Displayed trust scope: verification covers policy decisions only.
+    /// Both renderings name that scope, and editing the result does not move
+    /// the audit — pinning the whole-record limitation (issue #414).
+    #[test]
+    fn verified_output_names_policy_decisions_only_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        let document = audited_document(&directory);
+        assert_eq!(document["audit_seal_version"], json!(2));
+
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        assert!(text.contains("trust scope"), "{text}");
+        assert!(text.contains("policy decisions"), "{text}");
+        assert!(text.contains("shown as recorded"), "{text}");
+
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["audit_scope"], "policy-decisions-only");
+        assert_eq!(report["record_verified"], false);
+    }
+
+    #[test]
+    fn edited_result_keeps_audit_verified_with_scope_disclaimer() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        document["result"]["ok"] = json!(false);
+        document["result"]["error"] = json!("forged failure");
+        rewrite_run_document(&directory, &document);
+
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        assert!(text.contains("trust scope"), "{text}");
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        // The seal never covered the result: the audit still verifies while
+        // the forged result is shown as recorded. Whole-record binding is
+        // explicitly out of scope here (issue #414).
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["ok"], json!(false));
+        assert_eq!(report["error"], json!("forged failure"));
+        assert_eq!(report["audit_scope"], "policy-decisions-only");
     }
 }

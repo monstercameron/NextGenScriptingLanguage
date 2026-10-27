@@ -124,11 +124,38 @@ fn require_execution_policy(registry: &Registry) -> Result<()> {
     if registry.host_state::<Option<CapabilityPolicy>>().is_none()
         && execution_mode(registry) == ExecutionMode::Untrusted
     {
+        // A missing policy under untrusted execution denies the run: record
+        // it so a recorded run names the denial instead of failing silent.
+        record_policy_decision(
+            registry,
+            "<workflow>",
+            "execution.require_policy",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
         return Err(
             SandboxRefused("untrusted execution requires a capability policy".into()).into(),
         );
     }
     Ok(())
+}
+
+/// Record a structural preflight denial that carries no policy material: the
+/// subject names the applet (or `<workflow>`/host when there is none) and the
+/// action names the refused operation. Identifiers are scrubbed by
+/// `record_policy_decision`, so grants, paths and origins never reach the log.
+fn record_preflight_denial(registry: &Registry, subject: &str, action: &str) {
+    record_policy_decision(
+        registry,
+        subject,
+        action,
+        None,
+        PolicyRisk::High,
+        PolicyDecisionOutcome::Denied,
+        PolicyDecisionReason::MissingGrant,
+    );
 }
 
 fn validate_native_enforcement(grant: &AppletGrant, effects: &[String]) -> Result<()> {
@@ -1039,7 +1066,10 @@ fn preflight_program(
     // communicate with a remote service.
     for call in &calls {
         let manifest = registry.resolve_call(call)?;
-        validate_environment_backend(manifest)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
 
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
@@ -1052,22 +1082,31 @@ fn preflight_program(
         && calls.iter().any(|call| call.cache)
         && !cache_directory.is_some_and(Path::is_absolute)
     {
+        record_preflight_denial(registry, "<workflow>", "cache.directory");
         bail!(
             "capability policy requires an absolute cache directory when the program changes working directories"
         );
     }
 
     for name in policy.applets.keys() {
-        let manifest = registry
-            .resolve(name)
-            .with_context(|| format!("capability policy names unknown applet {name:?}"))?;
+        let manifest = match registry.resolve(name) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                record_preflight_denial(registry, name, "applet.invoke");
+                return Err(error)
+                    .with_context(|| format!("capability policy names unknown applet {name:?}"));
+            }
+        };
         if manifest.name != *name {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!("capability policy applet names must use canonical manifest names");
         }
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy grant for applet {name:?} has no version-1 contract")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy grant for applet {name:?} has no version-1 contract");
+        };
         if contract.version != 1 {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!(
                 "applet {name:?} has unsupported contract version {}",
                 contract.version
@@ -1135,7 +1174,11 @@ fn preflight_invocation_plan<'a>(
     require_execution_policy(registry)?;
     let calls = calls.into_iter().collect::<Vec<_>>();
     for call in &calls {
-        validate_environment_backend(registry.resolve_call(call)?)?;
+        let manifest = registry.resolve_call(call)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
@@ -1171,6 +1214,7 @@ fn preflight_cache_paths(
     for call in calls.iter().filter(|call| call.cache) {
         let manifest = registry.resolve_call(call)?;
         if call.direct {
+            record_preflight_denial(registry, "direct.command", "command.execute");
             bail!("capability policy denies direct quoted commands");
         }
         // A cache entry is opened for reading and may be atomically replaced
@@ -1184,16 +1228,24 @@ fn preflight_cache_paths(
 
 fn validate_policy_names(policy: &CapabilityPolicy, registry: &Registry) -> Result<()> {
     for name in policy.applets.keys() {
-        let manifest = registry
-            .resolve(name)
-            .with_context(|| format!("capability policy names unknown applet {name:?}"))?;
+        let manifest = match registry.resolve(name) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                record_preflight_denial(registry, name, "applet.invoke");
+                return Err(error)
+                    .with_context(|| format!("capability policy names unknown applet {name:?}"));
+            }
+        };
         if manifest.name != *name {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!("capability policy applet names must use canonical manifest names");
         }
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy grant for applet {name:?} has no version-1 contract")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy grant for applet {name:?} has no version-1 contract");
+        };
         if contract.version != 1 {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!(
                 "applet {name:?} has unsupported contract version {}",
                 contract.version
@@ -1237,10 +1289,12 @@ fn preflight_invocations_with_policy<'a>(
         }
         let manifest = registry.resolve_call(call)?;
         if manifest.builtin == Some(crate::manifest::Builtin::Cd) {
-            let value = call.parameters.get("path").ok_or_else(|| {
-                anyhow!("capability policy requires a literal path for the cd builtin")
-            })?;
+            let Some(value) = call.parameters.get("path") else {
+                record_preflight_denial(registry, &manifest.name, "filesystem.read");
+                bail!("capability policy requires a literal path for the cd builtin");
+            };
             let Value::String(path) = value else {
+                record_preflight_denial(registry, &manifest.name, "filesystem.read");
                 bail!(
                     "capability policy requires literal host filesystem paths that can be checked before effects"
                 );
@@ -1265,9 +1319,10 @@ fn preflight_invocations_with_policy<'a>(
             );
             bail!("capability policy has no allowlist entry for applet {name:?}");
         };
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy requires a version-1 contract for applet {name:?}")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy requires a version-1 contract for applet {name:?}");
+        };
         if let Some(environment) = &contract.environment {
             for variable in environment.set.keys() {
                 authorize_environment_override(registry, name, variable)?;
@@ -1279,32 +1334,41 @@ fn preflight_invocations_with_policy<'a>(
             AppletBackend::Command | AppletBackend::JsonLinesWorker
         ) && sandbox_required(registry, grant);
         if native_sandbox {
-            validate_native_enforcement(grant, &contract.effects)?;
+            if let Err(error) = validate_native_enforcement(grant, &contract.effects) {
+                record_preflight_denial(registry, name, "sandbox.enforce");
+                return Err(error);
+            }
         }
         match backend {
             AppletBackend::InProcess => {
                 if grant.sandbox_required {
+                    record_preflight_denial(registry, name, "sandbox.enforce");
                     bail!("required OS sandbox cannot isolate in-process applet {name:?}");
                 }
                 if grant.binary_sha256.is_some() {
+                    record_preflight_denial(registry, name, "binary.identity");
                     bail!("binary_sha256 cannot pin an in-process applet implementation");
                 }
                 if !is_policy_safe_in_process(name) || !contract.effects.is_empty() {
+                    record_preflight_denial(registry, name, "applet.invoke");
                     bail!(
                         "capability policy denies effectful or unreviewed in-process applet {name:?}"
                     );
                 }
             }
             AppletBackend::ProgramModule => {
+                record_preflight_denial(registry, name, "applet.invoke");
                 bail!(
                     "capability policy cannot isolate or fully preflight program module applet {name:?}"
                 );
             }
             AppletBackend::Remote => {
                 if grant.sandbox_required {
+                    record_preflight_denial(registry, name, "sandbox.enforce");
                     bail!("required OS sandbox cannot isolate remote applet {name:?}");
                 }
                 if grant.binary_sha256.is_some() {
+                    record_preflight_denial(registry, name, "binary.identity");
                     bail!("binary_sha256 cannot pin a remote applet implementation");
                 }
                 authorize_backend_capability(registry, name, grant, "network.connect")?;
@@ -1314,18 +1378,20 @@ fn preflight_invocations_with_policy<'a>(
             }
         }
         if grant.sandbox_required && !grant.network_origins.is_empty() {
+            record_preflight_denial(registry, name, "sandbox.enforce");
             bail!(
                 "required OS sandbox cannot enforce network origin restrictions for applet {name:?}"
             );
         }
         if backend != AppletBackend::Remote && !grant.network_origins.is_empty() {
+            record_preflight_denial(registry, name, "network.connect");
             bail!("network_origins is supported only for host-managed remote applets");
         }
         if backend == AppletBackend::Remote {
-            let remote = contract
-                .remote
-                .as_ref()
-                .ok_or_else(|| anyhow!("remote applet {name:?} has no endpoint configuration"))?;
+            let Some(remote) = contract.remote.as_ref() else {
+                record_preflight_denial(registry, name, "network.connect");
+                bail!("remote applet {name:?} has no endpoint configuration");
+            };
             authorize_network_endpoint(registry, name, &remote.endpoint)?;
             if let Some(auth) = &remote.auth {
                 match auth {
@@ -1334,6 +1400,7 @@ fn preflight_invocations_with_policy<'a>(
                     }
                     crate::contracts::RemoteAuthSource::BearerFile { path } => {
                         if !path.is_absolute() {
+                            record_preflight_denial(registry, name, "filesystem.read");
                             bail!("strict policy requires remote bearer-file paths to be absolute");
                         }
                         authorize_applet_host_path(registry, name, path, HostAccess::Read, cwd)?;
@@ -1349,12 +1416,19 @@ fn preflight_invocations_with_policy<'a>(
                 && !requested.starts_with('@')
                 && !Path::new(requested).is_absolute()
             {
+                record_preflight_denial(registry, name, "process.exec");
                 bail!(
                     "capability policy cannot resolve a relative or PATH executable after a dynamic working-directory change; use an absolute executable path"
                 );
             }
-            let resolved = crate::runtime::binary_path(requested, cwd)
-                .with_context(|| format!("resolving executable for applet {name:?}"))?;
+            let resolved = match crate::runtime::binary_path(requested, cwd) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    record_preflight_denial(registry, name, "process.exec");
+                    return Err(error)
+                        .with_context(|| format!("resolving executable for applet {name:?}"));
+                }
+            };
             Some(resolved)
         } else {
             None
@@ -1372,6 +1446,7 @@ fn preflight_invocations_with_policy<'a>(
         )?;
         if native_sandbox {
             if cwd_mode.is_dynamic() {
+                record_preflight_denial(registry, name, "sandbox.enforce");
                 bail!(
                     "required sandbox cannot preflight a program with dynamic working-directory changes"
                 );
@@ -1388,10 +1463,15 @@ fn preflight_invocations_with_policy<'a>(
     }
     // Complete declaration authorization for the whole program before probing
     // any sandbox facility, even for an earlier, otherwise authorized applet.
+    // A probe failure still denies the run, so it is recorded: otherwise a
+    // recorded run could fail with no denied entry in its audit.
     for (grant, binary, name) in sandboxes {
         if probe_sandbox {
-            preflight_native_sandbox(&grant, &binary, cwd)
-                .with_context(|| format!("preflighting required sandbox for applet {name:?}"))?;
+            if let Err(error) = preflight_native_sandbox(&grant, &binary, cwd) {
+                record_preflight_denial(registry, name, "sandbox.enforce");
+                return Err(error)
+                    .with_context(|| format!("preflighting required sandbox for applet {name:?}"));
+            }
         }
     }
     Ok(())
@@ -2367,17 +2447,25 @@ fn preflight_host_paths(
                         && registry.resolve_call(call)?.builtin
                             == Some(crate::manifest::Builtin::Cd) =>
                 {
-                    let path = call.parameters.get("path").ok_or_else(|| {
-                        anyhow!("capability policy requires a literal path for the cd builtin")
-                    })?;
+                    let Some(path) = call.parameters.get("path") else {
+                        record_preflight_denial(registry, "host", "filesystem.read");
+                        bail!("capability policy requires a literal path for the cd builtin");
+                    };
                     (path, HostAccess::Read)
                 }
                 _ => continue,
             };
             let Value::String(path) = path else {
+                record_preflight_denial(registry, "host", "filesystem.read");
                 bail!("capability policy requires literal host filesystem paths that can be checked before effects");
             };
-            let path = expand_home_path(path)?;
+            let path = match expand_home_path(path) {
+                Ok(path) => path,
+                Err(error) => {
+                    record_preflight_denial(registry, "host", "filesystem.read");
+                    return Err(error);
+                }
+            };
             if !cwd_mode.is_dynamic() || path.is_absolute() {
                 authorize_host_path(registry, &path, access, cwd)?;
             }

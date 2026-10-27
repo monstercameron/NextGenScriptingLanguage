@@ -1917,6 +1917,151 @@ mod tests {
     }
 
     #[test]
+    fn exact_issue_example_publishes_only_existing_lint_not_file_call_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let child = dir.path().join("sub");
+        fs::create_dir(&child).unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = child.join("callee.program");
+        let caller_text = "accept here as text from program directory\nrun program file \"sub/callee.program\" with theme \"dark\" as out\n";
+        let callee_text = "accept theme as text\nuse value theme\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, callee_text).unwrap();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({"rootUri":root_uri,"capabilities":{}}),
+        ));
+        for (uri, text) in [(&caller_uri, caller_text), (&callee_uri, callee_text)] {
+            input.extend(frame(json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":text}}})));
+        }
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let published = messages
+            .iter()
+            .filter(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == caller_uri
+            })
+            .last()
+            .unwrap();
+        let diagnostics = published["params"]["diagnostics"].as_array().unwrap();
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|d| (d["code"].as_str().unwrap(), d["severity"].as_u64().unwrap()))
+                .collect::<Vec<_>>(),
+            [("lint.unused_input", 2), ("lint.unused_binding", 2)],
+            "{published:#?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d["code"] == "lint.unused_binding"
+                    && d["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("out"))),
+            "{published:#?}"
+        );
+    }
+
+    #[test]
+    fn watched_callee_deletion_republishes_caller_error() {
+        struct DeleteBeforeWatch {
+            frames: Vec<Vec<u8>>,
+            frame: usize,
+            offset: usize,
+            callee: PathBuf,
+        }
+        impl Read for DeleteBeforeWatch {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                if self.frame >= self.frames.len() {
+                    return Ok(0);
+                }
+                if self.frame == 2 && self.offset == 0 {
+                    fs::remove_file(&self.callee)?;
+                }
+                let remaining = &self.frames[self.frame][self.offset..];
+                let count = output.len().min(remaining.len());
+                output[..count].copy_from_slice(&remaining[..count]);
+                self.offset += count;
+                if self.offset == self.frames[self.frame].len() {
+                    self.frame += 1;
+                    self.offset = 0;
+                }
+                Ok(count)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = dir.path().join("callee.program");
+        let source = "run program file \"callee.program\"\n";
+        fs::write(&caller, source).unwrap();
+        fs::write(&callee, "use value \"ok\"\n").unwrap();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
+        let input = DeleteBeforeWatch {
+            frames: vec![
+                frame(request(
+                    1,
+                    "initialize",
+                    json!({"rootUri":root_uri,"capabilities":{}}),
+                )),
+                frame(
+                    json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":caller_uri,"version":1,"text":source}}}),
+                ),
+                frame(
+                    json!({"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":callee_uri,"type":3}]}}),
+                ),
+                frame(request(2, "shutdown", JsonValue::Null)),
+            ],
+            frame: 0,
+            offset: 0,
+            callee,
+        };
+        let mut output = Vec::new();
+        run_with_io(input, &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let notifications: Vec<_> = messages
+            .iter()
+            .filter(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == caller_uri
+            })
+            .collect();
+        assert_eq!(notifications.len(), 2, "{notifications:#?}");
+        assert!(
+            notifications[0]["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|d| d["severity"] != 1),
+            "{notifications:#?}"
+        );
+        assert!(
+            notifications[1]["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["severity"] == 1
+                    && d["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("not found"))),
+            "{notifications:#?}"
+        );
+    }
+
+    #[test]
     fn issue_example_resolves_program_directory_and_callee() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("sub")).unwrap();

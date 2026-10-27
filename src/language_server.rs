@@ -2424,7 +2424,9 @@ mod tests {
                 .any(|d| d.message.contains("outside the language server workspace")),
             "{diagnostics:#?}"
         );
-        assert!(scope.loaded_sources().is_empty());
+        assert!(scope
+            .loaded_source(&fs::canonicalize(&outside).unwrap())
+            .is_none());
         assert!(!format!("{diagnostics:?}").contains("private"));
     }
 

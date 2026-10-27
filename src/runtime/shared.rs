@@ -2244,7 +2244,7 @@ pub fn explain_with_inputs(
             } => {
                 let manifest = registry.resolve_call(call)?;
                 let argv = match arguments_for_call(call, manifest, &known) {
-                    Ok(args) => serde_json::to_string(&args)?,
+                    Ok(args) => format!("{args:?}"),
                     Err(_) => format!(
                         "parameters {:?} (resolve program inputs at runtime)",
                         call.parameters
@@ -2492,7 +2492,7 @@ pub fn explain_with_inputs(
             StepKind::Invoke { call, connection } => {
                 let manifest = registry.resolve_call(call)?;
                 let argv = match arguments_for_call(call, manifest, &known) {
-                    Ok(argv) => serde_json::to_string(&argv)?,
+                    Ok(argv) => format!("{argv:?}"),
                     Err(_) => format!(
                         "parameters {:?} (resolve named results at runtime)",
                         call.parameters
@@ -2562,7 +2562,7 @@ pub fn explain_with_inputs(
         };
         rows.push(format!("line {}: {description}; {stdout}", step.line));
     }
-    Ok(rows.join("\n"))
+    Ok(crate::terminal_text::escape_controls(&rows.join("\n")))
 }
 
 fn resolve(value: &Value, bindings: &BTreeMap<String, Value>) -> Result<Value> {

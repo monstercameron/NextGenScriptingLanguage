@@ -371,6 +371,38 @@ fn text_explain_is_unchanged_without_the_flag() {
 }
 
 #[test]
+fn text_explain_escapes_terminal_controls_and_bidi_in_program_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run \"printf\" with arguments [\"\\u001b[31m\\u009b31m\\u202e\"] and environment {\"KEY\\u202e\": \"hidden\"}\n";
+    let output = explain(directory.path(), source, &[]);
+    assert!(
+        output.status.success(),
+        "explain failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !text.contains('\u{001b}'),
+        "raw ESC in explain output: {text:?}"
+    );
+    assert!(
+        !text.contains('\u{009b}'),
+        "raw C1 CSI in explain output: {text:?}"
+    );
+    assert!(
+        !text.contains('\u{202e}'),
+        "raw bidi override in explain output: {text:?}"
+    );
+    assert!(text.contains(r"\u{1b}[31m\u{9b}31m\u{202e}"), "{text:?}");
+    assert!(text.contains(r"KEY\u{202e}"), "{text:?}");
+    assert!(
+        !text.contains("hidden"),
+        "environment values must stay hidden: {text:?}"
+    );
+}
+
+#[test]
 fn json_is_rejected_for_run_and_the_check_json_contract_is_intact() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = write_manifests(directory.path());

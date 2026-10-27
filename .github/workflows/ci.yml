@@ -66,6 +66,12 @@ jobs:
           set -euo pipefail
           cargo test --locked --no-default-features --features test-fixtures --lib --tests
           cargo test --locked --features test-fixtures --lib --tests
+      - name: Measure Linux required-sandbox spawn overhead
+        if: runner.os == 'Linux'
+        run: >-
+          cargo test --locked --release --features test-fixtures --lib
+          platform::sandbox::tests::required_sandbox_100_spawn_overhead_and_probe_frequency
+          -- --ignored --nocapture --test-threads=1
       - name: Test standalone model feature
         run: cargo test --locked --no-default-features --features model --lib --tests
       - name: Verify daemon fallback across Linux namespaces

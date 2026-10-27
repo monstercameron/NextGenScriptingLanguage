@@ -100,6 +100,11 @@ thread_local! {
     static ACTIVE_PROBE_CACHE: RefCell<Option<ProbeCache>> = const { RefCell::new(None) };
 }
 
+#[cfg(all(test, target_os = "linux"))]
+thread_local! {
+    static TEST_BWRAP_PROBE_CHILDREN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Successful probes are reused only in the thread that owns the runtime run.
 /// Worker threads without an explicit run context bypass the cache, preventing
 /// reuse across threads with different per-thread credentials or namespaces.
@@ -594,6 +599,8 @@ fn probe_bwrap(bwrap: &Path, grant: &AppletGrant, binary: &Path, cwd: &Path) -> 
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(test)]
+    TEST_BWRAP_PROBE_CHILDREN.with(|count| count.set(count.get() + 1));
     let child = command.spawn().context("probing bubblewrap support")?;
     let status = wait_bounded(child, "bubblewrap")?;
     if !status.success() {
@@ -611,6 +618,8 @@ fn probe_bwrap(bwrap: &Path, grant: &AppletGrant, binary: &Path, cwd: &Path) -> 
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(test)]
+    TEST_BWRAP_PROBE_CHILDREN.with(|count| count.set(count.get() + 1));
     let child = command
         .spawn()
         .context("probing applet-specific bubblewrap mounts")?;
@@ -1207,6 +1216,100 @@ mod tests {
         .unwrap();
         drop(outer);
         assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    /// Linux CI acceptance measurement for issue #572. This deliberately runs
+    /// in release mode and is ignored in ordinary test suites because it is a
+    /// timing gate. The CI workflow invokes it explicitly after installing
+    /// Bubblewrap. The sandbox and baseline each launch the same executable
+    /// 100 times; sandbox preflight remains inside the timed launch loop.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "Linux CI performance acceptance; run explicitly in release mode"]
+    fn required_sandbox_100_spawn_overhead_and_probe_frequency() {
+        const SPAWNS: usize = 100;
+        const MAX_OVERHEAD_PER_SPAWN: u128 = 1_500_000;
+
+        let cwd = tempfile::tempdir().expect("temporary working directory");
+        let binary = [Path::new("/usr/bin/true"), Path::new("/bin/true")]
+            .into_iter()
+            .find(|path| path.is_file())
+            .expect("Linux CI must provide /usr/bin/true or /bin/true");
+        let grant = grant_for(cwd.path());
+        find_bwrap(cwd.path()).expect("Linux CI must install trusted Bubblewrap");
+
+        fn launch_plain(binary: &Path, cwd: &Path) {
+            let status = Command::new(binary)
+                .current_dir(cwd)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("launch baseline child");
+            assert!(status.success(), "baseline child failed: {status}");
+        }
+
+        fn launch_sandboxed(binary: &Path, cwd: &Path, grant: &AppletGrant) {
+            preflight(grant, binary, cwd).expect("required sandbox preflight");
+            let status = command(binary, std::iter::empty::<&OsStr>(), grant, cwd)
+                .expect("construct required sandbox command")
+                .current_dir(cwd)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("launch sandboxed child");
+            assert!(status.success(), "sandboxed child failed: {status}");
+        }
+
+        // Warm up the executable and filesystem before taking paired samples.
+        launch_plain(binary, cwd.path());
+        let warmup_guard = begin_probe_run_if_missing();
+        launch_sandboxed(binary, cwd.path(), &grant);
+        drop(warmup_guard);
+
+        let mut per_spawn_overheads = Vec::with_capacity(3);
+        for sample in 0..3 {
+            // Always collect the unsandboxed baseline first, as required by
+            // the acceptance contract.
+            let baseline_start = Instant::now();
+            for _ in 0..SPAWNS {
+                launch_plain(binary, cwd.path());
+            }
+            let baseline = baseline_start.elapsed();
+
+            TEST_BWRAP_PROBE_CHILDREN.with(|count| count.set(0));
+            let _probe_run = begin_probe_run();
+            let sandbox_start = Instant::now();
+            for _ in 0..SPAWNS {
+                launch_sandboxed(binary, cwd.path(), &grant);
+            }
+            let sandboxed = sandbox_start.elapsed();
+            let children = TEST_BWRAP_PROBE_CHILDREN.with(std::cell::Cell::get);
+            assert_eq!(
+                children, 2,
+                "sample {sample}: the two Bubblewrap validation probes must run exactly once per runtime run"
+            );
+            let overhead =
+                sandboxed.as_nanos().saturating_sub(baseline.as_nanos()) / SPAWNS as u128;
+            eprintln!(
+                "sample {sample}: baseline={:.3}ms sandboxed={:.3}ms overhead={:.3}us/spawn probes={children}",
+                baseline.as_secs_f64() * 1_000.0,
+                sandboxed.as_secs_f64() * 1_000.0,
+                overhead as f64 / 1_000.0,
+            );
+            assert!(
+                overhead <= MAX_OVERHEAD_PER_SPAWN,
+                "sample {sample} required-sandbox overhead exceeded 1.5ms per spawn: {overhead}ns"
+            );
+            per_spawn_overheads.push(overhead);
+        }
+
+        per_spawn_overheads.sort_unstable();
+        let median = per_spawn_overheads[per_spawn_overheads.len() / 2];
+        eprintln!(
+            "median sandbox overhead: {:.3}us/spawn across {SPAWNS} launches (each sample max {:.3}us)",
+            median as f64 / 1_000.0,
+            MAX_OVERHEAD_PER_SPAWN as f64 / 1_000.0,
+        );
     }
 
     #[cfg(target_os = "linux")]

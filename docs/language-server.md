@@ -45,8 +45,9 @@ roots. The server requests workspace file watches when the client supports dynam
 registration; otherwise watched-file notifications depend on the client. An untitled
 or unsaved file without a resolvable local path receives an
 informational message for file calls. Callee-specific locations and fixes remain
-limited by the diagnostic model; quick fixes use caller-only analysis until callee
-spans are available, and navigation and rename remain local to one file.
+limited by the diagnostic model. Quick fixes recompute diagnostics from the
+requested document's own current text and emit edits for that document; they do not
+include cross-file callee fixes. Navigation and rename remain local to one file.
 
 The VS Code grammar package remains usable without a language server. Configure
 an LSP client to launch `execute` with the `lsp` argument and associate it with

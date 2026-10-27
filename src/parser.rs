@@ -286,13 +286,23 @@ pub(crate) struct SuffixCompletionForm {
 
 /// Invocation suffixes from `parse_invocation`, `redirect_suffix`,
 /// `environment_suffix`, `parse_process_handoff` and the job `await` suffixes.
+///
+/// The core families are listed in the canonical `suffixes` order from the
+/// grammar (`as`, `and discard stderr`, `and keep status as`,
+/// `and keep result as`, `and keep secret`, `and cache`, then
+/// `and retry ...`; see `suffix_kind_rank`): completion only suggests a
+/// family in canonical position, and never suggests the combinations the
+/// parser rejects (`and retry` with `and cache`/`and keep status`/`and keep
+/// result`, `and keep secret` without `as`, `and discard stderr` for
+/// non-direct commands). Redirection and environment suffixes accept any
+/// relative order and follow the core families.
 pub(crate) fn invocation_suffix_forms() -> &'static [SuffixCompletionForm] {
     const FORMS: &[SuffixCompletionForm] = &[
         SuffixCompletionForm { label: "as", detail: "Bind the output to a name", snippet: Some("as ${1:binding}") },
+        SuffixCompletionForm { label: "and discard stderr", detail: "Discard stderr of a direct command", snippet: None },
         SuffixCompletionForm { label: "and keep status as", detail: "Bind the exit status", snippet: Some("and keep status as ${1:status}") },
         SuffixCompletionForm { label: "and keep result as", detail: "Bind the execution result", snippet: Some("and keep result as ${1:result}") },
         SuffixCompletionForm { label: "and keep secret", detail: "Mark the bound output sensitive", snippet: None },
-        SuffixCompletionForm { label: "and discard stderr", detail: "Discard stderr of a direct command", snippet: None },
         SuffixCompletionForm { label: "and cache", detail: "Cache a deterministic applet call", snippet: None },
         SuffixCompletionForm { label: "and retry up to", detail: "Retry a run command", snippet: Some("and retry up to ${1:3} times") },
         SuffixCompletionForm { label: "and stdin from", detail: "Feed a file as stdin", snippet: Some("and stdin from ${1:\"input.txt\"}") },
@@ -3518,7 +3528,11 @@ mod tests {
     fn statement_completion_covers_every_keyword() {
         // `cd` names an applet operation completed after `run`, `interactively`
         // and `redirect` are suffixes covered by `invocation_suffix_forms`, and
-        // `until` reserves a future loop word with no statement yet.
+        // `until` reserves a future loop word: it appears in no parser, a
+        // `grep` for `until` outside this list and the keyword table finds no
+        // consumer, so it intentionally has no statement form yet.
+        // (`stream from` is the streaming DSL in `stream.rs`, not program
+        // grammar, so it is correctly absent here too.)
         const NON_STATEMENT_HEADS: &[&str] = &["cd", "interactively", "redirect", "until"];
         let forms = statement_completion_forms();
         for keyword in STATEMENT_KEYWORDS {
@@ -3534,39 +3548,137 @@ mod tests {
                  add one to `statement_completion_forms`"
             );
         }
-        for required in [
-            "try",
-            "use value",
-            "take",
-            "on exit",
-            "on interrupt",
-            "with temporary file as",
-            "launch detached",
-            "hand over to",
-            "otherwise if",
+        // Full-label coverage: the first-word check above would miss a new
+        // head sharing an existing first word (another `with ...` form), so
+        // every form label is listed. Adding or removing a statement form
+        // must update this list.
+        const REQUIRED_FORMS: &[&str] = &[
+            "accept",
+            "break",
+            "cancel",
+            "catch",
+            "continue",
+            "define a program named",
+            "every",
+            "execute 1",
             "exit with status",
             "fail with message",
-            "then save to",
+            "finally",
+            "for each",
+            "hand over to",
+            "if",
+            "inspect",
+            "launch detached",
+            "listen to",
+            "on exit",
+            "on interrupt",
+            "on schedule",
+            "otherwise",
+            "otherwise if",
+            "parallel",
+            "parallel for each",
+            "pipe to",
+            "race",
+            "read",
+            "read from stdin",
+            "repeat",
+            "return",
+            "run",
+            "run program",
+            "run program file",
+            "spawn as",
+            "await",
+            "take",
+            "then",
             "then append to",
-        ] {
+            "then capture bytes as",
+            "then encode",
+            "then parse json as",
+            "then save to",
+            "try",
+            "use bytes",
+            "use environment",
+            "use folder",
+            "use value",
+            "use without environment",
+            "whenever a line arrives as",
+            "while",
+            "with temporary directory as",
+            "with temporary file as",
+        ];
+        for required in REQUIRED_FORMS {
             assert!(
-                forms.iter().any(|form| form.label == required),
+                forms.iter().any(|form| form.label == *required),
                 "completion is missing the `{required}` statement form"
             );
         }
-        for required in [
-            "and retry up to",
+        let distinct: std::collections::BTreeSet<&str> =
+            forms.iter().map(|form| form.label).collect();
+        assert_eq!(
+            distinct.len(),
+            forms.len(),
+            "statement completion form labels must be distinct"
+        );
+        assert_eq!(
+            forms.len(),
+            REQUIRED_FORMS.len(),
+            "statement completion added or dropped a form; update REQUIRED_FORMS"
+        );
+        const REQUIRED_SUFFIXES: &[&str] = &[
+            "as",
+            "and discard stderr",
             "and keep status as",
+            "and keep result as",
+            "and keep secret",
+            "and cache",
+            "and retry up to",
+            "and stdin from",
             "and stderr to",
+            "and stderr appended to",
+            "and stderr merged",
+            "and stdout to stderr",
             "and environment",
-        ] {
+            "and without environment",
+            "and output to",
+            "interactively",
+        ];
+        let suffixes = invocation_suffix_forms();
+        for required in REQUIRED_SUFFIXES {
             assert!(
-                invocation_suffix_forms()
-                    .iter()
-                    .any(|form| form.label == required),
+                suffixes.iter().any(|form| form.label == *required),
                 "completion is missing the `{required}` invocation suffix"
             );
         }
+        assert_eq!(
+            suffixes.len(),
+            REQUIRED_SUFFIXES.len(),
+            "invocation suffixes added or dropped a form; update REQUIRED_SUFFIXES"
+        );
+        // The core families must follow the canonical `suffixes` grammar
+        // order enforced by `suffix_kind_rank` and the `parse.suffix_order`
+        // diagnostic, so following a suggestion never needs a reorder fix.
+        let position = |label: &str| {
+            suffixes
+                .iter()
+                .position(|form| form.label == label)
+                .unwrap_or(usize::MAX)
+        };
+        let core = [
+            "as",
+            "and discard stderr",
+            "and keep status as",
+            "and keep result as",
+            "and keep secret",
+            "and cache",
+            "and retry up to",
+        ];
+        let order: Vec<usize> = core.iter().map(|label| position(label)).collect();
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            order, sorted,
+            "invocation suffixes are out of canonical order"
+        );
     }
 
     #[test]

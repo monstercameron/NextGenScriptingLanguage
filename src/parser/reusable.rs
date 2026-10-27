@@ -216,7 +216,7 @@ fn expand<'a>(
         {
             let (name, definition) =
                 definitions.get_key_value(&call.operation).ok_or_else(|| {
-                    match call.operation.strip_prefix(super::PROGRAM_FILE_PREFIX) {
+                    match crate::program_files::file_key_display_path(&call.operation) {
                         Some(path) => anyhow!(
                             "line {}: `run program file {path:?}` needs the program loaded from its file",
                             step.line

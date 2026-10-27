@@ -332,7 +332,7 @@ fn failures_in_all_execution_forms_are_structured_without_side_effects() {
         match expected_line {
             Some(line) => {
                 assert_eq!(diagnostic["span"]["line"], line);
-                let precision = if expected_code == "check.range" {
+                let precision = if matches!(expected_code, "check.range" | "parse.lexical") {
                     "token"
                 } else {
                     "line"
@@ -593,6 +593,41 @@ fn human_errors_and_option_rejection_remain_unchanged() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn called_file_diagnostics_keep_canonical_identity_for_display_alias_requests() {
+    let root = tempfile::tempdir().unwrap();
+    let callee = root.path().join("callee.program");
+    fs::write(
+        &callee,
+        "accept theme as text\nrun \"printf\" with arguments [them]\n",
+    )
+    .unwrap();
+    let canonical = callee.canonicalize().unwrap();
+    let canonical_text = canonical.to_string_lossy();
+    let display = canonical_text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical_text);
+    let caller = format!(
+        "run program file {}\n",
+        serde_json::to_string(display).unwrap()
+    );
+    fs::write(root.path().join("main.program"), caller).unwrap();
+
+    let result = report(
+        &invoke(root.path(), &["check", "main.program", "--json"]),
+        false,
+    );
+    let diagnostic = result["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "check.undefined_name")
+        .expect("callee diagnostic is reported for the canonical file identity");
+    assert_eq!(diagnostic["span"]["path"], canonical.display().to_string());
+    assert_eq!(diagnostic["span"]["line"], 2);
+}
+
 #[test]
 fn called_file_diagnostics_keep_their_own_source_and_call_site() {
     let root = tempfile::tempdir().unwrap();
@@ -662,12 +697,12 @@ fn nested_called_file_diagnostics_report_the_innermost_file() {
     fs::create_dir(root.path().join("sub")).unwrap();
     fs::write(
         root.path().join("main.program"),
-        "run program file \"sub/middle.program\"\n",
+        "use value \"root\"\nrun program file \"sub/middle.program\"\n",
     )
     .unwrap();
     fs::write(
         root.path().join("sub/middle.program"),
-        "run program file \"leaf.program\"\n",
+        "use value \"one\"\nuse value \"two\"\nrun program file \"leaf.program\"\n",
     )
     .unwrap();
     fs::write(
@@ -691,6 +726,26 @@ fn nested_called_file_diagnostics_report_the_innermost_file() {
             .to_string()
     );
     assert_eq!(diagnostic["span"]["line"], 1);
+    assert_eq!(
+        diagnostic["related"][0]["span"]["path"],
+        root.path()
+            .join("sub/middle.program")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    assert_eq!(diagnostic["related"][0]["span"]["line"], 3);
+    assert_eq!(
+        diagnostic["related"][1]["span"]["path"],
+        root.path()
+            .join("main.program")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    assert_eq!(diagnostic["related"][1]["span"]["line"], 2);
 }
 
 #[test]

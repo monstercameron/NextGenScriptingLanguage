@@ -868,7 +868,7 @@ impl Walker<'_> {
             .iter()
             .rev()
             .find_map(|open| {
-                open.strip_prefix(crate::parser::PROGRAM_FILE_PREFIX)
+                crate::program_files::file_key_display_path(open)
                     .and_then(|path| std::path::Path::new(path).parent())
                     .map(std::path::Path::to_path_buf)
             })

@@ -30,6 +30,9 @@ pub const MAX_PROGRAM_FILE_BYTES: u64 = 1024 * 1024;
 pub(crate) struct SourceLoadSnapshot {
     sources: std::sync::Arc<BTreeMap<PathBuf, String>>,
     requests: std::sync::Arc<BTreeMap<PathBuf, PathBuf>>,
+    call_paths: std::sync::Arc<BTreeMap<(PathBuf, usize), PathBuf>>,
+    failed_file: Option<PathBuf>,
+    failed_call_chain: Vec<(PathBuf, usize)>,
     replay_only: bool,
 }
 
@@ -44,8 +47,55 @@ impl SourceLoadSnapshot {
         self.replay_only
     }
 
-    pub(crate) fn loaded_source(&self, canonical: &Path) -> Option<String> {
-        self.sources.get(canonical).cloned()
+    /// Return captured source by canonical path or an exact requested path.
+    pub(crate) fn loaded_source(&self, path: &Path) -> Option<String> {
+        self.sources.get(path).cloned().or_else(|| {
+            self.requests
+                .get(path)
+                .and_then(|canonical| self.sources.get(canonical))
+                .cloned()
+        })
+    }
+
+    pub(crate) fn canonical_path_for_call(&self, parent: &Path, line: usize) -> Option<PathBuf> {
+        self.call_paths.get(&(parent.to_path_buf(), line)).cloned()
+    }
+
+    pub(crate) fn failed_file(&self) -> Option<(PathBuf, String, Vec<(PathBuf, usize)>)> {
+        let path = self.failed_file.as_ref()?;
+        Some((
+            path.clone(),
+            self.sources.get(path)?.clone(),
+            self.failed_call_chain.clone(),
+        ))
+    }
+
+    fn remember_request(&mut self, requested: &Path, canonical: &Path) {
+        let requests = std::sync::Arc::make_mut(&mut self.requests);
+        requests.insert(requested.to_path_buf(), canonical.to_path_buf());
+    }
+
+    fn remember_call(&mut self, parent: &Path, line: usize, canonical: &Path) {
+        std::sync::Arc::make_mut(&mut self.call_paths)
+            .insert((parent.to_path_buf(), line), canonical.to_path_buf());
+    }
+}
+
+pub(crate) fn file_key_display_path(key: &str) -> Option<&str> {
+    key.strip_prefix(PROGRAM_FILE_PREFIX)
+}
+
+fn remember_called_path(
+    paths: &mut BTreeMap<String, PathBuf>,
+    key: &str,
+    canonical: &Path,
+) -> bool {
+    match paths.entry(key.to_owned()) {
+        std::collections::btree_map::Entry::Occupied(entry) => entry.get().as_path() != canonical,
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(canonical.to_path_buf());
+            false
+        }
     }
 }
 
@@ -170,8 +220,16 @@ impl<'a> SourceScope<'a> {
     /// Exact source bytes authorized and used by the loader, including editor overlays.
     /// Consumed by callee-provenance diagnostics (#474) rather than rereading files.
     #[allow(dead_code)]
-    pub(crate) fn loaded_source(&self, canonical: &Path) -> Option<String> {
-        self.snapshot.borrow().sources.get(canonical).cloned()
+    pub(crate) fn loaded_source(&self, path: &Path) -> Option<String> {
+        self.snapshot.borrow().loaded_source(path)
+    }
+
+    pub(crate) fn canonical_path_for_call(&self, parent: &Path, line: usize) -> Option<PathBuf> {
+        self.snapshot.borrow().canonical_path_for_call(parent, line)
+    }
+
+    pub(crate) fn failed_file(&self) -> Option<(PathBuf, String, Vec<(PathBuf, usize)>)> {
+        self.snapshot.borrow().failed_file()
     }
 
     pub(crate) fn is_replay_only(&self) -> bool {
@@ -204,7 +262,9 @@ fn parse_source_resolved_inner<'a>(
     let mut loader = Loader {
         access,
         called: BTreeMap::new(),
+        called_paths: BTreeMap::new(),
         stack: Vec::new(),
+        call_chain: Vec::new(),
         #[cfg(feature = "lsp")]
         scope,
         snapshot,
@@ -236,7 +296,10 @@ pub(crate) fn parse_at_with_snapshot(
     access: Option<Access<'_>>,
     replay: Option<&SourceLoadSnapshot>,
 ) -> (Result<Program>, SourceLoadSnapshot) {
-    let snapshot = std::cell::RefCell::new(replay.cloned().unwrap_or_default());
+    let mut captured = replay.cloned().unwrap_or_default();
+    captured.failed_file = None;
+    captured.failed_call_chain.clear();
+    let snapshot = std::cell::RefCell::new(captured);
     let parsed = match path {
         Some(path) if snapshot.borrow().replay_only => {
             // A replay must use the same canonical parent used when the request
@@ -276,6 +339,11 @@ pub(crate) fn parse_at_scoped<'a>(
     access: Option<Access<'a>>,
     scope: Option<&'a SourceScope<'a>>,
 ) -> Result<Program> {
+    if let Some(scope) = scope {
+        let mut snapshot = scope.snapshot.borrow_mut();
+        snapshot.failed_file = None;
+        snapshot.failed_call_chain.clear();
+    }
     match path {
         Some(path) => {
             #[cfg(feature = "lsp")]
@@ -304,10 +372,14 @@ struct Loader<'a> {
     #[cfg(feature = "lsp")]
     scope: Option<&'a SourceScope<'a>>,
     snapshot: Option<&'a std::cell::RefCell<SourceLoadSnapshot>>,
-    /// Called files, keyed by `file:` plus their canonical path.
+    /// Called files, keyed by their public `file:` display key.
     called: BTreeMap<String, ReusableProgram>,
+    /// Canonical file identity for each public display key.
+    called_paths: BTreeMap<String, PathBuf>,
     /// Canonical paths of the files being resolved, outermost first.
     stack: Vec<PathBuf>,
+    /// Callsite edges from the root program to the current file.
+    call_chain: Vec<(PathBuf, usize)>,
 }
 
 impl Loader<'_> {
@@ -387,6 +459,22 @@ impl Loader<'_> {
             bail!("line {line}: called program file is outside the language server workspace");
         }
         let key = format!("{PROGRAM_FILE_PREFIX}{shown}");
+        if remember_called_path(&mut self.called_paths, &key, &canonical) {
+            bail!(
+                "line {line}: called program files have the same display path but different canonical identities"
+            );
+        }
+        let parent = self.stack.last().cloned();
+        if let (Some(snapshot), Some(parent)) = (self.snapshot, parent.as_deref()) {
+            let mut snapshot = snapshot.borrow_mut();
+            #[cfg(feature = "lsp")]
+            let replaying = replay_only;
+            #[cfg(not(feature = "lsp"))]
+            let replaying = snapshot.replay_only;
+            if !replaying {
+                snapshot.remember_call(parent, line, &canonical);
+            }
+        }
         if self.called.contains_key(&key) {
             if let Some(snapshot) = self.snapshot {
                 let mut snapshot = snapshot.borrow_mut();
@@ -395,8 +483,7 @@ impl Loader<'_> {
                 #[cfg(not(feature = "lsp"))]
                 let replaying = snapshot.replay_only;
                 if !replaying && snapshot.sources.contains_key(&canonical) {
-                    std::sync::Arc::make_mut(&mut snapshot.requests)
-                        .insert(path.to_path_buf(), canonical.clone());
+                    snapshot.remember_request(path, &canonical);
                 }
             }
             return Ok(key);
@@ -457,11 +544,18 @@ impl Loader<'_> {
             if !replaying {
                 std::sync::Arc::make_mut(&mut snapshot.sources)
                     .insert(canonical.clone(), source.to_owned());
-                std::sync::Arc::make_mut(&mut snapshot.requests)
-                    .insert(path.to_path_buf(), canonical.clone());
+                snapshot.remember_request(path, &canonical);
             }
         }
         let mut raw = parser::parse_raw(source).map_err(|error| {
+            if let Some(snapshot) = self.snapshot {
+                let mut snapshot = snapshot.borrow_mut();
+                snapshot.failed_file = Some(canonical.clone());
+                snapshot.failed_call_chain = self.call_chain.clone();
+                if let Some(parent) = self.stack.last() {
+                    snapshot.failed_call_chain.push((parent.clone(), line));
+                }
+            }
             anyhow::anyhow!(
                 "line {}: called program file {shown} is not valid program text",
                 error_line(&error).unwrap_or(1)
@@ -502,7 +596,16 @@ impl Loader<'_> {
             }
         }
         self.stack.push(canonical.clone());
+        let pushed_callsite = if let Some(parent) = parent {
+            self.call_chain.push((parent, line));
+            true
+        } else {
+            false
+        };
         let resolved = self.resolve(&mut raw, &canonical);
+        if pushed_callsite {
+            self.call_chain.pop();
+        }
         self.stack.pop();
         resolved?;
         self.called.insert(
@@ -630,7 +733,7 @@ pub fn program_directory(path: &Path) -> Option<PathBuf> {
 /// Shows a `file:` definition key as its path relative to `base`, the calling
 /// program's directory. Other keys, and keys without a base, are shown unchanged.
 pub fn display_key(key: &str, base: Option<&Path>) -> String {
-    let (Some(target), Some(base)) = (key.strip_prefix(PROGRAM_FILE_PREFIX), base) else {
+    let (Some(target), Some(base)) = (file_key_display_path(key), base) else {
         return key.to_owned();
     };
     let target = Path::new(target);
@@ -655,4 +758,137 @@ pub fn display_key(key: &str, base: Option<&Path>) -> String {
             .map(|part| part.as_os_str().to_string_lossy().into_owned()),
     );
     format!("{PROGRAM_FILE_PREFIX}{}", parts.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_snapshot_keeps_verbatim_identity_separate_from_display_path() {
+        let requested = PathBuf::from(r"\\?\C:\workspace\sub\..\callee.program");
+        let canonical = PathBuf::from(r"\\?\C:\workspace\callee.program");
+        let shown = display_path(&canonical);
+        let key = format!("{PROGRAM_FILE_PREFIX}{shown}");
+        let mut snapshot = SourceLoadSnapshot::default();
+        std::sync::Arc::make_mut(&mut snapshot.sources).insert(canonical.clone(), "run\n".into());
+        snapshot.remember_request(&requested, &canonical);
+        let caller = PathBuf::from(r"\\?\C:\workspace\main.program");
+        snapshot.remember_call(&caller, 3, &canonical);
+
+        assert_eq!(snapshot.loaded_source(&canonical).as_deref(), Some("run\n"));
+        assert_eq!(snapshot.loaded_source(&requested).as_deref(), Some("run\n"));
+        assert_eq!(snapshot.loaded_source(&PathBuf::from(&shown)), None);
+        assert_eq!(
+            snapshot.canonical_path_for_call(&caller, 3),
+            Some(canonical.clone())
+        );
+        assert_eq!(file_key_display_path(&key), Some(shown.as_str()));
+        assert_eq!(
+            display_key(&key, None),
+            format!("{PROGRAM_FILE_PREFIX}{shown}")
+        );
+    }
+
+    #[test]
+    fn snapshot_maps_each_canonical_path_by_callsite() {
+        let first = PathBuf::from(r"\\?\C:\workspace\callee.program.");
+        let second = PathBuf::from(r"\\?\C:\workspace\callee.program ");
+        let caller = PathBuf::from(r"\\?\C:\workspace\main.program");
+        let first_display_key = format!("{PROGRAM_FILE_PREFIX}C:\\workspace\\callee.program");
+        let second_display_key = format!("{PROGRAM_FILE_PREFIX}C:\\workspace\\callee.program");
+        assert_eq!(first_display_key, second_display_key);
+
+        let mut snapshot = SourceLoadSnapshot::default();
+        std::sync::Arc::make_mut(&mut snapshot.sources).insert(first.clone(), "first\n".into());
+        std::sync::Arc::make_mut(&mut snapshot.sources).insert(second.clone(), "second\n".into());
+        snapshot.remember_call(&caller, 1, &first);
+        snapshot.remember_call(&caller, 2, &second);
+
+        assert_eq!(
+            snapshot.canonical_path_for_call(&caller, 1),
+            Some(first.clone())
+        );
+        assert_eq!(
+            snapshot.canonical_path_for_call(&caller, 2),
+            Some(second.clone())
+        );
+        snapshot.failed_file = Some(second.clone());
+        snapshot.failed_call_chain = vec![(caller, 2)];
+        assert_eq!(
+            snapshot.failed_file(),
+            Some((
+                second,
+                "second\n".into(),
+                vec![(PathBuf::from(r"\\?\C:\workspace\main.program"), 2)]
+            ))
+        );
+    }
+
+    #[test]
+    fn a_display_key_collision_with_distinct_canonical_files_is_rejected() {
+        let first = PathBuf::from(r"\\?\C:\workspace\callee.program.");
+        let second = PathBuf::from(r"\\?\C:\workspace\callee.program ");
+        let mut paths = BTreeMap::new();
+
+        assert!(!remember_called_path(
+            &mut paths,
+            "file:C:\\workspace\\callee.program",
+            &first
+        ));
+        assert!(remember_called_path(
+            &mut paths,
+            "file:C:\\workspace\\callee.program",
+            &second
+        ));
+    }
+
+    #[test]
+    fn public_file_definition_keys_remain_plain_serializable_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let main = root.path().join("main.program");
+        let callee = root.path().join("callee.program");
+        std::fs::write(&main, "run program file \"callee.program\"\n").unwrap();
+        std::fs::write(&callee, "use value \"ok\"\n").unwrap();
+        let registry = Registry::default();
+        let access = Access {
+            registry: &registry,
+            cwd: root.path(),
+        };
+        let program = parse_at(
+            "run program file \"callee.program\"\n",
+            Some(&main),
+            Some(access),
+        )
+        .unwrap();
+        let expected = format!(
+            "{PROGRAM_FILE_PREFIX}{}",
+            display_path(&fs::canonicalize(&callee).unwrap())
+        );
+        let call = match &program.steps[0].kind {
+            StepKind::CallProgram { call, .. } => call,
+            other => panic!("expected a file call, got {other:?}"),
+        };
+        assert_eq!(call.operation, expected);
+        assert!(program.definitions.contains_key(&expected));
+        let serialized = serde_json::to_value(&program).unwrap();
+        assert!(serialized["definitions"]
+            .as_object()
+            .unwrap()
+            .contains_key(&expected));
+        assert!(!serialized.to_string().contains("\\u0000"));
+        fn contains_string(value: &serde_json::Value, expected: &str) -> bool {
+            match value {
+                serde_json::Value::String(value) => value == expected,
+                serde_json::Value::Array(values) => {
+                    values.iter().any(|value| contains_string(value, expected))
+                }
+                serde_json::Value::Object(values) => values
+                    .values()
+                    .any(|value| contains_string(value, expected)),
+                _ => false,
+            }
+        }
+        assert!(contains_string(&serialized, &expected));
+    }
 }

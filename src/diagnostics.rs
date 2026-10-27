@@ -741,23 +741,25 @@ fn analyze_source_impl(
                     }
                     collect_file_calls(&definition.steps, &mut calls);
                 }
-                for (line, call) in calls
+                for (line, _call) in calls
                     .iter()
                     .filter(|(_, call)| call.operation.starts_with("file:"))
                 {
-                    let key = &call.operation;
-                    let Some(child_path) = key.strip_prefix("file:").map(std::path::PathBuf::from)
-                    else {
+                    let caller_path = source_path.as_deref().unwrap_or(parent_path);
+                    let child_path = captured_snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.canonical_path_for_call(caller_path, *line));
+                    #[cfg(feature = "lsp")]
+                    let child_path = child_path.or_else(|| {
+                        scope.and_then(|scope| scope.canonical_path_for_call(caller_path, *line))
+                    });
+                    let Some(child_path) = child_path else {
                         continue;
                     };
                     #[cfg(feature = "lsp")]
                     let child_source = scope
                         .and_then(|scope| scope.loaded_source(&child_path))
-                        .or_else(|| {
-                            captured_snapshot
-                                .as_ref()
-                                .and_then(|snapshot| snapshot.loaded_source(&child_path))
-                        });
+                        .or_else(|| captured_snapshot.as_ref()?.loaded_source(&child_path));
                     #[cfg(not(feature = "lsp"))]
                     let child_source = captured_snapshot
                         .as_ref()
@@ -800,61 +802,68 @@ fn analyze_source_impl(
             let replay_snapshot = captured_snapshot
                 .as_ref()
                 .map(crate::program_files::SourceLoadSnapshot::replay);
-            if let Some(path_text) =
-                message
-                    .split_once("called program file ")
-                    .and_then(|(_, tail)| {
-                        tail.split_once(" is not valid program text")
-                            .map(|(path, _)| path)
-                    })
+            if message.contains("called program file ")
+                && message.contains(" is not valid program text")
             {
-                let child_path = std::path::PathBuf::from(path_text);
-                #[cfg(feature = "lsp")]
-                let child_source = scope
-                    .and_then(|scope| scope.loaded_source(&child_path))
-                    .or_else(|| {
-                        captured_snapshot
-                            .as_ref()
-                            .and_then(|snapshot| snapshot.loaded_source(&child_path))
-                    });
-                #[cfg(not(feature = "lsp"))]
-                let child_source = captured_snapshot
+                let failed_file = captured_snapshot
                     .as_ref()
-                    .and_then(|snapshot| snapshot.loaded_source(&child_path));
-                if let (Some(parent_path), Some(child_source)) = (path, child_source) {
-                    let mut child = analyze_child_source(
-                        &child_source,
-                        &child_path,
-                        registry,
-                        #[cfg(feature = "lsp")]
-                        replay_scope.as_ref(),
-                        replay_snapshot.as_ref(),
-                    );
-                    let name = child_path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("");
-                    let call_line = source
-                        .lines()
-                        .position(|line| line.contains(name))
-                        .map_or(1, |line| line + 1);
-                    let mut callsite = line_starts.span(source, call_line);
-                    let parent_path = source_path.as_deref().unwrap_or(parent_path);
-                    callsite.path = Some(parent_path.display().to_string());
-                    callsite.path_bytes = Some(parent_path.as_os_str().as_encoded_bytes().to_vec());
-                    for diagnostic in &mut child {
-                        diagnostic.related.push(RelatedInformation {
-                            message: "called from here".into(),
-                            span: callsite.clone(),
+                    .and_then(crate::program_files::SourceLoadSnapshot::failed_file);
+                #[cfg(feature = "lsp")]
+                let failed_file =
+                    failed_file.or_else(|| scope.and_then(|scope| scope.failed_file()));
+                if let Some((child_path, child_source, call_chain)) = failed_file {
+                    if path.is_some() {
+                        let mut child = analyze_child_source(
+                            &child_source,
+                            &child_path,
+                            registry,
                             #[cfg(feature = "lsp")]
-                            lsp_range: Some(line_starts.lsp_range(
-                                source,
-                                callsite.start_byte,
-                                callsite.end_byte,
-                            )),
-                        });
+                            replay_scope.as_ref(),
+                            replay_snapshot.as_ref(),
+                        );
+                        for (caller_path, call_line) in call_chain.into_iter().rev() {
+                            let caller_source = source_path
+                                .as_deref()
+                                .filter(|path| *path == caller_path.as_path())
+                                .map(|_| source.to_owned())
+                                .or_else(|| {
+                                    captured_snapshot
+                                        .as_ref()
+                                        .and_then(|snapshot| snapshot.loaded_source(&caller_path))
+                                })
+                                .or_else(|| {
+                                    #[cfg(feature = "lsp")]
+                                    {
+                                        scope.and_then(|scope| scope.loaded_source(&caller_path))
+                                    }
+                                    #[cfg(not(feature = "lsp"))]
+                                    {
+                                        None
+                                    }
+                                });
+                            let Some(caller_source) = caller_source else {
+                                continue;
+                            };
+                            let starts = LineStarts::new(&caller_source);
+                            let mut callsite = starts.span(&caller_source, call_line);
+                            callsite.path = Some(caller_path.display().to_string());
+                            callsite.path_bytes =
+                                Some(caller_path.as_os_str().as_encoded_bytes().to_vec());
+                            for diagnostic in &mut child {
+                                diagnostic.related.push(RelatedInformation {
+                                    message: "called from here".into(),
+                                    span: callsite.clone(),
+                                    #[cfg(feature = "lsp")]
+                                    lsp_range: Some(starts.lsp_range(
+                                        &caller_source,
+                                        callsite.start_byte,
+                                        callsite.end_byte,
+                                    )),
+                                });
+                            }
+                        }
+                        diagnostics.append(&mut child);
                     }
-                    diagnostics.append(&mut child);
                 }
             }
             let error_line = find_line_number(&message).unwrap_or(1);

@@ -36,6 +36,41 @@ pub struct CodeInfo {
 /// meaning gets a new code, and the family is documented per code.
 pub const CODES: &[CodeInfo] = &[
     CodeInfo {
+        code: "check.duplicate_name",
+        family: "validate",
+        meaning: "a result, input, label, or program name is declared more than once",
+    },
+    CodeInfo {
+        code: "check.scope",
+        family: "validate",
+        meaning: "a control-flow or job statement is used outside its valid construct",
+    },
+    CodeInfo {
+        code: "check.program.unknown",
+        family: "resolve",
+        meaning: "a called reusable program is not defined",
+    },
+    CodeInfo {
+        code: "check.program.input.unknown",
+        family: "validate",
+        meaning: "a reusable program call supplies an input it does not declare",
+    },
+    CodeInfo {
+        code: "check.program.input.required",
+        family: "validate",
+        meaning: "a reusable program call omits a required input",
+    },
+    CodeInfo {
+        code: "check.range",
+        family: "validate",
+        meaning: "a literal is outside the supported range for its setting",
+    },
+    CodeInfo {
+        code: "check.parameter.direct",
+        family: "validate",
+        meaning: "a direct executable call uses named applet parameters",
+    },
+    CodeInfo {
         code: "check.bound_output_withheld",
         family: "validate",
         meaning: "a final bound value is internal; explicitly reuse it to produce program stdout",
@@ -352,10 +387,11 @@ pub fn analyze_source_at(
             let message = format!("{error:#}");
             let error_line = find_line_number(&message).unwrap_or(1);
             if !local_error_lines.contains(&error_line) {
-                diagnostics.push(Diagnostic::error(
-                    syntax_code(&message),
-                    message,
-                    line_starts.span(source, error_line),
+                diagnostics.push(classified_parse_error(
+                    source,
+                    &message,
+                    error_line,
+                    &line_starts,
                 ));
             }
         }
@@ -384,6 +420,99 @@ pub fn analyze_source_at(
         ));
     }
     diagnostics
+}
+
+/// Parser errors include both grammar failures and semantic constraints checked
+/// while building the AST. Keep those constraints out of the `parse.*` family.
+fn classified_parse_error(
+    source: &str,
+    message: &str,
+    line: usize,
+    line_starts: &LineStarts,
+) -> Diagnostic {
+    let lower = message.to_ascii_lowercase();
+    let code = if lower.contains("duplicate")
+        && (lower.contains("label")
+            || lower.contains("input")
+            || lower.contains("program")
+            || lower.contains("binding")
+            || lower.contains("name"))
+    {
+        "check.duplicate_name"
+    } else if (lower.contains("only valid inside") || lower.contains("only valid in"))
+        && (lower.contains("loop") || lower.contains("reusable program"))
+        || lower.contains("must be awaited inside")
+        || lower.contains("cannot be cancelled outside")
+    {
+        "check.scope"
+    } else if lower.contains("undefined program")
+        || lower.contains("program") && lower.contains("not found")
+    {
+        "check.program.unknown"
+    } else if lower.contains("input")
+        && (lower.contains("not declared")
+            || lower.contains("unknown input")
+            || lower.contains("has no input"))
+        "check.program.input.unknown"
+    } else if lower.contains("required input")
+        || lower.contains("missing required input")
+        || lower.contains("requires input")
+    {
+        "check.program.input.required"
+    } else if lower.contains("outside the supported")
+        || lower.contains("must be a positive integer in range")
+        || lower.contains("status must be")
+        || lower.contains("retry count") && lower.contains("range")
+    {
+        "check.range"
+    } else if lower.contains("direct executable") && lower.contains("parameter") {
+        "check.parameter.direct"
+    } else {
+        syntax_code(message)
+    };
+    let line_span = line_starts.span(source, line);
+    let token = line_words_from_start(source, line_span.start_byte)
+        .into_iter()
+        .find(|word| !word.3 && semantic_token_matches(word.0, &lower));
+    let span = token
+        .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
+        .unwrap_or(line_span);
+    let mut diagnostic = Diagnostic::error(code, message, span.clone());
+    if code == "check.program.unknown" && span.precision == SpanPrecision::Token {
+        let names = parser::logical_lines(source)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|statement| {
+                let tokens = parser::tokenize(&statement.text).ok()?;
+                match tokens.as_slice() {
+                    [Token::Word("define"), Token::Word(name), ..] => Some((*name).to_owned()),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        if let Some(suggestion) = suggest::closest(
+            &source[span.start_byte..span.end_byte],
+            names.iter().map(String::as_str),
+        ) {
+            diagnostic
+                .message
+                .push_str(&format!("; did you mean {suggestion:?}?"));
+            diagnostic.fixes.push(SuggestedFix::replace(
+                format!("replace the program name with {suggestion:?}"),
+                span,
+                suggestion,
+            ));
+        }
+    }
+    diagnostic
+}
+
+fn semantic_token_matches(token: &str, message: &str) -> bool {
+    let token = token.to_ascii_lowercase();
+    ["break", "continue", "return", "await", "cancel", "status", "retry", "repeat"]
+        .iter()
+        .any(|candidate| token == *candidate && message.contains(candidate))
+        || message.contains(&format!("{token:?}"))
 }
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {
@@ -639,6 +768,30 @@ fn collect_program_diagnostics(
             );
         }
         if call.direct {
+            for name in call.parameters.keys() {
+                if name == "arguments" {
+                    continue;
+                }
+                let span = find_parameter_span_at(source, line, name, line_starts)
+                    .unwrap_or_else(|| line_starts.span(source, line));
+                let mut diagnostic = Diagnostic::error(
+                    "check.parameter.direct",
+                    format!(
+                        "direct executable {:?} does not accept parameter {name:?}; use `arguments` for its argument list",
+                        call.operation
+                    ),
+                    span.clone(),
+                );
+                if name == "args" && span.precision == SpanPrecision::Token {
+                    diagnostic.message.push_str("; did you mean \"arguments\"?");
+                    diagnostic.fixes.push(SuggestedFix::replace(
+                        "rename `args` to `arguments`",
+                        span,
+                        "arguments",
+                    ));
+                }
+                diagnostics.push(diagnostic);
+            }
             add_call_bindings(call, &mut known_names);
             continue;
         }

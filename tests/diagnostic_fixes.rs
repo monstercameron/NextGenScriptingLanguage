@@ -162,3 +162,51 @@ fn diagnostics_without_a_fix_keep_their_json_shape() {
         "empty fixes are omitted: {value}"
     );
 }
+
+#[test]
+fn semantic_parser_errors_have_specific_codes_and_token_spans() {
+    for (source, code, token) in [
+        ("break\n", "check.scope", "break"),
+        (
+            "step: run \"printf\" with arguments [\"x\"]\nstep: run \"printf\" with arguments [\"y\"]\n",
+            "check.duplicate_name",
+            "step",
+        ),
+        (
+            "exit with status 300\n",
+            "check.range",
+            "status",
+        ),
+        (
+            "define worker\n  run \"true\"\n\nrun program workre\n",
+            "check.program.unknown",
+            "workre",
+        ),
+    ] {
+        let diagnostics = analyze_source(source, &Registry::default());
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("expected {code}: {diagnostics:#?}"));
+        assert_eq!(diagnostic.span.precision, flow::diagnostics::SpanPrecision::Token);
+        assert_eq!(
+            &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
+            token
+        );
+        if code == "check.program.unknown" {
+            let repaired = apply(source, diagnostic.fixes.first().expect("program name fix"));
+            assert!(repaired.contains("run program worker\n"));
+            assert!(analyze_source(&repaired, &Registry::default()).is_empty());
+        }
+    }
+}
+
+#[test]
+fn direct_executable_args_typo_has_a_machine_applicable_fix() {
+    let source = "run \"grep\" with args [\"needle\"]\n";
+    let diagnostic = only_diagnostic(source, &Registry::default(), "check.parameter.direct");
+    assert!(diagnostic.message.contains("did you mean \"arguments\""));
+    let fixed = apply(source, diagnostic.fixes.first().expect("rename fix"));
+    assert_eq!(fixed, "run \"grep\" with arguments [\"needle\"]\n");
+    assert!(analyze_source(&fixed, &Registry::default()).is_empty());
+}

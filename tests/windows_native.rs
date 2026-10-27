@@ -187,6 +187,74 @@ fn real_native_statuses_propagate_or_can_be_handled() {
 }
 
 #[test]
+fn producer_broken_pipe_after_early_reader_exit_is_pipeline_success() {
+    let folder = tempfile::tempdir().unwrap();
+    for status in ["120", "141", "1"] {
+        let source = format!(
+            "{}pipe to {} with arguments [\"first-line\"]\n",
+            native(&["flood-lines", status]).trim_end(),
+            quoted(&fixture())
+        );
+        let result = invoke(folder.path(), &source, &[]);
+        ok(&result);
+        assert_eq!(result.stdout, b"first\n", "producer status {status}");
+    }
+}
+
+#[test]
+fn early_windows_reader_close_is_recorded_on_the_producer_stage() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = format!(
+        "{}pipe to {} with arguments [\"first-line\"] and keep result as execution\nthen encode execution as json\n",
+        native(&["flood-lines", "120"]).trim_end(),
+        quoted(&fixture())
+    );
+    let result = invoke(folder.path(), &source, &[]);
+    ok(&result);
+    let execution: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(execution["stages"][0]["broken_pipe"], true);
+}
+
+#[test]
+fn producer_failure_before_reader_closes_still_fails_pipeline() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = format!(
+        "{}pipe to {} with arguments [\"delayed-copy\"]\n",
+        native(&["exit", "42", "partial"]).trim_end(),
+        quoted(&fixture())
+    );
+    let result = invoke(folder.path(), &source, &[]);
+    assert_eq!(result.status.code(), Some(42));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("failed (exit code: 42)"));
+}
+
+#[test]
+fn producer_python_120_before_reader_close_still_fails_pipeline() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = format!(
+        "{}pipe to {} with arguments [\"delayed-copy\"]\n",
+        native(&["exit", "120", "partial"]).trim_end(),
+        quoted(&fixture())
+    );
+    let result = invoke(folder.path(), &source, &[]);
+    assert_eq!(result.status.code(), Some(120));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("failed (exit code: 120)"));
+}
+
+#[test]
+fn unrelated_failure_after_early_reader_close_still_fails_pipeline() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = format!(
+        "{}pipe to {} with arguments [\"first-line\"]\n",
+        native(&["flood-independent-failure"]).trim_end(),
+        quoted(&fixture())
+    );
+    let result = invoke(folder.path(), &source, &[]);
+    assert_eq!(result.status.code(), Some(42));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("failed (exit code: 42)"));
+}
+
+#[test]
 fn native_stderr_discard_preserves_child_status_result_and_interpreter_diagnostics() {
     let folder = tempfile::tempdir().unwrap();
     let source = format!(

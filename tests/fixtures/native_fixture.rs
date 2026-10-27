@@ -27,6 +27,52 @@ fn main() {
                 remaining -= next;
             }
         }
+        "flood-lines" => {
+            // Fill more than an anonymous pipe can hold. After a downstream
+            // reader exits, choose a process-defined status as many Windows
+            // runtimes do when stdout reports ERROR_NO_DATA / ERROR_BROKEN_PIPE.
+            let status: i32 = args[1].parse().unwrap();
+            let mut stdout = std::io::stdout().lock();
+            let chunk = [b'x'; 8192];
+            let result = (|| -> std::io::Result<()> {
+                stdout.write_all(b"first\n")?;
+                for _ in 0..128 {
+                    stdout.write_all(&chunk)?;
+                }
+                stdout.flush()
+            })();
+            if let Err(error) = result {
+                if error.kind() == std::io::ErrorKind::BrokenPipe {
+                    std::process::exit(status);
+                }
+                std::process::exit(90);
+            }
+        }
+        "flood-independent-failure" => {
+            // Even if the reader closes, this process exits with its own
+            // unrelated failure status after attempting a large write.
+            let mut stdout = std::io::stdout().lock();
+            let chunk = [b'x'; 8192];
+            let _ = stdout.write_all(b"first\n");
+            for _ in 0..128 {
+                match stdout.write_all(&chunk) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => break,
+                    Err(_) => std::process::exit(90),
+                }
+            }
+            std::process::exit(42);
+        }
+        "first-line" => {
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line).unwrap();
+            std::io::stdout().write_all(line.as_bytes()).unwrap();
+            std::io::stdout().flush().unwrap();
+        }
+        "delayed-copy" => {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::io::copy(&mut std::io::stdin(), &mut std::io::stdout()).unwrap();
+        }
         "copy" => {
             std::io::copy(&mut std::io::stdin(), &mut std::io::stdout()).unwrap();
         }

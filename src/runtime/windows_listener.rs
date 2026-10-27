@@ -82,6 +82,7 @@ fn listen(
                 stderr: None,
                 diagnostic: Vec::new(),
                 diagnostic_truncated: false,
+                downstream_state: Arc::new(AtomicU8::new(0)),
             });
             stopped(signals)?;
             trace_event(

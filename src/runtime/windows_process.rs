@@ -1,7 +1,11 @@
 // Included only on Windows; the parser, validation, cache, branches, JSON,
 // same-file calls and checkpoint state machine remain shared with Unix.
 use crate::platform::windows::{available, Job};
-use std::os::windows::io::AsHandle;
+use std::os::windows::io::{AsHandle, AsRawHandle};
+use windows_sys::Win32::{
+    Foundation::WAIT_TIMEOUT,
+    System::Threading::WaitForSingleObject,
+};
 
 struct ManagedChild {
     child: Child,
@@ -10,9 +14,39 @@ struct ManagedChild {
     stderr: Option<std::process::ChildStderr>,
     diagnostic: Vec<u8>,
     diagnostic_truncated: bool,
+    downstream_state: Arc<AtomicU8>,
 }
 #[derive(Default)]
-struct Children(Vec<ManagedChild>, Option<Arc<Mutex<Vec<bool>>>>);
+struct Children(
+    Vec<ManagedChild>,
+    Option<Arc<Mutex<Vec<bool>>>>,
+    Vec<std::thread::JoinHandle<()>>,
+    Arc<Mutex<Option<String>>>,
+);
+const DOWNSTREAM_CLOSED: u8 = 1;
+const DOWNSTREAM_CLOSED_WHILE_RUNNING: u8 = 2;
+impl Children {
+    fn check_bridge_error(&self) -> Result<()> {
+        let error = self
+            .3
+            .lock()
+            .map_err(|_| anyhow!("native pipeline bridge error lock poisoned"))?
+            .take();
+        if let Some(error) = error {
+            bail!("native pipeline bridge failed: {error}");
+        }
+        Ok(())
+    }
+
+    fn finish_bridges(&mut self) -> Result<()> {
+        for bridge in self.2.drain(..) {
+            bridge
+                .join()
+                .map_err(|_| anyhow!("native pipeline bridge panicked"))?;
+        }
+        self.check_bridge_error()
+    }
+}
 impl Drop for Children {
     fn drop(&mut self) {
         if let Some(target) = &self.1 {
@@ -29,6 +63,9 @@ impl Drop for Children {
             if !child.reaped {
                 let _ = child.child.wait();
             }
+        }
+        for bridge in self.2.drain(..) {
+            let _ = bridge.join();
         }
     }
 }
@@ -95,6 +132,7 @@ fn windows_statuses(
     last_status: &mut Option<i32>,
     started: Instant,
 ) -> Result<()> {
+    children.check_bridge_error()?;
     for (index, managed) in children.0.iter_mut().enumerate() {
         drain_diagnostic(managed, signals)?;
         if !managed.reaped {
@@ -114,6 +152,18 @@ fn windows_statuses(
                 }
                 let stderr = captured_stage_stderr(calls[index].0, calls[index].1, signals)
                     .then(|| managed.diagnostic.clone());
+                let downstream_state = managed.downstream_state.load(Ordering::Acquire);
+                let downstream_closed = downstream_state & DOWNSTREAM_CLOSED != 0;
+                let downstream_closed_while_running =
+                    downstream_state & DOWNSTREAM_CLOSED_WHILE_RUNNING != 0;
+                let has_downstream = index + 1 < calls.len();
+                let known_broken_pipe_status = code.is_some_and(|code| {
+                    code == 1
+                        || code == 120
+                        || code == (13 << 8)
+                        || code == 141
+                        || code == 0xC000014Bu32 as i32
+                });
                 observed_stages[index] = Some(if let Some(code) = code {
                     execution_result::StageResult::exited(
                         calls[index].2,
@@ -122,6 +172,7 @@ fn windows_statuses(
                         calls[index].1.outcome_for(code),
                         stderr,
                     )
+                    .with_broken_pipe(has_downstream && downstream_closed)
                 } else {
                     execution_result::StageResult::signaled(
                         calls[index].2,
@@ -144,10 +195,20 @@ fn windows_statuses(
                 let implicit_success = code.is_some_and(|code| {
                     calls[index].1.outcome_for(code).kind == crate::contracts::OutcomeKind::Success
                 });
-                let broken_pipe = code == Some(13 << 8);
+                // A downstream close alone cannot explain an arbitrary exit
+                // status: the producer may also have failed independently.
+                // Only known conventions are suppressed for intermediate
+                // stages, and only if the reader closed while the producer was
+                // still running. Windows applications can choose arbitrary exit
+                // codes, so 1 and Python's 120 remain ambiguous conventions;
+                // an unrelated error using either code after a close cannot be
+                // distinguished from a broken-pipe response.
+                let broken_pipe = has_downstream
+                    && known_broken_pipe_status
+                    && (downstream_closed_while_running || code == Some(13 << 8));
                 let inherited_reader_closed =
                     index + 1 == calls.len() && INHERIT_TERMINAL_STDOUT.with(|flag| flag.get());
-                if broken_pipe && (index + 1 < calls.len() || inherited_reader_closed) {
+                if broken_pipe || (code == Some(13 << 8) && inherited_reader_closed) {
                     continue;
                 }
                 if !(implicit_success || calls[index].0.status_binding.is_some() && code.is_some())
@@ -193,6 +254,8 @@ fn execute_group_with_sink(
     let mut children = Children(
         Vec::with_capacity(calls.len()),
         signals.job_diagnostic_truncation.clone(),
+        Vec::new(),
+        Arc::new(Mutex::new(None)),
     );
     let mut observed_stages = vec![None; calls.len()];
     let mut input = Some(input);
@@ -362,7 +425,47 @@ fn execute_group_with_sink(
             }
             let mut bytes = None;
             let stdin = if index > 0 {
-                Stdio::from(previous.take().expect("prior native stdout"))
+                // Keep the pipeline's read/write boundary in the runtime. The
+                // bridge observes a downstream close and then closes the
+                // producer's stdout pipe, causing the native producer to see
+                // the platform's real broken-pipe error.
+                let mut producer_stdout = previous.take().expect("prior native stdout");
+                let (pipe_reader, mut pipe_writer) = std::io::pipe()?;
+                let downstream_state = Arc::clone(&children.0[index - 1].downstream_state);
+                let bridge_error = Arc::clone(&children.3);
+                let producer_handle = children.0[index - 1]
+                    .child
+                    .as_handle()
+                    .try_clone_to_owned()?;
+                children.2.push(std::thread::spawn(move || {
+                    match std::io::copy(&mut producer_stdout, &mut pipe_writer) {
+                        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                            // Check the process handle before closing its stdout
+                            // reader. The producer cannot observe our induced
+                            // broken pipe and exit until after this check.
+                            // SAFETY: the duplicated process handle remains owned
+                            // by this bridge for the duration of the wait call.
+                            let wait = unsafe {
+                                WaitForSingleObject(producer_handle.as_raw_handle(), 0)
+                            };
+                            let state = DOWNSTREAM_CLOSED
+                                | if wait == WAIT_TIMEOUT {
+                                    DOWNSTREAM_CLOSED_WHILE_RUNNING
+                                } else {
+                                    0
+                                };
+                            downstream_state.store(state, Ordering::Release);
+                            drop(producer_stdout);
+                        }
+                        Err(error) => {
+                            if let Ok(mut slot) = bridge_error.lock() {
+                                *slot = Some(error.to_string());
+                            }
+                        }
+                        Ok(_) => {}
+                    }
+                }));
+                Stdio::from(pipe_reader)
             } else if terminal::requested() {
                 // The command owns the console, so its input is the console.
                 Stdio::inherit()
@@ -408,6 +511,7 @@ fn execute_group_with_sink(
                 stderr,
                 diagnostic: Vec::new(),
                 diagnostic_truncated: false,
+                downstream_state: Arc::new(AtomicU8::new(0)),
             });
             signals.record_job_stage_launch(jobs::StageLaunch {
                 line: *line,
@@ -553,6 +657,7 @@ fn execute_group_with_sink(
                 }
             }
             if eof && children.0.iter().all(|c| c.reaped) {
+                children.finish_bridges()?;
                 if let Some(sink) = sink.as_deref_mut() {
                     sink.finish(signals)?;
                 }

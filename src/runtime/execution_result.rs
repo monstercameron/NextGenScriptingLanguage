@@ -92,6 +92,8 @@ pub struct StageResult {
     pub outcome: Option<String>,
     pub kind: Option<ExecutionKind>,
     pub effect_certainty: EffectCertainty,
+    /// The runtime observed the next stage close stdin while forwarding output.
+    pub broken_pipe: bool,
     /// `None` means stderr was inherited or discarded. `Some(Vec::new())`
     /// means it was captured and empty.
     pub stderr: Option<Vec<u8>>,
@@ -108,6 +110,7 @@ impl StageResult {
             outcome: None,
             kind: None,
             effect_certainty: EffectCertainty::NotStarted,
+            broken_pipe: false,
             stderr: None,
         }
     }
@@ -122,6 +125,7 @@ impl StageResult {
             outcome: None,
             kind: Some(ExecutionKind::SpawnError),
             effect_certainty: EffectCertainty::NotStarted,
+            broken_pipe: false,
             stderr: None,
         }
     }
@@ -136,6 +140,7 @@ impl StageResult {
             outcome: None,
             kind: None,
             effect_certainty: EffectCertainty::Uncertain,
+            broken_pipe: false,
             stderr: None,
         }
     }
@@ -157,8 +162,14 @@ impl StageResult {
             outcome: Some(outcome.name),
             kind: Some(ExecutionKind::from_outcome(outcome.kind)),
             effect_certainty,
+            broken_pipe: false,
             stderr,
         }
+    }
+
+    pub fn with_broken_pipe(mut self, broken_pipe: bool) -> Self {
+        self.broken_pipe = broken_pipe;
+        self
     }
 
     pub fn signaled(
@@ -176,6 +187,7 @@ impl StageResult {
             outcome: None,
             kind: Some(ExecutionKind::Signaled),
             effect_certainty: EffectCertainty::Uncertain,
+            broken_pipe: false,
             stderr,
         }
     }
@@ -198,6 +210,7 @@ impl StageResult {
             "effect_certainty".into(),
             Value::String(self.effect_certainty.as_str().into()),
         );
+        fields.insert("broken_pipe".into(), Value::Bool(self.broken_pipe));
         fields.insert(
             "stderr".into(),
             self.stderr
@@ -225,6 +238,7 @@ pub struct StageMetadata {
     pub outcome: Option<String>,
     pub kind: Option<ExecutionKind>,
     pub effect_certainty: EffectCertainty,
+    pub broken_pipe: bool,
     pub stderr_captured: bool,
     pub stderr_bytes: usize,
 }
@@ -241,6 +255,7 @@ impl StageMetadata {
             outcome: stage.outcome.clone(),
             kind: stage.kind,
             effect_certainty: stage.effect_certainty,
+            broken_pipe: stage.broken_pipe,
             stderr_captured: stage.stderr.is_some(),
             stderr_bytes: stage.stderr.as_ref().map_or(0, Vec::len),
         }
@@ -265,6 +280,7 @@ impl StageMetadata {
             "effect_certainty".into(),
             Value::String(self.effect_certainty.as_str().into()),
         );
+        fields.insert("broken_pipe".into(), Value::Bool(self.broken_pipe));
         fields.insert("stderr_captured".into(), Value::Bool(self.stderr_captured));
         fields.insert(
             "stderr_bytes".into(),
@@ -927,6 +943,7 @@ fn worker_error_result(
                 .map(|outcome| ExecutionKind::from_outcome(outcome.kind))
                 .or(Some(kind)),
             effect_certainty: certainty,
+            broken_pipe: false,
             stderr: error.captured_stderr.clone(),
         });
     }

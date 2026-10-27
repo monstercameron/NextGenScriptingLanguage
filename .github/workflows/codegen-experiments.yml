@@ -38,7 +38,7 @@ jobs:
             strace -f -c -o "${bin}.strace" "$bin" run <(printf 'use value ""\n')
             cat "${bin}.strace"
             perf stat -e page-faults "$bin" run <(printf 'use value ""\n') || true
-            python3 tools/bash_compare.py "$bin" --runs 7 --warmup 1 --only startup --only one_external --only pipeline_5 --only json_get --json-out "${bin}.json"
+            python3 tools/bash_compare.py "$bin" --manifest-dir manifests --runs 7 --warmup 1 --only startup --only one_external --only pipeline_5 --only json_get --json-out "${bin}.json"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -73,7 +73,7 @@ jobs:
       - name: Benchmark portable baseline
         run: |
           cargo build --locked --release --bin execute
-          python3 tools/bash_compare.py target/release/execute --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out target/cpu-baseline.json
+          python3 tools/bash_compare.py target/release/execute --manifest-dir manifests --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out target/cpu-baseline.json
       - name: Benchmark CPU tier build
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
@@ -81,7 +81,7 @@ jobs:
           cargo build --locked --release --bin execute
           cp target/release/execute target/execute-${{ matrix.name }}
           size -A target/execute-${{ matrix.name }}
-          python3 tools/bash_compare.py target/execute-${{ matrix.name }} --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out target/cpu-${{ matrix.name }}.json
+          python3 tools/bash_compare.py target/execute-${{ matrix.name }} --manifest-dir manifests --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out target/cpu-${{ matrix.name }}.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -109,9 +109,9 @@ jobs:
           mkdir -p target/pgo-data
           cargo build --locked --release --bin execute
           cp target/release/execute target/execute-pgo-baseline
-          python3 tools/bash_compare.py target/execute-pgo-baseline --runs 7 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-baseline.json
+          python3 tools/bash_compare.py target/execute-pgo-baseline --manifest-dir manifests --runs 7 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-baseline.json
           RUSTFLAGS="-Cprofile-generate=$PWD/target/pgo-data" cargo build --locked --release --bin execute
-          python3 tools/bash_compare.py target/release/execute --runs 5 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-training.json
+          python3 tools/bash_compare.py target/release/execute --manifest-dir manifests --runs 5 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-training.json
           for program in examples/*.program; do target/release/execute check "$program"; done
           printf '{"sample":{"name":"profile","items":[1,2,3]}}\n' | target/release/execute run examples/json-compact.program >/dev/null
           llvm-profdata merge -o target/execute.profdata target/pgo-data
@@ -119,7 +119,7 @@ jobs:
           RUSTFLAGS="-Cprofile-use=$PWD/target/execute.profdata -Cllvm-args=-pgo-warn-missing-function" cargo build --locked --release --bin execute
           cp target/release/execute target/execute-pgo
           size -A target/execute-pgo
-          python3 tools/bash_compare.py target/execute-pgo --runs 7 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-trained.json
+          python3 tools/bash_compare.py target/execute-pgo --manifest-dir manifests --runs 7 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-trained.json
           for program in examples/*.program; do target/execute-pgo check "$program"; done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -153,13 +153,13 @@ jobs:
           exec perf record --append -o target/execute.perf.data -- "$PWD/target/execute-unmodified" "$@"
           SH
           chmod +x target/profile-execute
-          python3 tools/bash_compare.py target/profile-execute --runs 5 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/bolt-training.json
+          python3 tools/bash_compare.py target/profile-execute --manifest-dir manifests --runs 5 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/bolt-training.json
           perf2bolt target/execute-unmodified -p target/execute.perf.data -o target/execute.fdata
           llvm-bolt target/execute-unmodified -o target/execute-bolt -data=target/execute.fdata -reorder-blocks=cache+ -reorder-functions=hfsort+ -split-functions -split-all-cold
           chmod +x target/execute-bolt
           for bin in target/execute-unmodified target/execute-bolt; do
             size -A "$bin"
-            python3 tools/bash_compare.py "$bin" --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out "$bin.json"
+            python3 tools/bash_compare.py "$bin" --manifest-dir manifests --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out "$bin.json"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

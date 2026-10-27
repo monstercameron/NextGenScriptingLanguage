@@ -48,7 +48,7 @@ jobs:
           echo "EXECUTE_BIN=$bin" >> "$GITHUB_ENV"
       - run: bash --version | head -1 && jq --version && ls -l /usr/bin/dash "$EXECUTE_BIN"
       - name: Compare
-        run: python3 tools/bash_compare.py "$EXECUTE_BIN" --json-out target/bash-compare.json
+        run: python3 tools/bash_compare.py "$EXECUTE_BIN" --manifest-dir manifests --json-out target/bash-compare.json
       # Where the startup time goes, for the optimisation lanes: syscalls, the
       # dynamic loader's own cost, and the binary's sections.
       - name: Profile startup

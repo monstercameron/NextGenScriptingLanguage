@@ -180,29 +180,29 @@ gh.repo.json	546	gh.repo		78095	249
 git.commit.json	701	git.commit	commit changes	78344	271
 grep.json	515	grep		78615	232
 head.json	347	head		78847	186
-jev.ask.json	1678	jev.ask		79033	399
-jev.classify.json	4294	jev.classify		79432	830
-jev.judge.json	3247	jev.judge		80262	662
-jev.score.json	3434	jev.score		80924	705
-join.json	528	join		81629	230
-jq.json	529	jq		81859	245
-jq.ps.json	993	jq.ps		82104	480
-llm.ask.json	4351	llm.ask		82584	783
-llm.extract.json	4512	llm.extract		83367	807
-ls.json	546	ls		84174	217
-mkdir.json	553	mkdir		84391	242
-omarchy.browser-refresh.json	1052	omarchy.browser-refresh		84633	416
-omarchy.editor-install.json	1109	omarchy.editor-install		85049	408
-omarchy.editor-list.json	1057	omarchy.editor-list		85457	421
-paste.json	531	paste		85878	230
-printf.json	345	printf	print	86108	183
-ps.json	358	ps		86291	191
-pwd.json	129	pwd		86482	100
-sed.json	512	sed		86582	235
-sort.json	367	sort		86817	191
-tail.follow.json	476	tail.follow	follow file	87008	216
-tail.json	599	tail		87224	240
-tr.json	627	tr		87464	248
-uniq.json	367	uniq		87712	192
-upper.json	300	upper	uppercase	87904	169
-wc.json	383	wc		88073	203
+jev.ask.json	1725	jev.ask		79033	419
+jev.classify.json	4388	jev.classify		79452	853
+jev.judge.json	3341	jev.judge		80305	685
+jev.score.json	3528	jev.score		80990	724
+join.json	528	join		81714	230
+jq.json	529	jq		81944	245
+jq.ps.json	993	jq.ps		82189	480
+llm.ask.json	4445	llm.ask		82669	805
+llm.extract.json	4606	llm.extract		83474	829
+ls.json	546	ls		84303	217
+mkdir.json	553	mkdir		84520	242
+omarchy.browser-refresh.json	1052	omarchy.browser-refresh		84762	416
+omarchy.editor-install.json	1109	omarchy.editor-install		85178	408
+omarchy.editor-list.json	1057	omarchy.editor-list		85586	421
+paste.json	531	paste		86007	230
+printf.json	345	printf	print	86237	183
+ps.json	358	ps		86420	191
+pwd.json	129	pwd		86611	100
+sed.json	512	sed		86711	235
+sort.json	367	sort		86946	191
+tail.follow.json	476	tail.follow	follow file	87137	216
+tail.json	599	tail		87353	240
+tr.json	627	tr		87593	248
+uniq.json	367	uniq		87841	192
+upper.json	300	upper	uppercase	88033	169
+wc.json	383	wc		88202	203

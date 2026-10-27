@@ -174,7 +174,7 @@ fn listen(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-fixtures"))]
 mod native_listener_tests {
     use super::*;
 
@@ -192,8 +192,8 @@ mod native_listener_tests {
             .unwrap()
             .parent()
             .unwrap()
-            .join("examples/native-fixture.exe");
-        assert!(fixture.is_file(), "build the native fixture example first");
+            .join("native-fixture.exe");
+        assert!(fixture.is_file(), "native fixture binary is missing");
         let manifest = serde_json::json!({
             "name": "test.producer",
             "binary": fixture,
@@ -264,8 +264,8 @@ mod native_listener_tests {
             .unwrap()
             .parent()
             .unwrap()
-            .join("examples/native-fixture.exe");
-        assert!(fixture.is_file(), "build the native fixture example first");
+            .join("native-fixture.exe");
+        assert!(fixture.is_file(), "native fixture binary is missing");
         let binary = serde_json::to_string(fixture.to_str().unwrap()).unwrap();
         let program = crate::parser::parse(&format!(
             "listen to {binary} with arguments [\"sleep\", \"5000\"]\nwhenever a line arrives as event\n  run {binary} with arguments [\"copy\"]\n"

@@ -7,24 +7,7 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 fn fixture() -> String {
-    let name = if cfg!(windows) {
-        "native-fixture.exe"
-    } else {
-        "native-fixture"
-    };
-    let path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(name);
-    assert!(
-        path.is_file(),
-        "build cargo build --example native-fixture before these tests"
-    );
-    path.to_str().unwrap().to_owned()
+    env!("CARGO_BIN_EXE_native-fixture").to_owned()
 }
 
 fn quoted(value: &str) -> String {

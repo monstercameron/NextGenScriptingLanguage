@@ -70,6 +70,8 @@ dap = []
 failpoints = []
 # Fuzz entry points (src/fuzz_entry.rs) and the regression replay test; never enabled by default.
 fuzzing = ["dap", "graph", "records"]
+# Test executables used by integration and Windows listener tests.
+test-fixtures = []
 
 [dev-dependencies]
 tempfile = "3"
@@ -140,10 +142,6 @@ name = "execute-model"
 path = "src/bin/execute-model.rs"
 required-features = ["model"]
 
-[[example]]
-name = "native-fixture"
-path = "tests/fixtures/native_fixture.rs"
-
 # The probe parses screen programs too, so a core build skips it.
 [[example]]
 name = "parse_probe"
@@ -157,3 +155,112 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
+
+[[bin]]
+name = "native-fixture"
+path = "tests/fixtures/native_fixture.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "execution_results"
+required-features = ["test-fixtures", "remote"]
+
+[[test]]
+name = "graph_program_services"
+required-features = ["test-fixtures", "graph"]
+
+[[test]]
+name = "retry"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "lane_v2_capture"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "lane_g1r_output"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "lane_o_retry_safety"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "lane_o_parallel_resume"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "windows_native"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "worker_backend_windows"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "named_background_jobs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "agent_checkpoint_status"
+required-features = ["model", "agent-advisory"]
+
+[[test]]
+name = "agent_gate"
+required-features = ["model", "agent-advisory"]
+
+[[test]]
+name = "agent_json_errors"
+required-features = ["model"]
+
+[[test]]
+name = "agent_instance_policy"
+required-features = ["model", "agent-advisory"]
+
+[[test]]
+name = "agent_what_if"
+required-features = ["model", "agent-advisory"]
+
+[[test]]
+name = "agent_explain_json"
+required-features = ["model", "agent-advisory"]
+
+[[test]]
+name = "agent_schemas"
+required-features = ["model", "agent-advisory"]
+
+[[test]]
+name = "model_cli"
+required-features = ["model"]
+
+[[test]]
+name = "models"
+required-features = ["model"]
+
+[[test]]
+name = "model_control"
+required-features = ["model"]
+
+[[test]]
+name = "model_matrix"
+required-features = ["model"]
+
+[[test]]
+name = "what_if_confirm"
+required-features = ["model", "agent-advisory"]
+
+[[test]]
+name = "agent_gate_scope"
+required-features = ["agent-advisory"]
+
+[[test]]
+name = "agent_run_control"
+required-features = ["live", "agent-advisory"]
+
+[[test]]
+name = "gate_effects"
+required-features = ["agent-advisory"]
+
+[[test]]
+name = "graph_checkpoint_cli"
+required-features = ["graph", "agent-advisory"]

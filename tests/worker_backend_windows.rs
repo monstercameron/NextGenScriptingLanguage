@@ -70,15 +70,7 @@ const MAX_FRAME: usize = 16 * 1024 * 1024;
 const MAX_STDERR: usize = 1024;
 
 fn fixture() -> PathBuf {
-    let path = std::env::current_exe()
-        .expect("test executable path")
-        .parent()
-        .expect("deps directory")
-        .parent()
-        .expect("target directory")
-        .join("examples/native-fixture.exe");
-    assert!(path.is_file(), "build the native-fixture example first");
-    path
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_native-fixture"))
 }
 
 fn registry() -> manifest::Registry {

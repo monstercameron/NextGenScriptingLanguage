@@ -8,18 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 fn fixture() -> String {
-    let path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples/native-fixture.exe");
-    assert!(
-        path.is_file(),
-        "build cargo build --example native-fixture before these tests"
-    );
-    path.to_str().unwrap().to_owned()
+    env!("CARGO_BIN_EXE_native-fixture").to_owned()
 }
 fn quoted(value: &str) -> String {
     serde_json::to_string(value).unwrap()

@@ -640,13 +640,7 @@ fn later_invalid_job_stage_is_rejected_before_an_earlier_command_starts() -> any
 #[test]
 fn native_windows_fixture_runs_as_an_owned_background_job() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let fixture = std::env::current_exe()?
-        .parent()
-        .expect("integration test deps directory")
-        .parent()
-        .expect("integration test target directory")
-        .join("examples/native-fixture.exe");
-    assert!(fixture.is_file(), "build the native-fixture example first");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_native-fixture"));
     let source = format!(
         "spawn as output\n  run {} with arguments [\"write\", \"windows-bytes\"]\nawait output\nthen encode \"done\" as json\n",
         quote(&fixture.to_string_lossy()),

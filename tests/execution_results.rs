@@ -18,27 +18,10 @@ use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::thread;
 
-/// The `native-fixture` example, built alongside the tests. Its `write` command prints
+/// The `native-fixture` binary, built alongside the tests. Its `write` command prints
 /// its argument unchanged on every platform, which `printf` does not on Windows.
 fn native_fixture() -> String {
-    let name = if cfg!(windows) {
-        "native-fixture.exe"
-    } else {
-        "native-fixture"
-    };
-    let path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(name);
-    assert!(
-        path.is_file(),
-        "build cargo build --example native-fixture before these tests"
-    );
-    path.to_str().unwrap().to_owned()
+    env!("CARGO_BIN_EXE_native-fixture").to_owned()
 }
 
 fn options(cwd: &Path) -> runtime::RunOptions {

@@ -33,8 +33,51 @@ class FeatureMatrixTests(unittest.TestCase):
                 self.assertIn(f'"--no-default-features --features {feature}"', self.workflow)
 
     def test_core_and_default_are_tested_on_both_platforms(self) -> None:
-        self.assertIn("cargo test --locked --no-default-features --lib --tests", self.workflow)
-        self.assertIn("cargo test --locked --lib --tests", self.workflow)
+        self.assertIn("cargo test --locked --no-default-features --features test-fixtures --lib --tests", self.workflow)
+        self.assertIn("cargo test --locked --features test-fixtures --lib --tests", self.workflow)
+
+    def test_fixture_is_test_only_and_built_for_ci(self) -> None:
+        manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        full = re.search(r'(?m)^full\s*=\s*\[(.*?)\]', manifest)
+        self.assertIsNotNone(full)
+        self.assertNotIn('"test-fixtures"', full.group(1))
+        nightly = (ROOT / ".github/workflows/flaky.yml").read_text(encoding="utf-8")
+        self.assertIn("cargo nextest archive --locked --release --features full,test-fixtures", nightly)
+        self.assertIn("cargo build --locked --release --features full,test-fixtures --bins", nightly)
+        self.assertIn("target/release/native-fixture*", nightly)
+        self.assertIn("--release --features full,test-fixtures --bins", self.workflow)
+        self.assertIn("--release --features full,test-fixtures --lib", self.workflow)
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("test --locked --features full,test-fixtures --release", makefile)
+
+    def test_helper_and_subcommand_requirements(self) -> None:
+        manifest_path = pathlib.Path(os.environ.get("FEATURE_MATRIX_MANIFEST", ROOT / "Cargo.toml"))
+        manifest = manifest_path.read_text(encoding="utf-8")
+        requirements = {}
+        for section in re.split(r"(?m)^\[\[test\]\]\s*$", manifest)[1:]:
+            section = re.split(r"(?m)^\[", section, maxsplit=1)[0]
+            name = re.search(r'(?m)^name\s*=\s*"([^"]+)"', section)
+            features = re.search(r'(?ms)^required-features\s*=\s*\[(.*?)\]', section)
+            if name:
+                requirements[name.group(1)] = set(re.findall(r'"([^"]+)"', features.group(1))) if features else set()
+        for path in (ROOT / "tests").glob("*.rs"):
+            source = path.read_text(encoding="utf-8")
+            needed = set()
+            if 'CARGO_BIN_EXE_execute-model' in source:
+                needed.add("model")
+            if 'CARGO_BIN_EXE_native-fixture' in source:
+                needed.add("test-fixtures")
+            if re.search(r'"checkpoint"\s*,\s*"status"|"--what-if"|"--confirm"|"explain"', source):
+                # Only dedicated advisory suites need this requirement; other tests
+                # may deliberately check behavior when the feature is disabled.
+                if (path.name.startswith("agent_") or path.name == "what_if_confirm.rs"
+                        or path.name in {"gate_effects.rs", "graph_checkpoint_cli.rs"}):
+                    needed.add("agent-advisory")
+            with self.subTest(test=path.name):
+                self.assertFalse(needed - requirements.get(path.stem, set()),
+                                 f"{path.name} missing required-features: {needed - requirements.get(path.stem, set())}")
+            self.assertNotRegex(source, r'examples[/\\]native-fixture|join\("examples"\)\s*\.join\(name\)',
+                                f"{path.name} must use the Cargo fixture binary")
 
     def test_arch_desktop_image_requires_an_independently_supplied_digest(self) -> None:
         workflow_path = pathlib.Path(

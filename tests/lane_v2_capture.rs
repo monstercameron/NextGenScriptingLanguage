@@ -2,24 +2,7 @@ use flow::{manifest::Registry, parser, runtime};
 use std::path::{Path, PathBuf};
 
 fn fixture() -> PathBuf {
-    let name = if cfg!(windows) {
-        "native-fixture.exe"
-    } else {
-        "native-fixture"
-    };
-    let executable = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(name);
-    assert!(
-        executable.is_file(),
-        "build --example native-fixture before running these tests"
-    );
-    executable
+    PathBuf::from(env!("CARGO_BIN_EXE_native-fixture"))
 }
 
 fn source(arguments: &[&str]) -> String {

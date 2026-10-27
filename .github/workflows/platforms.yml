@@ -21,7 +21,7 @@ jobs:
         with:
           key: msrv-1.89.0
       - name: Check the library, binaries and tests on the minimum version
-        run: cargo check --locked --features full --lib --bins --tests
+        run: cargo check --locked --features full,test-fixtures --lib --bins --tests
   linux-arm64:
     name: Linux arm64 (library tests)
     runs-on: ubuntu-24.04-arm

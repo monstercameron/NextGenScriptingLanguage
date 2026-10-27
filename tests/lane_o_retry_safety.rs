@@ -16,20 +16,7 @@ fn execute(args: &[&str], directory: &Path) -> Output {
 }
 
 fn fixture() -> String {
-    let name = if cfg!(windows) {
-        "native-fixture.exe"
-    } else {
-        "native-fixture"
-    };
-    let path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(name);
-    path.to_str().unwrap().replace('\\', "/")
+    env!("CARGO_BIN_EXE_native-fixture").replace('\\', "/")
 }
 
 fn elements_log(checkpoint: &Path) -> String {

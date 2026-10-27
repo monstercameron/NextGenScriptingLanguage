@@ -30,9 +30,9 @@ library/model tests and the PE fixture suite on x64 and ARM64:
 
 ```powershell
 $target = "x86_64-pc-windows-msvc" # ARM64: aarch64-pc-windows-msvc
-cargo build --locked --target $target --release --bins --example native-fixture
-cargo test --locked --target $target --release --test windows_native --test models --test opt_manifest_regressions
-cargo test --locked --target $target --release --lib
+cargo build --locked --target $target --release --features full,test-fixtures --bins
+cargo test --locked --target $target --release --features full,test-fixtures --test windows_native --test models --test opt_manifest_regressions
+cargo test --locked --target $target --release --features full,test-fixtures --lib
 ```
 
 See [Windows contracts](docs/windows.md) and the [release workflow](docs/releases.md).
@@ -51,9 +51,12 @@ the two applets that need `remote` and the Quickshell applet that needs `desktop
 report `requires_full_build`. The release profile uses fat LTO and one codegen
 unit; the `dist` profile inherits it for packaged artifacts, and an opt-in `min` profile
 (`opt-level = "z"`, `panic = "abort"`, for example with a musl target) builds a much
-smaller binary but does not unwind panics, so releases do not use it. Two more features exist
+smaller binary but does not unwind panics, so releases do not use it. Other features exist
 for tests only: `failpoints` (fault injection for the crash-consistency tests) and
-`fuzzing` (the fuzz entry points). Neither is part of `full`.
+`fuzzing` (the fuzz entry points). Neither is part of `full`. The `test-fixtures`
+feature enables the native fixture binary and its integration tests; it is separate from
+`full` so production builds do not include the fixture. For a core test run with that coverage, use
+`cargo test --no-default-features --features test-fixtures --lib --tests`.
 
 Use `make rust-check` when working only on Rust, `make build` for a release build,
 and `make proof-smoke` for a small streaming/lifecycle check. The smoke report
@@ -253,7 +256,7 @@ Run `python3 tests/staged_rust.py` to verify staging isolation and hook behavior
 ## Minimum supported Rust version
 
 The minimum supported Rust version is **1.89.0** for the full feature set
-(`cargo check --locked --features full --lib --bins --tests`). The platform workflow
+(`cargo check --locked --features full,test-fixtures --lib --bins --tests`). The platform workflow
 (`.github/workflows/platforms.yml`, job `msrv`) checks it on every scheduled run. Raising
 it needs a changelog entry and a reason, such as a dependency that requires a newer
 compiler. Continuous integration uses the current stable compiler and the pinned

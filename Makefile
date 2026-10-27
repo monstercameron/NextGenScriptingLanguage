@@ -84,8 +84,8 @@ check: rust-check docs-check applet-boundaries-harness-check stress-evidence-har
 rust-check:
 	$(CARGO) fmt --check
 	$(RUSTFMT) --edition 2021 --check src/runtime/shared.rs
-	$(CARGO) clippy --locked --features full --all-targets -- -D warnings
-	$(CARGO) test --locked --features full --release --no-fail-fast -- --test-threads=1
+	$(CARGO) clippy --locked --features full,test-fixtures --all-targets -- -D warnings
+	$(CARGO) test --locked --features full,test-fixtures --release --no-fail-fast -- --test-threads=1
 	$(CARGO) build --locked --features full --release
 
 build:

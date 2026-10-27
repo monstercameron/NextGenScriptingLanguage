@@ -8,25 +8,7 @@ use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 fn fixture() -> String {
-    let name = if cfg!(windows) {
-        "native-fixture.exe"
-    } else {
-        "native-fixture"
-    };
-    let path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(name);
-    assert!(
-        path.is_file(),
-        "build cargo build --example native-fixture before these tests"
-    );
-    // Forward slashes keep the path free of escapes in the program's string literal.
-    path.to_str().unwrap().replace('\\', "/")
+    env!("CARGO_BIN_EXE_native-fixture").replace('\\', "/")
 }
 
 fn commit_lines(elements: &Path) -> usize {

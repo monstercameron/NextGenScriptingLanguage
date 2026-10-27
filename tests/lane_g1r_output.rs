@@ -17,19 +17,7 @@ fn execute(
         manifests.join("core.text_concat.json"),
     )
     .unwrap();
-    let fixture = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(if cfg!(windows) {
-            "native-fixture.exe"
-        } else {
-            "native-fixture"
-        });
-    assert!(fixture.is_file(), "build the native-fixture example first");
+    let fixture = Path::new(env!("CARGO_BIN_EXE_native-fixture"));
     fs::write(
         manifests.join("emit.json"),
         serde_json::json!({

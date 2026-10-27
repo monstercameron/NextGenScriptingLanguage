@@ -68,11 +68,14 @@ impl CancellationWake {
     }
 
     /// Signal-handler variant: this uses only lock-free atomics and `write(2)`.
+    /// Every signal writes its byte (bytes coalesce while the reader is never
+    /// drained) so a repeat interrupt during cleanup wakes the native
+    /// supervisor even after the first interrupt already notified. `notify`
+    /// stays one-shot: deadline polling calls it in a loop and must not fill
+    /// the pipe, while signals are rare.
     #[cfg(unix)]
     pub(crate) fn notify_signal(&self) {
-        if self.notified.swap(true, Ordering::AcqRel) {
-            return;
-        }
+        self.notified.store(true, Ordering::AcqRel);
         let byte = [1u8];
         // SAFETY: `writer_fd` refers to the nonblocking socket owned by `self`,
         // and the one-byte write uses a live buffer. `write` is async-signal-safe.

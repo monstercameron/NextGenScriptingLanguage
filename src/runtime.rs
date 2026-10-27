@@ -225,9 +225,13 @@ fn is_timeout_error(error: &anyhow::Error) -> bool {
 }
 
 /// Whether an error already reports an interrupt cancellation. Only these are
-/// rewritten when a repeat interrupt lands during cleanup; timeouts, cleanup
-/// budgets and ordinary step failures keep their own errors so they still
-/// unwind through the cleanup frames.
+/// rewritten when a repeat interrupt lands during cleanup: native
+/// `ExecutionKind::Cancelled` failures plus the plain-text cancellations the
+/// task-group, parallel fan-out, in-process applet and model backends report
+/// (`task group ...`, `parallel for each was cancelled ...`, `observed parent
+/// cancellation`, `model request cancelled ...`). Timeouts, cleanup budgets
+/// and ordinary step failures keep their own errors so they still unwind
+/// through the cleanup frames.
 fn is_cancellation_error(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -238,6 +242,10 @@ fn is_cancellation_error(error: &anyhow::Error) -> bool {
         message.contains("workflow cancelled")
             || message.contains("cancelled by handle")
             || message.contains("cancelled while")
+            || message.contains("task group cancelled")
+            || message.contains("was cancelled")
+            || message.contains("observed parent cancellation")
+            || message.contains("model request cancelled")
     })
 }
 
@@ -402,6 +410,21 @@ mod cleanup_interrupt_tests {
         assert!(is_cancellation_error(&chained));
         assert!(is_cancellation_error(&anyhow::anyhow!("cancelled by handle")));
         assert!(is_cancellation_error(&anyhow::anyhow!("cancelled while draining")));
+        // Task-group, parallel fan-out, in-process applet and model
+        // cancellations unwound mid-statement must rewrite the same way.
+        assert!(is_cancellation_error(&anyhow::anyhow!("task group cancelled")));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "task group was cancelled before preflight"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "parallel for each was cancelled before element launch"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "in-process applet observed parent cancellation"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "model request cancelled; its remote outcome may be uncertain"
+        )));
         // Timeouts, cleanup budgets and ordinary step failures keep their own
         // errors so they still unwind through the cleanup frames.
         assert!(!is_cancellation_error(&anyhow::Error::new(
@@ -412,6 +435,11 @@ mod cleanup_interrupt_tests {
                     execution_result::EffectCertainty::Uncertain,
                 ),
             )
+        )));
+        // A task-group error without a cancellation keeps its own error: the
+        // match is on the cancellation, not on the subsystem name.
+        assert!(!is_cancellation_error(&anyhow::anyhow!(
+            "task group result metadata exceeds the configured output limit"
         )));
         assert!(!is_cancellation_error(&anyhow::Error::new(CommandTimedOut)));
         assert!(!is_cancellation_error(&anyhow::Error::new(

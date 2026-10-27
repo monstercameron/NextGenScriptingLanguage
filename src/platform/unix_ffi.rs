@@ -13,6 +13,9 @@ use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 /// Rust's normal `posix_spawn` fast path while ensuring inherited descriptors do not leak.
 /// If the platform exposes no exact descriptor enumeration API, startup fails closed; RLIMIT
 /// values are not a safe scan bound because an already-open descriptor can exceed a lowered limit.
+/// No descriptors are exempted: the runtime supports no socket activation, so there is no
+/// LISTEN_FDS-style handoff whose descriptors must stay inheritable (issue #528). Standard
+/// streams (0-2) are untouched; everything from 3 up is marked.
 pub(crate) fn mark_inherited_descriptors_close_on_exec() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {

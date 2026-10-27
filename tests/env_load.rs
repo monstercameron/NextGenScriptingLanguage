@@ -173,6 +173,81 @@ fn checkpointed_env_load_with_secret_values_is_refused_before_writing_state() {
 }
 
 #[test]
+fn checkpointed_env_load_with_a_named_secret_is_refused_before_writing_state() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("credentials.env"),
+        "TOKEN=checkpoint-named-canary\nREGION=test-region\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "read \"credentials.env\"\nthen env.load with secret [\"TOKEN\"] as loaded\n",
+    )
+    .unwrap();
+
+    let output = execute(
+        root.path(),
+        &["run", "job.program", "--checkpoint", "checkpoint"],
+    );
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("secret"), "{error}");
+    assert!(!error.contains("checkpoint-named-canary"));
+    assert!(!root.path().join("checkpoint").exists());
+}
+
+#[test]
+fn checkpointed_env_load_without_a_secret_marking_is_allowed() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("credentials.env"), "TOKEN=public-value\n").unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "read \"credentials.env\"\nthen env.load with secret false as loaded\n",
+    )
+    .unwrap();
+
+    let output = execute(
+        root.path(),
+        &["run", "job.program", "--checkpoint", "checkpoint"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.path().join("checkpoint").exists());
+}
+
+#[test]
+fn env_load_secret_values_are_redacted_from_a_standalone_trace() {
+    let root = tempfile::tempdir().unwrap();
+    let canary = "ENV-LOAD-TRACE-CANARY-4a19";
+    fs::write(
+        root.path().join("credentials.env"),
+        format!("TOKEN={canary}\nREGION=test-region\n"),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "read \"credentials.env\"\nthen env.load with secret [\"TOKEN\"] as loaded\n",
+    )
+    .unwrap();
+
+    let output = execute(root.path(), &["run", "job.program", "--trace"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(canary));
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains(canary),
+        "trace leaked the secret"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn env_load_secret_redacts_a_failing_stdin_consumers_stderr_without_records() {
     let root = tempfile::tempdir().unwrap();

@@ -10,6 +10,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 fn execute(directory: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .current_dir(directory)
@@ -59,6 +62,10 @@ fn fixture(work: &Path) -> (PathBuf, PathBuf) {
 fn policy_file(work: &Path, body: &str) -> PathBuf {
     let policy = work.join("policy.json");
     fs::write(&policy, body).unwrap();
+    // A policy file must pass the same privacy check the binary enforces:
+    // on Windows an inherited tempdir DACL is refused before any privilege
+    // check runs, masking the expected denial.
+    private_answers::make_private(&policy);
     policy
 }
 

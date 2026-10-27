@@ -620,55 +620,117 @@ fn pty_interrupt(master: RawFd) {
     assert_eq!(written, 1, "writing Ctrl-C to the pty failed");
 }
 
-/// Owns the parent side of the PTY so every test path — including panics —
-/// closes it exactly once instead of leaking the descriptor.
-struct MasterFd(Option<RawFd>);
+/// Owns the parent side of the PTY and drains it on a background thread while
+/// the run is alive. The drain must be concurrent, not after-the-fact: on
+/// macOS a session leader's exit runs `ttywait` on its controlling terminal,
+/// so the run cannot finish exiting while output it wrote stays unread on the
+/// master side. Waiting for the exit before reading first deadlocks the exit
+/// itself (the exit wait burns its budget while the run sits in `E` state).
+/// Every test path — including panics — stops the reader and closes the
+/// descriptors exactly once instead of leaking them.
+struct PtyDrain {
+    master: Option<RawFd>,
+    reader: RawFd,
+    output: Arc<Mutex<Vec<u8>>>,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
 
-impl MasterFd {
+impl PtyDrain {
     fn new(master: RawFd) -> Self {
-        Self(Some(master))
+        // SAFETY: dup of the live parent-side descriptor; the reader thread
+        // owns this copy and the test keeps `master` for Ctrl-C writes.
+        let reader = unsafe { libc::dup(master) };
+        assert!(reader >= 0, "pty drain dup failed");
+        // SAFETY: enabling nonblocking reads on the reader copy only.
+        let flags = unsafe { libc::fcntl(reader, libc::F_GETFL) };
+        assert!(flags >= 0, "pty drain fcntl failed");
+        assert_eq!(
+            unsafe { libc::fcntl(reader, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0,
+            "pty drain nonblocking setup failed"
+        );
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = {
+            let output = Arc::clone(&output);
+            let stop = Arc::clone(&stop);
+            std::thread::Builder::new()
+                .name("pty-drain".to_string())
+                .spawn(move || {
+                    let mut chunk = [0u8; 4096];
+                    while !stop.load(Ordering::SeqCst) {
+                        // SAFETY: chunk is a live buffer of its length; the
+                        // reader is the nonblocking dup owned by this thread.
+                        let read = unsafe {
+                            libc::read(reader, chunk.as_mut_ptr().cast(), chunk.len())
+                        };
+                        if read > 0 {
+                            if let Ok(mut output) = output.lock() {
+                                output.extend_from_slice(&chunk[..read as usize]);
+                                if output.len() >= 1_000_000 {
+                                    return;
+                                }
+                            }
+                        } else if read == 0 {
+                            return;
+                        } else {
+                            let error = std::io::Error::last_os_error();
+                            if error.raw_os_error() == Some(libc::EIO) {
+                                // The slave is gone: the run has exited.
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                })
+                .expect("starting the pty drain")
+        };
+        Self {
+            master: Some(master),
+            reader,
+            output,
+            stop,
+            handle: Some(handle),
+        }
     }
 
     fn get(&self) -> RawFd {
-        self.0.unwrap_or(-1)
+        self.master.unwrap_or(-1)
+    }
+
+    /// Everything the run has printed so far.
+    fn snapshot(&self) -> String {
+        let bytes = self
+            .output
+            .lock()
+            .map(|output| output[..].to_owned())
+            .unwrap_or_default();
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     fn close(&mut self) {
-        if let Some(master) = self.0.take() {
-            // SAFETY: the parent-side descriptor is owned by this test.
-            unsafe {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        // SAFETY: both descriptors are owned by this test; each closes once.
+        unsafe {
+            let reader = std::mem::replace(&mut self.reader, -1);
+            if reader >= 0 {
+                libc::close(reader);
+            }
+            if let Some(master) = self.master.take() {
                 libc::close(master);
             }
         }
     }
 }
 
-impl Drop for MasterFd {
+impl Drop for PtyDrain {
     fn drop(&mut self) {
         self.close();
     }
-}
-
-/// Drain whatever the run printed to the slave without blocking: the master
-/// is nonblocking, and after the child exits the slave is gone, so reads end
-/// with `EAGAIN`/`EIO` instead of hanging. The total is capped so a wedged
-/// writer cannot grow the drain without bound.
-fn pty_output(master: RawFd) -> String {
-    let mut bytes = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        // SAFETY: chunk is a live buffer of its length; master is nonblocking.
-        let read = unsafe { libc::read(master, chunk.as_mut_ptr().cast(), chunk.len()) };
-        if read > 0 {
-            bytes.extend_from_slice(&chunk[..read as usize]);
-            if bytes.len() >= 1_000_000 {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[test]
@@ -686,8 +748,8 @@ fn pty_double_ctrl_c_during_on_exit_exits_within_200ms() {
         &on_exit_program(&started, &entered, &finished),
     );
     let watched = WatchedChild::spawn(child);
-    let mut master = MasterFd::new(master);
-    let diagnose = || pty_output(master.get());
+    let mut master = PtyDrain::new(master);
+    let diagnose = || master.snapshot();
     wait_for_marker(&watched, &started, "its main sleep", &diagnose);
     pty_interrupt(master.get());
     wait_for_marker(&watched, &entered, "its cleanup sleep", &diagnose);
@@ -708,9 +770,9 @@ fn pty_double_ctrl_c_during_on_exit_exits_within_200ms() {
         )
     };
     let elapsed = second.elapsed();
-    // Drain after the exit so output collection cannot stretch the measured
-    // second-interrupt-to-exit interval above.
-    let output = pty_output(master.get());
+    // The background drain collected output concurrently, so snapshotting here
+    // cannot stretch the measured second-interrupt-to-exit interval above.
+    let output = master.snapshot();
     master.close();
     watched.finish();
     assert_eq!(status.code(), Some(130), "pty output:\n{output}");

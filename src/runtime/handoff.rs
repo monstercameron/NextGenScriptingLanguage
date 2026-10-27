@@ -12,8 +12,9 @@
 //! the script's exit code.
 //!
 //! A detached launch starts a program that the script does not own. The child
-//! gets its own session on Unix and `DETACHED_PROCESS` on Windows, and is never
-//! assigned to a job object, so cancellation and exit of this script do not reach it.
+//! gets its own session on Unix and its own hidden console (`CREATE_NO_WINDOW`,
+//! never the parent's) on Windows, and is never assigned to a job object, so
+//! cancellation and exit of this script do not reach it.
 
 use crate::ast::{Connection, Program, Step, StepKind, Value};
 use anyhow::{bail, Context, Result};
@@ -263,11 +264,17 @@ pub(crate) fn launch_detached(mut command: Command, output: Option<File>) -> Res
 #[cfg(windows)]
 pub(crate) fn launch_detached(mut command: Command, output: Option<File>) -> Result<u32> {
     use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    // `CREATE_NO_WINDOW` (not `DETACHED_PROCESS`): a detached child has no
+    // console of its own, and console-subsystem runtimes such as the Windows
+    // PowerShell console host then cannot deliver stdout/stderr to the
+    // redirected output file. A hidden console keeps the child off the
+    // parent's console (with `CREATE_NEW_PROCESS_GROUP` for Ctrl-C isolation)
+    // while leaving redirected stdio working. Ignored for non-console apps.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     flush_output()?;
-    let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
     // CREATE_BREAKAWAY_FROM_JOB escapes an outer job only when that job permits
     // breakaway (JOB_OBJECT_LIMIT_BREAKAWAY_OK). Where the job forbids it, spawn
     // refuses the flag and this retries without it, so the child stays in the outer

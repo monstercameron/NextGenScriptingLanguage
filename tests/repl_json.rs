@@ -77,7 +77,10 @@ fn json_repl_captures_each_fresh_streamed_command_without_leaking_to_process_std
     let responses = parse_lines(&output.stdout);
     assert_eq!(responses.len(), 4);
     assert_eq!(responses[0]["stdout"], helper_output);
-    assert_eq!(responses[1]["stdout"], format!("{helper_output}{helper_output}"));
+    assert_eq!(
+        responses[1]["stdout"],
+        format!("{helper_output}{helper_output}")
+    );
     assert_eq!(responses[2]["stdout"], "", "{responses:?}");
     assert_eq!(responses[3]["stdout"], "", "{responses:?}");
 }
@@ -298,26 +301,30 @@ fn failed_multicommand_submission_keeps_ordered_redacted_partial_stdout() {
     std::fs::create_dir(&manifests).unwrap();
     let first_secret = "first-command-secret";
     let failed_secret = "failed-command-secret";
-    for (name, env_name, secret, script) in [
+    for (name, env_name, secret, unix_script, windows_script) in [
         (
             "first.echo",
             "FIRST_SECRET",
             first_secret,
             "printf 'first=%s|' \"$FIRST_SECRET\"",
+            "echo|set /p=first=%FIRST_SECRET%^|",
         ),
         (
             "last.fail",
             "FAILED_SECRET",
             failed_secret,
             "printf 'last=%s' \"$FAILED_SECRET\"; exit 7",
+            "echo|set /p=last=%FAILED_SECRET%^| & exit /b 7",
         ),
     ] {
+        let (binary, arguments) = shell_command(unix_script, windows_script);
         let environment = serde_json::Map::from_iter([(
             env_name.to_owned(),
             serde_json::Value::String(secret.to_owned()),
         )]);
         let manifest = serde_json::json!({
-            "name":name, "binary":"/bin/sh", "arguments":[{"literal":"-c"},{"literal":script}],
+            "name":name, "binary":binary,
+            "arguments":arguments.iter().map(|argument| serde_json::json!({"literal":argument})).collect::<Vec<_>>(),
             "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":environment}}
         });
         std::fs::write(manifests.join(format!("{name}.json")), manifest.to_string()).unwrap();
@@ -367,13 +374,22 @@ fn failed_pipeline_submission_returns_redacted_terminal_partial_stdout() {
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
     let secret = "pipeline-failure-secret";
+    let (first_binary, first_arguments) = shell_command(
+        "printf ignored-pipeline-input",
+        "echo ignored-pipeline-input",
+    );
     let first = serde_json::json!({
-        "name":"pipeline.first", "binary":"/bin/sh", "arguments":[{"literal":"-c"},{"literal":"printf ignored-pipeline-input"}],
+        "name":"pipeline.first", "binary":first_binary,
+        "arguments":first_arguments.iter().map(|argument| serde_json::json!({"literal":argument})).collect::<Vec<_>>(),
         "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"}}
     });
+    let (last_binary, last_arguments) = shell_command(
+        "cat >/dev/null; printf 'pipeline=%s' \"$PIPELINE_SECRET\"; exit 7",
+        "more >nul & echo|set /p=pipeline=%PIPELINE_SECRET%^| & exit /b 7",
+    );
     let last = serde_json::json!({
-        "name":"pipeline.last", "binary":"/bin/sh", "accepts_stdin":true,
-        "arguments":[{"literal":"-c"},{"literal":"cat >/dev/null; printf 'pipeline=%s' \"$PIPELINE_SECRET\"; exit 7"}],
+        "name":"pipeline.last", "binary":last_binary, "accepts_stdin":true,
+        "arguments":last_arguments.iter().map(|argument| serde_json::json!({"literal":argument})).collect::<Vec<_>>(),
         "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":{"PIPELINE_SECRET":secret}}}
     });
     std::fs::write(manifests.join("pipeline.first.json"), first.to_string()).unwrap();
@@ -726,6 +742,20 @@ fn repl_child(
         .stderr(Stdio::piped())
         .spawn()
         .unwrap()
+}
+
+fn shell_command(unix_script: &str, windows_script: &str) -> (String, Vec<String>) {
+    if cfg!(windows) {
+        (
+            "cmd".to_owned(),
+            vec!["/c".to_owned(), windows_script.to_owned()],
+        )
+    } else {
+        (
+            "/bin/sh".to_owned(),
+            vec!["-c".to_owned(), unix_script.to_owned()],
+        )
+    }
 }
 
 fn parse_lines(bytes: &[u8]) -> Vec<Value> {

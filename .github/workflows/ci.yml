@@ -15,8 +15,8 @@ concurrency:
 jobs:
   feature-matrix:
     # Every optional feature alone, the core build and the default build, linted in one
-    # job per platform with one shared cache. The full feature set is linted and tested
-    # by the Unix and Windows jobs below, so it is not repeated here.
+    # job per platform with one shared cache. Standalone model tests run here too. The
+    # full feature set is linted and tested by the Unix and Windows jobs below.
     name: Feature matrix (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -59,6 +59,8 @@ jobs:
           set -euo pipefail
           cargo test --locked --no-default-features --features test-fixtures --lib --tests
           cargo test --locked --features test-fixtures --lib --tests
+      - name: Test standalone model feature
+        run: cargo test --locked --no-default-features --features model --lib --tests
       - name: Verify daemon fallback across Linux namespaces
         if: runner.os == 'Linux'
         env:

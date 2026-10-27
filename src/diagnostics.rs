@@ -5016,10 +5016,9 @@ fn value_matches_schema_with_types(
         ("number", Value::Integer(_) | Value::Number(_)) => true,
         ("boolean", Value::Bool(_)) => true,
         ("array", Value::List(values)) => schema.get("items").is_none_or(|item_schema| {
-            values.iter().all(|item| {
-                matches!(item, Value::Reference(_))
-                    || value_matches_schema_with_types(item, item_schema, known_types)
-            })
+            values
+                .iter()
+                .all(|item| value_matches_schema_with_types(item, item_schema, known_types))
         }),
         ("object", Value::Record(values)) => {
             let fields = schema.get("properties").and_then(JsonValue::as_object);
@@ -6432,6 +6431,33 @@ mod tests {
             &values,
             &scalar_object,
             &mismatched_types
+        ));
+
+        let nested_array = json!({
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"}}
+            },
+            "additionalProperties": false
+        });
+        let text_items = Value::Record(BTreeMap::from([(
+            "items".into(),
+            Value::List(vec![Value::Reference("text".into())]),
+        )]));
+        assert!(value_matches_schema_with_types(
+            &text_items,
+            &nested_array,
+            &BTreeMap::from([("text".into(), OutputType::Text)])
+        ));
+        assert!(!value_matches_schema_with_types(
+            &text_items,
+            &nested_array,
+            &BTreeMap::from([("text".into(), OutputType::Integer)])
+        ));
+        assert!(value_matches_schema_with_types(
+            &text_items,
+            &nested_array,
+            &BTreeMap::new()
         ));
     }
 

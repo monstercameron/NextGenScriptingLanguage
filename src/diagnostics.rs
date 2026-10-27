@@ -4538,14 +4538,7 @@ fn validate_call(
         }
     }
 
-    validate_json_pointer_literals(
-        source,
-        line,
-        call,
-        manifest,
-        line_starts,
-        diagnostics,
-    );
+    validate_json_pointer_literals(source, line, call, manifest, line_starts, diagnostics);
 
     let dispatches_wait_until = (manifest.execution_backend() == AppletBackend::InProcess
         && manifest.name_for(call) == "wait.until")
@@ -4619,16 +4612,10 @@ fn validate_json_pointer_literals(
     };
     let (fields, where_pointer) = match operation {
         "json.get" => (&["pointer", "pointers"][..], false),
-        "json.set"
-        | "json.length"
-        | "json.first"
-        | "json.last"
-        | "json.keys"
-        | "json.entries"
-        | "json.values"
-        | "json.group_by"
-        | "json.unique_by"
-        | "json.sort_by" => (&["pointer"][..], false),
+        "json.set" | "json.length" | "json.first" | "json.last" | "json.keys" | "json.entries"
+        | "json.values" | "json.group_by" | "json.unique_by" | "json.sort_by" => {
+            (&["pointer"][..], false)
+        }
         "json.map" => (&["pointer", "select"][..], false),
         "json.filter" => (&["pointer"][..], true),
         "json.has" | "json.delete" => (&["path"][..], false),
@@ -4636,7 +4623,7 @@ fn validate_json_pointer_literals(
     };
 
     let mut invalid = Vec::new();
-    for name in fields {
+    for &name in fields {
         if let Some(value) = call.parameters.get(name) {
             collect_invalid_pointers(name, value, &mut invalid);
         }
@@ -4668,7 +4655,7 @@ fn validate_json_pointer_literals(
         diagnostics.push(Diagnostic::error(
             "applet.parameter.constraint",
             message,
-            parameter_value_span_at(source, line, parameter, line_starts)
+            parameter_value_span_at(source, line, &parameter, line_starts)
                 .unwrap_or_else(|| line_starts.span(source, line)),
         ));
     }
@@ -5540,9 +5527,8 @@ mod tests {
         let maximum_bytes = format!("/{}", "a".repeat(4095));
         let overlong = format!("/{}", "a".repeat(4096));
         for (pointer, valid) in [(&maximum_bytes, true), (&overlong, false)] {
-            let source = format!(
-                "run json.keys with document {{}} and pointer {pointer:?} as result\n"
-            );
+            let source =
+                format!("run json.keys with document {{}} and pointer {pointer:?} as result\n");
             let diagnostics = analyze_source(&source, &registry);
             assert_eq!(
                 !diagnostics
@@ -5557,9 +5543,8 @@ mod tests {
         let maximum_segments = "/".repeat(256);
         let over_segments = "/".repeat(257);
         for (pointer, valid) in [(&maximum_segments, true), (&over_segments, false)] {
-            let source = format!(
-                "run json.keys with document {{}} and pointer {pointer:?} as result\n"
-            );
+            let source =
+                format!("run json.keys with document {{}} and pointer {pointer:?} as result\n");
             let diagnostics = analyze_source(&source, &registry);
             assert_eq!(
                 !diagnostics
@@ -5586,8 +5571,7 @@ mod tests {
             "binary": "custom-json-keys",
             "parameters": {
                 "document": { "type": "json", "required": true },
-                "pointer": { "type": "string" },
-                "path": { "type": "string" }
+                "pointer": { "type": "string", "required": true }
             },
             "arguments": [{ "parameter": "pointer" }]
         })
@@ -5636,7 +5620,8 @@ mod tests {
                 .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
             "a fixed helper dispatch to json.keys was not pointer-checked"
         );
-        let ignored_path = "run fixture.json_keys with document {} and pointer \"\" and path \"/~2\" as result\n";
+        let ignored_path =
+            "run fixture.json_keys with document {} and pointer \"\" and path \"/~2\" as result\n";
         assert!(
             !analyze_source(ignored_path, &helper)
                 .iter()

@@ -340,7 +340,7 @@ program can continue after failure.
 ```sh
 execute repair.program --checkpoint .execute-state/repair --trace
 # Edit the failed node or remaining suffix, then:
-execute resume repair.program --checkpoint .execute-state/repair --trace
+execute resume repair.program --checkpoint .execute-state/repair --retry-uncertain --trace
 ```
 
 The [repair example](../examples/repair.program) deliberately fails after a cached

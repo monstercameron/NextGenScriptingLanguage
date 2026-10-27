@@ -94,7 +94,8 @@ fn documented_repair_example_requires_explicit_retry_and_recovers() {
     ];
     for docs in [
         include_str!("../README.md"),
-        include_str!("../docs/language.md"),
+        include_str!("../docs/guide.md"),
+        include_str!("../docs/runtime-reference.md"),
     ] {
         assert!(docs.contains("execute repair.program --checkpoint .execute-state/repair --trace"));
         assert!(docs.contains("execute resume repair.program --checkpoint .execute-state/repair --retry-uncertain --trace"));

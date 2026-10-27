@@ -113,6 +113,8 @@ fn check_accepts_every_declared_finite_string_option() {
                 format!("\"{value}\" and key \"x\"\n")
             } else if prefix.contains("symlink_policy") && !prefix.contains("permissions_policy") {
                 format!("\"{value}\" and permissions_policy \"preserve\" and content \"x\"\n")
+            } else if prefix.contains("permissions_policy") {
+                format!("\"{value}\" and mode 384\n")
             } else {
                 format!("\"{value}\"\n")
             };

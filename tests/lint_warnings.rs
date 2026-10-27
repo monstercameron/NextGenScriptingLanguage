@@ -36,6 +36,8 @@ fn shell_expansion_in_literal_arguments_warns_without_becoming_an_error() {
 fn explicit_shell_command_script_is_not_mistaken_for_a_literal_argument() {
     for source in [
         "run \"sh\" with arguments [\"-c\", \"echo $HOME\"]\n",
+        "run \"bash\" with arguments [\"-o\", \"pipefail\", \"-c\", \"echo $HOME\"]\n",
+        "run \"bash\" with arguments [\"-O\", \"extglob\", \"-c\", \"echo $HOME\"]\n",
         "run \"fish\" with arguments [\"-c\", \"echo $HOME\"]\n",
         "run \"env\" with arguments [\"bash\", \"-c\", \"echo $HOME\"]\n",
         "run \"busybox\" with arguments [\"sh\", \"-c\", \"echo $HOME\"]\n",
@@ -74,6 +76,7 @@ fn shell_looking_later_arguments_are_not_treated_as_a_command_string() {
         "run \"sh\" with arguments [\"script.sh\", \"-c\", \"echo $HOME\"]\n",
         "run \"env\" with arguments [\"echo\", \"bash\", \"-c\", \"echo $HOME\"]\n",
         "run \"busybox\" with arguments [\"echo\", \"sh\", \"-c\", \"echo $HOME\"]\n",
+        "run \"env\" with arguments [\"-S\", \"echo bash -c\", \"bash\", \"-c\", \"echo $HOME\"]\n",
     ] {
         let diagnostics = analyze_source(source, &Registry::default());
         assert!(

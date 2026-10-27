@@ -1019,8 +1019,9 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         .and_then(|name| name.to_str())
         .unwrap_or(executable);
     fn shell_script_index(arguments: &[Value]) -> Option<usize> {
-        for (index, argument) in arguments.iter().enumerate() {
-            let Value::String(argument) = argument else {
+        let mut index = 0;
+        while let Some(value) = arguments.get(index) {
+            let Value::String(argument) = value else {
                 return None;
             };
             if argument == "-c" {
@@ -1028,6 +1029,14 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
             }
             if argument == "--" || !argument.starts_with('-') {
                 return None;
+            }
+            if matches!(argument.as_str(), "-o" | "-O" | "--rcfile" | "--init-file") {
+                if !matches!(arguments.get(index + 1), Some(Value::String(_))) {
+                    return None;
+                }
+                index += 2;
+            } else {
+                index += 1;
             }
         }
         None
@@ -1040,10 +1049,10 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
                 break;
             }
             if argument.starts_with('-') {
-                if matches!(
-                    argument.as_str(),
-                    "-u" | "--unset" | "-C" | "--chdir" | "-S" | "--split-string"
-                ) {
+                if matches!(argument.as_str(), "-S" | "--split-string") {
+                    return None;
+                }
+                if matches!(argument.as_str(), "-u" | "--unset" | "-C" | "--chdir") {
                     index += 2;
                     continue;
                 }

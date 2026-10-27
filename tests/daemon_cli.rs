@@ -98,6 +98,7 @@ where
     command
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env_remove("EXECUTE_DAEMON")
+        .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
         .current_dir(directory)
         .stdin(Stdio::null())
         .arg("run")
@@ -196,7 +197,239 @@ fn daemon_serve_refuses_a_directory_that_is_not_private() {
 }
 
 #[test]
-fn run_with_daemon_flag_prints_the_same_output_silently() {
+fn daemon_rejects_raw_run_requests() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let reply = raw_request(&default_socket_under(runtime.path()), "run");
+    assert_eq!(reply["event"], "fallback");
+    assert!(reply["reason"].as_str().unwrap().contains("confinement"));
+}
+
+#[test]
+fn environment_selected_daemon_runs_locally() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let program = work.path().join("env.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("EXECUTE_DAEMON", "1")
+        .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+        .current_dir(work.path())
+        .arg("run")
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"out\n");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("client confinement cannot be preserved")
+    );
+}
+
+#[test]
+fn default_selection_never_contacts_a_legacy_daemon() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let socket = default_socket_under(runtime.path());
+    fs::create_dir(socket.parent().unwrap()).unwrap();
+    fs::set_permissions(socket.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+    let listener = UnixListener::bind(socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let output = run_program(runtime.path(), work.path(), &["--daemon"]);
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"out\n");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("client confinement cannot be preserved")
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn explicit_context_acceptance_forwards_a_run() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let program = work.path().join("forward.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(work.path())
+        .arg("run")
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .arg("--daemon")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"out\n");
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status = daemon_output(runtime.path(), &["status"]);
+    let reply: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert!(reply["requests_served"].as_u64().unwrap() >= 3);
+}
+
+#[test]
+fn explicit_context_acceptance_preserves_untrusted_mode() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let manifest_dir = work.path().join("manifests");
+    fs::create_dir(&manifest_dir).unwrap();
+    fs::write(
+        manifest_dir.join("gated.json"),
+        serde_json::json!({
+            "name": "gated", "binary": "true", "parameters": {}, "arguments": [],
+            "contract": {"version": 1}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let policy = work.path().join("policy.json");
+    fs::write(
+        &policy,
+        r#"{"version":1,"applets":{"gated":{"capabilities":["process.exec"]}}}"#,
+    )
+    .unwrap();
+    let program = work.path().join("workflow.program");
+    fs::write(&program, "run gated\n").unwrap();
+    let run = |forward: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+        command
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .current_dir(work.path())
+            .args(["run"])
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(&manifest_dir)
+            .args(["--execution-mode", "untrusted", "--capability-policy"])
+            .arg(&policy);
+        if forward {
+            command
+                .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+                .env("EXECUTE_DAEMON_TRACE", "1")
+                .arg("--daemon");
+        }
+        command.output().unwrap()
+    };
+    let cold = run(false);
+    let forwarded = run(true);
+    assert!(
+        cold.status.success(),
+        "local: {}",
+        String::from_utf8_lossy(&cold.stderr)
+    );
+    assert!(
+        forwarded.status.success(),
+        "forwarded: {}",
+        String::from_utf8_lossy(&forwarded.stderr)
+    );
+    assert_eq!(cold.stdout, forwarded.stdout);
+    assert!(String::from_utf8_lossy(&forwarded.stderr).contains("client-started"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn opted_in_untrusted_forwarding_denies_ungranted_write() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let manifest_dir = work.path().join("manifests");
+    fs::create_dir(&manifest_dir).unwrap();
+    fs::write(
+        manifest_dir.join("gated.json"),
+        serde_json::json!({
+            "name": "gated", "binary": "touch",
+            "parameters": {"path": {"type": "string", "required": true}},
+            "arguments": [{"parameter": "path"}], "contract": {"version": 1}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let policy = work.path().join("policy.json");
+    fs::write(
+        &policy,
+        r#"{"version":1,"applets":{"gated":{"capabilities":["process.exec"]}}}"#,
+    )
+    .unwrap();
+    let program = work.path().join("write.program");
+    let marker = work.path().join("forbidden");
+    fs::write(
+        &program,
+        format!("run gated with path {:?}\n", marker.to_string_lossy()),
+    )
+    .unwrap();
+    for forward in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+        command
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .env("EXECUTE_DAEMON_TRACE", "1")
+            .current_dir(work.path())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(&manifest_dir)
+            .args(["--execution-mode", "untrusted", "--capability-policy"])
+            .arg(&policy);
+        if forward {
+            command
+                .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+                .arg("--daemon");
+        }
+        let output = command.output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "ungranted write succeeded: {stderr}"
+        );
+        assert!(stderr.contains("Operation not permitted"), "{stderr}");
+        assert!(!marker.exists());
+        if forward {
+            assert!(stderr.contains("client-started"), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn untrusted_mode_with_daemon_matches_local_execution() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let cold = run_program(
+        runtime.path(),
+        work.path(),
+        &["--execution-mode", "untrusted"],
+    );
+    let selected = run_program(
+        runtime.path(),
+        work.path(),
+        &["--execution-mode", "untrusted", "--daemon"],
+    );
+    assert_eq!(cold.status.code(), selected.status.code());
+    assert_eq!(cold.stdout, selected.stdout);
+    assert!(String::from_utf8_lossy(&selected.stderr)
+        .contains("client confinement cannot be preserved"));
+}
+
+#[test]
+fn run_with_daemon_flag_falls_back_locally() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let cold = run_program(runtime.path(), work.path(), &[]);
@@ -207,23 +440,19 @@ fn run_with_daemon_flag_prints_the_same_output_silently() {
     assert!(warm.status.success(), "{:?}", warm);
     assert_eq!(warm.stdout, cold.stdout);
     assert!(
-        warm.stderr.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&warm.stderr)
+        String::from_utf8_lossy(&warm.stderr).contains("client confinement cannot be preserved")
     );
 }
 
 #[test]
-fn run_with_daemon_flag_without_a_daemon_is_silent_and_cold() {
+fn run_with_daemon_flag_without_a_daemon_is_local() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let output = run_program(runtime.path(), work.path(), &["--daemon"]);
     assert!(output.status.success(), "{:?}", output);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
     assert!(
-        output.stderr.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&output.stderr).contains("client confinement cannot be preserved")
     );
 }
 
@@ -279,7 +508,106 @@ fn a_program_that_takes_the_terminal_is_declined_before_it_runs() {
     let source = "interactively printf with message \"x\"\n";
     let output = run_source(runtime.path(), work.path(), source, &["--daemon"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("client confinement cannot be preserved"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn opted_in_interactive_run_is_declined_before_execution() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let program = work.path().join("interactive.program");
+    fs::write(&program, "interactively printf with message \"x\"\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .arg("run")
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .arg("--daemon")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("will not run this program"), "{stderr}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_namespace_clients_run_locally() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // The client maps its effective UID to zero. Serve at the path it will use,
+    // while retaining the host daemon's confinement context.
+    let socket = runtime.path().join("execute-0").join("daemon.sock");
+    let mut daemon = Daemon(Some(
+        daemon_command(
+            runtime.path(),
+            &["serve", "--socket", socket.to_str().unwrap()],
+        )
+        .spawn()
+        .expect("spawn daemon"),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !socket.exists() {
+        assert!(Instant::now() < deadline, "daemon did not start");
+        assert!(
+            daemon.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+            "daemon exited"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    let program = work.path().join("namespace.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    for namespace in ["--mount", "--net"] {
+        let probe = Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace, "true"])
+            .output();
+        if !probe.as_ref().is_ok_and(|result| result.status.success()) {
+            let message = format!("cannot create {namespace} namespace: {probe:?}");
+            assert!(
+                std::env::var_os("EXECUTE_REQUIRE_NAMESPACE_TESTS").is_none(),
+                "{message}"
+            );
+            eprintln!("SKIP: {message}");
+            return;
+        }
+        // Prove this client can actually reach the daemon it would otherwise use.
+        let status = Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace])
+            .arg(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .args(["daemon", "status"])
+            .output()
+            .unwrap();
+        let reply: Value = serde_json::from_slice(&status.stdout).expect("daemon status JSON");
+        assert_eq!(reply["running"], true, "{namespace}: {reply}");
+        let output = Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace])
+            .arg(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("EXECUTE_DAEMON", "1")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .current_dir(work.path())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(manifests())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{namespace}: {:?}", output);
+        assert_eq!(output.stdout, b"out\n");
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .contains("client confinement cannot be preserved"));
+    }
 }
 
 #[test]
@@ -360,7 +688,7 @@ fn warm_round_trip_and_forwarded_run_latency_are_measured() {
     let mut cold = Vec::new();
     for _ in 0..10 {
         let started = Instant::now();
-        let output = run_program(runtime.path(), work.path(), &["--daemon"]);
+        let output = run_with_manifests(runtime.path(), work.path(), &manifests(), &["--daemon"]);
         forwarded.push(started.elapsed());
         assert!(output.status.success(), "{:?}", output);
         assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
@@ -434,6 +762,14 @@ fn run_with_manifests(
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env_remove("EXECUTE_DAEMON")
+        .env(
+            "EXECUTE_DAEMON_ACCEPT_CONTEXT",
+            if extra.contains(&"--daemon") {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .current_dir(directory)
         .stdin(Stdio::null())
         .arg("run")
@@ -503,9 +839,9 @@ fn forwarded_runs_do_not_share_capability_policies() {
     fs::create_dir(&manifests).unwrap();
     let gated = serde_json::json!({
         "name": "gated",
-        "binary": "touch",
-        "parameters": {"path": {"type": "string", "required": true}},
-        "arguments": [{"parameter": "path"}],
+        "binary": "true",
+        "parameters": {},
+        "arguments": [],
         "contract": {"version": 1}
     });
     fs::write(
@@ -530,18 +866,10 @@ fn forwarded_runs_do_not_share_capability_policies() {
         (&deny, false),
     ];
     for (index, (policy, allowed)) in steps.into_iter().enumerate() {
-        let marker = root.path().join(format!("made-{index}"));
-        fs::write(
-            &program,
-            format!(
-                "run gated with path {:?}
-",
-                marker.to_string_lossy()
-            ),
-        )
-        .unwrap();
+        fs::write(&program, "run gated\n").unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_execute"))
             .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
             .env_remove("EXECUTE_DAEMON")
             .current_dir(root.path())
             .stdin(Stdio::null())
@@ -554,16 +882,32 @@ fn forwarded_runs_do_not_share_capability_policies() {
             .arg("--daemon")
             .output()
             .unwrap();
+        // A non-writing executable keeps this check within the untrusted sandbox's
+        // filesystem grants. Compare against a local run using the same policy.
+        let local = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .current_dir(root.path())
+            .stdin(Stdio::null())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(&manifests)
+            .arg("--capability-policy")
+            .arg(policy)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            local.status.code(),
+            "step {index}: local/daemon mismatch"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             output.status.success(),
             allowed,
             "step {index}: policy decided wrongly: {stderr}"
-        );
-        assert_eq!(
-            marker.exists(),
-            allowed,
-            "step {index}: effect must follow the policy"
         );
         if !allowed {
             assert!(
@@ -625,6 +969,14 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
         let output = Command::new(env!("CARGO_BIN_EXE_execute"))
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env_remove("EXECUTE_DAEMON")
+            .env(
+                "EXECUTE_DAEMON_ACCEPT_CONTEXT",
+                if extra.contains(&"--daemon") {
+                    "1"
+                } else {
+                    "0"
+                },
+            )
             .current_dir(root.path())
             .stdin(Stdio::null())
             .arg("run")
@@ -703,6 +1055,7 @@ fn forwarded_run_stage_breakdown_is_measured() {
         let output = Command::new(env!("CARGO_BIN_EXE_execute"))
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env("EXECUTE_DAEMON_TRACE", "1")
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
             .env_remove("EXECUTE_DAEMON")
             .current_dir(work.path())
             .stdin(Stdio::null())
@@ -779,7 +1132,10 @@ fn a_program_with_a_prompt_input_is_declined_before_it_runs() {
         &["--daemon", "--input", "name=Ada"],
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("will not run this program"), "{stderr}");
+    assert!(
+        stderr.contains("client confinement cannot be preserved"),
+        "{stderr}"
+    );
     assert!(output.status.success(), "{:?}", output);
 }
 

@@ -46,10 +46,9 @@ pipeline.
   or start the service; TTY handoff and universal detached-descendant cleanup
   are not provided. See [the practical guide](guide.md#generate-a-reviewable-service-definition).
 
-* A warm per-user daemon (`execute daemon`, `run --daemon`) forwards runs over a
-  checked Unix socket. It helps only where manifest and policy setup dominates;
-  for a one-line program it is level with a cold run. See
-  [the daemon section](language.md#warm-daemon---daemon).
+* Daemon run forwarding defaults to local execution because the client's OS confinement cannot be preserved. `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` explicitly
+  accepts the daemon context and enables forwarding.
+  See [the daemon section](language.md#warm-daemon---daemon).
 * Checkpoints record top-level `for each` loops element by element, match resume
   nodes by step id, and use journal version 5 with a keyed input digest. Retry
   safety follows declared effects, so a pure in-process loop writes no durable

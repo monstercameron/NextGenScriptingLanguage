@@ -116,10 +116,15 @@ pub fn default_socket() -> PathBuf {
         .join("daemon.sock")
 }
 
-/// Forward a `run` request (arguments without `--daemon`) to the daemon at the default
-/// socket. Without a trusted daemon the program runs here, with no output of its own.
+/// Forward only when the operator explicitly accepts the daemon confinement context.
 pub fn forward_run(arguments: &[String]) -> Forwarding {
-    imp::forward(arguments, &default_socket())
+    // This opt-in explicitly accepts the daemon context, including for older daemons.
+    if std::env::var_os("EXECUTE_DAEMON_ACCEPT_CONTEXT").is_some_and(|value| value == "1") {
+        return imp::forward(arguments, &default_socket());
+    }
+    Forwarding::Cold {
+        note: Some("daemon forwarding is disabled because client confinement cannot be preserved; running here".to_owned()),
+    }
 }
 
 fn socket_option(arguments: &[String]) -> Result<PathBuf> {
@@ -667,7 +672,17 @@ mod imp {
                     Flow::Stop
                 }
                 Some("run") => {
-                    self.start_run(stream, &request, descriptors);
+                    // Same-UID peers can have stricter OS confinement than this process.
+                    // Without explicit acceptance, refuse before preparing or forking.
+                    if request["accept_daemon_context"] == true {
+                        self.start_run(stream, &request, descriptors);
+                        return Flow::Continue;
+                    }
+                    let _ = descriptors;
+                    let _ = write_line(
+                        &mut stream,
+                        &json!({"event": "fallback", "reason": "client confinement cannot be preserved"}),
+                    );
                     Flow::Continue
                 }
                 _ => {
@@ -1261,12 +1276,15 @@ mod imp {
         Ok(())
     }
 
-    /// The environment to send, without the selector that asked for the daemon. A
+    /// The environment to send, without the daemon selector and context acceptance. A
     /// variable that is not UTF-8 cannot be sent, so the run stays here.
     fn environment_for_daemon() -> std::result::Result<Vec<(String, String)>, String> {
         let mut pairs = Vec::new();
         for (name, value) in std::env::vars_os() {
-            if name.to_str() == Some("EXECUTE_DAEMON") {
+            if matches!(
+                name.to_str(),
+                Some("EXECUTE_DAEMON" | "EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            ) {
                 continue;
             }
             match (name.into_string(), value.into_string()) {
@@ -1394,6 +1412,7 @@ mod imp {
         let header = json!({
             "protocol": PROTOCOL,
             "op": "run",
+            "accept_daemon_context": true,
             "argv": arguments,
             "cwd": cwd,
             "env": environment,

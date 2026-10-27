@@ -1736,27 +1736,11 @@ may be omitted. Trigger-only limits are rejected on programs that cannot use the
 
 `execute daemon serve` keeps a per-user process running behind a Unix socket, by default under `$XDG_RUNTIME_DIR`. `execute daemon status` reports whether it is running, and `execute daemon stop` stops it. Nothing runs in the background unless you start the daemon.
 
-The socket defaults to `$XDG_RUNTIME_DIR/execute-<uid>/daemon.sock` (the temporary directory when that variable is unset); `--socket PATH` selects another for `serve`, `status` and `stop`, while `run --daemon` always uses the default. The daemon is Unix only: on other platforms `daemon serve` reports that serving is not available and `run --daemon` runs in the client. Every client path checks the socket directory and the socket before it connects (a private directory owned by the user, a socket owned by the user), and checks the peer's user id after it connects. The daemon refuses a directory that is not private, another user's socket and a second daemon, and removes its socket when it exits. A client that connects and sends nothing holds the single-threaded accept loop for up to 2 seconds before its connection is dropped; only the same user can cause that delay (threat model H19). Before it serves, the daemon loads and parses the default manifest registry, and a plain forwarded run (no `--manifest-dir` or `--manifest-catalog`) starts from that parsed registry.
+The socket defaults to `$XDG_RUNTIME_DIR/execute-<uid>/daemon.sock` (the temporary directory when unset). `--socket PATH` selects another socket for `serve`, `status` and `stop`. The daemon is Unix only, and checks socket ownership, directory permissions and peer identity.
 
-`execute run program.program --daemon`, or `run` with `EXECUTE_DAEMON=1`, sends the run to the daemon when one answers. The daemon forks a child that takes the client's working directory, environment, umask, resource limits and standard streams, so the program sees what it would see run directly. When no daemon answers, the run happens in the client as usual. A program that may take the terminal (`interactively`, `hand over`, or a prompted input) is declined before it runs and runs in the client.
+By default, `run --daemon` and `EXECUTE_DAEMON=1` run locally with a notice. The daemon declines requests from older clients. The protocol cannot reproduce or prove equivalence of namespaces, cgroups, security filters and other OS confinement, so a daemon may be less restricted than its client. Local execution preserves the client's execution mode and policies.
 
-A forwarded run with `--manifest-dir` or `--manifest-catalog` uses a parsed registry the daemon keeps for up to 8 manifest sources, least recently used first. An entry is reused while the source's top-level JSON files keep their names, sizes and modification times, and a changed file rebuilds it. The manifests are shared between a cached entry and each run, so a run copies only its own policies. Capability and data-flow policies are applied to each run's own registry, so one run's policy never applies to another run. `EXECUTE_DAEMON_TRACE=1` prints a timestamp at each stage of a forwarded run to stderr.
-
-**When it helps.** A forwarded run pays for the client process, a fork, and the run itself. The daemon saves the cost of loading manifests and setting up policies, so it helps when that setup dominates. For a run that is already cheap it does not help: the two are level, within noise.
-
-Measured on the Linux CI runner (Ubuntu 24.04, release build), as medians of 10 runs on commit `7998580`:
-
-| Case | Cold | `--daemon` |
-|---|---|---|
-| One-line program, shipped manifests (`--manifest-dir`), end to end | 4.98 ms | 4.97 ms |
-| One-line program, a user directory of the shipped manifests, end to end | 4.60 ms | 4.64 ms |
-| Setup-heavy: a user directory of about 530 manifests, a capability policy and a data-flow policy | 8.50 ms | 7.30 ms |
-
-The setup-heavy row is the one where `--daemon` wins: about 1.2 ms faster (14%). For a one-line program the two are level, which is the most the daemon can do while a forwarded run still starts the client binary.
-
-Inside a forwarded run, a fork costs about 0.1 ms, a ping to the daemon about 0.09 ms, and the run itself about 1.6 ms. For a user directory, the daemon also checks the directory before the fork, which costs about 0.4 ms. That check is what lets the cache notice a change, and it is the price of a user directory. Before the cache, on commit `1291955`, the user-directory forwarded run took 5.46 ms against 4.57 ms cold, and the run itself took 3.5 ms. Numbers differ between runners and between commits, so compare cold and forwarded within one run, not across runs.
-
-Measure your own program before you rely on `--daemon`. We have not measured manifest sets larger than the one above, or policy files other than the ones used here.
+To explicitly accept execution in the daemon's OS context, set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` together with `--daemon` or `EXECUTE_DAEMON=1`. Only do this when you trust that context for the program; the client does not verify equivalence. Arguments, execution mode and policy paths are forwarded and the run applies those policies in the daemon context. Do not set the acceptance variable in sandboxed environments unless you intend to let runs leave their sandbox. Avoid `EXECUTE_DAEMON=1` in sandboxed environments when using older versions, which forward without this opt-in.
 
 ## Recover after a failure
 

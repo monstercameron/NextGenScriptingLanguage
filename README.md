@@ -160,14 +160,12 @@ faithful `sh` form and refuses the rest by name and line; see
 
 ## A warm daemon for repeated runs
 
-`execute daemon serve` keeps one per-user process behind a checked Unix socket, and
-`execute run FILE --daemon` (or `EXECUTE_DAEMON=1`) forwards a run to it when one
-answers; otherwise the run happens in the client as usual. The forwarded child gets
-the client's directory, environment, umask, limits and standard streams. Nothing runs
-in the background unless you start it, it is Unix only, and it helps only where
-manifest and policy setup dominates: a one-line program is level with a cold run, and
-a 530-manifest directory with two policies ran 14 percent faster (7.30 against 8.50 ms,
-medians on the Linux CI runner). See the [daemon section](docs/language.md#warm-daemon---daemon).
+`execute daemon serve` provides per-user status and management on Unix. Run forwarding is
+disabled by default because the daemon cannot preserve the client's OS confinement. `--daemon` and `EXECUTE_DAEMON=1` execute locally with a notice.
+Set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` to explicitly accept the daemon context and
+restore forwarding. Avoid `EXECUTE_DAEMON=1` in sandboxed environments with older
+versions that forward without this opt-in.
+See the [daemon section](docs/language.md#warm-daemon---daemon).
 
 ## Terminal apps with control flow you can read
 
@@ -433,8 +431,7 @@ in-process applet with the usual external tool, not like with like.
 **What it means.** Execute pays a fixed start-up cost (about 0.6 ms over bash here)
 that dominates short programs. It wins where it replaces a process with an in-process
 call. For a program that starts many processes, the work is in those processes, and the
-two runtimes are close. [`--daemon`](#a-warm-daemon-for-repeated-runs) removes only
-manifest and policy setup, so it does not close the startup gap for a short program. Earlier measurements,
+two runtimes are close. Daemon forwarding requires explicit acceptance of the daemon context. Earlier measurements,
 with their own methods, are indexed in [benchmarks/README.md](benchmarks/README.md).
 Browser virtual-applet timings do not measure native processes. No result establishes a
 universal speed advantage or full Bash parity.

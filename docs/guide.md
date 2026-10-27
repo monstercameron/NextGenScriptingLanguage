@@ -362,24 +362,12 @@ cannot be rewritten in place. See [recovery contracts](../docs/language.md#recov
 [per-element checkpoints](language.md#per-element-checkpoints) and
 [retry safety](language.md#retry-safety).
 
-## Faster repeated runs with the warm daemon
+## Daemon execution
 
-If you run many short programs that load a large manifest directory or policies, start
-a per-user daemon once and forward runs to it:
-
-```sh
-execute daemon serve &          # leave it running; `execute daemon stop` ends it
-execute run report.program --daemon
-EXECUTE_DAEMON=1 execute run report.program    # the same, from the environment
-```
-
-When no daemon answers, the program simply runs in the client. The forwarded run sees
-your working directory, environment, umask, resource limits and standard streams. A
-program that may take the terminal (`interactively`, `hand over`, a prompted input) is
-declined and runs in the client. For a one-line program the daemon is level with a
-cold run; it saves manifest loading and policy setup, so measure your own program
-first. Unix only. The details, measured latencies and socket checks are in the
-[language reference](language.md#warm-daemon---daemon).
+Run forwarding defaults to local execution because the daemon cannot preserve the client's OS confinement. Set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` with `--daemon` to explicitly
+accept the daemon context and forward. Avoid `EXECUTE_DAEMON=1` in sandboxed environments
+when using older versions that forward without this opt-in.
+See the [language reference](language.md#warm-daemon---daemon).
 
 ## Bring another CLI
 

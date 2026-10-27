@@ -58,6 +58,11 @@ jobs:
           set -euo pipefail
           cargo test --locked --no-default-features --features test-fixtures --lib --tests
           cargo test --locked --features test-fixtures --lib --tests
+      - name: Verify daemon fallback across Linux namespaces
+        if: runner.os == 'Linux'
+        env:
+          EXECUTE_REQUIRE_NAMESPACE_TESTS: "1"
+        run: cargo test --locked --test daemon_cli linux_namespace_clients_run_locally -- --nocapture
   workflows:
     name: Release contracts and workflow lint
     runs-on: ubuntu-24.04

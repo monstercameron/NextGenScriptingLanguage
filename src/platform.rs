@@ -74,16 +74,21 @@ pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> 
         windows::replace_file(source, target)
     }
 }
-/// Signal number of the latest interrupt that cancelled a run; 0 when none.
+/// Signal number of the latest interrupt this process saw; 0 when none. This is
+/// only a fallback channel for entry points that own no run (the CLI's error
+/// reporter and the graph cancellation handler). Per-run truth lives on each
+/// `Signals`' own slot, so overlapping runs and runs without signal handlers
+/// can neither inherit nor erase each other's exit codes.
 static CANCEL_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 pub(crate) fn record_cancel_signal(signal: i32) {
     CANCEL_SIGNAL.store(signal, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Clear the recorded interrupt signal at the start of a new run. Without this,
-/// a later run in the same process would inherit the previous run's `128+N`
-/// exit status even when it was never interrupted.
+/// Clear the recorded interrupt signal. Only tests use this: production runs
+/// read their own slot, and the process-wide fallback keeps the last signal
+/// so the CLI entry point can report it after its run is gone.
+#[cfg(test)]
 pub(crate) fn clear_cancel_signal() {
     CANCEL_SIGNAL.store(0, std::sync::atomic::Ordering::SeqCst);
 }
@@ -102,8 +107,9 @@ pub(crate) fn cancel_exit_code() -> Option<i32> {
     }
 }
 
-/// Serializes tests that touch the process-wide `CANCEL_SIGNAL` so a recorded
-/// probe signal cannot leak into a concurrent test's exit-status assertion.
+/// Serializes tests that touch the process-wide `CANCEL_SIGNAL` fallback so a
+/// recorded probe signal cannot leak into a concurrent test's exit-status
+/// assertion. Per-run slots need no serialization.
 #[cfg(test)]
 pub(crate) static CANCEL_SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -164,6 +170,7 @@ pub(crate) fn signals(
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
     wake: Option<Arc<crate::tasks::CancellationWake>>,
     cleanup: Arc<AtomicBool>,
+    signal_code: Arc<std::sync::atomic::AtomicI32>,
 ) -> Result<Vec<signal_hook::SigId>> {
     #[cfg(unix)]
     {
@@ -173,6 +180,7 @@ pub(crate) fn signals(
             let drain = drain.clone();
             let wake = wake.clone();
             let cleanup = cleanup.clone();
+            let signal_code = signal_code.clone();
             // SAFETY: the action performs atomic operations and a nonblocking
             // one-byte write through the cancellation wake, all signal-safe.
             // A repeat interrupt also marks the shared cleanup flag so a
@@ -180,6 +188,10 @@ pub(crate) fn signals(
             // instead of running out its cleanup budget.
             let registered = unsafe {
                 signal_hook::low_level::register(signal, move || {
+                    // The run's own slot is per-run truth; the process-wide
+                    // fallback keeps the CLI entry point reporting after the
+                    // run (and its slot) is gone.
+                    signal_code.store(signal, std::sync::atomic::Ordering::SeqCst);
                     record_cancel_signal(signal);
                     if let Some(drain) = &drain {
                         if request_drain(drain) {
@@ -216,7 +228,7 @@ pub(crate) fn signals(
     #[cfg(windows)]
     {
         let _ = wake;
-        windows::signals(cancel, drain, cleanup)?;
+        windows::signals(cancel, drain, cleanup, signal_code)?;
         Ok(Vec::new())
     }
 }

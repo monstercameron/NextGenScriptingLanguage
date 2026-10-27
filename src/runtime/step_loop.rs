@@ -576,7 +576,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             && parent_signals.begin_drain()
         {
             let exit = ProgramExit {
-                status: drain_exit_status(),
+                status: parent_signals.drain_exit_status(),
                 message: None,
             };
             let action = control_state.transfer(
@@ -842,7 +842,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         // The interrupt arrived after the last statement boundary: the
                         // body still runs, and the run ends with the interrupt status.
                         control_state.set_exit(ProgramExit {
-                            status: drain_exit_status(),
+                            status: signals.drain_exit_status(),
                             message: None,
                         });
                     }

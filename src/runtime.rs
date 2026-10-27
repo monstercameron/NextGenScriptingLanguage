@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -733,6 +733,12 @@ pub(crate) struct Signals {
     /// one, so a second Ctrl-C aborts the cleanup at once and kills its running
     /// command. The first interrupt never sets it, so cleanup still runs.
     cleanup_cancel: Arc<AtomicBool>,
+    /// Signal number of the interrupt that cancelled this run; 0 when none.
+    /// Each run owns its slot, so overlapping signal-owning runs keep their
+    /// own exit codes and runs that never install handlers cannot inherit a
+    /// previous run's code. Only entry points without a run (the CLI error
+    /// reporter) read the process-wide fallback in `platform`.
+    cancel_signal: Arc<AtomicI32>,
     /// Stops this run's drain watchdog when the run's signals are dropped.
     drain_stop: Option<Arc<AtomicBool>>,
     registrations: Vec<signal_hook::SigId>,
@@ -871,14 +877,15 @@ impl Signals {
     }
 
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
-        // A new signal-owned run must not inherit the previous run's recorded
-        // interrupt: clear it before installing this run's handlers.
-        crate::platform::clear_cancel_signal();
+        // A fresh per-run slot starts at zero, so a new signal-owned run can
+        // neither inherit nor erase another run's recorded interrupt.
         let cleanup_cancel = Arc::new(AtomicBool::new(false));
+        let cancel_signal = Arc::new(AtomicI32::new(0));
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
             cleanup_cancel: Arc::clone(&cleanup_cancel),
+            cancel_signal: Arc::clone(&cancel_signal),
             drain_stop: None,
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
@@ -929,6 +936,7 @@ impl Signals {
             armed,
             Some(signal_wake),
             Arc::clone(&guard.cleanup_cancel),
+            Arc::clone(&guard.cancel_signal),
         )?;
         Ok(guard)
     }
@@ -937,9 +945,8 @@ impl Signals {
         cancelled: Arc<AtomicBool>,
         deadline: Option<Instant>,
     ) -> Result<Self> {
-        // As with `register`: a new signal-owned run starts without a recorded
-        // interrupt from an earlier run in this process.
-        crate::platform::clear_cancel_signal();
+        // As with `register`: the fresh per-run slot starts without a recorded
+        // interrupt, so this run can neither inherit nor erase another run's.
         // The caller can set this flag directly without notifying the signal
         // wake, so native supervisors retain the bounded cancellation check.
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
@@ -950,6 +957,7 @@ impl Signals {
             None,
             Some(signal_wake),
             Arc::clone(&guard.cleanup_cancel),
+            Arc::clone(&guard.cancel_signal),
         )?;
         Ok(guard)
     }
@@ -968,6 +976,7 @@ impl Signals {
             cancelled,
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
             cleanup_cancel: Arc::new(AtomicBool::new(false)),
+            cancel_signal: Arc::new(AtomicI32::new(0)),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics,
@@ -1010,6 +1019,7 @@ impl Signals {
             cancelled: Arc::clone(&self.cleanup_cancel),
             drain: Arc::clone(&self.drain),
             cleanup_cancel: Arc::clone(&self.cleanup_cancel),
+            cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
@@ -1052,6 +1062,7 @@ impl Signals {
             cancelled: Arc::clone(&self.cancelled),
             drain: Arc::clone(&self.drain),
             cleanup_cancel: Arc::clone(&self.cleanup_cancel),
+            cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
@@ -1207,6 +1218,32 @@ impl Signals {
                 Ordering::SeqCst,
             )
             .is_ok()
+    }
+
+    /// Record the signal that interrupted this run. Production signal handlers
+    /// store into both this slot and the process-wide fallback; tests use this
+    /// to record against one run without delivering a real signal.
+    #[cfg(test)]
+    fn record_cancel_signal(&self, signal: i32) {
+        self.cancel_signal.store(signal, Ordering::SeqCst);
+    }
+
+    /// Exit status for this run when cancelled by an interrupt: 128 plus the
+    /// recorded signal. Runs that never recorded a signal report `None`, even
+    /// when another run in this process was interrupted.
+    pub(crate) fn cancel_exit_code(&self) -> Option<i32> {
+        match self.cancel_signal.load(Ordering::SeqCst) {
+            0 => None,
+            signal => Some(crate::platform::exit_code_for_signal(signal)),
+        }
+    }
+
+    /// Exit status of this run ended by an interrupt drain: 128 plus the
+    /// recorded signal (130 for SIGINT), or 130 when no signal was recorded.
+    pub(crate) fn drain_exit_status(&self) -> u8 {
+        self.cancel_exit_code()
+            .and_then(|code| u8::try_from(code).ok())
+            .unwrap_or(130)
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
@@ -2504,14 +2541,6 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     result.with_context(|| format!("writing {}", path.display()))
-}
-
-/// Exit status of a run ended by an interrupt drain: 128 plus the recorded
-/// signal (130 for SIGINT), or 130 when no signal was recorded.
-fn drain_exit_status() -> u8 {
-    crate::platform::cancel_exit_code()
-        .and_then(|code| u8::try_from(code).ok())
-        .unwrap_or(130)
 }
 
 /// Programs with an `on interrupt` body drain on their first interrupt.
@@ -6060,22 +6089,13 @@ mod drain_tests {
 
     /// Runs `source` in a fresh directory with the drain state preset, without
     /// installing OS signal handlers. The directory keeps any files the run wrote.
+    /// Each run owns its interrupt slot, so no process-wide lock or clear is
+    /// needed: a concurrent probe cannot move this run off 130.
     fn run_with_drain(
         source: &str,
         state: u8,
         cancel: bool,
-    ) -> (
-        tempfile::TempDir,
-        Result<RunResult>,
-        std::sync::MutexGuard<'static, ()>,
-    ) {
-        // Hold the cancel-signal serial lock for the whole run so a
-        // concurrent probe cannot move this run off 130. The guard is
-        // returned so the calling test keeps it alive until its assertions.
-        let serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::platform::clear_cancel_signal();
+    ) -> (tempfile::TempDir, Result<RunResult>) {
         let directory = tempfile::tempdir().unwrap();
         let registry =
             Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
@@ -6095,7 +6115,7 @@ mod drain_tests {
             None,
             None,
         );
-        (directory, result, serial)
+        (directory, result)
     }
 
     /// The interrupt body and the main body each leave a marker file, so the test can
@@ -6104,7 +6124,7 @@ mod drain_tests {
 
     #[test]
     fn requested_drain_runs_only_the_interrupt_body() {
-        let (directory, result, _serial) =
+        let (directory, result) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_REQUESTED, false);
         let result = result.expect("a drain is a clean end, not an error");
         assert_eq!(result.exit.map(|exit| exit.status), Some(130));
@@ -6114,7 +6134,7 @@ mod drain_tests {
 
     #[test]
     fn run_without_an_interrupt_skips_the_interrupt_body() {
-        let (directory, result, _serial) =
+        let (directory, result) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_IDLE, false);
         assert!(result.expect("ordinary run").exit.is_none());
         assert!(directory.path().join("main.txt").exists());
@@ -6123,7 +6143,7 @@ mod drain_tests {
 
     #[test]
     fn hard_cancel_skips_the_interrupt_body() {
-        let (directory, result, _serial) =
+        let (directory, result) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_CANCELLED, true);
         let error = result.err().expect("a second interrupt cancels the run");
         assert!(
@@ -6136,7 +6156,7 @@ mod drain_tests {
     #[test]
     fn drain_runs_the_interrupt_body_then_the_exit_body() {
         let source = "on interrupt\n  run printf with message \"interrupted\"\n  then save to file \"interrupted.txt\"\non exit\n  run printf with message \"exit\"\n  then save to file \"exit.txt\"\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
-        let (directory, result, _serial) =
+        let (directory, result) =
             run_with_drain(source, crate::platform::DRAIN_REQUESTED, false);
         assert_eq!(
             result
@@ -6148,6 +6168,77 @@ mod drain_tests {
         assert!(directory.path().join("interrupted.txt").exists());
         assert!(directory.path().join("exit.txt").exists());
         assert!(!directory.path().join("main.txt").exists());
+    }
+
+    #[test]
+    fn overlapping_signal_owners_keep_their_own_exit_codes() {
+        // Two live signal-owning runs record different signals: with the old
+        // process-wide slot the second record overwrote the first run's code.
+        // The serial lock keeps the installed handlers' fallback writes away
+        // from concurrent tests while both runs overlap.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let first =
+            Signals::register_with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), None)
+                .unwrap();
+        let second =
+            Signals::register_with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), None)
+                .unwrap();
+        first.record_cancel_signal(2);
+        second.record_cancel_signal(15);
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(second.cancel_exit_code(), Some(143));
+        assert_eq!(first.drain_exit_status(), 130);
+        assert_eq!(second.drain_exit_status(), 143);
+    }
+
+    #[test]
+    fn a_run_without_signal_handlers_ignores_an_earlier_runs_signal() {
+        // A stale process-wide record must not leak into a later run that
+        // never owned signal handlers: nested live, service, job, and worker
+        // runs all build on `with_cancellation_and_deadline`.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::platform::record_cancel_signal(15);
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        assert_eq!(signals.cancel_exit_code(), None);
+        crate::platform::clear_cancel_signal();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_handlers_record_into_their_own_run() {
+        // End to end through real OS delivery: a SIGINT addressed to this
+        // process lands in the owning run's slot and the CLI fallback, while
+        // an overlapping run without handlers stays clean.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::platform::clear_cancel_signal();
+        let signals = Signals::register_with_deadline(None).unwrap();
+        let other =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        // SAFETY: the installed handler only performs atomic stores and a
+        // nonblocking wake write, so delivering a real SIGINT is safe.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+        // `signal_hook` relays through a background thread, so poll briefly.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while signals.cancel_exit_code().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(signals.cancel_exit_code(), Some(130));
+        assert_eq!(signals.drain_exit_status(), 130);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        assert_eq!(other.cancel_exit_code(), None);
+        drop(signals);
+        crate::platform::clear_cancel_signal();
     }
 
     #[test]

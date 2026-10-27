@@ -133,7 +133,7 @@ impl WatchedChild {
             watchdog.watchdog_fired.store(true, Ordering::SeqCst);
             watchdog.kill();
         });
-        *watched.watchdog.lock().unwrap() = Some(handle);
+        *watched.watchdog.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
         watched
     }
 

@@ -114,13 +114,67 @@ jobs:
       - name: Prove Linux latency gate reports independent child RSS
         run: python3 tests/test_latency_budget_rss.py
       - name: Check Linux default release binary size
+        id: linux_binary_size
         run: |
           cargo build --locked --release --bin execute
           python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
+      # Temporary diagnostic for the binary-size boundary: same-runner paired
+      # comparison tells real growth apart from runner/toolchain noise without
+      # moving the absolute ceiling. Remove once the gate is green and the
+      # retained samples have justified a re-budget.
+      - name: Diagnose failed binary size with push parent on the same runner
+        id: paired_binary_size
+        if: failure() && steps.linux_binary_size.outcome == 'failure' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid base revision: $BASE_SHA" >&2
+            exit 1
+          fi
+          parent_worktree="$RUNNER_TEMP/binary-size-parent-src"
+          candidate_bin="$RUNNER_TEMP/execute-size-candidate"
+          baseline_bin="$RUNNER_TEMP/execute-size-baseline"
+          cp target/release/execute "$candidate_bin"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          worktree_added=0
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( worktree_added )); then
+              git worktree remove --force "$parent_worktree" || status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$parent_worktree" "$BASE_SHA"
+          worktree_added=1
+          CARGO_TARGET_DIR="$RUNNER_TEMP/binary-size-paired-target" cargo build --locked --release --manifest-path "$parent_worktree/Cargo.toml" --bin execute
+          cp "$RUNNER_TEMP/binary-size-paired-target/release/execute" "$baseline_bin"
+          python3 tools/compare_binary_size.py \
+            --baseline "$baseline_bin" \
+            --candidate "$candidate_bin" \
+            --baseline-label "$BASE_SHA" \
+            --candidate-label "$HEAD_SHA" \
+            --json-out target/paired-binary-size.json
+      - name: Save paired binary-size samples
+        if: always() && steps.paired_binary_size.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-binary-size-paired-${{ github.run_id }}
+          path: target/paired-binary-size.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Compare Omarchy ports with their Bash originals
         run: python3 tools/port_compare.py --binary target/release/execute
       - name: Test paired latency comparison tool
         run: python3 tools/test_paired_latency.py
+      - name: Test paired binary-size comparison tool
+        run: python3 tools/test_compare_binary_size.py
       - name: Test existing latency budget limits
         run: python3 -m unittest tests/test_latency_budget_limits.py -v
       - name: Test benchmark manifest command selection

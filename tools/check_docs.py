@@ -24,6 +24,8 @@ MAINTAINED = [
     "docs/README.md",
     "docs/guide.md",
     "docs/language.md",
+    "docs/runtime-reference.md",
+    "docs/internals/checkpoint-format.md",
     "docs/language-server.md",
     "docs/applet-contracts.md",
     "docs/csv.md",

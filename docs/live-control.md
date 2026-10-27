@@ -95,7 +95,7 @@ exist, defaults materialize at startup, and edits must retain the declared JSON
 type. Declared bindings cannot be deleted. A source edit that adds required inputs
 must add their values in the same atomic patch. Component TUI input ports retain
 their separate text-port contract. The source candidate's
-[`execute inspect FILE`](language.md#agent-interface-discovery) exposes program
+[`execute inspect FILE`](runtime-reference.md#agent-interface-discovery) exposes program
 input types, defaults, missing values and TUI ports without launching the program;
 the installed 0.8.0 release does not include `inspect` yet. `live schema` also
 describes these declared-input restrictions.
@@ -170,14 +170,14 @@ Cancellation cannot undo native file/API/Git effects. Failures expose
 The source candidate also treats each complete `if`/`otherwise` block as one
 execution node, including its nested commands. A step selects and runs that block;
 interior cursor edits are rejected, and pause/source edits wait for its boundary.
-Native status bindings are JSON integers. See the [conditional contract](language.md#conditional-commands-pending-source-candidate)
+Native status bindings are JSON integers. See the [conditional contract](language.md#conditional-commands)
 for comparison types and conservative checkpoint recovery.
 
 The candidate's same-file reusable finite calls are also one whole node. Their
 local bindings stay private; arguments and returned names live in the caller's
 state. Failed calls require explicit `retry`, and cancellation reaches their
 native children. Source edits that change expanded body size may require an
-atomic cursor update. See the [reuse contract](language.md#reusable-finite-programs-pending-source-candidate).
+atomic cursor update. See the [reuse contract](language.md#reusable-finite-programs).
 
 Native pipeline groups are single scheduling units. Separately buffered `then`
 steps and reads/saves form their own nodes. Runtime observations include the active

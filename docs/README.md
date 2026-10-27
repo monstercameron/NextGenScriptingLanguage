@@ -19,7 +19,7 @@ runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.
 | --- | --- |
 | [Quickstart](../README.md#quickstart) | Install, validate and run your first native pipeline. |
 | [Practical guide](guide.md) | Inputs, composition, scheduling and review-only service generation, terminal apps, AI routing and recovery. |
-| [Language reference](language.md) | Exact syntax, type rules, stdin, status, JSON, scopes, cache, checkpoints (per-element logs, journal v5, retry safety), `use folder`, the bundled manifest index and the warm daemon. |
+| [Language reference](language.md) | Core syntax, language rules, command forms and structured JSON. See the [runtime reference](runtime-reference.md) for operational interfaces and recovery details. |
 | [Formal grammar](grammar.md) | The grammar and the modifier/context table. |
 | [Language server and applet discovery](language-server.md) | LSP diagnostics, completion/navigation, safe executable discovery and typed port matching. |
 | [Applet contracts](applet-contracts.md) | Manifest discovery, typed boundaries, explicit outcomes, execution lifetimes and security limits. |

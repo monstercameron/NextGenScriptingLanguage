@@ -117,13 +117,13 @@ Save this as `preview.program`, then run
 Programs also support `accept root as text from environment "OMARCHY_PATH"`
 and `accept message as text from argument 1`; pass Unix arguments after `--`.
 Use `#!/usr/bin/env -S execute --` for an executable `.program` command.
-[Process input contracts](../docs/language.md#process-input-sources) explain precedence,
+[Process input contracts](runtime-reference.md#process-input-sources) explain precedence,
 static inspection and checkpoint behavior.
 
 Text, integers, booleans, and lists of text are supported. Missing required inputs,
 bad types, unknown names, and known manifest constraint violations fail before
 commands run. `check` and `explain` can inspect a signature without supplying
-required values. See the [input reference](../docs/language.md#program-inputs).
+required values. See the [input reference](runtime-reference.md#program-inputs).
 
 The command stays the same: `execute app.program`. The script declares its lifetime.
 
@@ -358,8 +358,8 @@ resume would do without running anything.
 
 Checkpoints do not make external effects transactional. An interrupted command
 with an uncertain outcome requires explicit `--retry-uncertain`; completed nodes
-cannot be rewritten in place. See [recovery contracts](../docs/language.md#recover-after-a-failure),
-[per-element checkpoints](language.md#per-element-checkpoints) and
+cannot be rewritten in place. See [recovery contracts](runtime-reference.md#recover-after-a-failure),
+[per-element checkpoints](runtime-reference.md#per-element-checkpoints) and
 [retry safety](language.md#retry-safety).
 
 ## Daemon execution
@@ -367,7 +367,7 @@ cannot be rewritten in place. See [recovery contracts](../docs/language.md#recov
 Run forwarding defaults to local execution because the daemon cannot preserve the client's OS confinement. Set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` with `--daemon` to explicitly
 accept the daemon context and forward. Avoid `EXECUTE_DAEMON=1` in sandboxed environments
 when using older versions that forward without this opt-in.
-See the [language reference](language.md#warm-daemon---daemon).
+See the [language reference](runtime-reference.md#warm-daemon---daemon).
 
 ## Bring another CLI
 

@@ -39,7 +39,8 @@ fn grammar_and_language_reference_cover_current_forms() {
     assert!(language.contains("SIGPIPE"));
     assert!(language.contains("preserves the existing file mode"));
     assert!(language.contains("16,384 VM-step budget"));
-    assert!(language.contains("divides the available output allowance"));
+    let runtime_reference = doc("docs/runtime-reference.md");
+    assert!(runtime_reference.contains("divides the available output allowance"));
     let guide = doc("docs/guide.md");
     assert!(guide.contains("One logical statement per line"));
     assert!(!guide.contains("One statement per line"));

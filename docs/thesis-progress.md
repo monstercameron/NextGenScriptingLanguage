@@ -310,7 +310,7 @@ the shared native/browser grammar, with same-type outer updates, local iteration
 names and a shared iteration guard. Native checkpoint/live handling treats a
 whole loop as one conservative recovery node. This closes the basic finite-loop
 gap; jobs, richer redirection and desktop acceptance remain separate proof gates.
-See the [language contract](language.md#loops-current-source). Published release
+See the [language contract](language.md#loops). Published release
 artifacts remain unchanged.
 
 

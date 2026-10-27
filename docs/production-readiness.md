@@ -48,11 +48,11 @@ pipeline.
 
 * Daemon run forwarding defaults to local execution because the client's OS confinement cannot be preserved. `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` explicitly
   accepts the daemon context and enables forwarding.
-  See [the daemon section](language.md#warm-daemon---daemon).
+  See [the daemon section](runtime-reference.md#warm-daemon---daemon).
 * Checkpoints record top-level `for each` loops element by element, match resume
   nodes by step id, and use journal version 5 with a keyed input digest. Retry
   safety follows declared effects, so a pure in-process loop writes no durable
-  begin record per element. See [recovery](language.md#recover-after-a-failure).
+  begin record per element. See [recovery](runtime-reference.md#recover-after-a-failure).
 * `use folder` and `cd` authorize the opened directory and later relative paths
   join onto it. The [threat model](threat-model.md) lists nineteen known holes
   (H1-H19) with severities, and CI runs dependency, secret, fuzz, sanitizer,
@@ -63,7 +63,7 @@ pipeline.
   `full` feature set. The shipped manifests are embedded in an index, so a
   default-path run does not read and validate every manifest file.
 
-See [the input reference](language.md#process-input-sources) and
+See [the input reference](runtime-reference.md#process-input-sources) and
 [the isolated Omarchy ports](../examples/omarchy-ports/README.md).
 
 ## Pinned upstream, not a compatibility percentage

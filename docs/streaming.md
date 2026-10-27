@@ -55,7 +55,7 @@ finite `printf` example needs no buffering flag because the source reaches EOF.
   outside the existing process-containment contract.
 
 Optional top-level `accept` declarations come first and use the same typed
-[program input contract](language.md#program-inputs). For example:
+[program input contract](runtime-reference.md#program-inputs). For example:
 
 ```text
 accept path as text

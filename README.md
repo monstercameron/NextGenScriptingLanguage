@@ -167,7 +167,7 @@ restore forwarding. The daemon bounds concurrent forwarded runs; set
 `EXECUTE_DAEMON_MAX_RUNS` when starting it to configure the limit. At capacity,
 additional clients fall back to local execution. Avoid `EXECUTE_DAEMON=1` in
 sandboxed environments with older versions that forward without this opt-in.
-See the [daemon section](docs/language.md#warm-daemon---daemon).
+See the [daemon section](docs/runtime-reference.md#warm-daemon---daemon).
 
 ## Terminal apps with control flow you can read
 

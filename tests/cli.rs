@@ -1401,19 +1401,34 @@ fn help_and_version_cannot_replace_required_option_values() {
     }
 }
 
+fn copy_manifest_bundle(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let target = destination.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_manifest_bundle(&entry.path(), &target);
+        } else {
+            assert!(entry.file_type().unwrap().is_file());
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
 #[test]
 fn installed_symlink_resolves_manifest_bundle_without_the_build_checkout() {
     let directory = tempfile::tempdir().unwrap();
     let bundle = directory.path().join("bundle");
     fs::create_dir_all(bundle.join("bin")).unwrap();
-    fs::create_dir(bundle.join("manifests")).unwrap();
+    let manifest_dir = bundle.join("manifests");
+    let source_manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    copy_manifest_bundle(&source_manifests, &manifest_dir);
     let binary = bundle.join("bin/execute");
     fs::copy(env!("CARGO_BIN_EXE_execute"), &binary).unwrap();
-    fs::write(bundle.join("manifests/probe.json"),r#"{"name":"installation.probe","binary":"printf","arguments":[{"literal":"%s\n"},{"literal":"installed bundle"}]}"#).unwrap();
     let command = directory.path().join("execute");
     std::os::unix::fs::symlink(&binary, &command).unwrap();
     let script = directory.path().join("my.program");
-    fs::write(&script, "run installation.probe\n").unwrap();
+    fs::write(&script, "run printf with message \"installed bundle\"\n").unwrap();
     let output = Command::new(&command)
         .arg(&script)
         .current_dir(directory.path())

@@ -15,8 +15,9 @@ pub(super) fn run(
             let (secs, nanos) = now(args)?;
             let dt = DateTime::<Utc>::from_timestamp(secs, nanos)
                 .ok_or_else(|| invalid("epoch is outside supported range"))?;
+            let (epoch_ms, epoch_ns) = epoch_units(secs, nanos)?;
             Ok(
-                serde_json::json!({"epoch_s":secs,"epoch_ms":secs.saturating_mul(1000).saturating_add((nanos/1_000_000) as i64),"epoch_ns":secs.saturating_mul(1_000_000_000).saturating_add(nanos as i64),"iso":dt.to_rfc3339_opts(chrono::SecondsFormat::AutoSi,true)}),
+                serde_json::json!({"epoch_s":secs,"epoch_ms":epoch_ms,"epoch_ns":epoch_ns,"iso":dt.to_rfc3339_opts(chrono::SecondsFormat::AutoSi,true)}),
             )
         }
         "time.format" => {
@@ -71,6 +72,17 @@ pub(super) fn run(
         }
         _ => Err(invalid("unsupported time operation")),
     }
+}
+// Use a wider intermediate so a negative second just below i64 nanosecond
+// range can become representable after its positive subsecond fraction is added.
+fn epoch_units(secs: i64, nanos: u32) -> Result<(i64, i64), AppletError> {
+    let ns = i128::from(secs) * 1_000_000_000 + i128::from(nanos);
+    let ms = i128::from(secs) * 1_000 + i128::from(nanos / 1_000_000);
+    let epoch_ns = i64::try_from(ns)
+        .map_err(|_| invalid("epoch nanoseconds are outside the signed 64-bit range"))?;
+    let epoch_ms = i64::try_from(ms)
+        .map_err(|_| invalid("epoch milliseconds are outside the signed 64-bit range"))?;
+    Ok((epoch_ms, epoch_ns))
 }
 fn now(args: &Map<String, Value>) -> Result<(i64, u32), AppletError> {
     if let Some(value) = args.get("epoch_s") {
@@ -177,6 +189,17 @@ mod tests {
             run("time.format", &y2038, &ExecutionContext::unrestricted()).unwrap(),
             "2038-01-19 08:44:08"
         );
+    }
+    #[test]
+    fn epoch_units_check_both_fractional_boundaries() {
+        assert_eq!(epoch_units(9_223_372_036, 854_775_807).unwrap().1, i64::MAX);
+        assert!(epoch_units(9_223_372_036, 854_775_808).is_err());
+        assert_eq!(
+            epoch_units(-9_223_372_037, 145_224_192).unwrap().1,
+            i64::MIN
+        );
+        assert!(epoch_units(-9_223_372_037, 145_224_191).is_err());
+        assert_eq!(epoch_units(-1, 999_999_999).unwrap(), (-1, -1));
     }
     #[test]
     fn invalid_formats_and_overflow_fail_closed() {

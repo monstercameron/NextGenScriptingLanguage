@@ -547,3 +547,11 @@ repeated. Commands:
 ```sh
 printf 'run printf with message "a" as first\nrun printf with message first\n:save session.program\n:quit\n' | execute repl
 ```
+
+## Read the clock
+
+`time.now` returns `epoch_s`, `epoch_ms`, and `epoch_ns` as signed 64-bit
+integer counts since the Unix epoch, with `iso` representing the same instant.
+Milliseconds are rounded down to the containing millisecond. If the instant's
+nanosecond count is outside the signed 64-bit range, the applet returns a
+permanent `invalid_request` error instead of a partial or saturated record.

@@ -34,13 +34,38 @@ fn shell_expansion_in_literal_arguments_warns_without_becoming_an_error() {
 
 #[test]
 fn explicit_shell_command_script_is_not_mistaken_for_a_literal_argument() {
-    let diagnostics = analyze_source(
+    for source in [
         "run \"sh\" with arguments [\"-c\", \"echo $HOME\"]\n",
+        "run \"fish\" with arguments [\"-c\", \"echo $HOME\"]\n",
+        "run \"env\" with arguments [\"bash\", \"-c\", \"echo $HOME\"]\n",
+        "run \"busybox\" with arguments [\"sh\", \"-c\", \"echo $HOME\"]\n",
+    ] {
+        let diagnostics = analyze_source(source, &Registry::default());
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"),
+            "{source}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
+fn shell_command_arguments_after_the_script_remain_literal() {
+    let diagnostics = analyze_source(
+        "run \"sh\" with arguments [\"-c\", \"echo $HOME\", \"$OTHER\"]\n",
         &Registry::default(),
     );
-    assert!(!diagnostics
+    let warnings = diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+        .filter(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        &"run \"sh\" with arguments [\"-c\", \"echo $HOME\", \"$OTHER\"]\n"
+            [warnings[0].span.start_byte..warnings[0].span.end_byte],
+        "\"$OTHER\""
+    );
 }
 
 #[test]
@@ -322,10 +347,10 @@ fn earlier_condition_with_reused_name_does_not_gate_later_model_result() {
 }
 
 #[test]
-fn model_gate_delegated_with_result_to_helper_is_not_flagged() {
+fn forwarding_model_result_to_unverified_helper_keeps_the_warning() {
     let source = "define a program named review\n  accept label as text\n  if label is \"yes\"\n    run \"printf\" with arguments [label]\nrun jev.classify with question \"classify\" and labels [\"yes\", \"no\"] and minimum 80 as classification\ntake text at \"/label\" from classification as label\nrun program review with label label\n";
     let diagnostics = analyze_source(source, &Registry::default());
-    assert!(!diagnostics
+    assert!(diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "model.result_unchecked"));
 }

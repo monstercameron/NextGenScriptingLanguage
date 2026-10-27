@@ -964,7 +964,9 @@ fn collect_lint_diagnostics(
         }
         if let Some(Value::List(arguments)) = call.parameters.get("arguments") {
             for (index, argument) in arguments.iter().enumerate() {
-                if is_explicit_shell_script_argument(call, arguments, index) {
+                if call.direct
+                    && shell_command_argument_index(&call.operation, arguments) == Some(index)
+                {
                     continue;
                 }
                 let Value::String(value) = argument else {
@@ -1002,22 +1004,37 @@ fn collect_lint_diagnostics(
     }
 }
 
-fn is_explicit_shell_script_argument(
-    call: &Invocation,
-    arguments: &[Value],
-    argument_index: usize,
-) -> bool {
-    if !call.direct || argument_index == 0 {
-        return false;
+fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option<usize> {
+    fn shell_name(value: &str) -> bool {
+        matches!(
+            std::path::Path::new(value)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(value),
+            "sh" | "bash" | "dash" | "zsh" | "ksh" | "fish"
+        )
     }
-    let executable = std::path::Path::new(&call.operation)
+    let executable = std::path::Path::new(executable)
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or(&call.operation);
-    if !matches!(executable, "sh" | "bash" | "dash" | "zsh" | "ksh") {
-        return false;
+        .unwrap_or(executable);
+    let command_flag = |index: usize| {
+        matches!(arguments.get(index + 1), Some(Value::String(flag)) if flag == "-c")
+            .then_some(index + 2)
+    };
+    if shell_name(executable) {
+        return arguments.iter().enumerate().find_map(|(index, value)| {
+            matches!(value, Value::String(flag) if flag == "-c").then_some(index + 1)
+        });
     }
-    matches!(arguments.get(argument_index - 1), Some(Value::String(flag)) if flag == "-c")
+    match executable {
+        "env" | "busybox" => arguments.iter().enumerate().find_map(|(index, value)| {
+            matches!(value, Value::String(name) if shell_name(name))
+                .then(|| command_flag(index))
+                .flatten()
+        }),
+        _ => None,
+    }
 }
 
 fn shell_expansion_argument_fix(
@@ -1744,14 +1761,6 @@ fn collect_model_lints(
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    fn value_contains_any(value: &Value, names: &BTreeSet<String>) -> bool {
-        match value {
-            Value::Reference(name) => names.contains(name),
-            Value::List(items) => items.iter().any(|item| value_contains_any(item, names)),
-            Value::Record(items) => items.values().any(|item| value_contains_any(item, names)),
-            _ => false,
-        }
-    }
     let mut calls = Vec::new();
     collect_calls(steps, &mut calls);
     let reads = {
@@ -1831,34 +1840,7 @@ fn collect_model_lints(
             &inspected_result_bindings,
             *line,
         );
-        // A same-file helper may own the gate; without interprocedural analysis,
-        // suppress this advisory when the value is routed through a program call.
-        let mut forwarded_names = result_names.clone();
-        forwarded_names.extend(accepted_bindings.keys().cloned());
-        for step in steps {
-            if let StepKind::TakeJson {
-                pointer,
-                source: Value::Reference(source_name),
-                binding,
-                ..
-            } = &step.kind
-            {
-                if step.line > *line
-                    && result_names.contains(source_name)
-                    && matches!(pointer.as_str(), "/label" | "/decision" | "/score")
-                {
-                    forwarded_names.insert(binding.clone());
-                }
-            }
-        }
-        let delegated_to_helper = steps.iter().any(|step| match &step.kind {
-            StepKind::CallProgram { call, .. } => call
-                .parameters
-                .values()
-                .any(|value| value_contains_any(value, &forwarded_names)),
-            _ => false,
-        });
-        if !acceptance_checked && !delegated_to_helper {
+        if !acceptance_checked {
             diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Warning,
                 code: "model.result_unchecked".into(),
@@ -1955,30 +1937,10 @@ fn collect_model_lints(
         let Some(Value::List(arguments)) = call.parameters.get("arguments") else {
             continue;
         };
-        let executable = call.operation.rsplit('/').next().unwrap_or(&call.operation);
-        let args = arguments
-            .iter()
-            .map(|argument| match argument {
-                Value::String(value) => Some(value.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let shell_command = arguments.iter().enumerate().any(|(index, argument)| {
-            if !matches!(argument, Value::String(flag) if flag == "-c")
-                || !matches!(arguments.get(index + 1), Some(Value::Reference(name)) if generated_text.contains(name))
-            {
-                return false;
-            }
-            let known_shell = |name: &str| {
-                matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish")
-            };
-            known_shell(executable)
-                || executable == "env"
-                    && args[..index].iter().flatten().any(|name| {
-                        let name = *name;
-                        known_shell(name.rsplit('/').next().unwrap_or(name))
-                    })
-        });
+        let shell_command = shell_command_argument_index(&call.operation, arguments)
+            .is_some_and(|index| {
+                matches!(arguments.get(index), Some(Value::Reference(name)) if generated_text.contains(name))
+            });
         if shell_command {
             diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Warning,

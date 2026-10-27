@@ -185,6 +185,7 @@ jobs:
           retention-days: 14
   reproducible:
     name: Reproducible build (x86_64 musl)
+    needs: packages
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -206,7 +207,13 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools
-      - name: Build twice from different paths and compare every shipped binary
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages-x86_64-unknown-linux-musl
+          path: shipped
+      - name: Test release binary comparison
+        run: python3 build-a/tests/reproduced_release.py
+      - name: Rebuild twice and compare against the uploaded release archive
         run: |
           SOURCE_DATE_EPOCH="$(git -C build-a log -1 --format=%ct)"
           export SOURCE_DATE_EPOCH
@@ -217,10 +224,14 @@ jobs:
                 cargo build --locked --profile dist --features full --bins --target x86_64-unknown-linux-musl
             )
           done
+          version=$(python3 build-a/tools/release.py version)
+          python3 build-a/tools/compare_release_binaries.py \
+            --archive "shipped/execute-$version-linux-x64.tar.gz" --version "$version" \
+            --output shipped-binaries \
+            --rebuild build-a/target/x86_64-unknown-linux-musl/dist \
+            --rebuild build-b/target/x86_64-unknown-linux-musl/dist
           for name in execute execute-model execute-applet; do
-            a="build-a/target/x86_64-unknown-linux-musl/dist/$name"
-            b="build-b/target/x86_64-unknown-linux-musl/dist/$name"
-            sha256sum "$a" "$b"
-            cmp "$a" "$b"
+            cmp "shipped-binaries/$name" "build-a/target/x86_64-unknown-linux-musl/dist/$name"
+            cmp "shipped-binaries/$name" "build-b/target/x86_64-unknown-linux-musl/dist/$name"
           done
-          echo "Every binary is byte-identical across two builds from different paths."
+          echo "Both independent rebuilds match every binary in the uploaded release archive."

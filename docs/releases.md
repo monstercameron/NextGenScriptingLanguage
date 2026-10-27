@@ -155,10 +155,12 @@ gh attestation verify ./execute-VERSION-linux-x64.tar.gz --repo monstercameron/N
 ```
 
 Replace `VERSION` with the release version. The reproducibility job compares
-the x86_64 Linux musl binaries from two checkouts and fails unless they are
-byte-identical under the release build's path remapping and source epoch. This
-comparison covers that target only; it does not compare the other shipped
-binaries or packages.
+the three x86_64 Linux musl binaries from two fresh checkouts with the binaries
+in the uploaded Linux x64 tarball. It fails on any byte difference under the
+release build's path remapping and source epoch. The Linux ARM64, macOS, and
+Windows binaries and the deb, RPM, ZIP, and Flatpak packages are not covered
+by this byte comparison. macOS releases remain unsigned and unnotarized, and
+Windows releases are not Authenticode signed.
 
 The `set-version` release helper also updates `fuzz/Cargo.lock` alongside the
 workspace version files.

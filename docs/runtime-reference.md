@@ -401,7 +401,9 @@ random bytes, created on first use at `$XDG_STATE_HOME/execute/what-if.key` (or
 Windows. On Unix it must be a regular file with no group or other permission bits and
 exactly 32 bytes. A key that fails these checks is refused, and a review with a
 sensitive input then fails rather than falling back to an unkeyed value. On Windows
-the file takes the user profile's owner-only ACL, which this release does not verify.
+the file must be owned by the current user and have an explicit, non-inherited DACL
+that grants access only to that user, SYSTEM, or local Administrators; otherwise the
+key is refused.
 A policy file appears as its path and digest. Changing any other covered setting
 requires a new `--what-if` review. Both options apply to finite programs and to `run`
 only, and `--what-if` takes precedence when both are given.

@@ -503,12 +503,10 @@ pub(crate) struct PrivateSecurity {
 }
 /// SECURITY_ATTRIBUTES whose descriptor pointer is owned by a PrivateSecurity. The
 /// lifetime `'a` ties every use to that owner, so the pointer cannot dangle.
-#[cfg(feature = "live")]
 pub(crate) struct SecurityAttributes<'a> {
     raw: SECURITY_ATTRIBUTES,
     _descriptor: std::marker::PhantomData<&'a PrivateSecurity>,
 }
-#[cfg(feature = "live")]
 impl SecurityAttributes<'_> {
     /// A pointer to the attributes, valid while this value is borrowed. Callers pass it to
     /// a Win32 call that reads it during that call.
@@ -543,7 +541,7 @@ impl PrivateSecurity {
             LocalFree(text.cast());
         }
         let sddl = wide(OsStr::new(&format!(
-            "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{sid_text})"
+            "O:{sid_text}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{sid_text})"
         )));
         let mut descriptor = std::ptr::null_mut();
         // SAFETY: `sddl` is the NUL-terminated UTF-16 string built by `wide` above, and
@@ -563,9 +561,8 @@ impl PrivateSecurity {
         }
         Ok(Self { descriptor })
     }
-    /// Attributes for pipe creation. They borrow this descriptor, so the lifetime stops
+    /// Attributes for secure object creation. They borrow this descriptor, so the lifetime stops
     /// them from outliving the PrivateSecurity whose memory they point into.
-    #[cfg(feature = "live")]
     pub(crate) fn attributes(&self) -> SecurityAttributes<'_> {
         SecurityAttributes {
             raw: SECURITY_ATTRIBUTES {
@@ -609,6 +606,37 @@ impl PrivateSecurity {
         Ok(())
     }
 }
+
+/// Create a file with a protected owner-only DACL and an explicit current-user owner.
+/// Supplying the descriptor to `CreateFileW` makes the privacy boundary atomic with
+/// creation, before another local principal can open the new file.
+pub(crate) fn create_private_file(path: &Path) -> Result<File> {
+    let security = PrivateSecurity::new()?;
+    let attributes = security.attributes();
+    let name = wide(path.as_os_str());
+    // SAFETY: `name` is NUL-terminated and remains live for the call. The security
+    // attributes borrow `security`, which remains live through the call. CreateFileW
+    // either returns a valid file handle or INVALID_HANDLE_VALUE, checked below.
+    let raw = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            attributes.as_ptr(),
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("creating private file {}", path.display()));
+    }
+    // SAFETY: CreateFileW returned a live handle and nothing else owns it; File takes
+    // sole responsibility for closing it.
+    Ok(unsafe { File::from_raw_handle(raw) })
+}
+
 impl Drop for PrivateSecurity {
     fn drop(&mut self) {
         // SAFETY: `descriptor` was allocated with LocalAlloc by the conversion in `new` and is

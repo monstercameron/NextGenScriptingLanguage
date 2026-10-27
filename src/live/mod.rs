@@ -471,11 +471,7 @@ fn dispatch(
             (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
         }?;
         let registry = if let Some(path) = opts.flags.get("--capability-policy") {
-            let bytes = limited_read(Path::new(path), 1024 * 1024)
-                .with_context(|| format!("reading capability policy {path}"))?;
-            let source =
-                String::from_utf8(bytes).context("capability policy must be UTF-8 JSON")?;
-            let policy = CapabilityPolicy::from_json(&source)
+            let policy = CapabilityPolicy::load(Path::new(path))
                 .with_context(|| format!("loading capability policy {path}"))?;
             registry.set_host_state(Some(policy));
             registry
@@ -702,7 +698,7 @@ fn dispatch(
     }
     if let Some(agent) = agent {
         let credential = AgentCredential::from_token_file(agent, Path::new(token_file.unwrap()))
-            .context("loading live agent credential")?;
+            .with_context(|| format!("loading live agent credential {}", token_file.unwrap()))?;
         let object = request
             .as_object_mut()
             .context("request must be a JSON object")?;

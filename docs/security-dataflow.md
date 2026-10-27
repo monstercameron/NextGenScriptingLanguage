@@ -18,7 +18,9 @@ sections have no grants. Unknown fields, duplicate keys, invalid labels and
 noncanonical origins fail validation. The policy is bounded to 64 KiB. On Unix,
 it must be a regular file owned by the effective user with no group/other
 permissions and is opened without following symlinks. Windows rejects reparse
-points but does not verify the file's ACL privacy.
+points and requires the file owner to be the current user with an explicit,
+non-inherited DACL that grants access only to that user, SYSTEM, or local
+Administrators.
 
 ~~~json
 {

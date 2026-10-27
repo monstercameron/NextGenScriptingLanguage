@@ -1142,6 +1142,13 @@ pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {
             "file is a reparse point",
         ));
     }
+    #[cfg(windows)]
+    validate_private_windows_acl(&file, path).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("cannot verify privacy of {}: {error}", path.display()),
+        )
+    })?;
     Ok(file)
 }
 
@@ -1155,9 +1162,10 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
         Security::{
             AclSizeInformation,
             Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
-            EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorDacl, GetTokenInformation,
-            TokenUser, ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION,
-            OWNER_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+            EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
+            GetSecurityDescriptorDacl, GetTokenInformation, TokenUser, ACCESS_ALLOWED_ACE,
+            ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+            SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
         },
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     };
@@ -1184,7 +1192,7 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
             unsafe { LocalFree(descriptor) };
         }
         return Err(std::io::Error::from_raw_os_error(status as i32))
-            .context("reading answers file Windows ACL");
+            .context("reading security-sensitive file Windows ACL");
     }
     let result = (|| {
         // SAFETY: GetCurrentProcess returns a valid pseudo-handle that requires no closing.
@@ -1228,14 +1236,14 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
         let user = unsafe { &*(token_data.as_ptr().cast::<TOKEN_USER>()) };
         if owner.is_null() || user.User.Sid.is_null() {
             bail!(
-                "answers file {} must be owned by the current user",
+                "security-sensitive file {} must be owned by the current user",
                 path.display()
             );
         }
         // SAFETY: both SIDs are non-null and remain live in the descriptor and token buffer.
         if unsafe { EqualSid(owner, user.User.Sid) } == 0 {
             bail!(
-                "answers file {} must be owned by the current user",
+                "security-sensitive file {} must be owned by the current user",
                 path.display()
             );
         }
@@ -1253,11 +1261,23 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
             )
         } == 0
             || present == 0
+            || acl_defaulted != 0
             || descriptor_dacl.is_null()
             || dacl != descriptor_dacl
         {
             bail!(
-                "answers file {} must have an explicit private Windows DACL",
+                "security-sensitive file {} must have an explicit private Windows DACL",
+                path.display()
+            );
+        }
+        let (mut control, mut revision) = (0, 0);
+        // SAFETY: descriptor is the live security descriptor returned by GetSecurityInfo, and
+        // control/revision are writable out-slots for the documented fixed-width values.
+        if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+            || control & SE_DACL_PROTECTED == 0
+        {
+            bail!(
+                "security-sensitive file {} must have a protected Windows DACL",
                 path.display()
             );
         }
@@ -1278,16 +1298,39 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
             || size.AceCount == 0
         {
             bail!(
-                "answers file {} must have a nonempty private Windows DACL",
+                "security-sensitive file {} must have a nonempty private Windows DACL",
                 path.display()
             );
         }
+        let trusted_sid = |kind| {
+            let mut storage = [0usize;
+                (windows_sys::Win32::Security::SECURITY_MAX_SID_SIZE as usize)
+                    .div_ceil(std::mem::size_of::<usize>())];
+            let mut size = windows_sys::Win32::Security::SECURITY_MAX_SID_SIZE;
+            // SAFETY: storage is aligned and has SECURITY_MAX_SID_SIZE bytes; CreateWellKnownSid
+            // writes at most that size and has no domain SID for these two built-in SIDs.
+            if unsafe {
+                windows_sys::Win32::Security::CreateWellKnownSid(
+                    kind,
+                    std::ptr::null_mut(),
+                    storage.as_mut_ptr().cast(),
+                    &mut size,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("reading trusted Windows principals");
+            }
+            Ok(storage)
+        };
+        let system_sid = trusted_sid(windows_sys::Win32::Security::WinLocalSystemSid)?;
+        let admins_sid = trusted_sid(windows_sys::Win32::Security::WinBuiltinAdministratorsSid)?;
         for index in 0..size.AceCount {
             let mut raw_ace = std::ptr::null_mut();
             // SAFETY: index is below the ACE count reported for this valid ACL.
             if unsafe { GetAce(dacl, index, &mut raw_ace) } == 0 || raw_ace.is_null() {
                 return Err(std::io::Error::last_os_error())
-                    .context("reading answers file ACL entry");
+                    .context("reading security-sensitive file ACL entry");
             }
             // SAFETY: GetAce returned a pointer to an ACE stored inside the live ACL.
             let header = unsafe { &*(raw_ace.cast::<windows_sys::Win32::Security::ACE_HEADER>()) };
@@ -1295,7 +1338,7 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
                 || header.AceFlags & INHERITED_ACE_FLAG != 0
             {
                 bail!(
-                    "answers file {} has a nonprivate or inherited Windows ACL entry",
+                    "security-sensitive file {} has a nonprivate or inherited Windows ACL entry",
                     path.display()
                 );
             }
@@ -1303,9 +1346,18 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
             let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
             let ace_sid = std::ptr::addr_of!(ace.SidStart).cast_mut().cast();
             // SAFETY: the ACE SID lies inside the validated ACL and the token SID buffer is live.
-            if unsafe { EqualSid(ace_sid, user.User.Sid) } == 0 {
+            // SYSTEM and local Administrators are trusted platform principals. No other
+            // principal may receive an allow ACE, even if a particular ACE currently grants
+            // only a narrow subset of rights: future rights changes must not expose the file.
+            // SAFETY: all candidate SIDs live in the checked ACL/token/local SID buffers.
+            let is_trusted = unsafe {
+                EqualSid(ace_sid, user.User.Sid) != 0
+                    || EqualSid(ace_sid, system_sid.as_ptr().cast_mut().cast()) != 0
+                    || EqualSid(ace_sid, admins_sid.as_ptr().cast_mut().cast()) != 0
+            };
+            if !is_trusted {
                 bail!(
-                    "answers file {} grants access to another Windows principal",
+                    "security-sensitive file {} grants access to another Windows principal",
                     path.display()
                 );
             }
@@ -1326,6 +1378,164 @@ mod tests {
 
     fn policy(text: &str) -> DataFlowPolicy {
         DataFlowPolicy::from_json(text.as_bytes()).unwrap()
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    fn current_user_sid_string() -> String {
+        use std::os::windows::ffi::OsStringExt;
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle that needs no closing.
+        let process = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
+        let sid = crate::platform::windows::user_sid(process).unwrap();
+        let mut text = std::ptr::null_mut();
+        // SAFETY: sid is a valid current-user SID and text is a writable out-slot.
+        assert_ne!(
+            unsafe {
+                windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW(
+                    sid.as_ptr().cast_mut().cast(),
+                    &mut text,
+                )
+            },
+            0
+        );
+        let mut length = 0;
+        // SAFETY: ConvertSidToStringSidW returned a NUL-terminated LocalAlloc string.
+        while unsafe { *text.add(length) } != 0 {
+            length += 1;
+        }
+        // SAFETY: the counted UTF-16 units precede the validated terminator.
+        let value =
+            std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(text, length) })
+                .to_string_lossy()
+                .into_owned();
+        // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
+        unsafe { windows_sys::Win32::Foundation::LocalFree(text.cast()) };
+        value
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    fn replace_test_dacl(path: &std::path::Path, sddl: &str) {
+        use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
+        use windows_sys::Win32::{
+            Foundation::LocalFree,
+            Security::{
+                Authorization::{SetSecurityInfo, SE_FILE_OBJECT},
+                GetSecurityDescriptorDacl, DACL_SECURITY_INFORMATION,
+                PROTECTED_DACL_SECURITY_INFORMATION,
+            },
+            Storage::FileSystem::{FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC},
+        };
+
+        let file = std::fs::OpenOptions::new()
+            .access_mode(WRITE_DAC | READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .open(path)
+            .unwrap();
+        let wide = std::ffi::OsStr::new(sddl)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let mut descriptor = std::ptr::null_mut();
+        // SAFETY: wide is NUL-terminated and descriptor is a writable out-slot.
+        assert_ne!(
+            unsafe {
+                windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    wide.as_ptr(),
+                    windows_sys::Win32::Security::Authorization::SDDL_REVISION_1,
+                    &mut descriptor,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut dacl = std::ptr::null_mut();
+        // SAFETY: descriptor is the live descriptor returned by the SDDL conversion.
+        assert_ne!(
+            unsafe {
+                GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted)
+            },
+            0
+        );
+        assert_ne!(present, 0);
+        // SAFETY: file is live, dacl belongs to descriptor, and all outputs passed to the API
+        // are valid. SetSecurityInfo reads the DACL before the descriptor is freed below.
+        let status = unsafe {
+            SetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                dacl,
+                std::ptr::null_mut(),
+            )
+        };
+        // SAFETY: descriptor is the LocalAlloc allocation returned by the SDDL conversion.
+        unsafe { LocalFree(descriptor.cast()) };
+        assert_eq!(status, 0);
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn windows_security_sensitive_loaders_require_private_acl() {
+        let directory = tempfile::tempdir().unwrap();
+        let insecure = directory.path().join("inherited.json");
+        std::fs::write(&insecure, br#"{"version":1}"#).unwrap();
+        assert!(open_private_file(&insecure).is_err());
+        assert!(crate::capabilities::CapabilityPolicy::load(&insecure).is_err());
+        assert!(DataFlowPolicy::load(&insecure).is_err());
+        assert!(crate::agent::what_if_key::load_existing_at(&insecure).is_err());
+        assert!(crate::live::auth::AgentCredential::from_token_file("agent", &insecure).is_err());
+
+        // Token creation installs the same protected DACL used by the Windows
+        // private-file writer. Reuse that ACL while checking every loader path.
+        let private = directory.path().join("private");
+        let credential = crate::live::auth::AgentCredential::create_token_file("agent", &private)
+            .expect("new live token should receive a private DACL");
+        assert_eq!(
+            crate::live::auth::AgentCredential::from_token_file("agent", &private)
+                .expect("private token should load")
+                .token_sha256(),
+            credential.token_sha256()
+        );
+        std::fs::write(&private, br#"{"version":1}"#).unwrap();
+        assert!(crate::capabilities::CapabilityPolicy::load(&private).is_ok());
+        assert!(DataFlowPolicy::load(&private).is_ok());
+
+        let key_path = directory.path().join("what-if.key");
+        let created_key = crate::agent::what_if_key::load_or_create_at(&key_path).unwrap();
+        assert_eq!(
+            crate::agent::what_if_key::load_existing_at(&key_path).unwrap(),
+            created_key,
+            "a newly-created key must pass privacy validation on reload"
+        );
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn windows_acl_rejects_explicit_outsider_and_accepts_administrators() {
+        let directory = tempfile::tempdir().unwrap();
+        let user_sid = current_user_sid_string();
+
+        let outsider = directory.path().join("explicit-outsider.json");
+        drop(crate::platform::windows::create_private_file(&outsider).unwrap());
+        replace_test_dacl(&outsider, &format!("D:P(A;;FA;;;WD)(A;;FA;;;{user_sid})"));
+        let error = open_private_file(&outsider).expect_err("Everyone ACE must be refused");
+        assert!(
+            error.to_string().contains("another Windows principal"),
+            "{error}"
+        );
+
+        let administrators = directory.path().join("administrators.json");
+        drop(crate::platform::windows::create_private_file(&administrators).unwrap());
+        replace_test_dacl(
+            &administrators,
+            &format!("D:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;{user_sid})"),
+        );
+        assert!(
+            open_private_file(&administrators).is_ok(),
+            "Administrators and SYSTEM ACEs are trusted exceptions"
+        );
     }
 
     #[test]

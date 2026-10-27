@@ -73,7 +73,9 @@ impl AgentCredential {
         getrandom::fill(&mut random).map_err(|_| AuthError::CredentialUnavailable)?;
         let token = hex(&random);
 
+        #[cfg(not(windows))]
         let mut options = std::fs::OpenOptions::new();
+        #[cfg(not(windows))]
         options.write(true).create_new(true);
         #[cfg(unix)]
         {
@@ -83,23 +85,12 @@ impl AgentCredential {
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
         }
         #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            use windows_sys::Win32::Foundation::GENERIC_WRITE;
-            use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
-            options.access_mode(GENERIC_WRITE | WRITE_DAC).custom_flags(
-                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-            );
-        }
+        let mut file = crate::platform::windows::create_private_file(path)
+            .map_err(|_| AuthError::CredentialUnavailable)?;
+        #[cfg(not(windows))]
         let mut file = options
             .open(path)
             .map_err(|_| AuthError::CredentialUnavailable)?;
-        #[cfg(windows)]
-        if crate::platform::windows::restrict_file(&file).is_err() {
-            drop(file);
-            let _ = std::fs::remove_file(path);
-            return Err(AuthError::CredentialUnavailable);
-        }
         if file
             .write_all(token.as_bytes())
             .and_then(|()| file.write_all(b"\n"))
@@ -393,6 +384,9 @@ fn open_private_file(path: &Path) -> io::Result<File> {
             "file is a reparse point",
         ));
     }
+    #[cfg(windows)]
+    crate::security::validate_private_windows_acl(&file, path)
+        .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error.to_string()))?;
     Ok(file)
 }
 

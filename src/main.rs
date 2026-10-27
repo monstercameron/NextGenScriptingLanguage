@@ -2657,20 +2657,8 @@ fn warm_forwarded_manifests(arguments: &[String]) {
     };
 }
 
-const MAX_CAPABILITY_POLICY_BYTES: usize = 1024 * 1024;
-
 fn load_capability_policy(path: &Path) -> Result<CapabilityPolicy> {
-    let mut bytes = Vec::new();
-    fs::File::open(path)
-        .with_context(|| format!("opening capability policy {}", path.display()))?
-        .take((MAX_CAPABILITY_POLICY_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("reading capability policy {}", path.display()))?;
-    if bytes.len() > MAX_CAPABILITY_POLICY_BYTES {
-        bail!("capability policy exceeds {MAX_CAPABILITY_POLICY_BYTES} bytes");
-    }
-    let source = String::from_utf8(bytes).context("capability policy must be UTF-8 JSON")?;
-    CapabilityPolicy::from_json(&source)
+    CapabilityPolicy::load(path)
         .with_context(|| format!("loading capability policy {}", path.display()))
 }
 

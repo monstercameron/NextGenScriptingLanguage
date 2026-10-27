@@ -391,7 +391,7 @@ impl CapabilityPolicy {
     /// Read and validate a policy file with a fixed size limit.
     pub fn load(path: &Path) -> Result<Self> {
         let mut bytes = Vec::new();
-        File::open(path)
+        crate::security::open_private_file(path)
             .with_context(|| format!("reading capability policy {}", path.display()))?
             .take((MAX_CAPABILITY_POLICY_BYTES + 1) as u64)
             .read_to_end(&mut bytes)

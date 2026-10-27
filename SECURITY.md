@@ -27,11 +27,16 @@ or permissions repair before reuse. Execute does not chmod rejected paths.
 Checkpoint state has separate no-follow/regular-file checks, private permissions,
 checksummed state and an exclusive writer lock.
 
+Security-sensitive policy, key, answers, and live-token files on Windows must
+be owned by the current user and have an explicit, non-inherited DACL with no
+allow entries for other principals. SYSTEM and local Administrators are trusted
+exceptions. An unreadable or unverifiable ACL fails closed and names the file.
+
 Cache/checkpoint parent directories must be trusted. These checks do not pin
 every ancestor against concurrent replacement, authenticate data against another
 process of the same user, provide cache integrity envelopes, or enforce Windows
 cache ownership/ACL policy. Unix extended ACLs are not inspected. Windows cache
-reparse checks are implemented; Unix UID/mode checks have no claimed Windows equivalent. Ordinary explicitly requested
+reparse checks are implemented; cache UID/mode checks have no Windows equivalent. Ordinary explicitly requested
 file reads, saves and executable aliases retain their normal path semantics.
 
 ## Live control and model applets

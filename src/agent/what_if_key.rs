@@ -11,12 +11,14 @@
 //!
 //! On Unix the key file must be a regular file, owned by no one but the user (no
 //! group or other permission bits), and exactly 32 bytes. A file that fails any of
-//! these is refused, never used. Windows files take the owner-only ACL of the user
-//! profile directory; this module does not inspect or set the ACL.
+//! these is refused, never used. Windows files are created with a protected DACL and
+//! explicit current-user owner; existing files are checked before the key is read.
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File, OpenOptions};
+use std::fs;
+#[cfg(not(windows))]
+use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -127,6 +129,10 @@ fn read_existing(path: &Path) -> Result<Option<[u8; KEY_BYTES]>> {
             );
         }
     }
+    #[cfg(windows)]
+    let mut file = crate::security::open_private_file(path)
+        .with_context(|| format!("reading the what-if key {}", path.display()))?;
+    #[cfg(not(windows))]
     let mut file =
         File::open(path).with_context(|| format!("reading the what-if key {}", path.display()))?;
     let mut bytes = Vec::with_capacity(KEY_BYTES + 1);
@@ -174,26 +180,46 @@ fn create(path: &Path) -> Result<[u8; KEY_BYTES]> {
     let mut key = [0u8; KEY_BYTES];
     getrandom::fill(&mut key)
         .map_err(|error| anyhow::anyhow!("generating the what-if key: {error}"))?;
+    #[cfg(not(windows))]
     let mut options = OpenOptions::new();
+    #[cfg(not(windows))]
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    match options.open(path) {
+    #[cfg(windows)]
+    let created = crate::platform::windows::create_private_file(path);
+    #[cfg(not(windows))]
+    let created = options.open(path);
+    match created {
         Ok(mut file) => {
             file.write_all(&key)
                 .and_then(|()| file.sync_all())
                 .with_context(|| format!("writing the what-if key {}", path.display()))?;
             Ok(key)
         }
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => read_existing(path)?
+        Err(error) if is_already_exists(&error) => read_existing(path)?
             .context("the what-if key was created by another process but could not be read"),
         Err(error) => {
             Err(error).with_context(|| format!("creating the what-if key {}", path.display()))
         }
     }
+}
+
+#[cfg(windows)]
+fn is_already_exists(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == ErrorKind::AlreadyExists)
+    })
+}
+
+#[cfg(not(windows))]
+fn is_already_exists(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::AlreadyExists
 }
 
 #[cfg(unix)]

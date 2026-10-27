@@ -1014,8 +1014,10 @@ fn collect_program_diagnostics(
                 continue;
             };
             if output.kind == OutputType::List {
+                let item_kind = runtime_list_item_type(item_kind);
                 changed |= list_item_types.insert(binding.clone(), item_kind) != Some(item_kind);
             } else {
+                let item_kind = runtime_json_item_type(item_kind);
                 changed |=
                     polymorphic_outputs.insert(binding.clone(), item_kind) != Some(item_kind);
             }
@@ -1026,7 +1028,8 @@ fn collect_program_diagnostics(
                 ..
             } = &step.kind
             {
-                if let Some(kind) = known_list_item_type(values, &known_types, &list_item_types) {
+                if let Some(kind) = known_for_each_item_type(values, &known_types, &list_item_types)
+                {
                     let before = known_types.get(binding).copied();
                     known_types.insert(binding.clone(), kind);
                     changed |= before != Some(kind);
@@ -1771,6 +1774,63 @@ fn known_list_item_type(
             };
             let first = kinds[0];
             Some(if kinds.iter().all(|kind| *kind == first) {
+                first
+            } else {
+                OutputType::Json
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Runtime list outputs currently retain precise item types only for text and
+/// integer lists. Other homogeneous JSON arrays remain conservatively JSON.
+fn runtime_list_item_type(kind: OutputType) -> OutputType {
+    match kind {
+        OutputType::Text | OutputType::Integer => kind,
+        _ => OutputType::Json,
+    }
+}
+
+/// Match the runtime's scalar type for a JSON-valued applet result.
+fn runtime_json_item_type(kind: OutputType) -> OutputType {
+    match kind {
+        OutputType::Number | OutputType::List | OutputType::Record => OutputType::Json,
+        other => other,
+    }
+}
+
+/// Match `runtime::loops::element_type`: only text and integer arrays retain
+/// scalar precision; empty, mixed, boolean, floating-point, and nested arrays
+/// are JSON values.
+fn known_for_each_item_type(
+    value: &Value,
+    known_types: &BTreeMap<String, OutputType>,
+    list_item_types: &BTreeMap<String, OutputType>,
+) -> Option<OutputType> {
+    let item_kind = |item: &Value| match item {
+        Value::String(_) => OutputType::Text,
+        Value::Integer(_) => OutputType::Integer,
+        Value::Reference(name) => match known_types.get(name).copied() {
+            Some(OutputType::Text) => OutputType::Text,
+            Some(OutputType::Integer) => OutputType::Integer,
+            None => OutputType::Text,
+            _ => OutputType::Json,
+        },
+        _ => OutputType::Json,
+    };
+    match value {
+        Value::Reference(name) => list_item_types
+            .get(name)
+            .copied()
+            .map(runtime_list_item_type)
+            .or_else(|| {
+                (known_types.get(name) == Some(&OutputType::Json)).then_some(OutputType::Json)
+            }),
+        Value::List(items) if items.is_empty() => Some(OutputType::Json),
+        Value::List(items) => {
+            let first = item_kind(&items[0]);
+            Some(if items.iter().all(|item| item_kind(item) == first) {
                 first
             } else {
                 OutputType::Json

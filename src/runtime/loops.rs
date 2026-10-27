@@ -71,8 +71,15 @@ pub(super) fn element_type(
             // interpretation. Declared JSON inputs opt into general values.
             None => Ok(InputType::Text),
         },
+        Value::List(items) if items.is_empty() => Ok(InputType::Json),
         Value::List(items) if items.iter().all(is_text_item) => Ok(InputType::Text),
-        Value::List(items) if items.iter().all(|item| matches!(item, Value::Integer(_))) => {
+        Value::List(items)
+            if items.iter().all(|item| match item {
+                Value::Integer(_) => true,
+                Value::Reference(name) => types.get(name) == Some(&InputType::Integer),
+                _ => false,
+            }) =>
+        {
             Ok(InputType::Integer)
         }
         Value::List(_) => Ok(InputType::Json),

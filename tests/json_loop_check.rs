@@ -1,5 +1,5 @@
 //! Static checking and execution agree for JSON-valued iteration inputs.
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     fs,
     path::Path,
@@ -170,4 +170,45 @@ fn list_sort_preserves_text_items_through_loop_bindings_and_argv() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(run.stdout, b"ab");
+}
+
+#[test]
+fn list_sort_preserves_integer_items_through_loop_bindings_and_argv() {
+    let root = tempfile::tempdir().unwrap();
+    let source = "run list.sort with items [2, 1] as sorted\nfor each x in sorted\n  run \"printf\" with arguments [\"%s\", x]\n";
+    let check = execute(root.path(), source, &["check"]);
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let run = execute(root.path(), source, &["run"]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"12");
+}
+
+#[test]
+fn unsupported_json_array_items_keep_conservative_loop_types() {
+    let cases = ["[true, false]", "[1.5, 2.5]", "[]", "[[1], [2]]"];
+    for items in cases {
+        let root = tempfile::tempdir().unwrap();
+        let source =
+            format!("for each x in {items}\n  run \"printf\" with arguments [\"%s\", x]\n");
+        let check = execute(root.path(), &source, &["check"]);
+        assert!(
+            check.status.success(),
+            "check failed for {items}: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        let run = execute(root.path(), &source, &["run"]);
+        assert!(
+            run.status.success(),
+            "run failed for {items}: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
 }

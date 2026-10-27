@@ -125,7 +125,14 @@ fn legacy_persist(journal: &Journal) {
     };
     let data = serde_json::to_vec(&body).unwrap();
     let envelope = encode_envelope(&hex_digest(&data), &data);
-    atomic_write(&journal.directory, "journal", "json", &envelope).unwrap();
+    atomic_write(
+        &journal.directory,
+        "journal",
+        "json",
+        &envelope,
+        "checkpoint.lane_v3_test.write",
+    )
+    .unwrap();
 }
 
 #[test]

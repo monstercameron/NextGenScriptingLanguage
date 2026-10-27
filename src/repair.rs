@@ -10,6 +10,7 @@
 
 use crate::manifest::Registry;
 use crate::parser;
+use crate::record::StoredRecord;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -576,6 +577,68 @@ pub fn boundary_line_at(
         .get(completed_steps)
         .map(|step| step.line)
         .unwrap_or_else(|| source.lines().count() + 1))
+}
+
+/// The repair boundary for a failed recorded run: the first line of the
+/// top-level statement that holds the record's first failed step, with the
+/// failed step's own line alongside it. Repairs may change that line and
+/// everything after it; earlier lines are the completed prefix that
+/// `resume --from-record` replays instead of re-running. Completed nodes are
+/// atomic, exactly as with checkpoint resume: when the failure is inside a
+/// block, the whole block re-runs, so the whole block is repairable.
+///
+/// A record with no failed step (an interrupted run, or an error outside any
+/// applet group) treats every recorded group as completed: the boundary is the
+/// first top-level statement after the last recorded line, or one past the end
+/// of the program when nothing follows.
+pub fn from_record_boundary(
+    source: &str,
+    path: Option<&Path>,
+    record: &StoredRecord,
+) -> Result<(usize, Option<usize>)> {
+    let failed_line = record
+        .steps
+        .iter()
+        .find(|step| crate::record::step_failed(step))
+        .map(|step| step.line);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let registry = Registry::default();
+    let access = crate::program_files::Access {
+        registry: &registry,
+        cwd: &cwd,
+    };
+    let program = crate::program_files::parse_at(source, path, Some(access))
+        .map_err(|error| anyhow!("{error:#}"))?;
+    let mut starts = Vec::new();
+    let mut at = 0;
+    while at < program.steps.len() {
+        starts.push(at);
+        at = crate::runtime::node_end(&program, at).max(at + 1);
+    }
+    let line_of = |index: usize| program.steps[index].line;
+    let boundary = match failed_line {
+        Some(failed) => {
+            let mut boundary = failed;
+            for (position, start) in starts.iter().enumerate() {
+                let start_line = line_of(*start);
+                let next_line = starts.get(position + 1).map(|next| line_of(*next));
+                if start_line <= failed && next_line.is_none_or(|next| failed < next) {
+                    boundary = start_line;
+                    break;
+                }
+            }
+            boundary
+        }
+        None => {
+            let last = record.steps.iter().map(|step| step.line).max().unwrap_or(0);
+            starts
+                .iter()
+                .map(|start| line_of(*start))
+                .find(|line| *line > last)
+                .unwrap_or_else(|| source.lines().count() + 1)
+        }
+    };
+    Ok((boundary, failed_line))
 }
 
 #[cfg(test)]

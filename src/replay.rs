@@ -13,7 +13,7 @@ use crate::record::{StoredRecord, StoredStep};
 use crate::runtime::observe::{Observer, StepRequest, StepResult};
 use crate::security::{self, SecretRedactor};
 use crate::terminal_text::escape_controls;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value as Json;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -263,6 +263,223 @@ pub fn stored_program_path(record: &Path) -> std::path::PathBuf {
 /// Compare an edited program's declared name with the record's program hash.
 pub fn program_matches_record(record: &StoredRecord, source: &[u8]) -> bool {
     record.run["program"]["sha256"].as_str() == Some(crate::record::sha256_hex(source).as_str())
+}
+
+/// Resume a failed recorded run: replay the completed prefix from the record,
+/// then run the repaired suffix natively.
+///
+/// The completed prefix is every recorded step before the record's first failed
+/// step (or every recorded step when nothing failed, as with an interrupted
+/// run). Each group is answered with the stdout, stderr and status the record
+/// stored for it, so no process is launched and no file is written for those
+/// steps — exactly like [`Replayer`]. Once the prefix is consumed, or when the
+/// program was repaired, later groups run for real: the first group past the
+/// prefix falls through to native execution.
+///
+/// A group inside the prefix that no longer matches the record is a refusal,
+/// not a re-run: silently running it would repeat a completed effect the resume
+/// promised to skip. A group whose recorded bytes are missing, withheld, or
+/// truncated is refused with its step index and reason.
+pub struct PrefixReplayer {
+    record: StoredRecord,
+    redactor: Arc<SecretRedactor>,
+    /// Lines below this ran before the failure; their writes and terminal
+    /// output are suppressed while they replay.
+    boundary: usize,
+    /// Recorded steps eligible for replay: up to the first failed step.
+    prefix: usize,
+    state: Mutex<PrefixState>,
+}
+
+#[derive(Default)]
+struct PrefixState {
+    cursor: usize,
+    resumed: bool,
+}
+
+impl PrefixReplayer {
+    /// Replay `record`'s completed prefix below `boundary`. Declared secrets
+    /// present in the environment are registered first, so recorded redactions
+    /// match.
+    pub fn new(
+        record: StoredRecord,
+        registry: &Registry,
+        boundary: usize,
+    ) -> Result<Self> {
+        let environment = std::env::vars_os().collect::<Vec<_>>();
+        security::register_declared_environment_secrets(registry, &environment)
+            .map_err(|error| anyhow!("registering declared secrets: {error}"))?;
+        let prefix = record
+            .steps
+            .iter()
+            .position(|step| crate::record::step_failed(step))
+            .unwrap_or(record.steps.len());
+        Ok(Self {
+            record,
+            redactor: security::secret_redactor(registry),
+            boundary,
+            prefix,
+            state: Mutex::new(PrefixState::default()),
+        })
+    }
+
+    /// Recorded steps replayed so far, without launching a process.
+    pub fn steps_replayed(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cursor
+    }
+
+    /// How many leading recorded steps may replay before native execution.
+    pub fn prefix(&self) -> usize {
+        self.prefix
+    }
+
+    /// Lines below this are the completed prefix.
+    pub fn boundary(&self) -> usize {
+        self.boundary
+    }
+
+    /// Whether execution has fallen through to the repaired suffix.
+    pub fn fell_through(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .resumed
+    }
+
+    pub fn record(&self) -> &StoredRecord {
+        &self.record
+    }
+
+    fn redacted_argv(&self, request: &StepRequest) -> Vec<Vec<String>> {
+        request
+            .argv
+            .iter()
+            .map(|argv| {
+                argv.iter()
+                    .map(|argument| self.redactor.redact_text(argument))
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+impl Observer for PrefixReplayer {
+    fn replay(&self, request: &StepRequest) -> Result<Option<StepResult>> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.resumed || state.cursor >= self.prefix {
+            state.resumed = true;
+            return Ok(None);
+        }
+        let actual = self.redacted_argv(request);
+        let index = state.cursor;
+        let Some(recorded) = self.record.steps.get(index) else {
+            bail!("resume reached step {index} past the end of the record; the completed prefix cannot be replayed");
+        };
+        if !same_group(recorded, request, &actual) {
+            let divergence = Divergence {
+                step: index,
+                line: request.line,
+                expected: describe_recorded(recorded),
+                actual: describe_request(request, &actual),
+            };
+            bail!(
+                "resume diverged at step {index}: expected {}, got {}; the completed prefix no longer matches, so it cannot be skipped",
+                divergence.expected,
+                divergence.actual
+            );
+        }
+        let stdout = self
+            .record
+            .blob(&recorded.stdout)
+            .map_err(|error| anyhow!("record incomplete at step {index}: {error:#}"))?;
+        let stderr = self
+            .record
+            .blob(&recorded.stderr)
+            .map_err(|error| anyhow!("record incomplete at step {index}: {error:#}"))?;
+        state.cursor += 1;
+        Ok(Some(StepResult {
+            status: recorded.status,
+            stdout,
+            stderr,
+            outcome: stored_outcome(recorded),
+            failed: recorded.failed,
+            // Replay runs no group and persists nothing, so there are no live labels.
+            sensitivity: security::SensitivitySet::empty(),
+            secret_environment: false,
+        }))
+    }
+
+    fn finished(
+        &self,
+        _request: &StepRequest,
+        _wall: std::time::Duration,
+        _result: &StepResult,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn suppresses_writes(&self, line: usize) -> bool {
+        line < self.boundary
+    }
+
+    fn suppresses_terminal_output(&self, line: usize) -> bool {
+        line < self.boundary
+    }
+}
+
+/// Recorded inputs for a resume, refusing a secret answer the record withheld.
+/// A withheld answer cannot be reproduced, so resuming with a marker in its
+/// place would run a different program than the recorded one.
+pub fn recorded_inputs(
+    record: &StoredRecord,
+) -> Result<std::collections::BTreeMap<String, crate::ast::Value>> {
+    if let Some(name) = record.run["inputs"]
+        .as_object()
+        .and_then(|fields| {
+            fields
+                .iter()
+                .find(|(_, value)| value.get("withheld").is_some())
+        })
+        .map(|(name, _)| name.clone())
+    {
+        bail!(
+            "resume cannot reproduce the secret answer for input {name:?}; the record withholds it"
+        );
+    }
+    serde_json::from_value(record.run["inputs"].clone())
+        .context("the record's inputs cannot be read")
+}
+
+/// The loop budget a resume replays under, matching the recorded run. Records
+/// written before per-loop limits used 100,000 as their default.
+pub fn recorded_loop_budget(
+    record: &StoredRecord,
+) -> Result<(usize, crate::runtime::LoopBudgetScope)> {
+    let recorded_limit = record.run["limits"].get("loop_iterations_max");
+    let max_loop_iterations = match recorded_limit {
+        None | Some(Json::Null) => 100_000,
+        Some(value) => usize::try_from(value.as_u64().context("invalid recorded loop limit")?)
+            .context("recorded loop limit exceeds this platform")?,
+    };
+    let loop_budget_scope = match record.run["limits"].get("loop_iterations_scope") {
+        None | Some(Json::Null)
+            if recorded_limit.is_none_or(serde_json::Value::is_null) =>
+        {
+            crate::runtime::LoopBudgetScope::LegacySharedRun
+        }
+        None | Some(Json::Null) => crate::runtime::LoopBudgetScope::PerLoop,
+        Some(Json::String(scope)) if scope == "per_loop" => {
+            crate::runtime::LoopBudgetScope::PerLoop
+        }
+        Some(Json::String(scope)) if scope == "legacy_shared_run" => {
+            crate::runtime::LoopBudgetScope::LegacySharedRun
+        }
+        _ => bail!("invalid recorded loop budget scope"),
+    };
+    Ok((max_loop_iterations, loop_budget_scope))
 }
 
 /// Recorded inputs as strings, for `--as-test` fixtures. Non-string values are

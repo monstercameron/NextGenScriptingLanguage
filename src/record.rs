@@ -913,7 +913,10 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
     Ok(text)
 }
 
-fn step_failed(step: &StoredStep) -> bool {
+/// Whether a recorded step ended the run's progress: a typed failure or a
+/// non-success outcome or status. Shared by `show-run` and resume-from-record,
+/// so both agree on which step failed.
+pub fn step_failed(step: &StoredStep) -> bool {
     step.failed
         || match &step.outcome {
             Some(outcome) => outcome["kind"] != "success",

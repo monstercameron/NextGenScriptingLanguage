@@ -14,7 +14,12 @@
       "type": "string"
     },
     "urgency": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "critical"
+      ]
     },
     "icon": {
       "type": "string"

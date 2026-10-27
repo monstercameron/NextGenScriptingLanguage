@@ -13,7 +13,11 @@
       "required": true
     },
     "state": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "present",
+        "absent"
+      ]
     }
   },
   "arguments": [

@@ -7,7 +7,12 @@
   "parameters": {
     "action": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "raise",
+        "lower",
+        "mute-toggle"
+      ]
     }
   },
   "arguments": [

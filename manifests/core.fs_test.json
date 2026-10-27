@@ -10,7 +10,17 @@
     },
     "kind": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "exists",
+        "file",
+        "directory",
+        "symlink",
+        "readable",
+        "writable",
+        "executable",
+        "empty"
+      ]
     }
   },
   "arguments": [

@@ -1,5 +1,7 @@
 //! Finite runtime string options are declared in manifests so `check` can reject
 //! known-invalid values before an applet runs.
+use flow::manifest::Registry;
+use serde_json::json;
 use std::{fs, path::Path, process::Command};
 
 fn check(root: &Path, source: &str) -> std::process::Output {
@@ -122,5 +124,45 @@ fn check_accepts_every_declared_finite_string_option() {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+    }
+}
+
+#[test]
+fn projected_parameter_enums_match_existing_contract_port_enums() {
+    let registry =
+        Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
+    let cases = [
+        ("osd.brightness", "action", json!(["raise", "lower"])),
+        (
+            "osd.volume",
+            "action",
+            json!(["raise", "lower", "mute-toggle"]),
+        ),
+        (
+            "notify.send",
+            "urgency",
+            json!(["low", "normal", "critical"]),
+        ),
+        ("fs.ensure_line", "state", json!(["present", "absent"])),
+        (
+            "fs.test",
+            "kind",
+            json!([
+                "exists",
+                "file",
+                "directory",
+                "symlink",
+                "readable",
+                "writable",
+                "executable",
+                "empty"
+            ]),
+        ),
+    ];
+    for (applet, parameter, expected) in cases {
+        let manifest = registry.resolve(applet).unwrap();
+        let schema =
+            manifest.contract()["parameters_schema"]["properties"][parameter]["enum"].clone();
+        assert_eq!(schema, expected, "{applet}.{parameter}");
     }
 }

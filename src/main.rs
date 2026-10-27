@@ -578,6 +578,13 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             }
             _ => (Vec::new(), None),
         };
+        let diagnostic_source = if json {
+            finite_check_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.source.clone())
+        } else {
+            None
+        };
         let data_flow_warning = args.capability_policy.is_some() && args.data_flow_policy.is_none();
         let github = args.github;
         let result = execute_workflow(args, finite_check_snapshot);
@@ -619,11 +626,25 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         }
         if let Err(error) = &result {
             if !has_static_error {
-                diagnostics.push(serde_json::json!({
-                    "severity": "error", "code": "check_failed",
+                let loop_error = error.downcast_ref::<runtime::ForEachInputTypeError>();
+                let span = loop_error
+                    .and_then(|error| error.line)
+                    .zip(diagnostic_source.as_deref())
+                    .map(|(line, source)| flow::diagnostics::source_line_span(source, line));
+                let code = if span.is_some() {
+                    "check.type_mismatch"
+                } else {
+                    "check_failed"
+                };
+                let mut diagnostic = serde_json::json!({
+                    "severity": "error", "code": code,
                     "message": format!("{error:#}"),
                     "causes": error.chain().map(ToString::to_string).collect::<Vec<_>>()
-                }));
+                });
+                if let Some(span) = span {
+                    diagnostic["span"] = serde_json::to_value(span)?;
+                }
+                diagnostics.push(diagnostic);
             }
         }
         if github {

@@ -464,6 +464,11 @@ fn syntax_code(message: &str) -> &'static str {
     }
 }
 
+/// Return a line-precision span for a validation error tied to a source line.
+pub fn source_line_span(source: &str, line: usize) -> SourceSpan {
+    LineStarts::new(source).span(source, line)
+}
+
 struct LineStarts {
     starts: Vec<usize>,
     ends: Vec<usize>,
@@ -829,7 +834,11 @@ fn collect_step_type_mismatches(
                     vec![(count, &[OutputType::Integer][..], "integer repeat count")]
                 }
                 crate::ast::LoopKind::ForEach { values, .. } => {
-                    vec![(values, &[OutputType::List][..], "list iteration values")]
+                    vec![(
+                        values,
+                        &[OutputType::List, OutputType::Json][..],
+                        "list iteration values",
+                    )]
                 }
                 _ => Vec::new(),
             },

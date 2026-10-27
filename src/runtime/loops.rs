@@ -4,6 +4,27 @@ use crate::ast::{InputType, LoopKind};
 
 pub(super) const MAX_LOOP_ITERATIONS: usize = 100_000;
 
+/// A resolved `for each` input is not an array or a text list.
+#[derive(Debug, Default)]
+pub struct ForEachInputTypeError {
+    /// Source line when the invalid value was found during validation.
+    pub line: Option<usize>,
+}
+
+pub(super) fn at_line(mut error: anyhow::Error, line: usize) -> anyhow::Error {
+    if let Some(error) = error.downcast_mut::<ForEachInputTypeError>() {
+        error.line = Some(line);
+    }
+    error
+}
+
+impl std::fmt::Display for ForEachInputTypeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("for each requires a JSON array or list of text")
+    }
+}
+impl std::error::Error for ForEachInputTypeError {}
+
 pub(super) fn repeat_count(value: &Value) -> Result<usize> {
     match value {
         Value::Integer(count) if *count >= 0 && *count <= MAX_LOOP_ITERATIONS as i64 => {
@@ -15,7 +36,7 @@ pub(super) fn repeat_count(value: &Value) -> Result<usize> {
 }
 fn list_items(value: &Value) -> Result<&[Value]> {
     let Value::List(items) = value else {
-        bail!("for each requires a JSON array or list of text");
+        return Err(ForEachInputTypeError::default().into());
     };
     Ok(items)
 }
@@ -40,7 +61,7 @@ pub(super) fn element_type(
         },
         Value::List(items) if items.iter().all(is_text_item) => Ok(InputType::Text),
         Value::List(_) => Ok(InputType::Json),
-        _ => bail!("for each requires a JSON array or list of text"),
+        _ => Err(ForEachInputTypeError::default().into()),
     }
 }
 

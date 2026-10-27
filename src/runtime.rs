@@ -37,6 +37,7 @@ pub mod invocation_io;
 mod jobs;
 pub(crate) mod live;
 mod loops;
+pub use loops::ForEachInputTypeError;
 pub mod observe;
 mod redirect;
 mod spawn;

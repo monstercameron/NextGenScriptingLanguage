@@ -259,6 +259,7 @@ pub(super) fn preflight(
             }
             StepKind::Loop { kind, .. } => {
                 loops::preflight(kind, &values)
+                    .map_err(|error| loops::at_line(error, step.line))
                     .with_context(|| format!("line {}: loop inputs", step.line))?;
                 if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
                     native(call, step.line, registry, &values, &types)?;

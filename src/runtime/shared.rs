@@ -980,7 +980,9 @@ fn validate_range(
             continue;
         }
         if let StepKind::Loop { kind, end } = &step.kind {
-            loops::validate(kind, flow).with_context(|| format!("line {}", step.line))?;
+            loops::validate(kind, flow)
+                .map_err(|error| loops::at_line(error, step.line))
+                .with_context(|| format!("line {}", step.line))?;
             if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
                 validate_command_condition(call, registry, flow)
                     .with_context(|| format!("line {}", step.line))?;

@@ -179,6 +179,25 @@ fn keep(source: Source, stamp: Stamp, registry: Registry) {
 mod tests {
     use super::*;
 
+    /// Restore only the modification time after replacing a fixture's contents.
+    /// Windows requires FILE_WRITE_ATTRIBUTES on the handle used by set_times;
+    /// File::open creates a read-only handle and fails with Access is denied.
+    fn restore_modified_time(path: &Path, modified: std::time::SystemTime) {
+        let mut options = fs::OpenOptions::new();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.access_mode(windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES);
+        }
+        #[cfg(not(windows))]
+        options.read(true);
+        options
+            .open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
     /// Writes one manifest named `name` into `directory`, a copy of the shipped `cat` manifest
     /// with its name changed, since names must be unique within a registry.
     fn write_manifest(directory: &Path, name: &str) {
@@ -276,10 +295,7 @@ mod tests {
         assert_ne!(changed, original);
         assert_eq!(changed.len(), original.len());
         fs::write(&path, changed).unwrap();
-        fs::File::open(&path)
-            .unwrap()
-            .set_times(fs::FileTimes::new().set_modified(before))
-            .unwrap();
+        restore_modified_time(&path, before);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
         let result = load(source, || Registry::load(directory.path())).unwrap();
         assert_eq!(names(&result), vec!["bravo".to_owned()]);
@@ -294,10 +310,7 @@ mod tests {
         let before = stamp(&source).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         fs::write(&path, b"{\"name\":\"bravo\"}").unwrap();
-        fs::File::open(&path)
-            .unwrap()
-            .set_times(fs::FileTimes::new().set_modified(modified))
-            .unwrap();
+        restore_modified_time(&path, modified);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
         assert_ne!(before, stamp(&source).unwrap());
     }

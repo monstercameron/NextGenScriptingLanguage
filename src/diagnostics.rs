@@ -811,17 +811,17 @@ fn analyze_source_impl(
                 #[cfg(feature = "lsp")]
                 let failed_file =
                     failed_file.or_else(|| scope.and_then(|scope| scope.failed_file()));
-                if let Some((child_path, child_source, call_chain)) = failed_file {
+                if let Some(failed_file) = failed_file {
                     if path.is_some() {
                         let mut child = analyze_child_source(
-                            &child_source,
-                            &child_path,
+                            &failed_file.source,
+                            &failed_file.path,
                             registry,
                             #[cfg(feature = "lsp")]
                             replay_scope.as_ref(),
                             replay_snapshot.as_ref(),
                         );
-                        for (caller_path, call_line) in call_chain.into_iter().rev() {
+                        for (caller_path, call_line) in failed_file.call_chain.into_iter().rev() {
                             let caller_source = source_path
                                 .as_deref()
                                 .filter(|path| *path == caller_path.as_path())

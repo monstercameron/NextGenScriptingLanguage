@@ -26,6 +26,13 @@ const MAX_CALLED_FILES: usize = 256;
 /// The largest program file a `run program file` call may read.
 pub const MAX_PROGRAM_FILE_BYTES: u64 = 1024 * 1024;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FailedProgramFile {
+    pub(crate) path: PathBuf,
+    pub(crate) source: String,
+    pub(crate) call_chain: Vec<(PathBuf, usize)>,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct SourceLoadSnapshot {
     sources: std::sync::Arc<BTreeMap<PathBuf, String>>,
@@ -61,13 +68,13 @@ impl SourceLoadSnapshot {
         self.call_paths.get(&(parent.to_path_buf(), line)).cloned()
     }
 
-    pub(crate) fn failed_file(&self) -> Option<(PathBuf, String, Vec<(PathBuf, usize)>)> {
+    pub(crate) fn failed_file(&self) -> Option<FailedProgramFile> {
         let path = self.failed_file.as_ref()?;
-        Some((
-            path.clone(),
-            self.sources.get(path)?.clone(),
-            self.failed_call_chain.clone(),
-        ))
+        Some(FailedProgramFile {
+            path: path.clone(),
+            source: self.sources.get(path)?.clone(),
+            call_chain: self.failed_call_chain.clone(),
+        })
     }
 
     fn remember_request(&mut self, requested: &Path, canonical: &Path) {
@@ -228,7 +235,7 @@ impl<'a> SourceScope<'a> {
         self.snapshot.borrow().canonical_path_for_call(parent, line)
     }
 
-    pub(crate) fn failed_file(&self) -> Option<(PathBuf, String, Vec<(PathBuf, usize)>)> {
+    pub(crate) fn failed_file(&self) -> Option<FailedProgramFile> {
         self.snapshot.borrow().failed_file()
     }
 
@@ -817,11 +824,11 @@ mod tests {
         snapshot.failed_call_chain = vec![(caller, 2)];
         assert_eq!(
             snapshot.failed_file(),
-            Some((
-                second,
-                "second\n".into(),
-                vec![(PathBuf::from(r"\\?\C:\workspace\main.program"), 2)]
-            ))
+            Some(FailedProgramFile {
+                path: second,
+                source: "second\n".into(),
+                call_chain: vec![(PathBuf::from(r"\\?\C:\workspace\main.program"), 2)],
+            })
         );
     }
 

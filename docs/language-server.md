@@ -33,8 +33,11 @@ without applying any part of the batch.
 
 For a saved local `file://` document, diagnostics resolve `run program file` and
 program-location inputs from that file. Called files must be regular files no
-larger than 1 MiB and must resolve inside a configured workspace folder; if no
-workspace is configured, the calling file's directory is the boundary. Open
+larger than 1 MiB and must resolve inside a configured workspace folder; legacy
+clients may use `rootPath` when `rootUri` is unavailable. If no workspace is
+configured, the calling file's directory is used as the scope. This is a
+best-effort path filter, not a security boundary: a path can change between
+resolution and file opening. Use OS confinement for untrusted workspaces. Open
 callee text is used for diagnostics before it is saved. Opening, changing, saving,
 closing, or reporting a watched-file change republishes diagnostics for open
 callers that may contain file calls. Workspace-folder changes update the allowed

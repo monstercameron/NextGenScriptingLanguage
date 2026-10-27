@@ -485,6 +485,19 @@ impl Workspace {
                 }
             }
         }
+        if !workspace.explicitly_configured {
+            if let Some(path) = params.get("rootPath").and_then(JsonValue::as_str) {
+                workspace.explicitly_configured = true;
+                let path = Path::new(path);
+                if path.is_absolute() {
+                    if let Ok(root) = fs::canonicalize(path) {
+                        if root.is_dir() {
+                            workspace.roots.push(root);
+                        }
+                    }
+                }
+            }
+        }
         workspace
     }
 
@@ -2316,6 +2329,103 @@ mod tests {
             crate::program_files::SourceScope::new(&root, &overlays).with_source_snapshots();
         let _ = analyze_source_scoped(source, Some(&caller), &Registry::default(), Some(&scope));
         assert!(scope.loaded_source(&outside_path).is_none());
+    }
+
+    #[test]
+    fn legacy_root_path_scopes_file_calls_and_root_uri_takes_precedence() {
+        let legacy = tempfile::tempdir().unwrap();
+        let modern = tempfile::tempdir().unwrap();
+        let legacy_root = fs::canonicalize(legacy.path()).unwrap();
+        let modern_root = fs::canonicalize(modern.path()).unwrap();
+        let workspace = Workspace::from_initialize(&json!({"rootPath": legacy.path()}));
+        assert_eq!(
+            workspace.root_for(&legacy_root.join("sub/caller.program")),
+            Some(legacy_root.clone())
+        );
+        assert_eq!(
+            workspace.root_for(&modern_root.join("caller.program")),
+            None
+        );
+        let modern_uri = url::Url::from_directory_path(modern.path())
+            .unwrap()
+            .to_string();
+        let workspace =
+            Workspace::from_initialize(&json!({"rootUri": modern_uri, "rootPath": legacy.path()}));
+        assert_eq!(
+            workspace.root_for(&modern_root.join("caller.program")),
+            Some(modern_root)
+        );
+        assert_eq!(
+            workspace.root_for(&legacy_root.join("caller.program")),
+            None
+        );
+        let invalid = Workspace::from_initialize(&json!({"rootPath": "relative/path"}));
+        assert!(invalid
+            .root_for(&legacy_root.join("caller.program"))
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_root_path_is_used_for_lsp_file_call_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        let caller = sub.join("caller.program");
+        let source = "run program file \"../callee.program\"\n";
+        fs::write(&caller, source).unwrap();
+        fs::write(dir.path().join("callee.program"), "use value \"ok\"\n").unwrap();
+        let uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({"rootPath": dir.path(), "capabilities": {}}),
+        ));
+        input.extend(frame(json!({"jsonrpc":"2.0", "method":"textDocument/didOpen", "params":{"textDocument":{"uri":uri,"version":1,"text":source}}})));
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let published = messages
+            .iter()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == uri
+            })
+            .unwrap();
+        assert!(
+            published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{published:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_scope_rejects_parent_traversal_before_capturing_a_source() {
+        let parent = tempfile::tempdir().unwrap();
+        let workspace = parent.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let root = fs::canonicalize(&workspace).unwrap();
+        let caller = root.join("caller.program");
+        let outside = parent.path().join("outside.program");
+        fs::write(&outside, "use value \"private\"\n").unwrap();
+        let source = "run program file \"../outside.program\"\n";
+        fs::write(&caller, source).unwrap();
+        let overlays = BTreeMap::new();
+        let scope =
+            crate::program_files::SourceScope::new(&root, &overlays).with_source_snapshots();
+        let diagnostics =
+            analyze_source_scoped(source, Some(&caller), &Registry::default(), Some(&scope));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("outside the language server workspace")),
+            "{diagnostics:#?}"
+        );
+        assert!(scope.loaded_sources().is_empty());
+        assert!(!format!("{diagnostics:?}").contains("private"));
     }
 
     #[test]

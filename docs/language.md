@@ -874,7 +874,9 @@ from a called file refer to that file, not to the caller. Calls nest to 16 files
 and a program may reach 256 distinct files. A file call needs the loader, so
 programs run from text with no path (such as live editing and the REPL) report it
 as an error. The language server resolves calls for saved local-file documents
-within its workspace; untitled documents receive an informational diagnostic.
+within its workspace scope; untitled documents receive an informational diagnostic.
+The scope is a best-effort path filter, not a security boundary against concurrent
+filesystem changes.
 
 ### Retry a command
 

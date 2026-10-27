@@ -130,5 +130,62 @@ class ResolveTests(unittest.TestCase):
         )
 
 
+class FetchOrderingTests(unittest.TestCase):
+    """Fork-PR heads live on pull/N/head, not origin: refetch first (issue #571).
+
+    The "Fetch gate revisions" step must fetch the pull-request head ref
+    before the required BASE_SHA/HEAD_SHA fetch, or a fork-PR head SHA
+    fails the job before the ref that provides it runs. Static checks only:
+    no network, no checkout, no untrusted code execution.
+    """
+
+    WORKFLOW = ROOT / ".github" / "workflows" / "bash-compare.yml"
+
+    def fetch_step(self):
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        marker = "Fetch gate revisions"
+        start = text.index(marker)
+        # Bound the step at the next "- name:" so later build steps cannot
+        # satisfy the ordering assertions by accident.
+        following = text.find("\n      - name:", start + len(marker))
+        return text[start:following if following != -1 else len(text)]
+
+    def test_fork_head_refetch_precedes_required_sha_fetch(self):
+        step = self.fetch_step()
+        pr_ref = step.index("pull/${{ github.event.pull_request.number }}/head")
+        sha_fetch = step.index('origin "$BASE_SHA" "$HEAD_SHA"')
+        self.assertLess(
+            pr_ref, sha_fetch,
+            "pull/N/head refetch must run before the required SHA fetch "
+            "so a fork-PR head SHA is present when it is fetched",
+        )
+
+    def test_required_sha_fetch_stays_fail_closed(self):
+        step = self.fetch_step()
+        sha_line = next(
+            line for line in step.splitlines() if '"$BASE_SHA" "$HEAD_SHA"' in line
+        )
+        self.assertIn("exit 2", step[step.index(sha_line):step.index(sha_line) + 200])
+        self.assertNotIn("|| true", sha_line)
+
+    def test_fork_refetch_is_guarded_and_best_effort(self):
+        step = self.fetch_step()
+        refetch_line = next(
+            line for line in step.splitlines()
+            if "git fetch" in line and "pull/" in line
+        )
+        self.assertIn("|| true", refetch_line)
+        self.assertIn('GITHUB_EVENT_NAME" = pull_request', step)
+        self.assertIn("github.event.pull_request.number", step)
+
+    def test_fetched_revisions_are_verified_before_use(self):
+        step = self.fetch_step()
+        sha_fetch = step.index('origin "$BASE_SHA" "$HEAD_SHA"')
+        base_check = step.index('cat-file -e "$BASE_SHA^{commit}"')
+        head_check = step.index('cat-file -e "$HEAD_SHA^{commit}"')
+        self.assertLess(sha_fetch, base_check)
+        self.assertLess(sha_fetch, head_check)
+
+
 if __name__ == "__main__":
     unittest.main()

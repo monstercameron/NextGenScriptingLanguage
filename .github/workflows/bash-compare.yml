@@ -81,16 +81,21 @@ jobs:
           set -e
           # A full checkout already carries both commits on most events, but
           # fetch them explicitly so a shallow or partial checkout still
-          # gates the right pair. These fetches are required: failures exit
-          # non-zero with the missing SHA named, never masked. Only the
-          # fork-head ref below is best-effort (same-origin PRs already have
-          # it), and PRs gate the head SHA -- the merge commit that lands is
-          # the head merged with its current base, so rebase/merge drift
-          # after the run is out of scope for this per-commit signal.
-          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || { echo "error: cannot fetch gate revisions $BASE_SHA $HEAD_SHA" >&2; exit 2; }
+          # gates the right pair. On pull_request events the head SHA comes
+          # from the fork and is absent from origin until the pull/N/head
+          # ref is fetched, so the fork-head refetch must run BEFORE the
+          # required SHA fetch; otherwise the required fetch exits 2 before
+          # the refetch can provide the head commit. The refetch itself is
+          # read-only and best-effort (same-origin PRs already have the
+          # head), while the SHA fetches below are required: failures exit
+          # non-zero with the missing SHA named, never masked. PRs gate the
+          # head SHA -- the merge commit that lands is the head merged with
+          # its current base, so rebase/merge drift after the run is out of
+          # scope for this per-commit signal.
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "${{ github.event.pull_request.number }}" ]; then
             git fetch --no-tags origin "pull/${{ github.event.pull_request.number }}/head:refs/remotes/pull/${{ github.event.pull_request.number }}/head" || true
           fi
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || { echo "error: cannot fetch gate revisions $BASE_SHA $HEAD_SHA" >&2; exit 2; }
           git cat-file -e "$BASE_SHA^{commit}" || { echo "error: base revision $BASE_SHA is not a commit" >&2; exit 2; }
           git cat-file -e "$HEAD_SHA^{commit}" || { echo "error: head revision $HEAD_SHA is not a commit" >&2; exit 2; }
           [ "$BASE_SHA" != "$HEAD_SHA" ]

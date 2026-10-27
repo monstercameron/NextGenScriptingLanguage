@@ -310,6 +310,35 @@ fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
 }
 
 #[test]
+fn required_constrained_program_input_fix_uses_a_declared_choice() {
+    let registry = Registry::default();
+    let source = concat!(
+        "define a program named worker\n",
+        "  accept shade as text one of [\"red\", \"blue\"]\n",
+        "  use value shade\n",
+        "\n",
+        "run program worker\n",
+    );
+    let diagnostic = only_diagnostic(
+        source,
+        &registry,
+        "check.program.input.required",
+    );
+    let repaired = apply(source, diagnostic.fixes.first().expect("required input fix"));
+    assert_eq!(
+        repaired,
+        concat!(
+            "define a program named worker\n",
+            "  accept shade as text one of [\"red\", \"blue\"]\n",
+            "  use value shade\n",
+            "\n",
+            "run program worker with shade \"red\"\n",
+        )
+    );
+    assert!(analyze_source(&repaired, &registry).is_empty());
+}
+
+#[test]
 fn missing_program_file_is_distinct_and_points_at_path() {
     let root = std::env::temp_dir().join(format!("flow-diagnostic-path-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

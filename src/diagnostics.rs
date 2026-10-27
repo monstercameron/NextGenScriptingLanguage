@@ -1292,6 +1292,7 @@ fn collect_program_input_diagnostics(
                 step.line,
                 &input.name,
                 input.kind,
+                input.choices.as_deref(),
                 !call.parameters.is_empty(),
             ) {
                 diagnostic.fixes.push(SuggestedFix {
@@ -1309,6 +1310,7 @@ fn missing_program_input_edit(
     line: usize,
     name: &str,
     kind: crate::ast::InputType,
+    choices: Option<&[String]>,
     already_has_inputs: bool,
 ) -> Option<TextEdit> {
     let starts = LineStarts::new(source);
@@ -1331,11 +1333,15 @@ fn missing_program_input_edit(
     let layout = parser::repair_invocation_layout(&statement.text).ok()?;
     let offset = line_start + bom + statement.indent + layout.parameter_insert;
     let placeholder = match kind {
-        crate::ast::InputType::Text => "\"\"",
-        crate::ast::InputType::Integer => "0",
-        crate::ast::InputType::Boolean => "false",
-        crate::ast::InputType::TextList => "[]",
-        crate::ast::InputType::Json => "null",
+        crate::ast::InputType::Text => match choices {
+            Some([first, ..]) => serde_json::to_string(first).ok()?,
+            Some([]) => return None,
+            None => "\"\"".to_owned(),
+        },
+        crate::ast::InputType::Integer => "0".to_owned(),
+        crate::ast::InputType::Boolean => "false".to_owned(),
+        crate::ast::InputType::TextList => "[]".to_owned(),
+        crate::ast::InputType::Json => "null".to_owned(),
         crate::ast::InputType::Bytes => return None,
     };
     let join = if already_has_inputs {

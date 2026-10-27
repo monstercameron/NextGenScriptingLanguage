@@ -11,14 +11,22 @@ tests. When a verified baseline exists, run with --fail-closed (and
 
 Only CPU-bound scenarios are gated: rows where the Execute arm is dominated by
 interpreter work rather than child processes or filesystem traffic, so the
-`instructions:u` count is a stable signal for the optimization backlog (#305).
+instruction count is a stable signal for the optimization backlog (#305).
 Every other scenario's instruction counts are reported for stability but never
 fail the gate. Without --fail-closed, scenarios without instruction data in
-either report (perf was unavailable or forbidden from counting) are listed as
-skipped, not failed; with --fail-closed, a gated row without data in either
-report fails the gate as incomplete rather than passing silently.
+either report (no working counter was available or counting was forbidden) are
+listed as skipped, not failed; with --fail-closed, a gated row without data in
+either report fails the gate as incomplete rather than passing silently.
+
+Instruction counts are backend-specific: perf `instructions:u` follows forked
+children while cachegrind `I refs` counts the leader process only, so reports
+produced by different backends are rejected as incomparable. Use --canary to
+prove the gate is live: it derives a synthetic baseline from a real candidate
+report with gated counts deflated by --canary-percent and checks that the gate
+fails on it.
 """
 import argparse
+import copy
 import json
 import math
 import sys
@@ -97,6 +105,14 @@ def evaluate(baseline, candidate, max_regression=MAX_REGRESSION, *,
             raise ValueError(
                 f"baseline/candidate {field} differ: {before!r} != {after!r}"
             )
+    before_backend = baseline_meta.get("instructions_backend")
+    after_backend = candidate_meta.get("instructions_backend")
+    if before_backend is not None and after_backend is not None and before_backend != after_backend:
+        raise ValueError(
+            f"baseline/candidate instructions_backend differ: "
+            f"{before_backend!r} != {after_backend!r} "
+            f"(perf instructions:u and cachegrind I refs are different units)"
+        )
     if str(baseline_meta.get("platform", "")).split("-", 1)[0] != str(
         candidate_meta.get("platform", "")
     ).split("-", 1)[0]:
@@ -146,10 +162,114 @@ def evaluate(baseline, candidate, max_regression=MAX_REGRESSION, *,
     return comparisons, failures, skipped
 
 
+def synthesize_canary_baseline(candidate, percent):
+    """Derive a synthetic baseline whose gated counts are lower by percent.
+
+    Only gated CPU-bound rows with data are deflated; every other row is left
+    identical so a correct gate fails exactly on the gated rows. Returns the
+    baseline report and the gated keys expected to fail.
+    """
+    if not percent > 0:
+        raise ValueError("canary percent must be positive")
+    if not isinstance(candidate, dict):
+        raise ValueError("canary needs a candidate report object")
+    baseline = copy.deepcopy(candidate)
+    metadata = baseline.get("metadata")
+    results = baseline.get("results")
+    if not isinstance(metadata, dict) or not isinstance(results, list):
+        raise ValueError("canary needs a candidate report with metadata and results")
+    revision = metadata.get("source_revision")
+    if not revision:
+        raise ValueError("canary needs a candidate report with a source revision")
+    metadata["source_revision"] = f"{revision}-canary-baseline"
+    expected = []
+    for row in results:
+        if not isinstance(row, dict):
+            raise ValueError("canary needs a candidate report with scenario results")
+        key = row.get("key")
+        execute = row.get("execute")
+        if not isinstance(execute, dict) or key not in CPU_BOUND_SCENARIOS:
+            continue
+        median = execute.get("median_instructions")
+        if median is None:
+            continue
+        baseline_value = float(median) / (1.0 + percent / 100.0)
+        if not math.isfinite(baseline_value) or baseline_value <= 0:
+            raise ValueError(f"canary cannot scale the instruction count for {key!r}")
+        execute["median_instructions"] = baseline_value
+        samples = execute.get("instruction_samples")
+        if isinstance(samples, list):
+            execute["instruction_samples"] = [
+                sample / (1.0 + percent / 100.0) for sample in samples
+            ]
+        expected.append(key)
+    return baseline, sorted(expected)
+
+
+def run_canary(candidate, percent):
+    """Prove the gate catches a synthetic regression in a real report.
+
+    Returns an (exit_code, detail) pair: 0 when the gate fails the synthetic
+    regression as it should, 1 when the gate misses it or the report is
+    unusable, and 2 when the report has no gated instruction data (or no
+    usable revision), which is inconclusive rather than acceptance.
+    """
+    if not percent / 100.0 > MAX_REGRESSION:
+        raise ValueError(
+            f"canary percent must clear the +{MAX_REGRESSION * 100:g}% gate threshold"
+        )
+    try:
+        baseline, expected = synthesize_canary_baseline(candidate, percent)
+    except ValueError as error:
+        return 2, f"canary incomplete: {error}"
+    if not expected:
+        return 2, (
+            "canary incomplete: the candidate report has no gated CPU-bound "
+            "instruction data (counters unavailable or forbidden); this is not acceptance"
+        )
+    try:
+        _, failures, skipped = evaluate(
+            baseline, candidate, MAX_REGRESSION, fail_closed=True
+        )
+    except ValueError as error:
+        return 2, f"canary incomplete: {error}"
+    missing = sorted(set(expected) - set(failures))
+    if missing:
+        return 1, (
+            f"canary FAILED: the +{MAX_REGRESSION * 100:g}% gate missed a synthetic "
+            f"+{percent:g}% regression in: " + ", ".join(missing)
+        )
+    caught = sorted(set(expected) & set(failures))
+    extra = sorted(set(failures) - set(expected) - set(CPU_BOUND_SCENARIOS))
+    detail = (
+        f"canary: the +{MAX_REGRESSION * 100:g}% gate correctly failed a synthetic "
+        f"+{percent:g}% regression in: " + ", ".join(caught)
+    )
+    if skipped:
+        detail += " (no instruction data in either report: " + ", ".join(skipped) + ")"
+    if extra:
+        detail += " (unexpected non-gated failures: " + ", ".join(extra) + ")"
+    return (1, detail) if extra else (0, detail)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("baseline", type=Path, help="retained baseline bash_compare JSON report")
-    parser.add_argument("candidate", type=Path, help="current bash_compare JSON report")
+    parser.add_argument("baseline", type=Path, nargs="?",
+                        help="retained baseline bash_compare JSON report")
+    parser.add_argument("candidate", type=Path, nargs="?",
+                        help="current bash_compare JSON report")
+    parser.add_argument(
+        "--canary", type=Path, default=None, metavar="CANDIDATE",
+        help="prove the gate is live: derive a synthetic baseline from CANDIDATE with "
+             "gated counts deflated by --canary-percent and check the gate fails on it; "
+             "exit 0 when the gate catches it, 1 when the gate misses it, "
+             "2 when inconclusive (no gated data)",
+    )
+    parser.add_argument(
+        "--canary-percent", type=float, default=3.0,
+        help="synthetic regression size for --canary; must clear the gate threshold "
+             "(default: 3)",
+    )
     parser.add_argument(
         "--max-regression-percent",
         type=float,
@@ -167,6 +287,33 @@ def main(argv=None):
         help="require the baseline to record execute_sha256 and runner_sha256",
     )
     args = parser.parse_args(argv)
+    if args.canary is not None:
+        if not args.canary.is_file():
+            print(
+                "error: canary incomplete: the candidate report does not exist; "
+                "a missing report is not acceptance",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            candidate = json.loads(args.canary.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError) as error:
+            print(f"error: canary incomplete: {error}", file=sys.stderr)
+            return 2
+        try:
+            code, detail = run_canary(candidate, args.canary_percent)
+        except ValueError as error:
+            print(f"error: canary incomplete: {error}", file=sys.stderr)
+            return 2
+        print(detail, file=sys.stderr if code else sys.stdout)
+        return code
+    if args.baseline is None or args.candidate is None:
+        print(
+            "error: gate incomplete: baseline and candidate reports are both required "
+            "(or use --canary CANDIDATE to prove the gate catches a synthetic regression)",
+            file=sys.stderr,
+        )
+        return 2
     if not args.baseline.is_file() or not args.candidate.is_file():
         print(
             "error: gate incomplete: baseline and candidate reports must both exist; "
@@ -198,7 +345,7 @@ def main(argv=None):
             print(
                 "error: gate incomplete: gated CPU-bound rows lack instruction data in: "
                 + ", ".join(incomplete)
-                + " (perf unavailable or forbidden; this is not acceptance)",
+                + " (no working counter was available or counting was forbidden; this is not acceptance)",
                 file=sys.stderr,
             )
         regressed = [key for key in failures if key not in set(skipped)]

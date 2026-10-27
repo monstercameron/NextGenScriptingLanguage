@@ -215,25 +215,47 @@ retained per arm in the JSON report.
 Bash uses --norc --noprofile; dash runs for all 22 scenarios. Execute runs
 execute run FILE with the workflow's explicit manifest directory. Peak RSS uses GNU
 /usr/bin/time -f %M, at most three runs per arm, with the same temporary working
-directory and fresh output/checkpoint fixtures. On Linux with a working perf counter,
-each arm also reports the median user instruction count (`perf stat -e
-instructions:u`, three samples) next to wall time. Where perf is missing or
-forbidden from counting, those rows report `-` instead of a count. Every child has a
+directory and fresh output/checkpoint fixtures. On Linux with a working counter,
+each arm also reports the median instruction count next to wall time: hardware user
+instructions (`perf stat -e instructions:u`, three samples) when perf can count, or
+cachegrind executed instructions (`I refs` via valgrind, experimental opt-in) when
+perf cannot and `--instructions-backend cachegrind` is passed. The report records
+which backend produced the counts plus one-line counter diagnostics (kernel
+`perf_event_paranoid` level, perf/valgrind probe outcomes), and the log and step
+summary state how many execute arms report counts. Where no counter works, those
+rows report `-` instead of a count. Every child has a
 30-second timeout and the harness stops at a 285-second end-to-end budget (hard maximum
 300 seconds).
 [bash-compare.yml](../.github/workflows/bash-compare.yml) runs the workload-contract
 test, the synthetic instruction-gate contract test, and the comparison for each
 release/profile variant on ubuntu-24.04 and
-ubuntu-24.04-arm, retaining a grouped JSON report. The workflow then runs
+ubuntu-24.04-arm, retaining a grouped JSON report. The workflow then runs a canary
+on the fresh report: it derives a synthetic baseline with gated counts deflated by
+3% and checks that
 [tools/check_instruction_regression.py](../tools/check_instruction_regression.py)
+fails on it, proving the wired gate (not just the unit test) catches a synthetic
+3% regression on the real report schema. A canary with no gated instruction data
+reports incomplete rather than passing; a canary the gate misses fails the job.
+The workflow finally runs the gate itself
 with `--fail-closed --require-provenance` only when a verified per-OS/variant
 baseline exists at `benchmarks/instruction-baseline-<os>-<variant>.json`; no such
 baseline is checked in, so the real +2% CPU-bound instruction gate is explicitly
-incomplete in CI and the contract test alone is not a regression gate. Missing perf
+incomplete in CI and neither the contract test nor a passing canary is a regression
+gate. Missing counter
 data fails the fail-closed gate as incomplete rather than passing silently. The local
 macOS expanded table above
 is diagnostic; the Linux eight-scenario table below is a historical snapshot. The
 latest Linux workflow artifacts remain the source for per-profile CI results.
+Counter availability on the hosted runners is still the open question: virtualized
+GitHub runners may expose no hardware PMU or forbid unprivileged counting, in which
+case perf reports `<not supported>` or `<not counted>` and the runner records that
+in its diagnostics. The deterministic fallback under evaluation is cachegrind via
+valgrind (instruction counts from its virtual CPU, the same approach the Rust
+ecosystem uses for CI benchmarking on virtualized runners), but the cachegrind
+backend is experimental until it is validated on Linux: output-contract fit,
+overhead against the 285-second budget, and behavior on static musl binaries. A
+checked-in baseline, when one lands, is backend-specific: the gate rejects
+perf-vs-cachegrind comparisons as incomparable units.
 What it does not show. The pairs use each runtime's natural operation, so they compare
 jobs rather than isolating interpreter overhead. The runners are shared machines, files
 are warm in the page cache, and wall-time point estimates stay noisy; use the retained

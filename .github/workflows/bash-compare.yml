@@ -74,6 +74,23 @@ jobs:
           LD_DEBUG=statistics "${program[@]}" 2>&1 | head -n 20
           strace -f -c -o "$RUNNER_TEMP/bash-count.txt" bash --norc --noprofile -c :
           tail -n 4 "$RUNNER_TEMP/bash-count.txt"
+      - name: Prove the gate fails a synthetic 3% regression (canary on the real report)
+        run: |
+          set +e
+          python3 tools/check_instruction_regression.py --canary target/bash-compare.json --canary-percent 3 > "$RUNNER_TEMP/instruction-canary.txt" 2>&1
+          status=$?
+          cat "$RUNNER_TEMP/instruction-canary.txt"
+          if [ "$status" -eq 0 ]; then
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              echo "## Instruction-gate canary" >> "$GITHUB_STEP_SUMMARY"
+              echo "The +2% CPU-bound gate correctly failed a synthetic +3% regression on this report." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif [ "$status" -eq 2 ]; then
+            echo "instruction-gate canary incomplete: this report carries no gated instruction data (counters unavailable or forbidden); this is not acceptance."
+          else
+            echo "error: instruction-gate canary failed: the +2% gate did not catch a synthetic +3% regression" >&2
+            exit 1
+          fi
       - name: Gate CPU-bound instruction counts (fail-closed when a verified baseline exists)
         run: |
           baseline="benchmarks/instruction-baseline-${{ matrix.os }}-${{ matrix.variant }}.json"

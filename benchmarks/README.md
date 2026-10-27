@@ -33,12 +33,16 @@ the inventory, grouping and shell oracles.
 The bash-compare.yml workflow runs the contract test and then compares all configured
 release/profile variants on ubuntu-24.04 and ubuntu-24.04-arm. The report includes
 scenario group, medians with bootstrap 95% confidence intervals, peak RSS when GNU
-time is available, median user instruction counts when Linux perf is available, and
+time is available, median instruction counts when a Linux counter works (perf
+`instructions:u`, or experimental cachegrind `I refs` via `--instructions-backend
+cachegrind`), the producing backend plus counter diagnostics, and
 binary sizes. `tools/check_instruction_regression.py` defines a +2% gate for the
 CPU-bound rows, run fail-closed with `--fail-closed --require-provenance` only when a
 verified per-OS/variant baseline is present; no such baseline is checked in, so the
-real gate is explicitly incomplete and the CI contract test (synthetic reports only)
-is not a regression gate. Defaults
+real gate is explicitly incomplete. Baselines are backend-specific (perf and
+cachegrind counts are different units; the gate rejects mixed-backend comparisons).
+CI additionally runs a canary on each fresh report proving the wired gate fails a
+synthetic +3% regression; the canary is wiring proof, not a regression gate. Defaults
 are two warmups and twenty samples, with fewer samples for the larger workloads. A
 285-second end-to-end budget (300-second maximum) bounds each run. Scenarios that write
 files or checkpoint state reset their temporary outputs between invocations. Each report

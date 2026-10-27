@@ -5,8 +5,12 @@ Each scenario pairs a bash command line with an Execute program that does the sa
 work, feeds both the same stdin, and reports the median wall time and, on POSIX,
 the peak resident set size of each. Every timed arm also reports a deterministic
 bootstrap 95% confidence interval for its median wall time, and on Linux with a
-working perf counter the median user instruction count (`instructions:u`) next to
-wall time. The report ends with the size of each binary.
+working counter the median instruction count next to wall time: hardware user
+instructions (`instructions:u`) via perf when available, otherwise executed
+instructions (`I refs`) via cachegrind when valgrind is present and explicitly or
+automatically selected. The report records which backend produced the counts plus
+counter diagnostics, because baselines are backend-specific. The report ends with
+the size of each binary.
 Bash runs with `--norc --noprofile`; nothing is cached between runs except what
 the OS caches for both.
 
@@ -20,6 +24,7 @@ import json
 import os
 import platform
 import random
+import re
 import signal
 import shutil
 import statistics
@@ -455,7 +460,7 @@ def median_confidence_interval(samples, *, resamples=BOOTSTRAP_RESAMPLES, seed=B
 
 
 def measure(command, stdin_path, runs, warmup, label, time_binary, cwd=None, before_each=None, deadline=None,
-            perf_binary=None, instruction_repeats=3):
+            perf_binary=None, instruction_repeats=3, cachegrind_binary=None):
     for _ in range(warmup):
         if before_each:
             before_each()
@@ -471,10 +476,18 @@ def measure(command, stdin_path, runs, warmup, label, time_binary, cwd=None, bef
             raise RuntimeError(f"{label} failed with status {returncode}: {message}")
         samples.append(elapsed)
     ci_low_ms, ci_high_ms = median_confidence_interval(samples)
-    instructions = perf_instructions(
-        command, stdin_path, perf_binary, cwd=cwd, before_each=before_each,
-        deadline=deadline, repeats=instruction_repeats,
-    )
+    if perf_binary:
+        instructions = perf_instructions(
+            command, stdin_path, perf_binary, cwd=cwd, before_each=before_each,
+            deadline=deadline, repeats=instruction_repeats,
+        )
+    elif cachegrind_binary:
+        instructions = cachegrind_instructions(
+            command, stdin_path, cachegrind_binary, cwd=cwd, before_each=before_each,
+            deadline=deadline, repeats=instruction_repeats,
+        )
+    else:
+        instructions = None
     return {
         "median_ms": statistics.median(samples),
         "min_ms": min(samples),
@@ -581,6 +594,181 @@ def perf_instructions(command, stdin_path, perf_binary, *, repeats=3, cwd=None, 
     return counts or None
 
 
+INSTRUCTION_BACKENDS = ("auto", "perf", "cachegrind", "none")
+
+
+def parse_cachegrind_instructions(output):
+    """Parse the executed-instruction total from cachegrind stderr, or None.
+
+    Only the `I refs:` total is read; a missing or unparsable total reads as
+    unavailable, never zero.
+    """
+    for line in output.splitlines():
+        match = re.search(r"\bI\s+refs:\s*([0-9,]+)", line)
+        if match:
+            try:
+                return int(match.group(1).replace(",", ""))
+            except ValueError:
+                continue
+    return None
+
+
+def cachegrind_stat():
+    """Return a valgrind binary that can count instructions, or None.
+
+    Cachegrind counts executed user-space instructions on its virtual CPU, so
+    the total stays deterministic on virtualized CI runners where hardware
+    perf counters are unavailable or forbidden from counting. This backend is
+    experimental: its output contract still needs Linux validation (issue
+    #571). A failed probe disables instruction counts without affecting
+    wall-time or RSS measurement.
+    """
+    if sys.platform != "linux":
+        return None
+    candidate = shutil.which("valgrind")
+    if not candidate:
+        return None
+    fd, out_path = tempfile.mkstemp(prefix="cachegrind-probe-", suffix=".out")
+    os.close(fd)
+    try:
+        try:
+            probe = subprocess.run(
+                [candidate, "--tool=cachegrind", f"--cachegrind-out-file={out_path}",
+                 sys.executable, "-c", "pass"],
+                capture_output=True, text=True, check=False,
+            )
+        except OSError:
+            return None
+        if probe.returncode != 0 or parse_cachegrind_instructions(f"{probe.stdout}\n{probe.stderr}") is None:
+            return None
+        return candidate
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+
+
+def cachegrind_instructions(command, stdin_path, valgrind_binary, *, repeats=3, cwd=None,
+                            before_each=None, deadline=None):
+    """Executed user instructions for a command through cachegrind, or None.
+
+    The median of the successful samples is reported alongside the raw
+    samples, and any failure degrades to None rather than failing the
+    comparison. Counts cover the leader process only: unlike perf, valgrind
+    does not follow forked children, so baselines are backend-specific and
+    the regression gate requires both sides to use the same backend.
+    """
+    if not valgrind_binary or repeats < 1:
+        return None
+    stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
+    fd, out_path = tempfile.mkstemp(prefix="cachegrind-", suffix=".out")
+    os.close(fd)
+    try:
+        counts = []
+        for _ in range(repeats):
+            if before_each:
+                before_each()
+            if stdin_path:
+                stdin.seek(0)
+            try:
+                result = run_process(
+                    [valgrind_binary, "--tool=cachegrind",
+                     f"--cachegrind-out-file={out_path}", *command],
+                    stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    cwd=cwd, timeout=remaining_timeout(deadline),
+                )
+            except (OSError, TimeoutError):
+                continue
+            if result.returncode != 0:
+                continue
+            count = parse_cachegrind_instructions(result.stderr.decode("utf-8", "replace"))
+            if count is not None:
+                counts.append(count)
+    finally:
+        if stdin_path:
+            stdin.close()
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+    return counts or None
+
+
+def resolve_instruction_backend(requested="auto", *, perf_binary=None, cachegrind_binary=None):
+    """Pick the instruction backend for a run.
+
+    Returns a (backend, binary) pair where backend is "perf", "cachegrind",
+    or None. "auto" prefers perf, then cachegrind, then no counters. An
+    explicit backend never falls through to another one; "none" disables
+    counters. A probed binary may be passed in to avoid probing twice.
+    """
+    if requested not in INSTRUCTION_BACKENDS:
+        raise ValueError(f"unknown instruction backend: {requested!r}")
+    if perf_binary is None and requested in ("auto", "perf"):
+        perf = perf_stat()
+    else:
+        # An explicit path is trusted; an explicit "" disables perf probing.
+        perf = perf_binary or None
+    cachegrind = None
+    if requested in ("auto", "cachegrind") and cachegrind_binary != "":
+        if cachegrind_binary or requested == "cachegrind" or not perf:
+            cachegrind = cachegrind_binary or cachegrind_stat()
+    if requested == "perf":
+        return ("perf", perf)
+    if requested == "cachegrind":
+        return ("cachegrind", cachegrind)
+    if requested == "none":
+        return (None, None)
+    if perf:
+        return ("perf", perf)
+    if cachegrind:
+        return ("cachegrind", cachegrind)
+    return (None, None)
+
+
+def perf_event_paranoid():
+    """Return the kernel perf restriction level, or None when unreadable."""
+    try:
+        with open("/proc/sys/kernel/perf_event_paranoid", "r", encoding="utf-8") as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def counter_diagnostics(*, backend, perf_binary, cachegrind_binary, cachegrind_attempted):
+    """One-line explanation of which instruction counter was used and why.
+
+    Never raises: every probe outcome degrades to a plain label so a missing
+    counter is always explained, never silent.
+    """
+    paranoid = perf_event_paranoid()
+    parts = [f"backend={backend or 'none'}"]
+    parts.append(f"perf_event_paranoid={paranoid if paranoid is not None else 'unknown'}")
+    if perf_binary:
+        parts.append(f"perf={perf_binary}(probe ok)")
+    elif shutil.which("perf"):
+        parts.append("perf=present(probe failed)")
+    else:
+        parts.append("perf=absent")
+    if cachegrind_binary:
+        parts.append(f"valgrind={cachegrind_binary}(cachegrind probe ok)")
+    elif shutil.which("valgrind"):
+        parts.append("valgrind=present(cachegrind probe failed)"
+                     if cachegrind_attempted else "valgrind=present(cachegrind probe not attempted)")
+    else:
+        parts.append("valgrind=absent")
+    return "; ".join(parts)
+
+
+def instruction_coverage(results):
+    """Count execute arms reporting an instruction count: (with_counts, total)."""
+    arms = [row.get("execute") for row in results
+            if isinstance(row, dict) and isinstance(row.get("execute"), dict)]
+    with_counts = sum(1 for arm in arms if arm.get("median_instructions") is not None)
+    return (with_counts, len(arms))
+
+
 def binary_size(path):
     if path is None:
         return None
@@ -652,8 +840,14 @@ def main(argv=None):
     parser.add_argument("--dash", default=shutil.which("dash"))
     parser.add_argument("--time", default=gnu_time(), help="GNU time, for peak RSS")
     parser.add_argument("--perf", default=perf_stat(), help="perf binary, for user instruction counts (empty disables)")
+    parser.add_argument("--cachegrind", default=None,
+                        help="valgrind binary, for cachegrind instruction counts when perf is "
+                             "unavailable (empty disables; default probes when the backend allows it)")
+    parser.add_argument("--instructions-backend", choices=INSTRUCTION_BACKENDS, default="auto",
+                        help="instruction counter backend: auto prefers perf, then cachegrind, "
+                             "then no counters; an explicit backend never falls through (default: auto)")
     parser.add_argument("--instruction-repeats", type=int, default=3,
-                        help="perf instruction samples per arm (default: 3)")
+                        help="instruction samples per arm (default: 3)")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--only", action="append", help="run only these scenario keys")
@@ -673,6 +867,20 @@ def main(argv=None):
         return 1
     if args.max_runtime_seconds <= 0 or args.max_runtime_seconds > 300:
         parser.error("--max-runtime-seconds must be greater than zero and at most 300")
+    try:
+        selected_backend, counter_binary = resolve_instruction_backend(
+            args.instructions_backend, perf_binary=args.perf, cachegrind_binary=args.cachegrind)
+    except ValueError as error:
+        parser.error(str(error))
+    cachegrind_attempted = args.instructions_backend in ("auto", "cachegrind") and args.cachegrind != ""
+    diagnostics = counter_diagnostics(
+        backend=selected_backend,
+        perf_binary=(args.perf or None) if selected_backend == "perf" else None,
+        cachegrind_binary=counter_binary if selected_backend == "cachegrind" else None,
+        cachegrind_attempted=cachegrind_attempted,
+    )
+    perf_binary = (args.perf or None) if selected_backend == "perf" else None
+    cachegrind_binary = counter_binary if selected_backend == "cachegrind" else None
     benchmark_started = time.monotonic()
     deadline = benchmark_started + args.max_runtime_seconds
 
@@ -748,13 +956,15 @@ def main(argv=None):
             row["bash"] = measure(
                 [args.bash, "--norc", "--noprofile", "-c", scenario.bash], stdin_path, runs, args.warmup,
                 f"bash {scenario.key}", args.time, cwd=root, before_each=reset_before_run, deadline=deadline,
-                perf_binary=args.perf or None, instruction_repeats=args.instruction_repeats
+                perf_binary=perf_binary, instruction_repeats=args.instruction_repeats,
+                cachegrind_binary=cachegrind_binary
             )
             if scenario.dash and args.dash:
                 row["dash"] = measure(
                     [args.dash, "-c", scenario.dash_command or scenario.bash], stdin_path, runs, args.warmup,
                     f"dash {scenario.key}", args.time, cwd=root, before_each=reset_before_run, deadline=deadline,
-                    perf_binary=args.perf or None, instruction_repeats=args.instruction_repeats
+                    perf_binary=perf_binary, instruction_repeats=args.instruction_repeats,
+                    cachegrind_binary=cachegrind_binary
                 )
             row["execute"] = measure(
                 execute_command(args.binary, program, args.manifest_dir, scenario),
@@ -766,8 +976,9 @@ def main(argv=None):
                 cwd=root,
                 before_each=reset_before_run,
                 deadline=deadline,
-                perf_binary=args.perf or None,
+                perf_binary=perf_binary,
                 instruction_repeats=args.instruction_repeats,
+                cachegrind_binary=cachegrind_binary,
             )
             results.append(row)
             execute_instr = row["execute"]["median_instructions"]
@@ -783,10 +994,15 @@ def main(argv=None):
     table = render(results, sizes)
     print()
     print(table)
+    covered, total = instruction_coverage(results)
+    coverage = (f"instruction counters (backend={selected_backend or 'none'}): "
+                f"{covered}/{total} execute arms report counts; {diagnostics}")
+    print()
+    print(coverage)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
-            handle.write("## Execute vs bash\n\n" + table + "\n")
+            handle.write("## Execute vs bash\n\n" + table + "\n\n" + coverage + "\n")
     lost = losses(results, sizes)
     if args.json_out:
         manifest_location = None
@@ -809,7 +1025,10 @@ def main(argv=None):
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "manifest_dir": manifest_location,
             "time_binary": args.time,
-            "perf_binary": args.perf or None,
+            "perf_binary": perf_binary,
+            "cachegrind_binary": cachegrind_binary,
+            "instructions_backend": selected_backend,
+            "counter_diagnostics": diagnostics,
             "instruction_repeats": args.instruction_repeats,
             "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
             "bootstrap_seed": BOOTSTRAP_SEED,

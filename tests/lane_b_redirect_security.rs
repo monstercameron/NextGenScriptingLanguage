@@ -177,6 +177,9 @@ fn a_new_redirect_file_is_owner_only() {
     let allowed = directory.path().join("allowed");
     fs::create_dir(&allowed).unwrap();
     let registry = registry_for(&binary());
+    let applet_grant = grant(&["process.exec"], Vec::new());
+    assert!(applet_grant.filesystem.read.is_empty());
+    assert!(applet_grant.filesystem.write.is_empty());
     registry.set_host_state(Some(CapabilityPolicy {
         host: Some(HostGrant {
             capabilities: BTreeSet::from(["filesystem.write".into()]),
@@ -189,19 +192,25 @@ fn a_new_redirect_file_is_owner_only() {
         deny_privileged: false,
         allow_wrappers: Default::default(),
         host_environment: Default::default(),
-        applets: BTreeMap::from([(
-            "fixture.echo".into(),
-            grant(&["process.exec", "filesystem.write"], vec![allowed.clone()]),
-        )]),
+        applets: BTreeMap::from([("fixture.echo".into(), applet_grant)]),
     }));
-    // The command fails with usage on stderr, so its stderr lands in the file.
-    let program = parser::parse("run fixture.echo and stderr to \"new.txt\"\n").unwrap();
-    let result = runtime::run(&program, &registry, &options(&allowed));
+    // The applet has no filesystem effect in its contract, so it must not
+    // inherit the host's write grant or use that directory as its sandbox cwd.
+    // Run it from the read-only system runtime and let the host redirect its
+    // stderr to the separately authorized absolute target.
+    let target = allowed.join("new.txt");
+    let target_source = target.to_str().expect("temporary path must be UTF-8");
+    let program = parser::parse(&format!(
+        "run fixture.echo and stderr to {:?}\n",
+        target_source
+    ))
+    .unwrap();
+    let result = runtime::run(&program, &registry, &options(Path::new("/usr/bin")));
     if let Err(error) = result {
         let message = format!("{error:#}");
         if message.contains("bubblewrap could not establish the required namespaces") {
             assert!(
-                !allowed.join("new.txt").exists(),
+                !target.exists(),
                 "an unavailable required sandbox must fail before creating the redirect target"
             );
             eprintln!("redirect mode skipped: sandbox namespace probe unavailable");
@@ -212,9 +221,6 @@ fn a_new_redirect_file_is_owner_only() {
             "redirect run failed unexpectedly: {message}"
         );
     }
-    let mode = fs::metadata(allowed.join("new.txt"))
-        .unwrap()
-        .permissions()
-        .mode();
+    let mode = fs::metadata(&target).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
 }

@@ -732,9 +732,10 @@ mod tests {
         // SAFETY: reader_fd is live and F_GETFL only reads its flags.
         let reader_flags = unsafe { libc::fcntl(reader_fd, libc::F_GETFL) };
         assert_ne!(reader_flags, -1);
-        // SAFETY: reader_fd remains open and F_SETFL receives flags by value.
-        let set_reader_flags =
-            unsafe { libc::fcntl(reader_fd, libc::F_SETFL, reader_flags | libc::O_NONBLOCK) };
+        let set_reader_flags = {
+            // SAFETY: reader_fd remains open and F_SETFL receives flags by value.
+            unsafe { libc::fcntl(reader_fd, libc::F_SETFL, reader_flags | libc::O_NONBLOCK) }
+        };
         assert_eq!(set_reader_flags, 0);
         let mut late_output = Vec::new();
         let mut buffer = [0u8; 8192];

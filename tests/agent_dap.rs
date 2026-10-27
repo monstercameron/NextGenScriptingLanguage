@@ -324,3 +324,117 @@ fn wait_for_exit(child: &mut Child, limit: Duration) -> std::process::ExitStatus
         thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+fn framing_bounds_total_headers_and_body_before_reading_body() {
+    const HEADER: usize = 64 * 1024;
+    const BODY: usize = 8 * 1024 * 1024;
+    for bytes in [vec![b'x'; HEADER + 1], {
+        let mut bytes = b"X: ".to_vec();
+        bytes.extend(std::iter::repeat_n(b'a', HEADER / 2));
+        bytes.extend_from_slice(b"\r\nY: ");
+        bytes.extend(std::iter::repeat_n(b'b', HEADER / 2));
+        bytes.extend_from_slice(b"\r\n\r\n");
+        bytes
+    }] {
+        let mut reader = BufReader::with_capacity(7, Cursor::new(bytes));
+        let error = read_message(&mut reader).unwrap_err().to_string();
+        assert!(error.contains("headers exceed"), "{error}");
+    }
+    let suffix = b"\r\nContent-Length: 2\r\n\r\n";
+    let mut exact = b"X: ".to_vec();
+    exact.extend(std::iter::repeat_n(
+        b'a',
+        HEADER - exact.len() - suffix.len(),
+    ));
+    exact.extend_from_slice(suffix);
+    assert_eq!(exact.len(), HEADER);
+    exact.extend_from_slice(b"{}");
+    assert_eq!(
+        read_message(&mut BufReader::with_capacity(11, Cursor::new(exact))).unwrap(),
+        Some(json!({}))
+    );
+
+    // No body is supplied: a bound error must occur before attempting to read it.
+    let header = format!("Content-Length: {}\r\n\r\n", BODY + 1);
+    let error = read_message(&mut BufReader::new(Cursor::new(header)))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("exceeds"), "{error}");
+    let header = format!("Content-Length: {BODY}\r\n\r\n");
+    let error = read_message(&mut BufReader::new(Cursor::new(header)))
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("exceeds"), "{error}");
+    for input in [
+        b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}".as_slice(),
+        b"X-Header: a\r\n".as_slice(),
+        b"X-Header: a".as_slice(),
+    ] {
+        assert!(read_message(&mut BufReader::new(Cursor::new(input))).is_err());
+    }
+}
+
+#[test]
+fn dap_process_reports_oversized_frames_without_panicking() {
+    use std::io::Write;
+    for request in [
+        vec![b'x'; 64 * 1024 + 1],
+        b"Content-Length: 8388609\r\n\r\n".to_vec(),
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("dap")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&request).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("exceed"), "{error}");
+        assert!(!error.contains("panicked"), "{error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_frame_stops_an_active_debuggee_before_adapter_exits() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("paused.program");
+    std::fs::write(&program, "run printf with message \"hello\"\n").unwrap();
+    let mut client = Client::start();
+    assert_eq!(client.request("initialize", json!({}))["success"], true);
+    client.event("initialized");
+    assert_eq!(
+        client.request("launch", json!({"program":program,"cwd":dir.path()}))["success"],
+        true
+    );
+    client.request(
+        "setBreakpoints",
+        json!({"source":{"path":program},"breakpoints":[{"line":1}]}),
+    );
+    assert_eq!(
+        client.request("configurationDone", json!({}))["success"],
+        true
+    );
+    client.event("stopped");
+    client
+        .stdin
+        .write_all(b"Content-Length: 8388609\r\n\r\n")
+        .unwrap();
+    client.stdin.flush().unwrap();
+    client.event("terminated");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = client.child.try_wait().unwrap() {
+            assert!(!status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "adapter did not exit");
+        thread::sleep(Duration::from_millis(20));
+    }
+}

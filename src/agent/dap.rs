@@ -22,7 +22,9 @@ const THREAD_ID: i64 = 1;
 /// The `variablesReference` of the single scope, the run's bindings.
 const BINDINGS_REFERENCE: i64 = 1;
 /// The largest DAP message accepted from the client.
-const MAX_MESSAGE: usize = 16 * 1024 * 1024;
+const MAX_MESSAGE: usize = 8 * 1024 * 1024;
+/// Total header bytes, including line endings and the terminating blank line.
+const MAX_HEADER: usize = 64 * 1024;
 /// The stderr line `execute run --control` prints with its endpoint address.
 const ENDPOINT_PREFIX: &str = "execute: control endpoint ";
 
@@ -35,21 +37,25 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
     let sink = Sink::new();
     let mut session = Session::new(exe, sink.clone());
     let mut input = BufReader::new(io::stdin().lock());
-    while let Some(message) = read_message(&mut input)? {
-        if message.get("type").and_then(Value::as_str) != Some("request") {
-            continue;
+    let result = (|| -> Result<()> {
+        while let Some(message) = read_message(&mut input)? {
+            if message.get("type").and_then(Value::as_str) != Some("request") {
+                continue;
+            }
+            let command = message["command"].as_str().unwrap_or_default().to_owned();
+            let result = session.handle(&command, &message["arguments"]);
+            sink.reply(&message, result);
+            if command == "initialize" {
+                sink.event("initialized", json!({}));
+            }
+            if command == "disconnect" {
+                break;
+            }
         }
-        let command = message["command"].as_str().unwrap_or_default().to_owned();
-        let result = session.handle(&command, &message["arguments"]);
-        sink.reply(&message, result);
-        if command == "initialize" {
-            sink.event("initialized", json!({}));
-        }
-        if command == "disconnect" {
-            break;
-        }
-    }
+        Ok(())
+    })();
     session.shutdown();
+    result?;
     Ok(0)
 }
 
@@ -57,25 +63,30 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
 /// Returns `None` at end of input between messages.
 pub fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
     let mut length = None;
+    let mut header_bytes = 0;
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
-            if length.is_none() {
+        let Some(line) = read_header_line(reader, MAX_HEADER - header_bytes)? else {
+            if header_bytes == 0 {
                 return Ok(None);
             }
             bail!("the client closed the stream inside a message header");
-        }
+        };
+        header_bytes += line.len();
+        let line = std::str::from_utf8(&line).context("DAP header is not UTF-8")?;
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             break;
         }
         if let Some((name, value)) = line.split_once(':') {
             if name.trim().eq_ignore_ascii_case("Content-Length") {
+                if length.is_some() {
+                    bail!("DAP message has duplicate Content-Length headers");
+                }
                 length = Some(
                     value
                         .trim()
                         .parse::<usize>()
-                        .with_context(|| format!("invalid Content-Length {:?}", value.trim()))?,
+                        .context("invalid DAP Content-Length")?,
                 );
             }
         }
@@ -89,6 +100,30 @@ pub fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
     Ok(Some(
         serde_json::from_slice(&body).context("DAP message body is not JSON")?,
     ))
+}
+
+// Bound allocation even when a peer never terminates the header line.
+fn read_header_line(reader: &mut impl BufRead, max_bytes: usize) -> Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            if line.is_empty() {
+                return Ok(None);
+            }
+            bail!("the client closed the stream inside a message header");
+        }
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let count = newline.map_or(buffer.len(), |position| position + 1);
+        if count > max_bytes - line.len() {
+            bail!("DAP headers exceed the {MAX_HEADER}-byte limit");
+        }
+        line.extend_from_slice(&buffer[..count]);
+        reader.consume(count);
+        if newline.is_some() {
+            return Ok(Some(line));
+        }
+    }
 }
 
 /// Write one DAP message with its byte-length `Content-Length` header.

@@ -638,17 +638,82 @@ fn called_file_parse_errors_report_the_callee_line_and_reason() {
     .unwrap();
     fs::write(
         root.path().join("callee.program"),
-        "run \"printf\"\nrun \"printf\"\nrun \"printf\"\nrun\n",
+        "run \"printf\"\nrun \"printf\"\nrun \"printf\"\nrun \"printf\" and discard stderr trailing\n",
     )
     .unwrap();
-    let result = report(&invoke(root.path(), &["check", "main.program", "--json"]), false);
+    let result = report(
+        &invoke(root.path(), &["check", "main.program", "--json"]),
+        false,
+    );
     let diagnostic = &result["diagnostics"][0];
     assert_eq!(diagnostic["code"], "parse.syntax");
-    assert_eq!(diagnostic["span"]["path"], root.path().join("callee.program").canonicalize().unwrap().display().to_string());
+    assert_eq!(
+        diagnostic["span"]["path"],
+        root.path()
+            .join("callee.program")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
     assert_eq!(diagnostic["span"]["line"], 4);
+    assert_eq!(diagnostic["span"]["precision"], "token");
+    assert_eq!(diagnostic["span"]["start_byte"], 71);
+    assert_eq!(diagnostic["span"]["end_byte"], 79);
+    assert_eq!(diagnostic["message"], "stray token `trailing`");
     assert!(!diagnostic["message"]
         .as_str()
         .unwrap()
         .contains("called program file"));
     assert_eq!(diagnostic["related"][0]["span"]["line"], 1);
+}
+
+#[test]
+fn called_file_unterminated_quote_has_an_exact_token_span() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("main.program"),
+        "run program file \"callee.program\"\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("callee.program"), "read \"unterminated\n").unwrap();
+    let result = report(
+        &invoke(root.path(), &["check", "main.program", "--json"]),
+        false,
+    );
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "parse.lexical");
+    assert_eq!(diagnostic["message"], "unterminated quoted string");
+    assert_eq!(
+        diagnostic["span"]["path"],
+        root.path()
+            .join("callee.program")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    assert_eq!(diagnostic["span"]["line"], 1);
+    assert_eq!(diagnostic["span"]["precision"], "token");
+    assert_eq!(diagnostic["span"]["start_byte"], 5);
+    assert_eq!(diagnostic["span"]["end_byte"], 18);
+}
+
+#[test]
+fn called_file_missing_operation_keeps_line_precision() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("main.program"),
+        "run program file \"callee.program\"\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("callee.program"), "run\n").unwrap();
+    let result = report(
+        &invoke(root.path(), &["check", "main.program", "--json"]),
+        false,
+    );
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "parse.syntax");
+    assert_eq!(diagnostic["span"]["precision"], "line");
+    assert_eq!(diagnostic["span"]["line"], 1);
 }

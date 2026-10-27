@@ -1751,6 +1751,59 @@ mod tests {
     }
 
     #[test]
+    fn lsp_publishes_exact_callee_parse_token_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = dir.path().join("callee.program");
+        let caller_text = "run program file \"callee.program\"\n";
+        let callee_text = "run \"printf\" and discard stderr trailing\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, callee_text).unwrap();
+        let root_uri = url::Url::from_directory_path(dir.path()).unwrap().to_string();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({ "rootUri": root_uri, "capabilities": {} }),
+        ));
+        for (uri, text) in [(&caller_uri, caller_text), (&callee_uri, callee_text)] {
+            input.extend(frame(json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {"textDocument": {"uri": uri, "version": 1, "text": text}}
+            })));
+        }
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({"jsonrpc": "2.0", "method": "exit"})));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let publish = messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == callee_uri
+            })
+            .unwrap();
+        let diagnostic = publish["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "parse.syntax")
+            .expect("parse error is published to the open callee");
+        assert_eq!(diagnostic["range"]["start"]["line"], 0);
+        assert_eq!(diagnostic["range"]["start"]["character"], 32);
+        assert_eq!(diagnostic["range"]["end"]["character"], 40);
+        assert_eq!(diagnostic["data"]["span_precision"], "token");
+        assert_eq!(
+            diagnostic["relatedInformation"][0]["location"]["uri"],
+            caller_uri
+        );
+    }
+
+    #[test]
     fn missing_callee_matches_path_aware_check_and_untitled_is_informational() {
         let dir = tempfile::tempdir().unwrap();
         let caller = dir.path().join("caller.program");

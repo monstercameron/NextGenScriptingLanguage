@@ -518,14 +518,44 @@ fn analyze_source_impl(
         }
 
         let content = statement.text.as_str();
-        let Ok(tokens) = parser::tokenize(content) else {
-            diagnostics.push(Diagnostic::error(
-                "parse.lexical",
-                lexical_message(content),
-                line_starts.span(source, line_number),
-            ));
-            local_error_lines.insert(line_number);
-            continue;
+        let physical_line = source
+            .lines()
+            .nth(line_number.saturating_sub(1))
+            .unwrap_or("");
+        let bom_bytes = if line_number == 1 && physical_line.starts_with('\u{feff}') {
+            '\u{feff}'.len_utf8()
+        } else {
+            0
+        };
+        let physical_line = &physical_line[bom_bytes..];
+        let content_source_offset = (parser::strip_comment(physical_line).trim_start_matches(' ')
+            == content)
+            .then(|| line_starts.start(line_number) + bom_bytes + statement.indent);
+        let (tokens, token_ranges) = match parser::tokenize_with_ranges(content) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                let span = error
+                    .downcast_ref::<parser::LocatedParseError>()
+                    .and_then(parser::LocatedParseError::source_range)
+                    .and_then(|range| {
+                        content_source_offset.map(|offset| {
+                            line_starts.span_at(
+                                source,
+                                offset + range.start,
+                                offset + range.end,
+                                SpanPrecision::Token,
+                            )
+                        })
+                    })
+                    .unwrap_or_else(|| line_starts.span(source, line_number));
+                diagnostics.push(Diagnostic::error(
+                    "parse.lexical",
+                    lexical_message(content),
+                    span,
+                ));
+                local_error_lines.insert(line_number);
+                continue;
+            }
         };
         if tokens.is_empty() {
             continue;
@@ -543,10 +573,10 @@ fn analyze_source_impl(
                 continue;
             }
         };
-        let tokens = if label.is_some() {
-            &tokens[1..]
+        let (tokens, token_ranges) = if label.is_some() {
+            (&tokens[1..], &token_ranges[1..])
         } else {
-            &tokens[..]
+            (&tokens[..], &token_ranges[..])
         };
         if is_contextual_header(tokens) {
             continue;
@@ -555,8 +585,24 @@ fn analyze_source_impl(
             let message = format!("{error:#}");
             let mut diagnostic =
                 classified_parse_error(source, &message, line_number, &line_starts);
-            let line_start_offset = line_starts.start(line_number);
-            let content_start = line_start_offset + statement.indent;
+            let span = error
+                .downcast_ref::<parser::LocatedParseError>()
+                .and_then(parser::LocatedParseError::token_index)
+                .and_then(|index| token_ranges.get(index))
+                .and_then(|range| {
+                    content_source_offset.map(|offset| {
+                        line_starts.span_at(
+                            source,
+                            offset + range.start,
+                            offset + range.end,
+                            SpanPrecision::Token,
+                        )
+                    })
+                })
+                .unwrap_or_else(|| line_starts.span(source, line_number));
+            diagnostic.span = span;
+            let content_start = content_source_offset
+                .unwrap_or_else(|| line_starts.start(line_number) + statement.indent);
             if let Some(first) = content.split_whitespace().next() {
                 if let Some(keyword) = suggest::keyword_for(first) {
                     let span = line_starts.span_at(

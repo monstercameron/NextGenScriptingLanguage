@@ -5,7 +5,49 @@ use crate::ast::{
 use anyhow::{anyhow, bail, Context, Result};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::ops::Range;
+
+#[derive(Debug)]
+pub(crate) struct LocatedParseError {
+    message: String,
+    token_index: Option<usize>,
+    source_range: Option<Range<usize>>,
+}
+
+impl LocatedParseError {
+    fn token(message: String, token_index: usize) -> Self {
+        Self {
+            message,
+            token_index: Some(token_index),
+            source_range: None,
+        }
+    }
+
+    fn source_range(message: String, source_range: Range<usize>) -> Self {
+        Self {
+            message,
+            token_index: None,
+            source_range: Some(source_range),
+        }
+    }
+
+    pub(crate) fn token_index(&self) -> Option<usize> {
+        self.token_index
+    }
+
+    pub(crate) fn source_range(&self) -> Option<&Range<usize>> {
+        self.source_range.as_ref()
+    }
+}
+
+impl fmt::Display for LocatedParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LocatedParseError {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token<'source> {
@@ -1521,6 +1563,15 @@ pub(crate) fn tokenize<'source>(line: &'source str) -> Result<Vec<Token<'source>
     Ok(tokens)
 }
 
+pub(crate) fn tokenize_with_ranges<'source>(
+    line: &'source str,
+) -> Result<(Vec<Token<'source>>, Vec<Range<usize>>)> {
+    let mut tokens = Vec::new();
+    let mut ranges = Vec::new();
+    tokenize_with_ranges_into(line, &mut tokens, Some(&mut ranges))?;
+    Ok((tokens, ranges))
+}
+
 fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) -> Result<()> {
     tokenize_with_ranges_into(line, tokens, None)
 }
@@ -1589,14 +1640,22 @@ fn tokenize_with_ranges_into<'source>(
                     }
                 }
                 if !closed {
-                    bail!("unterminated quoted string");
+                    return Err(LocatedParseError::source_range(
+                        "unterminated quoted string".into(),
+                        start..bytes.len(),
+                    )
+                    .into());
                 }
                 if plain {
                     tokens.push(Token::String(Cow::Borrowed(&line[start + 1..i - 1])));
                 } else {
                     let literal = &line[start..i];
-                    let value = serde_json::from_str::<String>(literal)
-                        .map_err(|_| anyhow!("malformed quoted string {literal}"))?;
+                    let value = serde_json::from_str::<String>(literal).map_err(|_| {
+                        LocatedParseError::source_range(
+                            format!("malformed quoted string {literal}"),
+                            start..i,
+                        )
+                    })?;
                     tokens.push(Token::String(Cow::Owned(value)));
                 }
             }
@@ -2816,7 +2875,11 @@ fn ensure_end(tokens: &[Token<'_>], cursor: usize) -> Result<()> {
     if cursor == tokens.len() {
         Ok(())
     } else {
-        bail!("stray token `{}`", token_text(&tokens[cursor]))
+        Err(LocatedParseError::token(
+            format!("stray token `{}`", token_text(&tokens[cursor])),
+            cursor,
+        )
+        .into())
     }
 }
 

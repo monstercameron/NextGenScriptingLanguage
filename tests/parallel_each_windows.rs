@@ -58,10 +58,11 @@ fn native_parallel_each_accepts_ninety_percent_of_raw_limit() -> Result<()> {
 }
 
 #[test]
-fn native_parallel_each_limit_keeps_versioned_partial_results() -> Result<()> {
+fn native_parallel_each_shared_limit_preserves_versioned_partial_results() -> Result<()> {
     let fixture = serde_json::to_string(env!("CARGO_BIN_EXE_native-fixture"))?;
+    // Both invocations fit under 1,500 bytes, while their combined 1,600 do not.
     let source = format!(
-        "parallel for each n in [\"2\", \"2000\"] at most 1 as results\n  run {fixture} with arguments [\"repeat-byte\", n]\n"
+        "parallel for each n in [\"800\", \"800\"] at most 1 as results\n  run {fixture} with arguments [\"repeat-byte\", n]\n"
     );
     let error = match run_source(&source, 1500) {
         Err(error) => error,
@@ -93,8 +94,12 @@ fn native_parallel_each_limit_keeps_versioned_partial_results() -> Result<()> {
         Some(&flow::ast::Value::String("utf8".into()))
     );
     assert_eq!(
+        first.get("state"),
+        Some(&flow::ast::Value::String("success".into()))
+    );
+    assert_eq!(
         first.get("output"),
-        Some(&flow::ast::Value::String("xx".into()))
+        Some(&flow::ast::Value::String("x".repeat(800)))
     );
     Ok(())
 }

@@ -5,7 +5,7 @@
 //! a line; token spans are emitted only when the token can be located reliably.
 
 use crate::ast::{Connection, Invocation, Program, Step, StepKind, Value};
-use crate::contracts::{OutputType, ValueSchema};
+use crate::contracts::{AppletBackend, OutputType, ValueSchema};
 use crate::manifest::{Manifest, Registry};
 use crate::parser::{self, Token};
 use crate::suggest;
@@ -2413,7 +2413,10 @@ fn validate_call(
         }
     }
 
-    if manifest.name == "wait.until"
+    let dispatches_wait_until = (manifest.execution_backend() == AppletBackend::InProcess
+        && manifest.name_for(call) == "wait.until")
+        || manifest.execute_applet_operation() == Some("wait.until");
+    if dispatches_wait_until
         && matches!(call.parameters.get("probe"), Some(Value::String(probe)) if probe == "tcp_port_open")
     {
         if let Some(Value::String(host)) = call.parameters.get("host") {
@@ -3141,6 +3144,91 @@ mod tests {
             &union
         ));
         assert_eq!(schema_type(&union), "integer or boolean");
+    }
+
+    #[test]
+    fn wait_tcp_constraint_follows_effective_runtime_dispatch() {
+        let source = "run wait.until with probe \"tcp_port_open\" and host \"8.8.8.8\" and port 443 and timeout_ms 0\n";
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let bundled =
+            Registry::load_default(&manifest_dir, crate::manifest::ManifestCheck::Full).unwrap();
+        assert!(analyze_source(source, &bundled)
+            .iter()
+            .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"));
+
+        let custom_command = json!({
+            "name": "wait.until",
+            "binary": "custom-wait",
+            "parameters": {
+                "probe": { "type": "string" },
+                "host": { "type": "string" },
+                "port": { "type": "integer" },
+                "timeout_ms": { "type": "integer" }
+            },
+            "arguments": [{ "literal": "custom-operation" }]
+        })
+        .to_string();
+        let custom = Registry::from_sources(&[custom_command.clone()]).unwrap();
+        assert!(!analyze_source(source, &custom)
+            .iter()
+            .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"));
+
+        let scope_origin = tempfile::tempdir().unwrap();
+        let scoped = bundled
+            .with_scoped_manifest_sources(&[custom_command], scope_origin.path())
+            .unwrap();
+        assert!(!analyze_source(source, &scoped)
+            .iter()
+            .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"));
+
+        // Command manifests can route through the generic helper too. Only a
+        // fixed operation literal establishes that it dispatches to wait.until.
+        let helper_manifest = json!({
+            "name": "fixture.waiter",
+            "binary": "@execute-applet",
+            "parameters": {
+                "probe": { "type": "string" },
+                "host": { "type": "string" },
+                "port": { "type": "integer" },
+                "timeout_ms": { "type": "integer" }
+            },
+            "arguments": [
+                { "literal": "wait.until" },
+                { "literal": "--args" },
+                { "json_arguments": true }
+            ]
+        })
+        .to_string();
+        let helper = Registry::from_sources(&[helper_manifest]).unwrap();
+        let helper_source = source.replace("wait.until", "fixture.waiter");
+        assert!(analyze_source(&helper_source, &helper)
+            .iter()
+            .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"));
+
+        let dynamic_helper_manifest = json!({
+            "name": "fixture.dynamic_waiter",
+            "binary": "@execute-applet",
+            "parameters": {
+                "operation": { "type": "string", "required": true },
+                "probe": { "type": "string" },
+                "host": { "type": "string" },
+                "port": { "type": "integer" },
+                "timeout_ms": { "type": "integer" }
+            },
+            "arguments": [
+                { "parameter": "operation" },
+                { "literal": "--args" },
+                { "json_arguments": true }
+            ]
+        })
+        .to_string();
+        let dynamic_helper = Registry::from_sources(&[dynamic_helper_manifest]).unwrap();
+        let dynamic_source = source
+            .replace("wait.until", "fixture.dynamic_waiter")
+            .replace("with probe", "with operation \"wait.until\" and probe");
+        assert!(!analyze_source(&dynamic_source, &dynamic_helper)
+            .iter()
+            .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"));
     }
 
     #[test]

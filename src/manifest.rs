@@ -1536,6 +1536,23 @@ impl Manifest {
         }
     }
 
+    /// The operation selected by a command manifest that uses the generic applet
+    /// helper with a statically generated operation and JSON arguments. Other
+    /// argument templates may choose an operation dynamically at runtime.
+    pub(crate) fn execute_applet_operation(&self) -> Option<&str> {
+        if self.execution_backend() != AppletBackend::Command || self.binary != "@execute-applet" {
+            return None;
+        }
+        match self.arguments.as_slice() {
+            [ArgumentNode::Literal { literal: operation }, ArgumentNode::Literal { literal: flag }, ArgumentNode::JsonArguments]
+                if flag == "--args" =>
+            {
+                Some(operation)
+            }
+            _ => None,
+        }
+    }
+
     /// Check names, required parameters, and statically known types. Named
     /// results contain text; their string contents are checked after resolution.
     pub fn validate(&self, invocation: &Invocation) -> Result<()> {

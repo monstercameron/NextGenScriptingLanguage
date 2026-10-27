@@ -134,8 +134,8 @@ class FetchOrderingTests(unittest.TestCase):
     """Fork-PR heads live on pull/N/head, not origin: refetch first (issue #571).
 
     The "Fetch gate revisions" step must fetch the pull-request head ref
-    before the required BASE_SHA/HEAD_SHA fetch, or a fork-PR head SHA
-    fails the job before the ref that provides it runs. Static checks only:
+    before the required per-SHA fetches, or a fork-PR head SHA fails the
+    job before the ref that provides it runs. Static checks only:
     no network, no checkout, no untrusted code execution.
     """
 
@@ -153,22 +153,35 @@ class FetchOrderingTests(unittest.TestCase):
     def test_fork_head_refetch_precedes_required_sha_fetch(self):
         step = self.fetch_step()
         pr_ref = step.index("pull/${{ github.event.pull_request.number }}/head")
-        sha_fetch = step.index('origin "$BASE_SHA" "$HEAD_SHA"')
+        base_fetch = step.index('origin "$BASE_SHA"')
+        head_fetch = step.index('origin "$HEAD_SHA"')
         self.assertLess(
-            pr_ref, sha_fetch,
-            "pull/N/head refetch must run before the required SHA fetch "
+            pr_ref, base_fetch,
+            "pull/N/head refetch must run before the required SHA fetches "
             "so a fork-PR head SHA is present when it is fetched",
         )
+        self.assertLess(pr_ref, head_fetch)
 
-    def test_required_sha_fetch_stays_fail_closed(self):
+    def test_required_sha_fetches_stay_fail_closed_and_split(self):
         step = self.fetch_step()
-        sha_line = next(
-            line for line in step.splitlines() if '"$BASE_SHA" "$HEAD_SHA"' in line
+        base_line = next(
+            line for line in step.splitlines()
+            if 'origin "$BASE_SHA"' in line
         )
-        self.assertIn("exit 2", step[step.index(sha_line):step.index(sha_line) + 200])
-        self.assertNotIn("|| true", sha_line)
+        head_line = next(
+            line for line in step.splitlines()
+            if 'origin "$HEAD_SHA"' in line
+        )
+        # Per-SHA fetches: a denial names only the missing SHA, and one
+        # SHA's denial cannot mask the other.
+        self.assertNotEqual(base_line, head_line)
+        self.assertNotIn("|| true", base_line)
+        self.assertNotIn("|| true", head_line)
+        self.assertIn("cannot fetch base revision $BASE_SHA", step)
+        self.assertIn("cannot fetch head revision $HEAD_SHA", step)
+        self.assertIn("exit 2", step)
 
-    def test_fork_refetch_is_guarded_and_best_effort(self):
+    def test_fork_refetch_is_guarded_best_effort_and_numeric(self):
         step = self.fetch_step()
         refetch_line = next(
             line for line in step.splitlines()
@@ -177,14 +190,189 @@ class FetchOrderingTests(unittest.TestCase):
         self.assertIn("|| true", refetch_line)
         self.assertIn('GITHUB_EVENT_NAME" = pull_request', step)
         self.assertIn("github.event.pull_request.number", step)
+        # PR identity is GitHub-generated, but the number is interpolated
+        # into a refspec: reject anything but decimal digits, fail-closed.
+        self.assertIn("*[!0-9]*", step)
+        self.assertIn("not numeric", step)
 
     def test_fetched_revisions_are_verified_before_use(self):
         step = self.fetch_step()
-        sha_fetch = step.index('origin "$BASE_SHA" "$HEAD_SHA"')
+        head_fetch = step.index('origin "$HEAD_SHA"')
         base_check = step.index('cat-file -e "$BASE_SHA^{commit}"')
         head_check = step.index('cat-file -e "$HEAD_SHA^{commit}"')
-        self.assertLess(sha_fetch, base_check)
-        self.assertLess(sha_fetch, head_check)
+        self.assertLess(head_fetch, base_check)
+        self.assertLess(head_fetch, head_check)
+
+
+class ForkHeadFixtureTests(unittest.TestCase):
+    """Behavioral fork-head fetching against a local restricted server.
+
+    Stock-git upload-pack rules are enforced through an
+    ``ext::git upload-pack <server>`` remote: plain-path and ``file://``
+    transports bypass ``uploadpack.hideRefs`` and the ``allow*SHA1InWant``
+    denials, so they cannot reproduce the failure. Each fixture builds an
+    upstream bare repo (``main`` plus a fork-only ``refs/pull/123/head``),
+    denies SHA-want, and clones only ``main`` into a runner, mirroring a
+    PR runner whose default refspec omits pull refs. No network, no daemon.
+    """
+
+    def _run(self, *args, cwd=None, env=None):
+        import os
+        import subprocess
+
+        merged = dict(os.environ)
+        merged["GIT_ALLOW_PROTOCOL"] = "ext:file"
+        merged["GIT_CONFIG_COUNT"] = "2"
+        merged["GIT_CONFIG_KEY_0"] = "protocol.ext.allow"
+        merged["GIT_CONFIG_VALUE_0"] = "always"
+        merged["GIT_CONFIG_KEY_1"] = "protocol.file.allow"
+        merged["GIT_CONFIG_VALUE_1"] = "always"
+        if env:
+            merged.update(env)
+        return subprocess.run(
+            list(args),
+            capture_output=True,
+            text=True,
+            cwd=str(cwd) if cwd is not None else None,
+            env=merged,
+        )
+
+    def _make_fixture(self, hide_pull_refs):
+        import subprocess
+        from pathlib import Path
+
+        tmp = Path(self._tmpdir())
+        srv = tmp / "upstream.git"
+        seed = tmp / "seed"
+        runner = tmp / "runner"
+        self._run("git", "init", "--bare", "-q", str(srv), cwd=tmp).check_returncode()
+        self._run("git", "init", "-q", "-b", "main", str(seed), cwd=tmp).check_returncode()
+        self._run("git", "-C", str(seed), "config", "user.email", "gate@test").check_returncode()
+        self._run("git", "-C", str(seed), "config", "user.name", "gate").check_returncode()
+        (seed / "file.txt").write_text("base\n", encoding="utf-8")
+        self._run("git", "-C", str(seed), "add", "file.txt").check_returncode()
+        self._run("git", "-C", str(seed), "commit", "-qm", "base").check_returncode()
+        base = self._run("git", "-C", str(seed), "rev-parse", "HEAD").stdout.strip()
+        self._run(
+            "git", "-C", str(seed), "push", "-q", str(srv), "HEAD:refs/heads/main"
+        ).check_returncode()
+        (seed / "file.txt").write_text("base\nfork\n", encoding="utf-8")
+        self._run("git", "-C", str(seed), "add", "file.txt").check_returncode()
+        self._run("git", "-C", str(seed), "commit", "-qm", "fork").check_returncode()
+        fork = self._run("git", "-C", str(seed), "rev-parse", "HEAD").stdout.strip()
+        self._run(
+            "git", "-C", str(seed), "push", "-q", str(srv), "HEAD:refs/pull/123/head"
+        ).check_returncode()
+        for key in (
+            "allowTipSHA1InWant",
+            "allowReachableSHA1InWant",
+            "allowAnySHA1InWant",
+        ):
+            self._run(
+                "git", "--git-dir", str(srv), "config", f"uploadpack.{key}", "false"
+            ).check_returncode()
+        if hide_pull_refs:
+            self._run(
+                "git", "--git-dir", str(srv), "config",
+                "uploadpack.hideRefs", "refs/pull/",
+            ).check_returncode()
+        self._run("git", "init", "-q", "-b", "main", str(runner), cwd=tmp).check_returncode()
+        self._run(
+            "git", "-C", str(runner), "remote", "add", "origin",
+            f"ext::git upload-pack {srv}",
+        ).check_returncode()
+        fetched = self._run(
+            "git", "-C", str(runner), "fetch", "--no-tags", "origin",
+            "refs/heads/main:refs/remotes/origin/main",
+        )
+        self.assertEqual(fetched.returncode, 0, fetched.stderr)
+        self.assertNotEqual(
+            self._run("git", "-C", str(runner), "cat-file", "-e", fork).returncode, 0,
+            "runner must start without the fork object",
+        )
+        return {"tmp": tmp, "srv": srv, "runner": runner, "base": base, "fork": fork}
+
+    def _tmpdir(self):
+        import tempfile
+
+        tmp = tempfile.mkdtemp(prefix="gate-fork-")
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        return tmp
+
+    def test_required_sha_fetch_fails_when_head_absent_and_denied(self):
+        """Unadvertised SHA-want denied while the object is not yet local."""
+        fix = self._make_fixture(hide_pull_refs=True)
+        fetched = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags", "origin", fix["fork"]
+        )
+        self.assertNotEqual(fetched.returncode, 0)
+        self.assertIn("unadvertised object", fetched.stderr)
+        # The advertised base still fetches: the gate is fail-closed per SHA.
+        base_fetch = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags", "origin", fix["base"]
+        )
+        self.assertEqual(base_fetch.returncode, 0, base_fetch.stderr)
+
+    def test_stock_git_rejects_hidden_pull_ref_by_name(self):
+        """Pin the GitHub dependency: stock hideRefs rejects the named refetch."""
+        fix = self._make_fixture(hide_pull_refs=True)
+        refetch = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags", "origin",
+            "pull/123/head:refs/remotes/pull/123/head",
+        )
+        self.assertNotEqual(refetch.returncode, 0)
+        self.assertIn("couldn't find remote ref", refetch.stderr)
+
+    def test_pull_refetch_first_then_sha_fetch_verifies(self):
+        """Refetch-first provides the head; the required SHA fetch then verifies."""
+        fix = self._make_fixture(hide_pull_refs=True)
+        # Required-first fails before any refetch can help.
+        denied = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags", "origin", fix["fork"]
+        )
+        self.assertNotEqual(denied.returncode, 0)
+        # Simulate GitHub serving pull/N/head by explicit name: unhide it.
+        unhide = self._run(
+            "git", "--git-dir", str(fix["srv"]), "config", "--unset",
+            "uploadpack.hideRefs",
+        )
+        self.assertEqual(unhide.returncode, 0, unhide.stderr)
+        refetch = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags", "origin",
+            "pull/123/head:refs/remotes/pull/123/head",
+        )
+        self.assertEqual(refetch.returncode, 0, refetch.stderr)
+        self.assertEqual(
+            self._run(
+                "git", "-C", str(fix["runner"]), "cat-file", "-e",
+                f"{fix['fork']}^{{commit}}",
+            ).returncode, 0,
+        )
+        # Restrict again: the required SHA fetch now succeeds from the local
+        # object, doubling as fail-closed verification of the refetch.
+        rehide = self._run(
+            "git", "--git-dir", str(fix["srv"]), "config",
+            "uploadpack.hideRefs", "refs/pull/",
+        )
+        self.assertEqual(rehide.returncode, 0, rehide.stderr)
+        verify = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags", "origin", fix["fork"]
+        )
+        self.assertEqual(verify.returncode, 0, verify.stderr)
+
+    def test_sha_fetch_short_circuits_when_object_already_local(self):
+        """Once local, the SHA fetch cannot fail for lack of the object."""
+        fix = self._make_fixture(hide_pull_refs=False)
+        refetch = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags", "origin",
+            "pull/123/head:refs/remotes/pull/123/head",
+        )
+        self.assertEqual(refetch.returncode, 0, refetch.stderr)
+        bogus = self._run(
+            "git", "-C", str(fix["runner"]), "fetch", "--no-tags",
+            "ext::git upload-pack /nonexistent-571.git", fix["fork"],
+        )
+        self.assertEqual(bogus.returncode, 0, bogus.stderr)
 
 
 if __name__ == "__main__":

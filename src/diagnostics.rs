@@ -5,7 +5,10 @@
 //! a line; token spans are emitted only when the token can be located reliably.
 
 use crate::ast::{Connection, Invocation, Program, Step, StepKind, Value};
-use crate::contracts::{AppletBackend, OutputType, StringPattern, ValueSchema};
+use crate::contracts::{
+    text_schema_guarantees_nonempty, text_schema_guarantees_single_line, AppletBackend, OutputType,
+    StringPattern, ValueSchema,
+};
 use crate::manifest::{Manifest, Registry};
 use crate::parser::{self, Token};
 use crate::suggest;
@@ -4947,18 +4950,12 @@ fn compare_schema(
         ));
     }
     if output.kind == OutputType::Text {
-        if input.nonempty && !output.nonempty {
+        if input.nonempty && !text_schema_guarantees_nonempty(output) {
             reasons.push(format!(
-                "{path} may be empty, but the input requires nonempty text"
+                "{path} may be empty, whitespace-only, or contain NUL, but the input requires nonempty text"
             ));
         }
-        if input.single_line
-            && !output.single_line
-            && !output
-                .enum_values
-                .as_ref()
-                .is_some_and(|values| values.iter().all(|value| !value.contains(['\n', '\r'])))
-        {
+        if input.single_line && !text_schema_guarantees_single_line(output) {
             reasons.push(format!(
                 "{path} may contain a carriage return or line feed, but the input requires single-line text"
             ));
@@ -5671,6 +5668,74 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    enum_values: Some(vec!["ready".into()]),
+                    ..base(OutputType::Text)
+                },
+                ValueSchema {
+                    nonempty: true,
+                    ..base(OutputType::Text)
+                },
+                true,
+            ),
+            (
+                ValueSchema {
+                    enum_values: Some(vec![" ".into()]),
+                    ..base(OutputType::Text)
+                },
+                ValueSchema {
+                    nonempty: true,
+                    ..base(OutputType::Text)
+                },
+                false,
+            ),
+            (
+                ValueSchema {
+                    enum_values: Some(vec!["ready".into()]),
+                    ..base(OutputType::Text)
+                },
+                ValueSchema {
+                    single_line: true,
+                    ..base(OutputType::Text)
+                },
+                true,
+            ),
+            (
+                ValueSchema {
+                    enum_values: Some(vec!["two\nlines".into()]),
+                    ..base(OutputType::Text)
+                },
+                ValueSchema {
+                    single_line: true,
+                    ..base(OutputType::Text)
+                },
+                false,
+            ),
+            (
+                ValueSchema {
+                    pattern: Some(StringPattern::OctalMode),
+                    ..base(OutputType::Text)
+                },
+                ValueSchema {
+                    nonempty: true,
+                    single_line: true,
+                    ..base(OutputType::Text)
+                },
+                true,
+            ),
+            (
+                ValueSchema {
+                    pattern: Some(StringPattern::HexColorOptionalHash),
+                    ..base(OutputType::Text)
+                },
+                ValueSchema {
+                    nonempty: true,
+                    single_line: true,
+                    ..base(OutputType::Text)
+                },
+                true,
+            ),
+            (
+                ValueSchema {
                     additional_properties: Some(Box::new(base(OutputType::Text))),
                     ..base(OutputType::Record)
                 },
@@ -5720,6 +5785,40 @@ mod tests {
             (
                 list(record_with(ValueSchema {
                     nonempty: false,
+                    ..base(OutputType::Text)
+                })),
+                list(record_with(ValueSchema {
+                    nonempty: true,
+                    ..base(OutputType::Text)
+                })),
+                false,
+            ),
+            (
+                list(record_with(ValueSchema {
+                    pattern: Some(StringPattern::OctalMode),
+                    ..base(OutputType::Text)
+                })),
+                list(record_with(ValueSchema {
+                    nonempty: true,
+                    single_line: true,
+                    ..base(OutputType::Text)
+                })),
+                true,
+            ),
+            (
+                list(record_with(ValueSchema {
+                    enum_values: Some(vec!["ready".into()]),
+                    ..base(OutputType::Text)
+                })),
+                list(record_with(ValueSchema {
+                    nonempty: true,
+                    ..base(OutputType::Text)
+                })),
+                true,
+            ),
+            (
+                list(record_with(ValueSchema {
+                    enum_values: Some(vec!["".into(), "ready".into()]),
                     ..base(OutputType::Text)
                 })),
                 list(record_with(ValueSchema {

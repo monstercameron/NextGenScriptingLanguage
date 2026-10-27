@@ -47,6 +47,18 @@ impl StringPattern {
             Self::HexColorOptionalHash => "^#?[0-9A-Fa-f]{6}$",
         }
     }
+
+    pub(crate) fn guarantees_nonempty(self) -> bool {
+        match self {
+            Self::OctalMode | Self::HexColorOptionalHash => true,
+        }
+    }
+
+    pub(crate) fn guarantees_single_line(self) -> bool {
+        match self {
+            Self::OctalMode | Self::HexColorOptionalHash => true,
+        }
+    }
 }
 
 /// How a host should connect one standard stream for a manifest's native
@@ -857,12 +869,8 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
     }
     match source.kind {
         OutputType::Text => {
-            (!target.nonempty || source.nonempty)
-                && (!target.single_line
-                    || source.single_line
-                    || source.enum_values.as_ref().is_some_and(|values| {
-                        values.iter().all(|value| !value.contains(['\n', '\r']))
-                    }))
+            (!target.nonempty || text_schema_guarantees_nonempty(source))
+                && (!target.single_line || text_schema_guarantees_single_line(source))
                 && enum_assignable(source.enum_values.as_deref(), target.enum_values.as_deref())
                 && pattern_assignable(
                     source.pattern,
@@ -932,6 +940,29 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
         OutputType::Json => !target.scalar_only || source.scalar_only,
         _ => true,
     }
+}
+
+pub(crate) fn text_schema_guarantees_nonempty(schema: &ValueSchema) -> bool {
+    schema.nonempty
+        || schema
+            .pattern
+            .is_some_and(StringPattern::guarantees_nonempty)
+        || schema.enum_values.as_ref().is_some_and(|values| {
+            !values.is_empty()
+                && values
+                    .iter()
+                    .all(|value| !value.trim().is_empty() && !value.contains('\0'))
+        })
+}
+
+pub(crate) fn text_schema_guarantees_single_line(schema: &ValueSchema) -> bool {
+    schema.single_line
+        || schema
+            .pattern
+            .is_some_and(StringPattern::guarantees_single_line)
+        || schema.enum_values.as_ref().is_some_and(|values| {
+            !values.is_empty() && values.iter().all(|value| !value.contains(['\n', '\r']))
+        })
 }
 
 fn enum_assignable(source: Option<&[String]>, target: Option<&[String]>) -> bool {

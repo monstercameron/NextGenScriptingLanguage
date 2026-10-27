@@ -39,6 +39,17 @@ class FeatureMatrixTests(unittest.TestCase):
     def test_standalone_model_feature_is_tested_without_remote(self) -> None:
         self.assertIn("cargo test --locked --no-default-features --features model --lib --tests", self.workflow)
 
+    def test_private_answers_integration_tests_run_on_both_windows_targets(self) -> None:
+        windows = self.workflow.split("  windows:\n", maxsplit=1)[1]
+        self.assertIn("target: x86_64-pc-windows-msvc", windows)
+        self.assertIn("target: aarch64-pc-windows-msvc", windows)
+        command = next(
+            line for line in windows.splitlines()
+            if "cargo test --locked --target ${{ matrix.target }}" in line
+            and "--test windows_native" in line
+        )
+        self.assertIn("--test prompt_inputs", command)
+
     def test_fixture_is_test_only_and_built_for_ci(self) -> None:
         manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
         full = re.search(r'(?m)^full\s*=\s*\[(.*?)\]', manifest)

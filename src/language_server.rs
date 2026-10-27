@@ -1243,7 +1243,7 @@ fn complete_at_cursor(
         return;
     }
     if matches!(words[0], "await" | "inspect" | "cancel") {
-        complete_job_reference(items, source, line, &words, ends_with_space);
+        complete_job_reference(items, source, line, indent, tokens, &words, ends_with_space);
         return;
     }
     // Listener sources name applets without a `run` prefix.
@@ -1876,9 +1876,9 @@ fn complete_use(
             }
         }
         Some("bytes") => {
-            if words.len() == 2 || (words.len() == 3 && !ends_with_space) {
-                push_value_items(items, source, line, None, None);
-            }
+            // `use bytes <binding>`: the byte binding is fresh, so no value
+            // (or any other) completion applies, matching every other new
+            // binding position (`take ... as`, `spawn as`, `read ... as`).
         }
         Some("without") => {
             // `use without environment [...]`: the only follow-up is the
@@ -2159,18 +2159,36 @@ fn complete_then_statement(
 }
 
 /// Complete job references (`await`, `inspect`, `cancel`) with spawned jobs.
+/// Quoted literals never reach `words`, so a trailing quoted span is a job
+/// being typed (`await "j`) or a complete job (`await "j" `): the former
+/// offers jobs, the latter offers the same follow-ups as a bare job.
 fn complete_job_reference(
     items: &mut Vec<JsonValue>,
     source: &str,
     line: usize,
+    indent: usize,
+    tokens: &[CompletionWord],
     words: &[&str],
     ends_with_space: bool,
 ) {
-    if words.len() == 1 && !ends_with_space {
-        push_statement_forms(items);
+    let quoted_trailing = ends_with_space && tokens.last().is_some_and(|token| token.quoted);
+    let quoted_value = !ends_with_space && tokens.last().is_some_and(|token| token.quoted);
+    if words.len() == 1 && !ends_with_space && !quoted_value {
+        push_statement_forms_scoped(items, source, line, indent);
         return;
     }
-    if words.len() == 1 || (words.len() == 2 && !ends_with_space) {
+    if quoted_trailing {
+        // A complete quoted job: follow-ups, never the job list again.
+        if words[0] == "await" {
+            push_keyword(items, "and keep status as", "Bind the job exit status");
+            push_keyword(items, "and keep result as", "Bind the job result");
+        } else if words[0] == "inspect" {
+            push_keyword(items, "as", "Bind the snapshot to a name");
+        }
+        // `cancel <job>` is complete: nothing follows.
+        return;
+    }
+    if quoted_value || words.len() == 1 || (words.len() == 2 && !ends_with_space) {
         for job in collect_jobs(source, line) {
             items.push(json!({
                 "label": job.name,
@@ -2344,6 +2362,14 @@ fn complete_invocation(
         push_value_items(items, source, line, None, schema);
         return;
     }
+    if tail.len() >= 2 && !ends_with_space && !quoted_value {
+        // `with <name> <partial>` (or `and <name> <partial>`): a bare partial
+        // value being typed. Quoted partials never reach `words`, so they
+        // stay on the single-word path above.
+        let schema = parameter_value_schema(source, registry, &operation, tail[0], direct);
+        push_value_items(items, source, line, None, schema);
+        return;
+    }
     // A complete `with <name> <value>` pair: suffixes may follow.
     if ends_with_space {
         push_suffix_forms_filtered(items, rest, direct, head, indent);
@@ -2379,14 +2405,6 @@ fn push_statement_form(items: &mut Vec<JsonValue>, form: &crate::parser::Stateme
             "insertText": form.label,
             "insertTextFormat": 1
         })),
-    }
-}
-
-/// Push the parser-generated statement-start forms. Forms with snippets use
-/// LSP `insertTextFormat: 2` so editors expand tab stops.
-fn push_statement_forms(items: &mut Vec<JsonValue>) {
-    for form in crate::parser::statement_completion_forms() {
-        push_statement_form(items, form);
     }
 }
 
@@ -2554,7 +2572,8 @@ fn push_suffix_form(items: &mut Vec<JsonValue>, form: &crate::parser::SuffixComp
 /// `and discard stderr` needs a direct command, `and keep secret` needs
 /// `as`, `and retry` is withheld beside `and cache`/`and keep status`/`and
 /// keep result` (and vice versa), `and output to` is launch-only, and
-/// `interactively` is for top-level `run`/bare commands only.
+/// `interactively` is for a top-level `run` with no redirection, stdin,
+/// environment or retry suffix (see `parse_interactive_run`).
 fn push_suffix_forms_filtered(
     items: &mut Vec<JsonValue>,
     rest: &[&str],
@@ -2567,8 +2586,9 @@ fn push_suffix_forms_filtered(
         return;
     }
     let allow_output = head == InvocationHead::Launch;
-    let allow_interactive =
-        matches!(head, InvocationHead::Run | InvocationHead::Bare) && indent == 0;
+    // `parse_interactive_run` only accepts a leading `run` (never a bare
+    // phrase, `then`, `pipe to`, handover or detached launch) at top level.
+    let allow_interactive = head == InvocationHead::Run && indent == 0;
     // Bare words only: quoted bindings cannot collide with these families.
     let adjacent = |first: &str, second: &str| {
         rest.windows(2)
@@ -2623,7 +2643,18 @@ fn push_suffix_forms_filtered(
             "and environment" => !has_environment,
             "and without environment" => !has_without_environment,
             "and output to" => allow_output && !has_output,
-            "interactively" => allow_interactive && !has_interactive,
+            "interactively" => {
+                allow_interactive
+                    && !has_interactive
+                    && !has_stdin
+                    && !has_environment
+                    && !has_without_environment
+                    && !has_stderr_to
+                    && !has_stderr_appended
+                    && !has_stderr_merged
+                    && !has_stdout_to_stderr
+                    && !has_retry
+            }
             _ => true,
         };
         if offer {
@@ -5452,7 +5483,6 @@ mod tests {
             "with temporary file as",
             "launch detached",
             "hand over to",
-            "otherwise if",
             "exit with status",
             "fail with message",
             "then save to",
@@ -5737,29 +5767,205 @@ mod tests {
     #[test]
     fn completion_statement_start_filters_by_block_scope() {
         let registry = Registry::default();
+        // Top level hides every scoped form: a no-op filter would still pass
+        // the positive cases below, so the negatives are the real gate.
+        let result = complete_source("", 0, 0, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        for hidden in [
+            "break",
+            "continue",
+            "return",
+            "catch",
+            "finally",
+            "otherwise",
+            "otherwise if",
+            "whenever a line arrives as",
+        ] {
+            assert!(
+                !items.iter().any(|item| item["label"] == hidden),
+                "top-level completion must not offer `{hidden}`, got {items:?}"
+            );
+        }
         let result = complete_source("for each x in [\"a\"]\n  ", 1, 2, &registry, &[]);
         let items = result["items"].as_array().unwrap();
         assert!(
             items.iter().any(|item| item["label"] == "break"),
             "loop body completion is missing `break`, got {items:?}"
         );
+        for hidden in [
+            "return",
+            "catch",
+            "finally",
+            "otherwise",
+            "whenever a line arrives as",
+        ] {
+            assert!(
+                !items.iter().any(|item| item["label"] == hidden),
+                "loop body completion must not offer `{hidden}`, got {items:?}"
+            );
+        }
         let result = complete_source("define a program named p\n  ", 1, 2, &registry, &[]);
         let items = result["items"].as_array().unwrap();
         assert!(
             items.iter().any(|item| item["label"] == "return"),
             "reusable program completion is missing `return`, got {items:?}"
         );
+        for hidden in ["break", "catch", "otherwise", "whenever a line arrives as"] {
+            assert!(
+                !items.iter().any(|item| item["label"] == hidden),
+                "reusable body completion must not offer `{hidden}`, got {items:?}"
+            );
+        }
         let result = complete_source("try\n  run x\n", 2, 0, &registry, &[]);
         let items = result["items"].as_array().unwrap();
-        assert!(
-            items.iter().any(|item| item["label"] == "catch"),
-            "try tail completion is missing `catch`, got {items:?}"
-        );
+        for required in ["catch", "finally"] {
+            assert!(
+                items.iter().any(|item| item["label"] == required),
+                "try tail completion is missing `{required}`, got {items:?}"
+            );
+        }
+        for hidden in ["break", "return", "otherwise", "otherwise if"] {
+            assert!(
+                !items.iter().any(|item| item["label"] == hidden),
+                "try tail completion must not offer `{hidden}`, got {items:?}"
+            );
+        }
         let result = complete_source("if mode is x\n  run y\n", 2, 0, &registry, &[]);
         let items = result["items"].as_array().unwrap();
+        for required in ["otherwise", "otherwise if"] {
+            assert!(
+                items.iter().any(|item| item["label"] == required),
+                "if tail completion is missing `{required}`, got {items:?}"
+            );
+        }
+        for hidden in ["break", "return", "catch", "finally"] {
+            assert!(
+                !items.iter().any(|item| item["label"] == hidden),
+                "if tail completion must not offer `{hidden}`, got {items:?}"
+            );
+        }
+        let result = complete_source("listen to stdin\n  ", 1, 2, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
         assert!(
-            items.iter().any(|item| item["label"] == "otherwise"),
-            "if tail completion is missing `otherwise`, got {items:?}"
+            items
+                .iter()
+                .any(|item| item["label"] == "whenever a line arrives as"),
+            "listen body completion is missing `whenever`, got {items:?}"
         );
+    }
+
+    #[test]
+    fn completion_bare_partial_value_lists_bindings() {
+        let registry = fixture_registry();
+        let manifests = registry.manifests().unwrap();
+        let source = "accept shout as text\nrun text.upper with text greeting as upper\nrun text.upper with text upp";
+        let result = complete_source(source, 2, 28, &registry, &manifests);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|item| item["label"] == "upper"),
+            "bare partial value must offer the `upper` binding, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn completion_use_bytes_binds_nothing() {
+        let registry = Registry::default();
+        let result = complete_source("use bytes ", 0, 10, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.is_empty(),
+            "fresh `use bytes` binding must complete nothing, got {items:?}"
+        );
+        // A partial binding name must also complete nothing, even when an
+        // in-scope binding matches the prefix (a value flood would survive
+        // the client-side prefix filter here).
+        let source = "run text.upper with text x as payload\nuse bytes pay";
+        let result = complete_source(source, 1, 13, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.is_empty(),
+            "partial `use bytes` binding must complete nothing, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn completion_quoted_job_reference_offers_follow_ups() {
+        let registry = Registry::default();
+        let source = "spawn as myjob\n  run x\nawait \"myjob\" ";
+        let character = "await \"myjob\" ".chars().count() as u64;
+        let result = complete_source(source, 2, character, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        for required in ["and keep status as", "and keep result as"] {
+            assert!(
+                items.iter().any(|item| item["label"] == required),
+                "quoted await must offer `{required}`, got {items:?}"
+            );
+        }
+        assert!(
+            !items.iter().any(|item| item["label"] == "myjob"),
+            "quoted await must not re-offer the job list, got {items:?}"
+        );
+        let source = "spawn as myjob\n  run x\ninspect \"myjob\" ";
+        let character = "inspect \"myjob\" ".chars().count() as u64;
+        let result = complete_source(source, 2, character, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|item| item["label"] == "as"),
+            "quoted inspect must offer `as`, got {items:?}"
+        );
+        let source = "spawn as myjob\n  run x\ncancel \"myjob\" ";
+        let character = "cancel \"myjob\" ".chars().count() as u64;
+        let result = complete_source(source, 2, character, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.is_empty(),
+            "quoted cancel must complete nothing, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn completion_interactively_only_for_plain_top_level_run() {
+        let registry = fixture_registry();
+        let manifests = registry.manifests().unwrap();
+        let source = "run text.upper with text hello ";
+        let result = complete_source(source, 0, 31, &registry, &manifests);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|item| item["label"] == "interactively"),
+            "plain top-level run must offer `interactively`, got {items:?}"
+        );
+        // Bare applet phrases never take `interactively` (`parse_interactive_run`
+        // requires a leading `run`).
+        let source = "text.upper with text hello ";
+        let character = source.chars().count() as u64;
+        let result = complete_source(source, 0, character, &registry, &manifests);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|item| item["label"] == "as"),
+            "bare invocation must still offer suffixes, got {items:?}"
+        );
+        assert!(
+            !items.iter().any(|item| item["label"] == "interactively"),
+            "bare invocation must not offer `interactively`, got {items:?}"
+        );
+        // Redirection, stdin, environment and retry combinations reject it.
+        for source in [
+            "run text.upper with text hello and stdin from \"f\" ",
+            "run text.upper with text hello and stderr to \"e\" ",
+            "run text.upper with text hello and environment {\"A\": \"b\"} ",
+            "run text.upper with text hello and retry up to 3 times ",
+        ] {
+            let character = source.chars().count() as u64;
+            let result = complete_source(source, 0, character, &registry, &manifests);
+            let items = result["items"].as_array().unwrap();
+            assert!(
+                !items.is_empty(),
+                "suffix combination must still offer suffixes for `{source}`, got {items:?}"
+            );
+            assert!(
+                !items.iter().any(|item| item["label"] == "interactively"),
+                "suffix combination must not offer `interactively` for `{source}`, got {items:?}"
+            );
+        }
     }
 }

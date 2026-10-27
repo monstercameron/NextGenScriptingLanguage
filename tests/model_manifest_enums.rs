@@ -155,7 +155,7 @@ fn static_check_rejects_empty_required_model_text_literals() {
 #[test]
 fn dynamic_model_text_is_deferred_but_rejected_before_the_model_helper() {
     let dir = tempfile::tempdir().unwrap();
-    let source = "run printf with arguments [\"\"] as empty\nthen llm.ask with model \"gpt-6-luna\" and instruction empty as raw\n";
+    let source = "run \"printf\" with arguments [\"\"] as empty\nthen llm.ask with model \"gpt-6-luna\" and instruction empty as raw\n";
     let check = execute(dir.path(), "check", source);
     assert!(
         check.status.success(),

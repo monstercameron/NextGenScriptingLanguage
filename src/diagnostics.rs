@@ -11,7 +11,7 @@ use crate::parser::{self, Token};
 use crate::suggest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -985,12 +985,32 @@ fn collect_program_diagnostics(
             list_item_types.insert(input.name.clone(), kind);
         }
     }
+    let mut scoped_types = InferredTypeScope {
+        known_types: known_types.clone(),
+        list_item_types: list_item_types.clone(),
+    };
+    let mut call_type_scopes = HashMap::new();
+    collect_scoped_call_types(
+        &program.steps,
+        registry,
+        &mut scoped_types,
+        &mut call_type_scopes,
+        false,
+    );
+    let mut loop_scoped_lines = BTreeSet::new();
+    collect_loop_scoped_lines(&program.steps, &mut loop_scoped_lines);
     let mut polymorphic_outputs = BTreeMap::<String, OutputType>::new();
     // Resolve list item contracts before checking call sites. A few bounded
     // passes allow an applet result to feed another list applet and then a loop.
     for _ in 0..top_level_call_count.saturating_add(1) {
         let mut changed = false;
         for (_, call) in calls.iter().take(top_level_call_count).copied() {
+            if call_type_scopes
+                .get(&(call as *const Invocation as usize))
+                .is_some_and(|scope| scope.inside_loop)
+            {
+                continue;
+            }
             let Some(binding) = &call.binding else {
                 continue;
             };
@@ -1022,20 +1042,6 @@ fn collect_program_diagnostics(
                     polymorphic_outputs.insert(binding.clone(), item_kind) != Some(item_kind);
             }
         }
-        for step in &program.steps {
-            if let StepKind::Loop {
-                kind: crate::ast::LoopKind::ForEach { binding, values },
-                ..
-            } = &step.kind
-            {
-                if let Some(kind) = known_for_each_item_type(values, &known_types, &list_item_types)
-                {
-                    let before = known_types.get(binding).copied();
-                    known_types.insert(binding.clone(), kind);
-                    changed |= before != Some(kind);
-                }
-            }
-        }
         for (name, kind) in &polymorphic_outputs {
             let before = known_types.get(name).copied();
             known_types.insert(name.clone(), *kind);
@@ -1047,6 +1053,9 @@ fn collect_program_diagnostics(
     }
     let mut top_level_types = known_types.clone();
     for step in &program.steps {
+        if loop_scoped_lines.contains(&step.line) {
+            continue;
+        }
         if let StepKind::BindValue { source, binding } = &step.kind {
             if let Some(kind) = known_value_type(source, &known_types) {
                 record_binding_type(&mut known_types, &mut ambiguous_types, binding, kind);
@@ -1113,7 +1122,10 @@ fn collect_program_diagnostics(
         };
         let empty_types = BTreeMap::new();
         let active_types = if index < top_level_call_count {
-            &known_types
+            call_type_scopes
+                .get(&(call as *const Invocation as usize))
+                .map(|scope| &scope.scope.known_types)
+                .unwrap_or(&known_types)
         } else {
             &empty_types
         };
@@ -1127,6 +1139,13 @@ fn collect_program_diagnostics(
             diagnostics,
         );
         if index < top_level_call_count {
+            if call_type_scopes
+                .get(&(call as *const Invocation as usize))
+                .is_some_and(|scope| scope.inside_loop)
+            {
+                add_call_bindings(call, &mut known_names);
+                continue;
+            }
             if let Some(binding) = &call.binding {
                 if let Some(kind) = polymorphic_outputs
                     .get(binding)
@@ -1143,6 +1162,9 @@ fn collect_program_diagnostics(
     // Aliases can name typed results learned while walking calls. Resolve those
     // types before checking their later uses (diagnostics are deduplicated below).
     for step in &program.steps {
+        if loop_scoped_lines.contains(&step.line) {
+            continue;
+        }
         if let StepKind::BindValue { source, binding } = &step.kind {
             if let Some(kind) = known_value_type(source, &top_level_types) {
                 record_binding_type(&mut top_level_types, &mut ambiguous_types, binding, kind);
@@ -1159,7 +1181,10 @@ fn collect_program_diagnostics(
                 line,
                 call,
                 manifest,
-                &top_level_types,
+                call_type_scopes
+                    .get(&(call as *const Invocation as usize))
+                    .map(|scope| &scope.scope.known_types)
+                    .unwrap_or(&top_level_types),
                 line_starts,
                 diagnostics,
             );
@@ -1839,6 +1864,162 @@ fn known_for_each_item_type(
             })
         }
         _ => None,
+    }
+}
+
+#[derive(Clone, Default)]
+struct InferredTypeScope {
+    known_types: BTreeMap<String, OutputType>,
+    list_item_types: BTreeMap<String, OutputType>,
+}
+
+#[derive(Clone)]
+struct CallTypeScope {
+    scope: InferredTypeScope,
+    inside_loop: bool,
+}
+
+/// Infer call-site types while walking the flattened AST with lexical loop
+/// scopes. Loop bindings shadow outer names only inside their body; after the
+/// body, the prior scope is restored.
+fn collect_scoped_call_types(
+    steps: &[Step],
+    registry: &Registry,
+    scope: &mut InferredTypeScope,
+    calls: &mut HashMap<usize, CallTypeScope>,
+    inside_loop: bool,
+) {
+    let mut index = 0;
+    while index < steps.len() {
+        let step = &steps[index];
+        match &step.kind {
+            StepKind::Loop { kind, end } => {
+                if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
+                    calls.insert(
+                        call as *const Invocation as usize,
+                        CallTypeScope {
+                            scope: scope.clone(),
+                            inside_loop,
+                        },
+                    );
+                }
+                let finish = index.saturating_add(*end);
+                if finish > index + 1 && finish <= steps.len() {
+                    let mut body_scope = scope.clone();
+                    if let crate::ast::LoopKind::ForEach { binding, values } = kind {
+                        if let Some(kind) = known_for_each_item_type(
+                            values,
+                            &body_scope.known_types,
+                            &body_scope.list_item_types,
+                        ) {
+                            body_scope.known_types.insert(binding.clone(), kind);
+                        } else {
+                            body_scope.known_types.remove(binding);
+                        }
+                        body_scope.list_item_types.remove(binding);
+                    }
+                    collect_scoped_call_types(
+                        &steps[index + 1..finish - 1],
+                        registry,
+                        &mut body_scope,
+                        calls,
+                        true,
+                    );
+                    index = finish;
+                    continue;
+                }
+            }
+            StepKind::Invoke { call, .. } => {
+                calls.insert(
+                    call as *const Invocation as usize,
+                    CallTypeScope {
+                        scope: scope.clone(),
+                        inside_loop,
+                    },
+                );
+                infer_call_output_type(call, registry, scope);
+            }
+            StepKind::IfCommand { call, .. } => {
+                calls.insert(
+                    call as *const Invocation as usize,
+                    CallTypeScope {
+                        scope: scope.clone(),
+                        inside_loop,
+                    },
+                );
+            }
+            StepKind::BindValue { source, binding } => {
+                if let Some(kind) = known_value_type(source, &scope.known_types) {
+                    scope.known_types.insert(binding.clone(), kind);
+                    if let Value::Reference(name) = source {
+                        if let Some(item_kind) = scope.list_item_types.get(name).copied() {
+                            scope.list_item_types.insert(binding.clone(), item_kind);
+                        }
+                    } else if let Some(item_kind) =
+                        known_list_item_type(source, &scope.known_types, &scope.list_item_types)
+                    {
+                        scope.list_item_types.insert(binding.clone(), item_kind);
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+}
+
+fn infer_call_output_type(call: &Invocation, registry: &Registry, scope: &mut InferredTypeScope) {
+    let Some(binding) = &call.binding else {
+        return;
+    };
+    let Ok(manifest) = registry.resolve_call(call) else {
+        return;
+    };
+    let output = manifest
+        .execution_contract()
+        .and_then(|contract| contract.output.as_ref());
+    if let Some(output) = output {
+        if let Some(parameter) = output.same_as_parameter.as_deref() {
+            if let Some(value) = call.parameters.get(parameter) {
+                if let Some(item_kind) =
+                    known_list_item_type(value, &scope.known_types, &scope.list_item_types)
+                {
+                    if output.kind == OutputType::List {
+                        scope
+                            .list_item_types
+                            .insert(binding.clone(), runtime_list_item_type(item_kind));
+                    } else {
+                        scope
+                            .known_types
+                            .insert(binding.clone(), runtime_json_item_type(item_kind));
+                    }
+                }
+            }
+        }
+    }
+    if output.is_some() {
+        if let Some(kind) = manifest_output_type(manifest) {
+            scope.known_types.insert(binding.clone(), kind);
+        }
+    }
+}
+
+fn collect_loop_scoped_lines(steps: &[Step], lines: &mut BTreeSet<usize>) {
+    let mut index = 0;
+    while index < steps.len() {
+        let StepKind::Loop { end, .. } = &steps[index].kind else {
+            index += 1;
+            continue;
+        };
+        let finish = index.saturating_add(*end);
+        if finish <= index + 1 || finish > steps.len() {
+            index += 1;
+            continue;
+        }
+        let body = &steps[index + 1..finish - 1];
+        lines.extend(body.iter().map(|step| step.line));
+        collect_loop_scoped_lines(body, lines);
+        index = finish;
     }
 }
 

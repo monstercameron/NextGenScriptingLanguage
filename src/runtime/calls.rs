@@ -273,9 +273,14 @@ pub(super) fn preflight(
                     values.keys().cloned().collect::<BTreeSet<_>>(),
                     types.clone(),
                 ));
-                if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
+                if let crate::ast::LoopKind::ForEach {
+                    binding,
+                    values: source,
+                } = kind
+                {
                     forget(&mut values, binding);
-                    types.insert(binding.clone(), InputType::Text);
+                    let element_type = loops::element_type(source, &types)?;
+                    types.insert(binding.clone(), element_type);
                 }
             }
             StepKind::EndLoop { .. } => {
@@ -378,9 +383,9 @@ pub(super) fn preflight(
                 native(call, step.line, registry, &values, &types)?;
                 if let Some(name) = &call.binding {
                     forget(&mut values, name);
-                    let kind = registry
-                        .resolve_call(call)?
-                        .output_kind()
+                    let manifest = registry.resolve_call(call)?;
+                    let kind = super::polymorphic_output_kind(manifest, call, &types)
+                        .or_else(|| manifest.output_kind())
                         .unwrap_or(InputType::Text);
                     types.insert(name.clone(), kind);
                 }

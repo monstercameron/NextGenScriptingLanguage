@@ -194,8 +194,7 @@ fn list_sort_preserves_integer_items_through_loop_bindings_and_argv() {
 #[test]
 fn json_loop_item_types_match_runtime() {
     let root = tempfile::tempdir().unwrap();
-    let booleans =
-        "for each x in [true, false]\n  run \"printf\" with arguments [\"%s\", x]\n";
+    let booleans = "for each x in [true, false]\n  run \"printf\" with arguments [\"%s\", x]\n";
     for command in ["check", "run"] {
         let result = execute(root.path(), booleans, &[command]);
         assert!(
@@ -224,13 +223,44 @@ fn json_loop_item_types_match_runtime() {
             String::from_utf8_lossy(&run.stderr)
         );
 
-        let argv_source = format!(
-            "for each x in {items}\n  run \"printf\" with arguments [\"%s\", x]\n"
-        );
+        let argv_source =
+            format!("for each x in {items}\n  run \"printf\" with arguments [\"%s\", x]\n");
         let argv_check = execute(root.path(), &argv_source, &["check"]);
         assert!(
             !argv_check.status.success(),
             "check accepted JSON loop items from {items} at the native argv boundary"
         );
     }
+}
+
+#[test]
+fn loop_binding_types_are_scoped_across_siblings_and_nested_shadowing() {
+    let cases = [
+        "for each x in [true]\n  run encode.base64 with text \"x\" and url_safe x\nfor each x in [1]\n  run list.top with items [1] and n x\n",
+        "for each x in [1]\n  run list.top with items [1] and n x\nfor each x in [true]\n  run encode.base64 with text \"x\" and url_safe x\n",
+        "for each x in [true]\n  for each y in [1]\n    run list.top with items [1] and n y\n  run encode.base64 with text \"x\" and url_safe x\n",
+        "for each x in [1]\n  for each y in [true]\n    run encode.base64 with text \"x\" and url_safe y\n  run list.top with items [1] and n x\n",
+    ];
+    for (index, source) in cases.iter().enumerate() {
+        let root = tempfile::tempdir().unwrap();
+        for command in ["check", "run"] {
+            let result = execute(root.path(), source, &[command]);
+            assert!(
+                result.status.success(),
+                "case {index} {command}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+
+    let nested_shadow =
+        "for each x in [true]\n  for each x in [1]\n    run list.top with items [1] and n x\n";
+    let root = tempfile::tempdir().unwrap();
+    let rejected = execute(root.path(), nested_shadow, &["check"]);
+    assert!(!rejected.status.success());
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("iteration binding \"x\" is already defined"),
+        "unexpected nested-shadow diagnostic: {stderr}"
+    );
 }

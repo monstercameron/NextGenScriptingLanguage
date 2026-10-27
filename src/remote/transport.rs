@@ -77,21 +77,23 @@ impl<In: Transport> Connector<In> for InterruptibleTcpConnector {
             details.config.input_buffer_size(),
             details.config.output_buffer_size(),
         );
-        Ok(Some(EitherTransport::Socket(InterruptibleTcpTransport {
-            poll: stream.poll,
-            events: Events::with_capacity(16),
-            stream: stream.stream,
-            buffers,
-            cancelled: Arc::clone(&self.cancelled),
-            stream_idle: self.stream_idle.clone(),
-            open: true,
-        })))
+        Ok(Some(EitherTransport::Socket(Box::new(
+            InterruptibleTcpTransport {
+                poll: stream.poll,
+                events: Events::with_capacity(16),
+                stream: stream.stream,
+                buffers,
+                cancelled: Arc::clone(&self.cancelled),
+                stream_idle: self.stream_idle.clone(),
+                open: true,
+            },
+        ))))
     }
 }
 
 pub(super) enum EitherTransport<In: Transport> {
     Chained(In),
-    Socket(InterruptibleTcpTransport),
+    Socket(Box<InterruptibleTcpTransport>),
 }
 
 impl<In: Transport> fmt::Debug for EitherTransport<In> {

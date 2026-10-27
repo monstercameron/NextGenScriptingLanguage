@@ -9,7 +9,12 @@ it arrives for graphs with persistent nodes (timers, listeners, native
 streams, program services, or renderers). `--events document` keeps the
 closing document and `--events jsonl` streams lines for any graph without a
 checkpoint; streamed runs hold no collected outputs, so a persistent graph can
-run indefinitely, and closing the reader (`| head -n 3`) cancels the session.
+run indefinitely, and closing the reader (`| head -n 3`) cancels the session
+and exits successfully. Each streamed line is bounded by a per-event limit
+derived from the message byte limit, a worker failure at end of stream
+surfaces instead of a clean EOF, graph runs refuse `--record` and `--answers`
+instead of ignoring them, and the daemon declines explicit event streams so
+the client streams them directly.
 The event schema is `docs/schemas/graph-event.v1.schema.json`.
 Graphs can declare the same typed top-level inputs
 as finite programs, then use those names in applet parameters. `--input` and

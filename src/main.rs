@@ -335,10 +335,32 @@ fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunCon
         context.decline("the program takes the terminal");
         return 0;
     }
+    if streams_graph_events(arguments) {
+        // An event stream holds the client's stdout open indefinitely and a
+        // closed pipe reader is its normal stop; the daemon's captured run
+        // protocol cannot serve either, so the client streams it directly.
+        context.decline("graph event streams run on the client");
+        return 0;
+    }
     match execute_forwarded(arguments.to_vec(), context.registry()) {
         Ok(()) => 0,
         Err(error) => report_error(&error),
     }
+}
+
+/// Whether a run streams graph events: an explicit `--events jsonl` before the
+/// `--` separator. Only the separate-argument form exists (see
+/// `take_option_value`), and anything after `--` is program data, not a flag.
+/// An unflagged persistent graph also streams, but that needs a registry to
+/// detect, so the daemon still serves it; this gate covers the explicit case.
+fn streams_graph_events(arguments: &[String]) -> bool {
+    let separator = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    arguments[..separator]
+        .windows(2)
+        .any(|pair| pair[0] == "--events" && pair[1] == "jsonl")
 }
 
 /// Whether a run may take the terminal: `interactively`, `hand over`, or a prompt input
@@ -1164,39 +1186,69 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         "--events jsonl cannot be combined with --checkpoint or resume; stream persistent graphs with plain `run`"
                     );
                 }
+                // Graph runs never honour these finite-program options; refuse
+                // them instead of silently ignoring them on either path.
+                if args.record_dir.is_some() {
+                    bail!("--record applies only to finite programs, not graph programs");
+                }
+                if args.answers.is_some() {
+                    bail!("--answers applies only to finite programs, not graph programs");
+                }
                 if stream_events {
                     // Long-lived graphs print one `execute.graph-event/1`
                     // line per terminal event as it arrives, flushing after
                     // every event. Nothing is collected, so a graph can run
                     // indefinitely with flat memory. A closed reader
-                    // (`| head -n 3`) cancels the session before returning.
+                    // (`| head -n 3`) cancels the session and exits
+                    // successfully; each line is bounded by the session's
+                    // per-event limit so one huge event cannot allocate
+                    // unbounded JSON.
                     let (graph_name, mut session) =
                         flow::graph::start_session(graph, &registry, &options, cancelled)?;
                     let generation = session.context().generation;
                     let revision = session.context().revision;
+                    let event_limit = session.max_stream_event_bytes();
                     let stdout = io::stdout();
                     let mut out = stdout.lock();
                     loop {
-                        match session.recv_output()? {
-                            Some(event) => {
-                                let line = flow::graph::graph_event_line(
-                                    &graph_name,
-                                    generation,
-                                    revision,
-                                    &event,
-                                );
-                                let mut text = serde_json::to_string(&line)?;
-                                text.push('\n');
-                                let written = (|| -> io::Result<()> {
-                                    out.write_all(text.as_bytes())?;
-                                    out.flush()
-                                })();
-                                if let Err(error) = written {
-                                    let _ = session.cancel_and_join();
-                                    return Err(error.into());
-                                }
+                        let event = match session.recv_output() {
+                            Ok(Some(event)) => event,
+                            Ok(None) => break,
+                            Err(error) => {
+                                let _ = session.cancel_and_join();
+                                return Err(error);
                             }
-                            None => break,
+                        };
+                        let mut text = match flow::graph::graph_event_line_json(
+                            &graph_name,
+                            generation,
+                            revision,
+                            &event,
+                            event_limit,
+                        ) {
+                            Ok(line) => line,
+                            Err(error) => {
+                                let _ = session.cancel_and_join();
+                                return Err(error);
+                            }
+                        };
+                        text.push('\n');
+                        let written = (|| -> io::Result<()> {
+                            out.write_all(text.as_bytes())?;
+                            out.flush()
+                        })();
+                        if let Err(error) = written {
+                            // A closed pipe reader is the normal way to stop
+                            // an indefinite stream: cancel promptly and report
+                            // success, like the codebase's other pipe writers.
+                            // `cancel_and_join` only reports failures that
+                            // predated our cancel, so cancellation fallout
+                            // cannot mask the reader's close here.
+                            let _ = session.cancel_and_join();
+                            if error.kind() == io::ErrorKind::BrokenPipe {
+                                return Ok(());
+                            }
+                            return Err(error.into());
                         }
                     }
                     session.cancel_and_join()?;

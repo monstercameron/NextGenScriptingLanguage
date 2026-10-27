@@ -12,9 +12,14 @@ original version labels.
   no collected outputs. Graphs with persistent nodes (timers, listeners, native
   streams, program services, or renderers) stream by default so a timer graph
   prints each tick within milliseconds and runs indefinitely; closing the
-  reader (`| head -n 3`) cancels the session. Finite graphs keep the closing
-  `execute.graph-run/1` document unless `--events jsonl` is passed. The event
-  schema is `docs/schemas/graph-event.v1.schema.json`.
+  reader (`| head -n 3`) cancels the session and exits successfully. Finite
+  graphs keep the closing `execute.graph-run/1` document unless `--events jsonl`
+  is passed. The event schema is `docs/schemas/graph-event.v1.schema.json`.
+  Follow-up hardening: a worker failure at end of stream now surfaces instead
+  of a clean EOF, each streamed line is bounded by a per-event limit derived
+  from the message byte limit, graph runs refuse `--record` and `--answers`
+  instead of ignoring them, and the daemon declines explicit event streams so
+  the client streams them directly.
 
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known

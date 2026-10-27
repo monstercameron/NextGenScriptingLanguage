@@ -1236,6 +1236,14 @@ impl GraphSession {
         &self.context
     }
 
+    /// Per-event serialized byte bound for this session's stream, derived
+    /// from its configured per-message payload bound (see
+    /// [`stream_event_byte_limit`]). The streaming path holds no collected
+    /// outputs, so each line is bounded individually instead.
+    pub fn max_stream_event_bytes(&self) -> usize {
+        stream_event_byte_limit(self.options.max_message_bytes)
+    }
+
     /// Read one terminal output without allowing stale revisions into the
     /// current session. Returns `None` once every terminal has closed.
     pub fn recv_output(&mut self) -> Result<Option<EventEnvelope>> {
@@ -1259,6 +1267,12 @@ impl GraphSession {
                 .iter()
                 .all(|closed| *closed)
             {
+                // A worker may have failed after the poll above but before
+                // its queues closed (failure-at-EOF). Re-poll so a late
+                // failure surfaces as an error instead of a clean EOF; any
+                // failure after this point is reported by `cancel_and_join`.
+                self.poll_finished_workers()?;
+                self.cancellation_check()?;
                 return Ok(None);
             }
             if self.terminals.is_empty() {
@@ -1276,8 +1290,48 @@ impl GraphSession {
     }
 
     pub fn cancel_and_join(&mut self) -> Result<()> {
+        // `TaskScope::cancel_and_join` only waits for workers; their typed
+        // results stay in these handles, so a worker that failed after the
+        // last `recv_output` poll (failure-at-EOF) would be lost. Drain
+        // already-finished workers and the recorded first failure *before*
+        // signalling cancellation: anything recorded after this point is
+        // cancellation fallout from our own cancel and must not mask the
+        // caller's reason for stopping (for example a closed pipe reader).
+        // `Drop` cannot propagate errors; callers that need a late failure
+        // must call this method instead of dropping the session.
+        let mut first_error = None;
+        for slot in &mut self.tasks {
+            let Some(handle) = slot.as_mut() else {
+                continue;
+            };
+            if !handle.is_finished() {
+                continue;
+            }
+            match self.scope.try_join(handle) {
+                Ok(Some(())) => *slot = None,
+                Ok(None) => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    *slot = None;
+                }
+            }
+        }
+        if let Ok(recorded) = self.worker_error.lock() {
+            if let Some(message) = recorded.as_ref() {
+                first_error.get_or_insert_with(|| anyhow!("graph worker failed: {message}"));
+            }
+        }
         self.cancel();
-        self.scope.cancel_and_join()
+        let _ = self.scope.cancel_and_join();
+        for slot in &mut self.tasks {
+            // Remaining workers were cancelled above; their results are
+            // cancellation fallout and are discarded here on purpose.
+            slot.take();
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Consume, stop, and reap this session before starting a new generation.
@@ -3063,12 +3117,74 @@ pub fn graph_event_line(
     })
 }
 
+/// Bound for one serialized `execute.graph-event/1` line, derived from the
+/// configured per-message payload bound instead of a new knob: a bytes
+/// payload renders as a JSON integer array at up to four bytes per input
+/// byte (`255,`), plus envelope overhead. Every payload admitted by `emit`
+/// fits; anything larger is rejected before an unbounded allocation.
+pub fn stream_event_byte_limit(max_message_bytes: usize) -> usize {
+    max_message_bytes
+        .checked_mul(4)
+        .map(|expanded| expanded.saturating_add(4096))
+        .unwrap_or(usize::MAX)
+}
+
+/// Render [`graph_event_line`] as compact JSON without allocating past
+/// `max_bytes`. A single huge bytes event must not serialize unbounded
+/// JSON on the streaming path, which holds no collected outputs and so has
+/// no total to exceed. Returns an error naming the port and the limit when
+/// the line does not fit.
+pub fn graph_event_line_json(
+    graph_name: &str,
+    generation: u64,
+    revision: u64,
+    event: &EventEnvelope,
+    max_bytes: usize,
+) -> Result<String> {
+    let line = graph_event_line(graph_name, generation, revision, event);
+    let mut buffer = Vec::new();
+    {
+        let mut bounded = BoundedJsonWriter {
+            inner: &mut buffer,
+            limit: max_bytes,
+            port: event.port.clone(),
+        };
+        serde_json::to_writer(&mut bounded, &line)?;
+    }
+    String::from_utf8(buffer).map_err(|error| anyhow!("graph event JSON was not UTF-8: {error}"))
+}
+
+struct BoundedJsonWriter<'a> {
+    inner: &'a mut Vec<u8>,
+    limit: usize,
+    port: PortRef,
+}
+
+impl std::io::Write for BoundedJsonWriter<'_> {
+    fn write(&mut self, chunk: &[u8]) -> std::io::Result<usize> {
+        if self.inner.len().saturating_add(chunk.len()) > self.limit {
+            return Err(std::io::Error::other(format!(
+                "graph event for {}.{} exceeds stream limit of {} bytes",
+                self.port.node, self.port.port, self.limit,
+            )));
+        }
+        self.inner.extend_from_slice(chunk);
+        Ok(chunk.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Start a live graph session with the same registry, policy, and module
 /// preflight as [`run`], without collecting terminal outputs. Use this for
 /// graphs with persistent nodes: consume terminal events through
-/// [`GraphSession::recv_output`] and render each with [`graph_event_line`]
-/// as it arrives, so memory stays flat no matter how many events flow.
-/// Checkpointed graphs are finite-only and keep the closing document path.
+/// [`GraphSession::recv_output`] and render each with
+/// [`graph_event_line_json`] (bounded by
+/// [`GraphSession::max_stream_event_bytes`]) as it arrives, so memory stays
+/// flat no matter how many events flow. Checkpointed graphs are finite-only
+/// and keep the closing document path.
 pub fn start_session(
     plan: GraphPlan,
     registry: &Registry,

@@ -191,7 +191,7 @@ fn producer_broken_pipe_after_early_reader_exit_is_pipeline_success() {
     let folder = tempfile::tempdir().unwrap();
     for status in ["120", "141", "1"] {
         let source = format!(
-            "{}pipe to {} with arguments [\"first-line\"]\n",
+            "{}\npipe to {} with arguments [\"first-line\"]\n",
             native(&["flood-lines", status]).trim_end(),
             quoted(&fixture())
         );
@@ -205,7 +205,7 @@ fn producer_broken_pipe_after_early_reader_exit_is_pipeline_success() {
 fn early_windows_reader_close_is_recorded_on_the_producer_stage() {
     let folder = tempfile::tempdir().unwrap();
     let source = format!(
-        "{}pipe to {} with arguments [\"first-line\"] and keep result as execution\nthen encode execution as json\n",
+        "{}\npipe to {} with arguments [\"first-line\"] and keep result as execution\nthen encode execution as json\n",
         native(&["flood-lines", "120"]).trim_end(),
         quoted(&fixture())
     );
@@ -219,7 +219,7 @@ fn early_windows_reader_close_is_recorded_on_the_producer_stage() {
 fn producer_failure_before_reader_closes_still_fails_pipeline() {
     let folder = tempfile::tempdir().unwrap();
     let source = format!(
-        "{}pipe to {} with arguments [\"delayed-copy\"]\n",
+        "{}\npipe to {} with arguments [\"delayed-copy\"]\n",
         native(&["exit", "42", "partial"]).trim_end(),
         quoted(&fixture())
     );
@@ -232,7 +232,7 @@ fn producer_failure_before_reader_closes_still_fails_pipeline() {
 fn producer_python_120_before_reader_close_still_fails_pipeline() {
     let folder = tempfile::tempdir().unwrap();
     let source = format!(
-        "{}pipe to {} with arguments [\"delayed-copy\"]\n",
+        "{}\npipe to {} with arguments [\"delayed-copy\"]\n",
         native(&["exit", "120", "partial"]).trim_end(),
         quoted(&fixture())
     );
@@ -245,7 +245,7 @@ fn producer_python_120_before_reader_close_still_fails_pipeline() {
 fn unrelated_failure_after_early_reader_close_still_fails_pipeline() {
     let folder = tempfile::tempdir().unwrap();
     let source = format!(
-        "{}pipe to {} with arguments [\"first-line\"]\n",
+        "{}\npipe to {} with arguments [\"first-line\"]\n",
         native(&["flood-independent-failure"]).trim_end(),
         quoted(&fixture())
     );

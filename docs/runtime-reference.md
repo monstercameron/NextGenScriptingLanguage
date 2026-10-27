@@ -493,6 +493,23 @@ accept arguments as list of text from arguments
 run "printf" with arguments ["%s|%s\n", root, count]
 ```
 
+Environment inputs are sensitive by default: their values are withheld from
+records, traces, live state and reviews, and cannot be placed in command argv.
+When an environment value is intentionally public, declare that choice explicitly
+with `from public environment`. Public inputs can appear in those outputs and can
+be passed as command arguments, so use this only for non-credential values such as
+`HOME` or a public installation path:
+
+```text
+accept home_dir as text from public environment "HOME"
+run "printf" with arguments ["%s", home_dir]
+```
+
+`from public environment` changes the input's secrecy handling; it does not grant
+access to that environment variable under a capability policy.
+In the Rust API, `ast::InputDeclaration` has a `public: bool` field (Serde defaults
+it to `false`); downstream struct literals must set it explicitly.
+
 Run `execute tool.program -- 20`, or make the file executable and invoke it
 directly with `./tool.program 20`. The shebang's `--` separates interpreter
 options from the workflow filename and its argv. Without that shebang, put

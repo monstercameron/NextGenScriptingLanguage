@@ -1197,9 +1197,19 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
     } else {
         None
     };
+    let mut public = false;
     let source = if word_is(tokens.get(cursor), "from") {
         cursor += 1;
         let source = match tokens.get(cursor) {
+            Some(Token::Word("public")) if word_is(tokens.get(cursor + 1), "environment") => {
+                public = true;
+                cursor += 2;
+                let value = parse_value(tokens, &mut cursor).context("environment name")?;
+                let Value::String(name) = value else {
+                    bail!("environment name must be a quoted literal");
+                };
+                InputSource::Environment(name)
+            }
             Some(Token::Word("environment")) => {
                 cursor += 1;
                 let value = parse_value(tokens, &mut cursor).context("environment name")?;
@@ -1335,6 +1345,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         kind,
         default,
         source,
+        public,
         line,
         description,
         choices,

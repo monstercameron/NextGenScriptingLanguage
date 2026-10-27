@@ -88,7 +88,7 @@ fn input_entry(input: &InputDeclaration) -> Value {
             .as_ref()
             .map(plain_json)
             .or_else(|| matches!(input.source, Some(InputSource::Flag { .. })).then(|| json!(false))),
-        "source": input.source.as_ref().map(source_label),
+        "source": input.source.as_ref().map(|source| source_label(source, input.public)),
         "spelling": flag_spelling(input),
         "description": input.description,
         "line": input.line,
@@ -148,8 +148,9 @@ fn type_label(kind: InputType) -> &'static str {
 }
 
 /// Exhaustive on purpose: a new source must be labelled before it compiles.
-fn source_label(source: &InputSource) -> String {
+fn source_label(source: &InputSource, public: bool) -> String {
     match source {
+        InputSource::Environment(name) if public => format!("public environment {name}"),
         InputSource::Environment(name) => format!("environment {name}"),
         InputSource::Argument(index) => format!("argument {index}"),
         InputSource::Arguments => "all arguments".to_owned(),

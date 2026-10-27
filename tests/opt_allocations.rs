@@ -316,6 +316,7 @@ fn report_release_allocation_counts() {
                 kind: flow::ast::InputType::Integer,
                 default: Some(Value::Integer(42)),
                 source: None,
+                public: false,
                 line: n + 1,
                 description: None,
                 choices: None,

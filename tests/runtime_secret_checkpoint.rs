@@ -260,6 +260,27 @@ fn check_rejects_secret_environment_inputs_in_command_arguments() {
 }
 
 #[test]
+fn check_allows_an_explicitly_public_environment_input_in_command_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("public.program"),
+        "accept home_dir as text from public environment \"HOME\"\nrun printf with message home_dir\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["check", "public.program"])
+        .current_dir(directory.path())
+        .env("HOME", "/home/compat")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn check_rejects_catch_records_from_secret_failure_flows_in_command_arguments() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(

@@ -2,7 +2,7 @@
 # Source: omacom/omarchy bin/omarchy-webapp-remove at c668141e9c42b13c80c9ca4ea108e11708c5e8a5.
 # jq performs bounded text/list adaptation; generic path applets derive launcher
 # names with the same suffix-then-basename order as the pinned Bash source.
-accept home as text from environment "HOME"
+accept home as text from public environment "HOME"
 accept arguments as list of text from arguments
 accept notify as text from environment "OMARCHY_REMOVE_NOTIFY" with default "true"
 run "printf" with arguments ["%s/.local/share/applications/", home] as desktop_dir

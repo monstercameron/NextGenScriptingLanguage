@@ -1015,6 +1015,7 @@ fn environment_entry_inputs_are_denied_by_the_shared_policy_preflight() {
         source: Some(flow::ast::InputSource::Environment(
             "LANE_X2_UNDECLARED".into(),
         )),
+        public: false,
         line: 1,
         description: None,
         choices: None,

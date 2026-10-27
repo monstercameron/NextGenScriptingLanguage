@@ -4,7 +4,7 @@
 execute 1
 accept arguments as list of text from arguments
 accept name_arg as text from argument 1 with default ""
-accept home_dir as text from environment "HOME" with default ""
+accept home_dir as text from public environment "HOME" with default ""
 run text.concat with parts [home_dir, "/.local/state/omarchy/toggles/hypr/", name_arg, ".lua"] as flag_path
 if run "test" with arguments ["-f", flag_path] succeeds
   exit with status 1

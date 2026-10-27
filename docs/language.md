@@ -627,11 +627,17 @@ execution records (`step_id`). A program checkpoint records the id of each compl
 node's first step and matches it again on resume; see
 [Recover after a failure](#recover-after-a-failure). Live control does not expose step ids yet.
 
-Checkpointed runs refuse secret prompt or environment inputs and runtime-secret
+Checkpointed runs refuse secret prompt or sensitive environment inputs and runtime-secret
 bindings before effects, because the journal could retain their values or data
 derived from them. They do not store secret answers as HMACs. `env.load` can mark
 all loaded values with `secret true` or a selected name list; a checkpointed run
 using that option is refused as well.
+
+Environment inputs are sensitive by default, including values such as `HOME`.
+Use `from public environment "NAME"` only when the value is intentionally public.
+That opt-in permits the binding to appear in records and live state and to enter
+command argv; it must not be used for credentials. A public declaration does not
+override a capability policy's environment-input grant.
 
 ### Exit and interrupt handlers
 

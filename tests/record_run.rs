@@ -623,6 +623,38 @@ fn declared_secret_environment_values_never_appear_in_the_record() {
 }
 
 #[test]
+fn explicitly_public_environment_values_can_be_recorded_and_passed_in_argv() {
+    let work = tempfile::tempdir().unwrap();
+    let public_home = "/public-home-record-fixture";
+    fs::write(
+        work.path().join("public.program"),
+        "accept home_dir as text from public environment \"HOME\"\nrun \"printf\" with arguments [\"%s\", home_dir]\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args([
+            "run",
+            "public.program",
+            "--record",
+            record.to_str().unwrap(),
+        ])
+        .env("HOME", public_home)
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, public_home.as_bytes());
+
+    let trace = fs::read_to_string(record.join("trace.jsonl")).unwrap();
+    assert!(trace.contains(public_home), "{trace}");
+}
+
+#[test]
 fn successful_secret_pipeline_redacts_earlier_stage_stderr_from_the_record() {
     let work = tempfile::tempdir().unwrap();
     let canary = "PIPELINE-STDERR-CANARY-315";

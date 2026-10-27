@@ -1142,6 +1142,33 @@ fn sensitive_inputs_are_not_expanded_into_invocation_argv() {
 }
 
 #[test]
+fn public_environment_inputs_are_expanded_but_sensitive_ones_are_withheld() {
+    let directory = tempfile::tempdir().unwrap();
+    let public_value = "/public-home-explain";
+    let public = explain(
+        directory.path(),
+        "accept home_dir as text from public environment \"HOME\"\nrun \"printf\" with arguments [\"%s\", home_dir]\n",
+        &["--json", "--input", "home_dir=/public-home-explain"],
+    );
+    let public_plan = plan(&public);
+    assert_eq!(
+        public_plan["steps"][0]["argv"],
+        serde_json::json!(["%s", public_value])
+    );
+    assert!(String::from_utf8_lossy(&public.stdout).contains(public_value));
+
+    let secret_value = "/secret-home-explain";
+    let secret = explain(
+        directory.path(),
+        "accept home_dir as text from environment \"HOME\"\nrun \"printf\" with arguments [\"%s\", home_dir]\n",
+        &["--json", "--input", "home_dir=/secret-home-explain"],
+    );
+    assert!(!secret.status.success());
+    assert!(!String::from_utf8_lossy(&secret.stdout).contains(secret_value));
+    assert!(!String::from_utf8_lossy(&secret.stderr).contains(secret_value));
+}
+
+#[test]
 fn nested_sensitive_and_unresolved_inputs_remain_safe() {
     let directory = tempfile::tempdir().unwrap();
     let source = "accept token as text from secret prompt \"Token?\"\naccept name as text\nuse value token\n";

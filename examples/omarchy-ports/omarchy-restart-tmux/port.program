@@ -3,7 +3,7 @@
 # when a tmux server is running; with no server the script exits 0.
 execute 1
 accept arguments as list of text from arguments
-accept home_dir as text from environment "HOME" with default ""
+accept home_dir as text from public environment "HOME" with default ""
 if run "tmux" with arguments ["has-session"] succeeds
   run text.concat with parts [home_dir, "/.config/tmux/tmux.conf"] as tmux_conf
   run "tmux" with arguments ["source-file", tmux_conf] and keep status as sourced

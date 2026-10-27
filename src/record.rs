@@ -954,9 +954,9 @@ fn redact_json(redactor: &SecretRedactor, value: &Json) -> Json {
     }
 }
 
-/// Input values for a record. A sensitive input (an environment value or a secret
-/// prompt answer) is withheld: the record keeps a marker in its place, so the value is
-/// never written to disk.
+/// Input values for a record. A sensitive input (an environment value by default, or
+/// a secret prompt answer) is withheld: the record keeps a marker in its place, so the
+/// value is never written to disk.
 pub fn inputs_json_for(
     inputs: &BTreeMap<String, crate::ast::Value>,
     declarations: &[crate::ast::InputDeclaration],

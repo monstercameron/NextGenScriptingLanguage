@@ -691,6 +691,11 @@ pub struct InputDeclaration {
     pub default: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<InputSource>,
+    /// Explicitly public environment inputs opt out of the default secret handling.
+    /// This is only valid with `from public environment`; ordinary environment
+    /// inputs remain sensitive by default.
+    #[serde(default)]
+    pub public: bool,
     pub line: usize,
     /// Human-readable text from `described as "TEXT"`, shown by inspect and help.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -734,10 +739,11 @@ pub enum InputSource {
 /// records, live state, journals and checkpoint signatures unless keyed. Every
 /// sensitivity decision goes through this function, so the sources cannot drift apart.
 pub fn is_sensitive(declaration: &InputDeclaration) -> bool {
-    matches!(
-        declaration.source,
-        Some(InputSource::Environment(_)) | Some(InputSource::Prompt { secret: true, .. })
-    )
+    match declaration.source {
+        Some(InputSource::Environment(_)) => !declaration.public,
+        Some(InputSource::Prompt { secret: true, .. }) => true,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

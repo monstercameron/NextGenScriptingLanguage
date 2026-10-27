@@ -3,7 +3,7 @@
 # filesystem applets snapshot and atomically update the state file with an
 # explicit follow-symlink policy and compare-and-swap. jq adapts compositor JSON
 # and checks the Bash-compatible workspace id spelling.
-accept home as text from environment "HOME"
+accept home as text from public environment "HOME"
 accept ignored_arguments as list of text from arguments
 
 define a program named report_file_failure

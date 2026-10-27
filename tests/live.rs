@@ -117,6 +117,95 @@ fn paused_live_bindings_withhold_secret_prompt_values() {
 }
 
 #[test]
+fn paused_live_bindings_show_an_explicitly_public_environment_value() {
+    use serde_json::{json, Value};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("public.program");
+    let socket = directory.path().join("control.sock");
+    let public_home = "/LIVE-PUBLIC-HOME";
+    std::fs::write(
+        &program,
+        "accept home_dir as text from public environment \"HOME\"\nuse value home_dir\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("live")
+        .arg("serve")
+        .arg(&program)
+        .arg("--socket")
+        .arg(&socket)
+        .arg("--paused")
+        .arg("--headless")
+        .arg("--breakpoints")
+        .arg("2")
+        .arg("--bindings")
+        .arg(json!({"home_dir": public_home}).to_string())
+        .current_dir(directory.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut ready = String::new();
+    reader.read_line(&mut ready).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&ready).unwrap()["event"],
+        "ready",
+        "{ready}"
+    );
+    let request = |op: &str| -> Value {
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        writeln!(stream, "{}", json!({"op": op})).unwrap();
+        let mut response = String::new();
+        BufReader::new(stream).read_line(&mut response).unwrap();
+        serde_json::from_str(&response).unwrap()
+    };
+    let mut resume = UnixStream::connect(&socket).unwrap();
+    writeln!(resume, "{}", json!({"op":"control","action":"resume"})).unwrap();
+    let mut response = String::new();
+    BufReader::new(resume).read_line(&mut response).unwrap();
+    for _ in 0..100 {
+        let snapshot = request("read");
+        if snapshot
+            .pointer("/result/runtime/status")
+            .and_then(Value::as_str)
+            == Some("breakpoint")
+        {
+            assert_eq!(
+                snapshot.pointer("/result/runtime/debug/paused/bindings/home_dir"),
+                Some(&json!(public_home))
+            );
+            let mut stop = UnixStream::connect(&socket).unwrap();
+            writeln!(stop, "{}", json!({"op":"control","action":"stop"})).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if child.try_wait().unwrap().is_none() {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("live server did not stop after control request");
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("live run did not pause at the public binding breakpoint");
+}
+
+#[test]
 fn paused_live_bindings_withhold_secret_pipeline_derived_values() {
     use serde_json::{json, Value};
     use std::io::{BufRead, BufReader, Write};

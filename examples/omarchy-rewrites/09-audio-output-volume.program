@@ -4,7 +4,7 @@
 # See fixture README for finite-output, redirection, arithmetic and save limits.
 accept action as text from argument 1 with default ""
 accept ignored_arguments as list of text from arguments
-accept runtime_directory as text from environment "XDG_RUNTIME_DIR" with default "/tmp"
+accept runtime_directory as text from public environment "XDG_RUNTIME_DIR" with default "/tmp"
 
 define a program named percent
   accept sink as text

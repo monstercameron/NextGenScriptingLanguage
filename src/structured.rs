@@ -377,6 +377,7 @@ pub(crate) fn take<'a>(
         kind,
         default: None,
         source: None,
+        public: false,
         line,
         description: None,
         choices: None,

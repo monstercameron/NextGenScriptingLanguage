@@ -310,6 +310,7 @@ mod tests {
                 question: format!("{name}?"),
                 secret,
             }),
+            public: false,
             line: 1,
             description: None,
             choices: None,

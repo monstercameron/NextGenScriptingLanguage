@@ -12,6 +12,7 @@ fn declarations(count: usize) -> Vec<InputDeclaration> {
             kind: InputType::Integer,
             default: Some(Value::Integer(42)),
             source: None,
+            public: false,
             line: n + 1,
             description: None,
             choices: None,

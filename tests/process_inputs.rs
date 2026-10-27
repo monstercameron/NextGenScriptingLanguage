@@ -150,6 +150,32 @@ fn static_inspection_describes_sources_without_reading_environment_secrets() {
     assert_eq!(value["inputs"][1]["source"]["position"], 1);
     assert!(value["inputs"][0].get("value").is_none());
 }
+
+#[test]
+fn inspection_marks_an_explicit_public_environment_value_as_public() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("public.program");
+    fs::write(
+        &file,
+        "accept home_dir as text from public environment \"HOME\"\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("inspect")
+        .arg(&file)
+        .env("HOME", "/public-home-inspection")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["inputs"][0]["source"]["kind"], "environment");
+    assert_eq!(value["inputs"][0]["source"]["public"], true);
+    assert!(value["inputs"][0].get("value_withheld").is_none());
+}
 #[test]
 fn executable_program_shebang_forwards_options_as_program_arguments() {
     let directory = tempfile::tempdir().unwrap();

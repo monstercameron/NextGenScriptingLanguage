@@ -3734,6 +3734,19 @@ mod binding_type_tests {
     use serde_json::json;
     use std::collections::BTreeMap;
 
+    #[test]
+    fn public_environment_input_is_not_marked_as_a_secret_binding() {
+        let registry = Registry::from_sources(&[] as &[&str]).unwrap();
+        let program = crate::parser::parse(
+            "accept home_dir as text from public environment \"HOME\"\naccept token as text from environment \"API_TOKEN\"\n",
+        )
+        .unwrap();
+
+        let sensitive = super::sensitive_binding_names(&program, &registry);
+        assert!(!sensitive.contains("home_dir"));
+        assert!(sensitive.contains("token"));
+    }
+
     #[cfg(feature = "live")]
     #[test]
     fn live_validation_rejects_a_temporary_scope_reusing_a_live_name() {

@@ -1,7 +1,7 @@
 # Omarchy omarchy-power-present, pinned c668141e9c42b13c80c9ca4ea108e11708c5e8a5.
 # Source and MIT license: ../../tests/fixtures/omarchy-rewrites/04-power-present/README.md
 # Run against an owned fixture with --input power_supply_path=/absolute/fake/root.
-accept power_supply_path as text from environment "OMARCHY_POWER_SUPPLY_PATH" with default "/sys/class/power_supply"
+accept power_supply_path as text from public environment "OMARCHY_POWER_SUPPLY_PATH" with default "/sys/class/power_supply"
 accept arguments as list of text from arguments
 
 # Bash's ${VAR:-default} also defaults an explicitly empty environment value.

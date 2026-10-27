@@ -3,8 +3,8 @@
 execute 1
 accept arguments as list of text from arguments
 accept theme_arg as text from argument 1 with default ""
-accept home_dir as text from environment "HOME" with default ""
-accept omarchy_path as text from environment "OMARCHY_PATH" with default ""
+accept home_dir as text from public environment "HOME" with default ""
+accept omarchy_path as text from public environment "OMARCHY_PATH" with default ""
 if run "test" with arguments ["-z", theme_arg] succeeds
   fail with message "Usage: omarchy-theme-dir <theme-name>" and status 1
 run text.concat with parts [home_dir, "/.config/omarchy/themes/", theme_arg] as user_dir

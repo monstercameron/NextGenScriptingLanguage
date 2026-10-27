@@ -75,6 +75,7 @@ fn input_values(data: &[u8]) {
         kind,
         default: None,
         source: None,
+        public: false,
         line: index + 1,
         description: None,
         choices: None,

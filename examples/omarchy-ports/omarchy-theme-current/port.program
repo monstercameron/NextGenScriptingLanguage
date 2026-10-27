@@ -2,7 +2,7 @@
 # Port of bin/omarchy-theme-current (see original.sh). Title-cases the theme name.
 execute 1
 accept arguments as list of text from arguments
-accept home_dir as text from environment "HOME" with default ""
+accept home_dir as text from public environment "HOME" with default ""
 run text.concat with parts [home_dir, "/.local/state/omarchy/current/theme.name"] as name_path
 if run "test" with arguments ["-f", name_path] succeeds
   run "sed" with arguments ["-E", "s/(^|-)([a-z])/\\1\\u\\2/g; s/-/ /g", name_path]

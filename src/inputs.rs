@@ -774,7 +774,11 @@ pub fn describe(
         }
         match &input.source {
             Some(InputSource::Environment(name)) => {
-                spec["source"] = serde_json::json!({"kind":"environment", "name":name});
+                spec["source"] = if input.public {
+                    serde_json::json!({"kind":"environment", "name":name, "public":true})
+                } else {
+                    serde_json::json!({"kind":"environment", "name":name})
+                };
             }
             Some(InputSource::Argument(position)) => {
                 spec["source"] = serde_json::json!({"kind":"argument", "position":position});
@@ -863,6 +867,7 @@ mod tests {
             kind,
             default: None,
             source: None,
+            public: false,
             line: 1,
             description: None,
             choices: None,

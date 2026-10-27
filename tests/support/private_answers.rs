@@ -11,6 +11,18 @@ pub fn make_private(path: &Path) {
         let who = std::process::Command::new("whoami").output().unwrap();
         assert!(who.status.success());
         let principal = String::from_utf8(who.stdout).unwrap().trim().to_owned();
+        let owner = std::process::Command::new("icacls")
+            .arg(path)
+            .arg("/setowner")
+            .arg(&principal)
+            .output()
+            .unwrap();
+        assert!(
+            owner.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&owner.stdout),
+            String::from_utf8_lossy(&owner.stderr)
+        );
         let output = std::process::Command::new("icacls")
             .arg(path)
             .arg("/inheritance:r")

@@ -171,13 +171,31 @@ fn skip_unknown_region(
     Ok(end)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn known_folder(value: &crate::ast::Value, cwd: &Path, cwd_known: bool) -> Option<PathBuf> {
+    let crate::ast::Value::String(path) = value else {
+        return None;
+    };
+    let path = Path::new(path);
+    if !path.is_absolute() && !cwd_known {
+        return None;
+    }
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let path = std::fs::canonicalize(path).ok()?;
+    path.is_dir().then_some(path)
+}
+
 /// Resolve every executable the run is certain to reach, before the first effect,
 /// and report all unresolved ones together. Top-level commands, task groups and
 /// jobs count, and so do branches and loop bodies whose condition is statically
 /// known to take them. A branch or loop body that may not run is left to the run,
-/// so a tool needed only on another path does not block this one. Once a
-/// working-directory change makes relative names unknown, later calls are left to
-/// their own run-time resolution.
+/// so a tool needed only on another path does not block this one. Literal folder
+/// changes are followed; dynamic or conditional changes leave later relative names
+/// to their run-time resolution.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn preflight_executables(
     program: &Program,
@@ -185,8 +203,14 @@ pub(crate) fn preflight_executables(
     cwd: &Path,
 ) -> Result<()> {
     let mut known_cwd = true;
+    let mut current_cwd = cwd.to_path_buf();
+    let mut cwd_scopes = Vec::<(PathBuf, bool)>::new();
     let mut missing = Vec::new();
-    let check = |call: &Invocation, line: usize, missing: &mut Vec<String>| -> Result<()> {
+    let check = |call: &Invocation,
+                 line: usize,
+                 current_cwd: &Path,
+                 missing: &mut Vec<String>|
+     -> Result<()> {
         let manifest = registry.resolve_call(call)?;
         if manifest.builtin.is_some()
             || manifest.execution_backend() != crate::contracts::AppletBackend::Command
@@ -197,8 +221,17 @@ pub(crate) fn preflight_executables(
         if binary.starts_with('@') {
             return Ok(());
         }
-        if let Err(error) = binary_path(binary, cwd) {
-            missing.push(format!("line {line}: {error:#}"));
+        if let Err(error) = binary_path(binary, current_cwd) {
+            let suggestion = if call.direct {
+                executable_suggestion(binary, current_cwd)
+            } else {
+                None
+            };
+            let message = match suggestion {
+                Some(name) => format!("line {line}: {error:#}; did you mean {name:?}?"),
+                None => format!("line {line}: {error:#}"),
+            };
+            missing.push(message);
         }
         Ok(())
     };
@@ -207,22 +240,36 @@ pub(crate) fn preflight_executables(
     while index < steps.len() {
         let step = &steps[index];
         index = match &step.kind {
-            StepKind::UseFolder { .. } => {
-                known_cwd = false;
+            StepKind::UseFolder { path } => {
+                if let Some(folder) = known_folder(path, &current_cwd, known_cwd) {
+                    current_cwd = folder;
+                    known_cwd = true;
+                } else {
+                    known_cwd = false;
+                }
                 index + 1
             }
             StepKind::Invoke { call, .. } => {
                 if registry.resolve_call(call)?.builtin == Some(Builtin::Cd) {
-                    known_cwd = false;
+                    if let Some(path) = call.parameters.get("path") {
+                        if let Some(folder) = known_folder(path, &current_cwd, known_cwd) {
+                            current_cwd = folder;
+                            known_cwd = true;
+                        } else {
+                            known_cwd = false;
+                        }
+                    } else {
+                        known_cwd = false;
+                    }
                 } else if known_cwd {
-                    check(call, step.line, &mut missing)?;
+                    check(call, step.line, &current_cwd, &mut missing)?;
                 }
                 index + 1
             }
             StepKind::TaskGroup { tasks, .. } => {
                 if known_cwd {
                     for call in tasks {
-                        check(call, step.line, &mut missing)?;
+                        check(call, step.line, &current_cwd, &mut missing)?;
                     }
                 }
                 index + 1
@@ -230,7 +277,7 @@ pub(crate) fn preflight_executables(
             StepKind::SpawnJob { stages, .. } => {
                 if known_cwd {
                     for stage in stages {
-                        check(&stage.call, stage.line, &mut missing)?;
+                        check(&stage.call, stage.line, &current_cwd, &mut missing)?;
                     }
                 }
                 index + 1
@@ -238,7 +285,7 @@ pub(crate) fn preflight_executables(
             // The command always runs; its branches depend on its outcome.
             StepKind::IfCommand { call, end, .. } => {
                 if known_cwd {
-                    check(call, step.line, &mut missing)?;
+                    check(call, step.line, &current_cwd, &mut missing)?;
                 }
                 skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
             }
@@ -262,7 +309,7 @@ pub(crate) fn preflight_executables(
             StepKind::Loop { kind, end } => {
                 if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
                     if known_cwd {
-                        check(call, step.line, &mut missing)?;
+                        check(call, step.line, &current_cwd, &mut missing)?;
                     }
                 }
                 if loop_runs_once(kind) {
@@ -270,6 +317,17 @@ pub(crate) fn preflight_executables(
                 } else {
                     skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
                 }
+            }
+            StepKind::CallProgram { .. } => {
+                cwd_scopes.push((current_cwd.clone(), known_cwd));
+                index + 1
+            }
+            StepKind::EndCall => {
+                if let Some((saved_cwd, saved_known)) = cwd_scopes.pop() {
+                    current_cwd = saved_cwd;
+                    known_cwd = saved_known;
+                }
+                index + 1
             }
             _ => index + 1,
         };
@@ -281,6 +339,69 @@ pub(crate) fn preflight_executables(
         );
     }
     Ok(())
+}
+
+fn executable_suggestion(binary: &str, cwd: &Path) -> Option<String> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut names = std::collections::BTreeSet::<String>::new();
+    for directory in std::env::split_paths(&path) {
+        let directory = if directory.is_absolute() {
+            directory
+        } else {
+            cwd.join(directory)
+        };
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let executable = entry.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && crate::platform::executable(&metadata)
+            });
+            if executable {
+                if let Some(name) = executable_candidate_name(&file_name) {
+                    names.insert(name);
+                }
+            }
+        }
+    }
+    crate::suggest::closest(binary, names.iter().map(String::as_str)).map(str::to_owned)
+}
+
+fn executable_candidate_name(file_name: &std::ffi::OsStr) -> Option<String> {
+    let name = file_name.to_str()?;
+    if cfg!(windows) {
+        let extension = Path::new(name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("");
+        if extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd") {
+            return None;
+        }
+        if extension.eq_ignore_ascii_case("exe") {
+            return Path::new(name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_owned);
+        }
+    }
+    Some(name.to_owned())
+}
+
+#[cfg(all(test, windows))]
+mod executable_candidate_tests {
+    use super::executable_candidate_name;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn skips_batch_files_and_uses_exe_stems() {
+        assert_eq!(executable_candidate_name(OsStr::new("tool.bat")), None);
+        assert_eq!(executable_candidate_name(OsStr::new("tool.cmd")), None);
+        assert_eq!(
+            executable_candidate_name(OsStr::new("printf.exe")),
+            Some("printf".into())
+        );
+    }
 }
 
 /// `interactively` (terminal handoff) is valid only for one fresh native command

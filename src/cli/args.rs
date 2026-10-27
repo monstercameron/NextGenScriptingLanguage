@@ -15,6 +15,7 @@ pub(crate) struct Args {
     pub(crate) json: bool,
     /// `check --explain CODE`: print the published diagnostic entry.
     pub(crate) diagnostic_explain: Option<String>,
+    pub(crate) resolve: bool,
     pub(crate) explain_version: Option<u8>,
     /// Categories approved with `explain --json --allow`. Empty means no gate.
     pub(crate) allow: Vec<String>,

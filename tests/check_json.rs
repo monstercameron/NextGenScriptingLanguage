@@ -19,6 +19,160 @@ fn invoke(root: &Path, arguments: &[&str]) -> Output {
         .unwrap()
 }
 
+#[cfg(unix)]
+fn invoke_with_path(root: &Path, path: &Path, arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(arguments)
+        .current_dir(root)
+        .env("PATH", path)
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_checks_direct_executables_only_and_suggests_path_names() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let printf = bin.join("printf");
+    fs::write(&printf, "placeholder; resolution must not execute this file\n").unwrap();
+    fs::set_permissions(&printf, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = bin.to_str().unwrap();
+
+    fs::write(
+        root.path().join("job.program"),
+        "run \"prinft\" with arguments [\"x\"]\n",
+    )
+    .unwrap();
+    let unchanged = invoke_with_path(root.path(), &bin, &["check", "job.program", "--json"]);
+    assert_eq!(report(&unchanged, true)["diagnostics"], json!([]));
+
+    let resolved = invoke_with_path(
+        root.path(),
+        &bin,
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    let value = report(&resolved, true);
+    let diagnostic = &value["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "exec.not_found");
+    assert_eq!(diagnostic["severity"], "warning");
+    assert!(diagnostic["message"].as_str().unwrap().contains("did you mean \"printf\""));
+    assert!(diagnostic["message"].as_str().unwrap().contains(path));
+    assert_eq!(diagnostic["fixes"][0]["edits"][0]["replacement"], "printf");
+
+    let denied = invoke_with_path(
+        root.path(),
+        &bin,
+        &["check", "job.program", "--resolve", "--deny-warnings", "--json"],
+    );
+    let denied = report(&denied, false);
+    assert_eq!(denied["diagnostics"][0]["severity"], "warning");
+
+    let run = invoke_with_path(root.path(), &bin, &["run", "job.program"]);
+    assert!(!run.status.success());
+    assert!(String::from_utf8_lossy(&run.stderr).contains("did you mean \"printf\""));
+
+    fs::set_permissions(&printf, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(root.path().join("job.program"), "run \"printf\"\n").unwrap();
+    let not_executable = invoke_with_path(
+        root.path(),
+        &bin,
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    let not_executable = report(&not_executable, true);
+    assert_eq!(not_executable["diagnostics"][0]["code"], "exec.not_found");
+    assert_eq!(not_executable["diagnostics"][0]["severity"], "warning");
+
+    fs::write(
+        root.path().join("job.program"),
+        "run text.concat with parts [\"a\", \"b\"]\n",
+    )
+    .unwrap();
+    let named_applet = invoke_with_path(
+        root.path(),
+        &bin,
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    assert_eq!(report(&named_applet, true)["diagnostics"], json!([]));
+
+    fs::write(
+        root.path().join("job.program"),
+        "run \"text.conct\" with arguments [\"a\"]\n",
+    )
+    .unwrap();
+    let applet_hint = invoke_with_path(
+        root.path(),
+        &bin,
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    let applet_hint = report(&applet_hint, true);
+    let diagnostic = &applet_hint["diagnostics"][0];
+    assert!(diagnostic["message"].as_str().unwrap().contains("catalog applet \"text.concat\""));
+    assert!(diagnostic.get("fixes").is_none());
+
+    let subdir_bin = root.path().join("subdir").join("bin");
+    fs::create_dir_all(&subdir_bin).unwrap();
+    let subdir_printf = subdir_bin.join("printf");
+    fs::write(&subdir_printf, "placeholder\n").unwrap();
+    fs::set_permissions(&subdir_printf, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(root.path().join("job.program"), "use folder \"subdir\"\nrun \"printf\"\n").unwrap();
+    let relative_path = invoke_with_path(
+        root.path(),
+        Path::new("bin"),
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    assert_eq!(report(&relative_path, true)["diagnostics"], json!([]));
+
+    fs::set_permissions(&printf, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&subdir_printf, fs::Permissions::from_mode(0o644)).unwrap();
+    let wrong_initial_cwd = invoke_with_path(
+        root.path(),
+        Path::new("bin"),
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    assert_eq!(report(&wrong_initial_cwd, true)["diagnostics"][0]["code"], "exec.not_found");
+    fs::set_permissions(&subdir_printf, fs::Permissions::from_mode(0o755)).unwrap();
+
+    fs::write(
+        root.path().join("job.program"),
+        "use folder \"subdir\"\nrun \"prinft\" with arguments [\"x\"]\n",
+    )
+    .unwrap();
+    let relative_suggestion = invoke_with_path(
+        root.path(),
+        Path::new("bin"),
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    let relative_suggestion = report(&relative_suggestion, true);
+    assert!(relative_suggestion["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("did you mean \"printf\""));
+    let relative_run = invoke_with_path(
+        root.path(),
+        Path::new("bin"),
+        &["run", "job.program"],
+    );
+    assert!(!relative_run.status.success());
+    assert!(String::from_utf8_lossy(&relative_run.stderr).contains("did you mean \"printf\""));
+
+    fs::write(
+        root.path().join("job.program"),
+        "define a program named helper\n  run \"prinft\" with arguments [\"x\"]\nrun program helper\n",
+    )
+    .unwrap();
+    fs::set_permissions(&printf, fs::Permissions::from_mode(0o755)).unwrap();
+    let in_definition = invoke_with_path(
+        root.path(),
+        &bin,
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    let in_definition = report(&in_definition, true);
+    assert_eq!(in_definition["diagnostics"][0]["code"], "exec.not_found");
+}
 fn report(output: &Output, ok: bool) -> Value {
     assert_eq!(
         output.status.success(),

@@ -203,6 +203,14 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
+        code: "exec.not_found",
+        family: "resolve",
+        meaning: "an explicitly resolved quoted executable was not found on PATH",
+        example: "run \"prinft\" with arguments [\"x\"]",
+        typical_fix: "Correct the executable name, install it on PATH, or omit --resolve for a portable check.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
         code: "applet.parameter.unknown",
         family: "resolve",
         meaning: "the applet declares no parameter with this name",
@@ -2214,6 +2222,237 @@ fn is_backslash_escaped(bytes: &[u8], index: usize) -> bool {
     }
     count % 2 == 1
 }
+
+/// Resolve quoted executable calls without launching them. This is opt-in because
+/// PATH is host-specific and ordinary static checking remains portable.
+pub fn resolve_executable_diagnostics(
+    source: &str,
+    path: Option<&std::path::Path>,
+    registry: &Registry,
+) -> Vec<Diagnostic> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let access = crate::program_files::Access {
+        registry,
+        cwd: &cwd,
+    };
+    let Ok(program) = crate::program_files::parse_at(source, path, Some(access)) else {
+        return Vec::new();
+    };
+    let line_starts = LineStarts::new(source);
+    let mut calls = Vec::new();
+    collect_resolve_calls(&program.steps, &cwd, registry, &mut calls);
+    for definition in program.definitions.values() {
+        collect_resolve_calls(&definition.steps, &cwd, registry, &mut calls);
+    }
+    let path_value = std::env::var_os("PATH").unwrap_or_default();
+    let path_note = path_value.to_string_lossy();
+    let mut diagnostics = calls.into_iter().filter_map(|(line, call, call_cwd)| {
+        if !call.direct || crate::runtime::binary_path(&call.operation, &call_cwd).is_ok() {
+            return None;
+        }
+        let path_names = path_executable_names(&path_value, &call_cwd);
+        let path_suggestion = crate::suggest::closest(
+            &call.operation,
+            path_names.iter().map(String::as_str),
+        );
+        let applet_suggestion = crate::suggest::closest(
+            &call.operation,
+            registry.applet_names().into_iter(),
+        );
+        let start = line_starts.start(line);
+        let end = source[start..]
+            .find('\n')
+            .map_or(source.len(), |offset| start + offset);
+        let quoted = format!("\"{}\"", call.operation);
+        let span = source[start..end]
+            .find(&quoted)
+            .map(|offset| {
+                let token_start = start + offset + 1;
+                line_starts.span_at(
+                    source,
+                    token_start,
+                    token_start + call.operation.len(),
+                    SpanPrecision::Token,
+                )
+            })
+            .unwrap_or_else(|| line_starts.span(source, line));
+        let message = match (path_suggestion, applet_suggestion) {
+            (Some(name), _) => format!(
+                "executable {:?} was not found; did you mean {name:?}? (PATH used: {path_note})",
+                call.operation
+            ),
+            (None, Some(name)) => format!(
+                "executable {:?} was not found (PATH used: {path_note}); catalog applet {name:?} is available when called without quotes using its declared parameters",
+                call.operation
+            ),
+            (None, None) => format!(
+                "executable {:?} was not found (PATH used: {path_note})",
+                call.operation
+            ),
+        };
+        let mut diagnostic = Diagnostic {
+            severity: DiagnosticSeverity::Warning,
+            code: "exec.not_found".into(),
+            message,
+            span: span.clone(),
+            fixes: Vec::new(),
+        };
+        if let Some(name) = path_suggestion {
+            diagnostic.fixes.push(SuggestedFix::replace(
+                format!("replace executable {:?} with {name:?}", call.operation),
+                span,
+                name,
+            ));
+        }
+        Some(diagnostic)
+    })
+    .collect::<Vec<_>>();
+    diagnostics.sort_by(|left, right| {
+        (left.span.start_byte, &left.code, &left.message).cmp(&(
+            right.span.start_byte,
+            &right.code,
+            &right.message,
+        ))
+    });
+    diagnostics.dedup_by(|left, right| {
+        left.code == right.code && left.span.start_byte == right.span.start_byte
+    });
+    diagnostics
+}
+
+fn path_executable_names(path: &std::ffi::OsStr, cwd: &std::path::Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for directory in std::env::split_paths(path) {
+        let directory = if directory.is_absolute() {
+            directory
+        } else {
+            cwd.join(directory)
+        };
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let executable = entry.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && crate::platform::executable(&metadata)
+            });
+            if !executable {
+                continue;
+            }
+            if let Some(name) = executable_candidate_name(&file_name) {
+                names.insert(name);
+            }
+        }
+    }
+    names
+}
+
+fn executable_candidate_name(file_name: &std::ffi::OsStr) -> Option<String> {
+    let name = file_name.to_str()?;
+    if cfg!(windows) {
+        let extension = std::path::Path::new(name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("");
+        if extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd") {
+            return None;
+        }
+        if extension.eq_ignore_ascii_case("exe") {
+            return std::path::Path::new(name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_owned);
+        }
+    }
+    Some(name.to_owned())
+}
+
+fn collect_resolve_calls<'a>(
+    steps: &'a [Step],
+    start_cwd: &std::path::Path,
+    registry: &Registry,
+    calls: &mut Vec<(usize, &'a Invocation, std::path::PathBuf)>,
+) {
+    let mut cwd = Some(start_cwd.to_path_buf());
+    let mut index = 0;
+    while index < steps.len() {
+        let step = &steps[index];
+        match &step.kind {
+            StepKind::UseFolder { path } => {
+                if let Value::String(folder) = path {
+                    let folder = std::path::Path::new(folder);
+                    if let Some(current) = cwd.as_ref() {
+                        let folder = if folder.is_absolute() {
+                            folder.to_path_buf()
+                        } else {
+                            current.join(folder)
+                        };
+                        cwd = std::fs::canonicalize(folder).ok();
+                    }
+                } else {
+                    cwd = None;
+                }
+            }
+            StepKind::Invoke { call, .. } => {
+                if let Some(current) = &cwd {
+                    calls.push((step.line, call, current.clone()));
+                }
+                if registry.resolve_call(call).is_ok_and(|manifest| {
+                    manifest.builtin == Some(crate::manifest::Builtin::Cd)
+                }) {
+                    match call.parameters.get("path") {
+                        Some(Value::String(folder)) => {
+                            if let Some(current) = &cwd {
+                                let folder = std::path::Path::new(folder);
+                                let folder = if folder.is_absolute() {
+                                    folder.to_path_buf()
+                                } else {
+                                    current.join(folder)
+                                };
+                                cwd = std::fs::canonicalize(folder).ok();
+                            }
+                        }
+                        _ => cwd = None,
+                    }
+                }
+            }
+            StepKind::TaskGroup { tasks, .. } => {
+                if let Some(current) = &cwd {
+                    calls.extend(tasks.iter().map(|call| (step.line, call, current.clone())));
+                }
+            }
+            StepKind::SpawnJob { stages, .. } => {
+                if let Some(current) = &cwd {
+                    calls.extend(
+                        stages
+                            .iter()
+                            .map(|stage| (stage.line, &stage.call, current.clone())),
+                    );
+                }
+            }
+            StepKind::IfCommand { call, .. }
+            | StepKind::Loop {
+                kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                ..
+            } => {
+                if let Some(current) = &cwd {
+                    calls.push((step.line, call, current.clone()));
+                }
+            }
+            StepKind::CallProgram { end, .. } => {
+                let finish = index.saturating_add(*end).min(steps.len());
+                if let (Some(current), true) = (&cwd, finish > index + 1) {
+                    collect_resolve_calls(&steps[index + 1..finish - 1], current, registry, calls);
+                }
+                index = finish;
+                continue;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+}
+
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {
     let word = |index: usize, expected: &str| matches!(tokens.get(index), Some(Token::Word(value)) if *value == expected);
@@ -4379,6 +4618,17 @@ mod tests {
     use crate::contracts::{OutputType, ValueSchema};
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[cfg(windows)]
+    #[test]
+    fn resolution_suggestions_skip_batch_files_and_match_exe_stems() {
+        assert_eq!(executable_candidate_name(std::ffi::OsStr::new("tool.bat")), None);
+        assert_eq!(executable_candidate_name(std::ffi::OsStr::new("tool.cmd")), None);
+        assert_eq!(
+            executable_candidate_name(std::ffi::OsStr::new("printf.exe")),
+            Some("printf".into())
+        );
+    }
 
     #[test]
     fn independent_line_errors_have_stable_line_spans() {

@@ -357,6 +357,13 @@ help/version output and output-write failures retain normal CLI behavior;
 errors from a correctly parsed check use this protocol. Human-readable checks
 are unchanged.
 
+`execute check --resolve` opts into checking quoted executable names against the
+current PATH without starting those commands. Missing executables produce an
+`exec.not_found` warning with the PATH used and a suggested correction when a
+close executable or catalog applet name is available. Without `--resolve`,
+checks remain independent of the host's installed tools. `explain --json`
+reports `resolved: false` when a statically named executable was not found.
+
 ## Review a plan before it runs
 
 Three options confirm what runs, and they change nothing in the program itself.

@@ -67,6 +67,7 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `check.scope` | validate | a control-flow, job, declaration, or trigger is outside its valid scope or order |
 | `check.program.unknown` | resolve | a called reusable program is not defined |
 | `check.program.file.unknown` | resolve | a called program file path does not exist |
+| `exec.not_found` | resolve | an explicitly resolved quoted executable was not found on PATH |
 | `check.program.cycle` | validate | a reusable program call graph contains a recursive cycle |
 | `check.program.input.unknown` | validate | a reusable program call supplies an input it does not declare |
 | `check.program.input.required` | validate | a reusable program call omits a required input |

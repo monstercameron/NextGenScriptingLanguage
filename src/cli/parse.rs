@@ -32,6 +32,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut json = false;
     let mut diagnostic_explain = None;
     let mut deny_warnings = false;
+    let mut resolve = false;
     let mut explain_version = None;
     #[cfg(feature = "agent-advisory")]
     let mut allow = Vec::new();
@@ -120,6 +121,12 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     bail!("--deny-warnings may be specified only once");
                 }
                 deny_warnings = true;
+            }
+            "--resolve" if command == "check" => {
+                if resolve {
+                    bail!("--resolve may be specified only once");
+                }
+                resolve = true;
             }
             "--explain-version" if command == "explain" || command == "run" => {
                 if explain_version.is_some() {
@@ -494,6 +501,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         json,
         diagnostic_explain,
         deny_warnings,
+        resolve,
         explain_version,
         allow,
         what_if,

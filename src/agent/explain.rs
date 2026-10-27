@@ -698,7 +698,9 @@ impl Walker<'_> {
             row.binary = Some(call.operation.clone());
             row.process = Some(true);
             if let Ok(cwd) = std::env::current_dir() {
-                row.resolved_path = crate::runtime::binary_path(&call.operation, &cwd)
+                let resolved = crate::runtime::binary_path(&call.operation, &cwd);
+                row.resolved = Some(resolved.is_ok());
+                row.resolved_path = resolved
                     .ok()
                     .and_then(|path| std::fs::canonicalize(path).ok())
                     .map(|path| path.to_string_lossy().into_owned());

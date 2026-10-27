@@ -29,6 +29,17 @@ jobs:
           CRASH_TRIALS: "40"
           CRASH_SEED: ${{ github.run_id }}
         run: cargo test --locked --features failpoints --test crash_consistency -- --test-threads=1 --nocapture
+      - name: Drop checkpoint writeback bios on an isolated loopback filesystem (Linux only)
+        if: runner.os == 'Linux'
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends dmsetup e2fsprogs
+          sudo modprobe dm_mod
+          sudo modprobe dm_flakey
+          cargo build --locked --features failpoints --bin execute
+          bash tools/crash_consistency_dm_flakey.sh
       - name: Parser and journal decoding properties
         env:
           PROPTEST_CASES: "1024"

@@ -5,7 +5,13 @@
 //! refusal without a reason fails the test. The seed is printed, so a failure replays with
 //! `CRASH_SEED`. `CRASH_TRIALS` sets the number of random kills per mode (nightly raises it).
 //! The `lost` action is a deterministic in-process write shim; these tests do not simulate
-//! storage-device power loss or establish power-loss durability.
+//! storage-device power loss or establish power-loss durability. `lost` skips one selected
+//! write call; it does not drop all unsynced file contents and directory metadata at a crash.
+//! The nightly Linux job separately drops all write bios emitted during a controlled
+//! post-append interval on a private loopback filesystem with dm-flakey. Writes that
+//! reached the backing image before the target switch are retained, so this does not prove
+//! loss of every unsynced write at an arbitrary power-loss instant. Windows runs the
+//! portable process-failure suite only.
 //!
 //! Run with: `cargo test --features failpoints --test crash_consistency`
 #![cfg(feature = "failpoints")]

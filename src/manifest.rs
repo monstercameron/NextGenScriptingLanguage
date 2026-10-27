@@ -2909,6 +2909,7 @@ fn validate_value(
         for item in items {
             let valid_item = if item_type == ParameterType::Json {
                 crate::structured::literal(item)
+                    || allow_reference_items && contains_parameter_reference(item)
             } else {
                 is_scalar_type(item, item_type)
             };

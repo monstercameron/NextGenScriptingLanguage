@@ -43,29 +43,30 @@ pub(super) fn run(
             let amount = integer(args, "amount")?;
             let unit = required_string(args, "unit")?;
             let multiplier = unit_multiplier(unit)?;
-            Ok(Value::Number(
-                epoch
-                    .checked_add(
-                        amount
-                            .checked_mul(multiplier)
-                            .ok_or_else(|| invalid("time arithmetic overflow"))?,
-                    )
-                    .ok_or_else(|| invalid("time arithmetic overflow"))?
-                    .into(),
-            ))
+            let result = i128::from(epoch) + i128::from(amount) * i128::from(multiplier);
+            let result = i64::try_from(result).map_err(|_| invalid("time arithmetic overflow"))?;
+            Ok(Value::Number(result.into()))
         }
         "time.diff" => {
             let left = integer(args, "left")?;
             let right = integer(args, "right")?;
             let unit = required_string(args, "unit")?;
             let multiplier = unit_multiplier(unit)?;
-            let difference = left
-                .checked_sub(right)
-                .ok_or_else(|| invalid("time difference overflow"))?;
+            let difference = i128::from(left) - i128::from(right);
+            let multiplier = i128::from(multiplier);
             if difference % multiplier == 0 {
                 // Keep exact whole-unit values as integers; converting first to
                 // binary64 loses seconds beyond 2^53 even when no division is needed.
-                Ok(Value::from(difference / multiplier))
+                let whole = difference / multiplier;
+                if let Ok(whole) = i64::try_from(whole) {
+                    Ok(Value::from(whole))
+                } else if let Ok(whole) = u64::try_from(whole) {
+                    Ok(Value::from(whole))
+                } else {
+                    Number::from_f64(whole as f64)
+                        .map(Value::Number)
+                        .ok_or_else(|| invalid("time difference is not finite"))
+                }
             } else {
                 Ok(Value::Number(
                     Number::from_f64(difference as f64 / multiplier as f64)
@@ -215,15 +216,19 @@ mod tests {
             &ExecutionContext::unrestricted()
         )
         .is_err());
-        assert!(run(
-            "time.diff",
-            &Map::from_iter([
-                ("left".into(), Value::from(i64::MAX)),
-                ("right".into(), Value::from(i64::MIN)),
-                ("unit".into(), Value::String("seconds".into())),
-            ]),
-            &ExecutionContext::unrestricted()
-        )
-        .is_err());
+        assert_eq!(
+            run(
+                "time.diff",
+                &Map::from_iter([
+                    ("left".into(), Value::from(i64::MAX)),
+                    ("right".into(), Value::from(i64::MIN)),
+                    ("unit".into(), Value::String("seconds".into())),
+                ]),
+                &ExecutionContext::unrestricted()
+            )
+            .unwrap()
+            .as_u64(),
+            Some(u64::MAX)
+        );
     }
 }

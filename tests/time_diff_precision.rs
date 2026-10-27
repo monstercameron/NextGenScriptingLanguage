@@ -7,6 +7,55 @@ fn diff(left: i64, right: i64, unit: &str) -> Result<Value, applets::AppletError
     applets::execute("time.diff", args.as_object().unwrap(), &[])
 }
 
+fn add(epoch: i64, amount: i64, unit: &str) -> Result<Value, applets::AppletError> {
+    let args = json!({"epoch": epoch, "amount": amount, "unit": unit});
+    applets::execute("time.add", args.as_object().unwrap(), &[])
+}
+
+#[test]
+fn time_add_checks_only_the_final_signed_64_bit_epoch() {
+    let amount = 106_751_991_167_301;
+    assert_eq!(
+        add(i64::MIN, amount, "days").unwrap().as_i64(),
+        Some(30_592)
+    );
+    assert_eq!(
+        add(i64::MAX, -amount, "days").unwrap().as_i64(),
+        Some(-30_593)
+    );
+
+    assert_eq!(
+        add(i64::MAX, 1, "seconds").unwrap_err().code,
+        "invalid_request"
+    );
+    assert_eq!(
+        add(i64::MIN, -1, "seconds").unwrap_err().code,
+        "invalid_request"
+    );
+    assert_eq!(
+        add(0, i64::MAX, "days").unwrap_err().code,
+        "invalid_request"
+    );
+}
+
+#[test]
+fn time_diff_uses_wide_subtraction_and_only_rounds_when_json_requires_float() {
+    let positive = diff(i64::MAX, i64::MIN, "days").unwrap();
+    let negative = diff(i64::MIN, i64::MAX, "days").unwrap();
+    let expected = u64::MAX as f64 / 86_400.0;
+    assert!((positive.as_f64().unwrap() - expected).abs() < 0.1);
+    assert!((negative.as_f64().unwrap() + expected).abs() < 0.1);
+
+    assert_eq!(
+        diff(i64::MAX, i64::MIN, "seconds").unwrap().as_u64(),
+        Some(u64::MAX)
+    );
+    let negative_seconds = diff(i64::MIN, i64::MAX, "seconds").unwrap();
+    assert!((negative_seconds.as_f64().unwrap() + u64::MAX as f64).abs() < 4096.0);
+    // Results that fit the established integer representation remain exact.
+    assert_eq!(diff(8_640_000, 0, "days").unwrap().as_i64(), Some(100));
+}
+
 #[test]
 fn whole_units_remain_exact_across_the_binary64_boundary() {
     for seconds in [
@@ -53,8 +102,8 @@ fn fractional_units_and_overflow_keep_their_contract() {
         assert!(diff(seconds, 0, unit).unwrap().as_i64().is_none());
     }
     assert_eq!(
-        diff(i64::MAX, i64::MIN, "seconds").unwrap_err().code,
-        "invalid_request"
+        diff(i64::MAX, i64::MIN, "seconds").unwrap().as_u64(),
+        Some(u64::MAX)
     );
 }
 

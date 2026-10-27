@@ -1443,7 +1443,9 @@ fn missing_program_input_edit(
         },
         crate::ast::InputType::Integer => "0".to_owned(),
         crate::ast::InputType::Boolean => "false".to_owned(),
-        crate::ast::InputType::TextList => "[]".to_owned(),
+        crate::ast::InputType::TextList
+        | crate::ast::InputType::IntegerList
+        | crate::ast::InputType::JsonList => "[]".to_owned(),
         crate::ast::InputType::Json => "null".to_owned(),
         crate::ast::InputType::Bytes => return None,
     };

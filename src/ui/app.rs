@@ -1605,7 +1605,7 @@ impl Signals {
             None,
             None,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        )?
+        )?;
         Ok(guard)
     }
 }

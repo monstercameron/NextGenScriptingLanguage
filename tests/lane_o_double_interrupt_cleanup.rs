@@ -63,10 +63,7 @@ fn finally_program(started: &Path, entered: &Path, finished: &Path) -> String {
 fn wait_for_marker(path: &Path, what: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "the run never reached {what}"
-        );
+        assert!(Instant::now() < deadline, "the run never reached {what}");
         std::thread::sleep(Duration::from_millis(10));
     }
     std::thread::sleep(Duration::from_millis(100));
@@ -267,8 +264,8 @@ fn spawn_pty(directory: &Path, program: &str) -> (Child, RawFd) {
     // SAFETY: dups of the live slave descriptor.
     let stderr_raw = unsafe { libc::dup(stdin_fd.as_raw_fd()) };
     assert!(stderr_raw >= 0, "pty stderr dup failed");
-    // SAFETY: both fds came from successful dup calls above.
     let (stdout_fd, stderr_fd) =
+        // SAFETY: both fds came from successful dup calls above.
         unsafe { (OwnedFd::from_raw_fd(stdout_raw), OwnedFd::from_raw_fd(stderr_raw)) };
 
     let master_in_child = master;
@@ -357,7 +354,11 @@ fn pty_double_ctrl_c_during_on_exit_exits_within_200ms() {
     let second = Instant::now();
     pty_interrupt(master);
     let Some(status) = wait_for_exit(&mut child, Duration::from_secs(10)) else {
-        done(&mut child, master, "the second Ctrl-C did not abort the cleanup sleep");
+        done(
+            &mut child,
+            master,
+            "the second Ctrl-C did not abort the cleanup sleep",
+        );
         unreachable!();
     };
     let elapsed = second.elapsed();

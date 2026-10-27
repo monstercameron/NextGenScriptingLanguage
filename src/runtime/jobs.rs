@@ -500,8 +500,7 @@ impl Supervisor {
         for (index, stage) in stages.iter().enumerate() {
             let mut call = stage.call.clone();
             let manifest = registry.resolve_call(&call)?.clone();
-            if manifest.builtin.is_some()
-                || manifest.execution_backend() != AppletBackend::Command
+            if manifest.builtin.is_some() || manifest.execution_backend() != AppletBackend::Command
             {
                 bail!(
                     "line {}: background jobs support native command applets only",
@@ -591,7 +590,12 @@ impl Supervisor {
         stages: &[JobStage],
         env: JobEnv<'_>,
     ) -> Result<()> {
-        let JobEnv { registry, bindings, cwd, .. } = env;
+        let JobEnv {
+            registry,
+            bindings,
+            cwd,
+            ..
+        } = env;
         if stages.is_empty() || stages.len() > MAX_JOB_STAGES {
             bail!("background pipeline must contain between 1 and {MAX_JOB_STAGES} stages");
         }

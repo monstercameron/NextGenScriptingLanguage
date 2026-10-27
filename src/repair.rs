@@ -579,6 +579,41 @@ pub fn boundary_line_at(
         .unwrap_or_else(|| source.lines().count() + 1))
 }
 
+/// The bytes of `source` before the 1-based `boundary` line: the completed
+/// prefix a repair must leave untouched. A boundary past the last newline
+/// covers the whole file.
+pub fn prefix_before_line(source: &str, boundary: usize) -> &str {
+    if boundary <= 1 {
+        return "";
+    }
+    let mut line = 1;
+    for (offset, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            line += 1;
+            if line == boundary {
+                return &source[..offset + 1];
+            }
+        }
+    }
+    source
+}
+
+/// Check that the resume program keeps the record's completed prefix byte for
+/// byte. Line numbers in a repair refer to the recorded program, so a resume
+/// program whose earlier lines differ would silently shift the boundary over
+/// completed steps and re-run their effects. Repairs after the boundary stay
+/// free: only the prefix is compared, never the suffix.
+pub fn check_resume_prefix(recorded: &str, current: &str, boundary: usize) -> Result<()> {
+    let before_recorded = prefix_before_line(recorded, boundary);
+    let before_current = prefix_before_line(current, boundary);
+    if before_recorded != before_current {
+        bail!(
+            "the resume program differs from the recorded program before line {boundary}; the completed prefix must still match, so repair the recorded program instead of rewriting its earlier lines"
+        );
+    }
+    Ok(())
+}
+
 /// The repair boundary for a failed recorded run: the first line of the
 /// top-level statement that holds the record's first failed step, with the
 /// failed step's own line alongside it. Repairs may change that line and

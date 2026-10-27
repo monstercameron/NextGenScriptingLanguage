@@ -2,7 +2,10 @@
 //! `execute repair --from-record` and `execute resume --from-record`: a failed
 //! recorded run is repaired in its failed suffix and resumed without re-running
 //! completed native steps (counted with a fake tool). Prefix edits, completed
-//! records and missing blobs are refused with a per-step reason.
+//! records, missing blobs, truncated or torn records, edited program copies,
+//! manifest swaps, withheld secrets and unsupported shapes are refused without
+//! repeating completed effects; prefix file writes and loop iterations are
+//! replayed, not re-run.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,6 +62,16 @@ fn failed_record(work: &Path, source: &str) -> PathBuf {
 
 /// Repair the failed suffix of `record` in `program`.
 fn repair_from_record(work: &Path, record: &Path, program: &str, op: &str) -> Output {
+    repair_from_record_with_manifests(work, record, program, op, &manifests())
+}
+
+fn repair_from_record_with_manifests(
+    work: &Path,
+    record: &Path,
+    program: &str,
+    op: &str,
+    manifest_dir: &Path,
+) -> Output {
     execute(
         work,
         &[
@@ -70,7 +83,7 @@ fn repair_from_record(work: &Path, record: &Path, program: &str, op: &str) -> Ou
             "--op",
             op,
             "--manifest-dir",
-            manifests().to_str().unwrap(),
+            manifest_dir.to_str().unwrap(),
         ],
     )
 }
@@ -268,10 +281,9 @@ fn resume_from_record_refuses_an_edited_prefix_without_rerunning_it() {
     assert_eq!(resumed.status.code(), Some(1));
     let diagnostic = text(&resumed.stderr);
     assert!(
-        diagnostic.contains("resume diverged at step 0"),
+        diagnostic.contains("completed prefix must still match"),
         "{diagnostic}"
     );
-    assert!(diagnostic.contains("completed prefix"), "{diagnostic}");
     assert!(
         resumed.stdout.is_empty(),
         "a refused prefix must not run anything"
@@ -329,6 +341,629 @@ fn a_completed_record_has_no_failed_suffix_to_repair_or_resume() {
         "{}",
         text(&resumed.stderr)
     );
+}
+
+#[cfg(unix)]
+fn failed_counter_record(work: &Path) -> (PathBuf, PathBuf) {
+    let custom = counter_manifests(work);
+    let source = format!(
+        "run counter\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"three\"\n",
+        executable_text()
+    );
+    fs::write(work.join("workflow.program"), &source).unwrap();
+    let record = work.join("record");
+    let run = execute(
+        work,
+        &[
+            "run",
+            "workflow.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert!(!run.status.success(), "the program should fail");
+    (record, custom)
+}
+
+fn read_record_json(record: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(record.join("run.json")).unwrap()).unwrap()
+}
+
+fn write_record_json(record: &Path, document: &serde_json::Value) {
+    fs::write(
+        record.join("run.json"),
+        serde_json::to_string_pretty(document).unwrap(),
+    )
+    .unwrap();
+}
+
+/// A resume replays applet output and suppresses the completed prefix's file
+/// writes: an `append` and a `save` in the prefix must not touch their files
+/// again, even though only the linear happy path is otherwise covered.
+#[cfg(unix)]
+#[test]
+fn resume_suppresses_prefix_file_writes_without_repeating_them() {
+    let work = tempfile::tempdir().unwrap();
+    let custom = counter_manifests(work.path());
+    let source = format!(
+        "run counter\nthen append to \"log.txt\"\nthen save to \"out.txt\"\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"three\"\n",
+        executable_text()
+    );
+    fs::write(work.path().join("workflow.program"), &source).unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "workflow.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert!(!run.status.success(), "the program should fail");
+    assert_eq!(
+        fs::read_to_string(work.path().join("log.txt")).unwrap(),
+        "counted\n"
+    );
+    // A sentinel proves the resume does not rewrite the file: a repeated save
+    // would replace it with the pipeline bytes.
+    fs::write(work.path().join("out.txt"), "SENTINEL\n").unwrap();
+
+    let repaired = repair_from_record_with_manifests(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 4 run printf with message \"two\"",
+        &custom,
+    );
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)
+    );
+
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(0), "{}", text(&resumed.stderr));
+    assert_eq!(text(&resumed.stdout), "two\nthree\n");
+    // The counter ran once, for the original failure: the append did not run
+    // again and the save left the sentinel alone.
+    assert_eq!(count_lines(work.path()), 1);
+    assert_eq!(
+        fs::read_to_string(work.path().join("log.txt")).unwrap(),
+        "counted\n"
+    );
+    assert_eq!(
+        fs::read_to_string(work.path().join("out.txt")).unwrap(),
+        "SENTINEL\n"
+    );
+}
+
+/// A loop in the completed prefix replays every iteration without launching
+/// the native tool again.
+#[cfg(unix)]
+#[test]
+fn resume_replays_a_loop_prefix_without_relaunching() {
+    let work = tempfile::tempdir().unwrap();
+    let custom = counter_manifests(work.path());
+    let source = format!(
+        "repeat 3 times\n  run counter\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"done\"\n",
+        executable_text()
+    );
+    fs::write(work.path().join("workflow.program"), &source).unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "workflow.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert!(!run.status.success(), "the program should fail");
+    assert_eq!(count_lines(work.path()), 3);
+
+    let repaired = repair_from_record_with_manifests(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 3 run printf with message \"two\"",
+        &custom,
+    );
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)
+    );
+
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(0), "{}", text(&resumed.stderr));
+    assert_eq!(text(&resumed.stdout), "two\ndone\n");
+    assert!(
+        text(&resumed.stderr).contains("3 steps replayed"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert_eq!(count_lines(work.path()), 3);
+}
+
+/// Repair refuses a program file edited in the completed prefix: line numbers
+/// from the edited file cannot bound the record.
+#[test]
+fn repair_refuses_a_program_edited_before_the_boundary() {
+    let work = tempfile::tempdir().unwrap();
+    let source = failing_program();
+    let record = failed_record(work.path(), &source);
+    fs::write(
+        work.path().join("workflow.program"),
+        source.replace("with message \"before\"", "with message \"changed\""),
+    )
+    .unwrap();
+
+    let refused = repair_from_record(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        text(&refused.stderr).contains("differs from the program")
+            && text(&refused.stderr).contains("repair the recorded program"),
+        "{}",
+        text(&refused.stderr)
+    );
+    assert!(!record.join("repairs.jsonl").exists());
+}
+
+/// A resume whose program keeps the suffix but rewrites the prefix is refused
+/// before anything runs, even when the per-step groups would still match.
+#[test]
+fn resume_refuses_a_rewritten_prefix_without_running_anything() {
+    let work = tempfile::tempdir().unwrap();
+    let source = failing_program();
+    let record = failed_record(work.path(), &source);
+    let repaired = repair_from_record(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+    );
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)
+    );
+    // A comment-only edit still moves the completed prefix bytes.
+    let program = work.path().join("workflow.program");
+    let fixed = fs::read_to_string(&program).unwrap();
+    fs::write(&program, format!("# rewritten\n{fixed}")).unwrap();
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("completed prefix must still match"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+}
+
+/// Repair and resume refuse a record whose program copy was edited after the
+/// run: the recorded hash no longer matches, so no boundary can be trusted.
+#[test]
+fn repair_and_resume_refuse_an_edited_program_copy() {
+    let work = tempfile::tempdir().unwrap();
+    let source = failing_program();
+    let record = failed_record(work.path(), &source);
+    let copy = record.join("program.program");
+    let before = fs::read(&copy).unwrap();
+    fs::write(&copy, [before.as_slice(), b"\n# edited\n"].concat()).unwrap();
+
+    let repair = repair_from_record(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        text(&repair.stderr).contains("does not match its recorded hash"),
+        "{}",
+        text(&repair.stderr)
+    );
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("does not match its recorded hash"),
+        "{}",
+        text(&resumed.stderr)
+    );
+}
+
+/// A torn trace — the run died mid-line — refuses repair and resume instead
+/// of silently dropping the last step and re-running its effect.
+#[cfg(unix)]
+#[test]
+fn repair_and_resume_refuse_a_torn_trace() {
+    let work = tempfile::tempdir().unwrap();
+    let (record, custom) = failed_counter_record(work.path());
+    let trace_path = record.join("trace.jsonl");
+    let trace = fs::read(&trace_path).unwrap();
+    assert!(trace.ends_with(b"\n"));
+    // Cut the final step line in half, as a kill mid-write would.
+    let cut = trace.len().saturating_sub(10);
+    fs::write(&trace_path, &trace[..cut]).unwrap();
+    let mut run_json = read_record_json(&record);
+    run_json["finished"] = serde_json::Value::Bool(false);
+    write_record_json(&record, &run_json);
+
+    let repair = repair_from_record_with_manifests(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+        &custom,
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        text(&repair.stderr).contains("ends mid-line"),
+        "{}",
+        text(&repair.stderr)
+    );
+    assert!(!record.join("repairs.jsonl").exists());
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("ends mid-line"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+    // Nothing re-ran: the counter still shows only the original failure.
+    assert_eq!(count_lines(work.path()), 1);
+}
+
+/// A record that outgrew its byte budget refuses repair and resume: hashes
+/// without bytes cannot replay a prefix.
+#[cfg(unix)]
+#[test]
+fn repair_and_resume_refuse_a_truncated_record() {
+    let work = tempfile::tempdir().unwrap();
+    let (record, custom) = failed_counter_record(work.path());
+    let mut run_json = read_record_json(&record);
+    run_json["truncated"] = serde_json::Value::Bool(true);
+    write_record_json(&record, &run_json);
+
+    let repair = execute(
+        work.path(),
+        &[
+            "repair",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--program",
+            "workflow.program",
+            "--op",
+            "replace-command 2 run printf with message \"two\"",
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        text(&repair.stderr).contains("truncated"),
+        "{}",
+        text(&repair.stderr)
+    );
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("truncated"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+    assert_eq!(count_lines(work.path()), 1);
+}
+
+/// Resuming under a different manifest for the same applet name is refused:
+/// the recorded blobs belong to the recorded manifests.
+#[cfg(unix)]
+#[test]
+fn resume_refuses_a_manifest_swap_without_repeating_effects() {
+    let work = tempfile::tempdir().unwrap();
+    let (record, _custom) = failed_counter_record(work.path());
+    let alternate = work.path().join("alternate-manifests");
+    fs::create_dir(&alternate).unwrap();
+    fs::copy(
+        manifests().join("printf.json"),
+        alternate.join("printf.json"),
+    )
+    .unwrap();
+    fs::write(
+        alternate.join("counter.json"),
+        serde_json::json!({
+            "name": "counter",
+            "binary": "/nonexistent-adversarial-counter",
+            "arguments": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            alternate.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("manifests changed"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+    assert_eq!(count_lines(work.path()), 1);
+}
+
+/// A secret input answer is withheld from the record, so the resume that
+/// would need it is refused rather than run with a marker in its place.
+#[cfg(unix)]
+#[test]
+fn resume_refuses_a_withheld_secret_input_without_running() {
+    let work = tempfile::tempdir().unwrap();
+    let custom = counter_manifests(work.path());
+    let source = format!(
+        "accept key as text from secret prompt \"Key?\"\nuse value key\nthen \"cat\"\nrun counter\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"done\"\n",
+        executable_text()
+    );
+    fs::write(work.path().join("workflow.program"), &source).unwrap();
+    fs::write(work.path().join("answers.json"), "{\"key\":\"s3cret-value\"}").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            work.path().join("answers.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args([
+            "run",
+            "workflow.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+            "--answers",
+            "answers.json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!run.status.success(), "the program should fail: {}", text(&run.stderr));
+    assert_eq!(count_lines(work.path()), 1);
+
+    let repaired = repair_from_record_with_manifests(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 5 run printf with message \"two\"",
+        &custom,
+    );
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)
+    );
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("withhold"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+    assert_eq!(count_lines(work.path()), 1);
+}
+
+/// A dry-run repair reports the diff without touching the program or logging
+/// a repair.
+#[test]
+fn repair_dry_run_changes_nothing() {
+    let work = tempfile::tempdir().unwrap();
+    let source = failing_program();
+    let record = failed_record(work.path(), &source);
+    let before = fs::read_to_string(work.path().join("workflow.program")).unwrap();
+
+    let dry = execute(
+        work.path(),
+        &[
+            "repair",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--program",
+            "workflow.program",
+            "--op",
+            "replace-command 2 run printf with message \"two\"",
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+            "--dry-run",
+        ],
+    );
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr));
+    assert!(text(&dry.stdout).contains("dry run"), "{}", text(&dry.stdout));
+    assert_eq!(
+        fs::read_to_string(work.path().join("workflow.program")).unwrap(),
+        before
+    );
+    assert!(!record.join("repairs.jsonl").exists());
+}
+
+/// A program shape the record cannot replay is refused before anything runs.
+#[cfg(unix)]
+#[test]
+fn resume_refuses_an_unsupported_program_shape() {
+    let work = tempfile::tempdir().unwrap();
+    let (record, custom) = failed_counter_record(work.path());
+    fs::write(
+        work.path().join("detached.program"),
+        "run counter\nlaunch detached \"true\"\n",
+    )
+    .unwrap();
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "detached.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("does not support"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+    assert_eq!(count_lines(work.path()), 1);
+}
+
+/// An interrupted record with a clean trace still repairs and resumes: every
+/// recorded step replays and the suffix runs once.
+#[cfg(unix)]
+#[test]
+fn interrupted_record_with_a_clean_trace_still_repairs_and_resumes() {
+    let work = tempfile::tempdir().unwrap();
+    let (record, custom) = failed_counter_record(work.path());
+    let mut run_json = read_record_json(&record);
+    run_json["finished"] = serde_json::Value::Bool(false);
+    write_record_json(&record, &run_json);
+
+    let repaired = execute(
+        work.path(),
+        &[
+            "repair",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--program",
+            "workflow.program",
+            "--op",
+            "replace-command 2 run printf with message \"two\"",
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)
+    );
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(0), "{}", text(&resumed.stderr));
+    assert_eq!(text(&resumed.stdout), "two\nthree\n");
+    assert_eq!(count_lines(work.path()), 1);
 }
 
 #[test]

@@ -5,8 +5,13 @@
 //! Layout of a record directory:
 //!
 //! - `run.json`: protocol `execute.record/1`. Program hash, plan (explain text) and
-//!   its hash, redacted inputs, timing, the final result and output hash, and the
-//!   limits that applied.
+//!   its hash, redacted inputs, timing, the final result and output hash, the
+//!   limits that applied, and the provenance (manifest fingerprint and working
+//!   directory) a repair or resume must still match. `truncated` marks a record
+//!   that kept hashes without bytes; repair and resume refuse such records, as
+//!   they refuse a torn trace, instead of re-running completed effects. The
+//!   record carries no authentication code (see `check_from_record_usable` for
+//!   the exact checks and the residual tampering limits).
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
 //!   resolved argv, status, declared outcome, wall time, and the stdout and stderr
@@ -83,6 +88,41 @@ pub struct RecordStart<'a> {
     /// Inputs as JSON; string values are redacted before they are stored.
     pub inputs: Json,
     pub registry: &'a Registry,
+    /// The working directory the run executes in. It is pinned in the record's
+    /// provenance so a resume elsewhere refuses rather than replaying the
+    /// completed prefix under different file and executable resolution.
+    pub working_directory: &'a Path,
+}
+
+/// Identity of the applet manifests a record was taken under: every manifest
+/// name with its binary and serialized body, hashed in name order. A resume
+/// that resolves the same applet name to a different manifest refuses instead
+/// of replaying stale blobs. This does not pin the bytes of the executables
+/// themselves: swapping a binary behind an identical manifest is not detected
+/// (see [`check_from_record_usable`]).
+pub fn registry_fingerprint(registry: &Registry) -> Result<String> {
+    let mut manifests = registry.manifests()?;
+    manifests.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut hash = Sha256::new();
+    hash.update(b"execute.record-provenance-v1");
+    for manifest in manifests {
+        hash.update(manifest.name.as_bytes());
+        hash.update([0]);
+        hash.update(manifest.binary.as_bytes());
+        hash.update([0]);
+        hash.update(serde_json::to_vec(manifest)?);
+        hash.update([0]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// The working directory as the record pins it: canonicalized when possible so
+/// a symlinked alias of the same directory still matches.
+fn pin_working_directory(directory: &Path) -> String {
+    std::fs::canonicalize(directory)
+        .unwrap_or_else(|_| directory.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Writes one finite run's record. Install it with `runtime::observe::install`.
@@ -102,6 +142,8 @@ pub struct Recorder {
     plan_text: String,
     inputs: Json,
     declared_secret_names: Vec<String>,
+    provenance_manifests: String,
+    provenance_cwd: String,
     state: Mutex<RecorderState>,
 }
 
@@ -183,6 +225,8 @@ impl Recorder {
         #[cfg(not(unix))]
         create_private_directory(&start.directory.join(BLOB_DIR))?;
         let (plan_text, plan_sha256) = prepare_plan(&redactor, start.plan);
+        let provenance_manifests = registry_fingerprint(start.registry)?;
+        let provenance_cwd = pin_working_directory(start.working_directory);
         let recorder = Self {
             #[cfg(not(unix))]
             directory: start.directory.to_path_buf(),
@@ -197,6 +241,8 @@ impl Recorder {
             plan_text,
             inputs: redact_json(&redactor, &start.inputs),
             declared_secret_names: security::declared_secret_environment_names(start.registry),
+            provenance_manifests,
+            provenance_cwd,
             redactor,
             state: Mutex::new(RecorderState {
                 loop_limit: None,
@@ -306,6 +352,10 @@ impl Recorder {
             },
             "redaction": {
                 "declared_secret_names": self.declared_secret_names,
+            },
+            "provenance": {
+                "manifests_sha256": self.provenance_manifests,
+                "cwd": self.provenance_cwd,
             },
         });
         let text = serde_json::to_string_pretty(&document)?;
@@ -497,6 +547,86 @@ pub struct StoredRecord {
     blobs_handle: Option<File>,
     pub run: Json,
     pub steps: Vec<StoredStep>,
+    /// The trace ended mid-line: the run died while a step line was being
+    /// written, so the last step may have run without being recorded.
+    /// Repair and resume refuse such records; `show-run` still opens them.
+    pub torn_trace: bool,
+}
+
+/// Refuse a repair or resume from a record that cannot prove its completed
+/// prefix. A truncated record (`run.truncated`, or a finished run whose trace
+/// holds fewer steps than `run.steps`) silently shortens the prefix and would
+/// re-run completed effects. A torn trace (the run died mid-line) may have a
+/// completed step with no trace entry at all. A record whose manifest or
+/// working-directory provenance no longer matches resolves applets, files and
+/// executables differently than the recorded run did, so replaying its blobs
+/// would answer a different program. Records without provenance predate it and
+/// are refused with a re-record hint.
+///
+/// What this still does not cover: `run.json` and `trace.jsonl` carry no
+/// authentication code (unlike checkpoint journals), so an edit that rewrites
+/// those files consistently — flipping a step's failure flag together with its
+/// status and outcome, or swapping an executable behind an identical manifest
+/// — is not detected. Only resume records written on this machine by a run you
+/// trust, from a directory only you can write.
+pub fn check_from_record_usable(
+    record: &StoredRecord,
+    registry: &Registry,
+    working_directory: &Path,
+) -> Result<()> {
+    if record.run["truncated"].as_bool().unwrap_or(false) {
+        bail!(
+            "the record {} is truncated: it kept hashes but not bytes for some steps, so the completed prefix cannot be replayed; re-run the repaired program without --from-record",
+            record.directory.display()
+        );
+    }
+    if record.torn_trace {
+        bail!(
+            "the record {} ends mid-line: the run died while writing the trace, so a completed step may have no entry; re-run the repaired program without --from-record",
+            record.directory.display()
+        );
+    }
+    if record.run["finished"].as_bool() == Some(true)
+        && record.run["steps"].as_u64() != Some(record.steps.len() as u64)
+    {
+        bail!(
+            "the record {} trace holds {} steps but run.json counts {}; the trace is incomplete, so the completed prefix cannot be trusted; re-run the repaired program without --from-record",
+            record.directory.display(),
+            record.steps.len(),
+            record.run["steps"]
+        );
+    }
+    let Some(expected_manifests) = record.run["provenance"]["manifests_sha256"].as_str() else {
+        bail!(
+            "the record {} has no manifest provenance; re-record it with this build, then repair and resume from the new record",
+            record.directory.display()
+        );
+    };
+    let actual_manifests = registry_fingerprint(registry)?;
+    if actual_manifests != expected_manifests {
+        bail!(
+            "the applet manifests changed since the record {} was written; replaying its blobs would answer a different program; re-record, then repair and resume from the new record",
+            record.directory.display()
+        );
+    }
+    if let Some(recorded_cwd) = record.run["provenance"]["cwd"].as_str() {
+        if !recorded_cwd.is_empty() {
+            let current = std::fs::canonicalize(working_directory)
+                .unwrap_or_else(|_| working_directory.to_path_buf())
+                .to_string_lossy()
+                .into_owned();
+            let canonical_recorded = std::fs::canonicalize(recorded_cwd)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| recorded_cwd.to_owned());
+            if current != recorded_cwd && current != canonical_recorded {
+                bail!(
+                    "the record {} was taken in a different working directory; replaying its blobs would resolve files and executables differently; re-record there or move the work back",
+                    record.directory.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 impl StoredRecord {
@@ -542,10 +672,19 @@ impl StoredRecord {
         let trace_line_count = trace.lines().count();
         let has_torn_final_line = run["finished"] == false && !trace.ends_with('\n');
         let mut steps = Vec::new();
+        let mut torn_trace = false;
         for (number, line) in trace.lines().enumerate() {
             let value: Json = match serde_json::from_str(line) {
                 Ok(value) => value,
-                Err(_) if number + 1 == trace_line_count && has_torn_final_line => break,
+                Err(_)
+                    if number + 1 == trace_line_count && has_torn_final_line =>
+                {
+                    // The run died mid-line: a completed step may have no trace
+                    // entry. The prefix is unprovable, so repair and resume
+                    // refuse this record while `show-run` still opens it.
+                    torn_trace = true;
+                    break;
+                }
                 Err(error) => {
                     return Err(error).with_context(|| format!("trace.jsonl line {}", number + 1));
                 }
@@ -573,6 +712,24 @@ impl StoredRecord {
         if run["finished"] == false {
             run["steps"] = json!(steps.len());
         }
+        // The program copy is content-addressed by run.json: a record whose
+        // copy no longer matches its hash was edited after the run, so its
+        // line numbers no longer bound any program. Records written before
+        // the hash was kept have no expected value and skip the check.
+        if let Some(expected) = run["program"]["sha256"].as_str() {
+            #[cfg(unix)]
+            let program_bytes = read_regular_no_follow_at(&directory_handle, PROGRAM_FILE)
+                .context("reading recorded program")?;
+            #[cfg(not(unix))]
+            let program_bytes = read_regular_no_follow(&program_directory.join(PROGRAM_FILE))
+                .context("reading recorded program")?;
+            if sha256_hex(&program_bytes) != expected {
+                bail!(
+                    "the record {} program copy does not match its recorded hash; the record was edited after the run",
+                    directory.display()
+                );
+            }
+        }
         Ok(Self {
             directory: directory.to_path_buf(),
             program_directory,
@@ -582,6 +739,7 @@ impl StoredRecord {
             blobs_handle,
             run,
             steps,
+            torn_trace,
         })
     }
 
@@ -1311,7 +1469,7 @@ mod bounded_record_tests {
     }
 
     #[test]
-    fn incomplete_record_opens_and_ignores_a_torn_final_trace_line() {
+    fn incomplete_record_opens_but_marks_a_torn_final_trace_line() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory.path().join(super::RUN_FILE),
@@ -1326,8 +1484,18 @@ mod bounded_record_tests {
         let record = StoredRecord::open(directory.path()).unwrap();
         assert_eq!(record.steps.len(), 1);
         assert_eq!(record.run["finished"], false);
+        // The torn tail is kept out of the steps, but the record remembers it
+        // so repair and resume can refuse the unprovable prefix.
+        assert!(record.torn_trace);
         let summary = super::show_run(directory.path(), false).unwrap();
         assert!(summary.contains("recorded run did not finish"));
+        let error = super::check_from_record_usable(
+            &record,
+            &crate::manifest::Registry::default(),
+            directory.path(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("ends mid-line"), "{error:#}");
     }
 
     #[test]
@@ -1340,11 +1508,13 @@ mod bounded_record_tests {
             plan: "plan",
             inputs: json!({}),
             registry: &registry,
+            working_directory: directory.path(),
         })
         .unwrap();
         drop(recorder);
         let record = StoredRecord::open(directory.path()).unwrap();
         assert_eq!(record.run["finished"], false);
         assert_eq!(record.run["steps"], 0);
+        assert!(!record.torn_trace);
     }
 }

@@ -422,11 +422,18 @@ impl Observer for PrefixReplayer {
     }
 
     fn suppresses_writes(&self, line: usize) -> bool {
-        line < self.boundary
+        // Lines below the recorded boundary are the completed prefix. Lines
+        // at or past it are suppressed while the run is still inside the
+        // prefix: every step executed before the fall-through already ran in
+        // the recorded run, including file writes in a failed block or a
+        // loop body whose lines sit at or past the boundary. Once the
+        // repaired suffix runs natively, only the completed prefix stays
+        // suppressed.
+        line < self.boundary || !self.fell_through()
     }
 
     fn suppresses_terminal_output(&self, line: usize) -> bool {
-        line < self.boundary
+        line < self.boundary || !self.fell_through()
     }
 }
 

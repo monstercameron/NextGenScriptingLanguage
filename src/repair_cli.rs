@@ -137,6 +137,10 @@ fn repair_from_record(
     if record.run["result"]["ok"].as_bool() == Some(true) {
         bail!("the record completed successfully; there is no failed suffix to repair");
     }
+    // A truncated, torn, or provenance-mismatched record cannot bound the
+    // repair: refuse it instead of guessing a boundary over completed steps.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    flow::record::check_from_record_usable(&record, registry, &cwd)?;
     let source = fs::read(program_path)
         .with_context(|| format!("reading {}", program_path.display()))?;
     if !flow::replay::program_matches_record(&record, &source) {

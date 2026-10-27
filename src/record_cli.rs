@@ -38,6 +38,7 @@ pub fn run_recorded(
         plan: &plan,
         inputs: record::inputs_json_for(&options.inputs, &program.inputs),
         registry,
+        working_directory: &options.working_directory,
     })?);
     recorder.set_loop_budget(options.max_loop_iterations, options.loop_budget_scope)?;
     let guard = runtime::observe::install(recorder.clone())?;
@@ -89,6 +90,11 @@ pub fn run_recorded(
 /// record; a group in the completed prefix that no longer matches is refused
 /// rather than re-run, and a group whose bytes were not recorded is refused
 /// with its step index and reason.
+///
+/// The completed prefix itself is pinned: the resume program must keep every
+/// byte before the recorded boundary, and a truncated, torn, or
+/// provenance-mismatched record refuses the resume instead of re-running
+/// completed effects.
 pub fn resume_from_record(
     program: &Program,
     source_path: &Path,
@@ -101,18 +107,21 @@ pub fn resume_from_record(
     if record.run["result"]["ok"].as_bool() == Some(true) {
         bail!("the record completed successfully; there is nothing to resume");
     }
-    if !replay::program_matches_record(&record, source.as_bytes()) {
-        eprintln!(
-            "resume: the program differs from the recorded one; the completed prefix must still match"
-        );
-    }
+    record::check_from_record_usable(&record, registry, &base_options.working_directory)?;
     if let Some(reason) = replay::unsupported_reason(program) {
         bail!("resume --from-record does not support {reason}");
     }
     let inputs = replay::recorded_inputs(&record)?;
     let (max_loop_iterations, loop_budget_scope) = replay::recorded_loop_budget(&record)?;
+    // The boundary comes from the recorded program, never from the program
+    // being resumed: line numbers in the untrusted file must not move the
+    // line that suppresses the completed prefix's file writes.
+    let recorded_source = record.program_source()?;
+    let recorded_text =
+        std::str::from_utf8(&recorded_source).context("the recorded program is not UTF-8")?;
     let (boundary, failed_line) =
-        flow::repair::from_record_boundary(source, Some(source_path), &record)?;
+        flow::repair::from_record_boundary(recorded_text, Some(source_path), &record)?;
+    flow::repair::check_resume_prefix(recorded_text, source, boundary)?;
     let replayer = Arc::new(replay::PrefixReplayer::new(record, registry, boundary)?);
     eprintln!(
         "resume: {} recorded steps, {} replayable{}",

@@ -710,7 +710,11 @@ Without a checkpoint, the same loop works from a run record: `execute repair
 the record's first failed step, and `execute resume FILE --from-record DIR`
 replays the recorded results instead of re-running them. A prefix that no
 longer matches, bytes the record never kept, and a record that completed
-successfully refuse the repair or resume with the step and reason.
+successfully refuse the repair or resume with the step and reason, as do
+truncated or torn records, edited program copies, and changed manifests or
+working directories. Records are not tamper-evident (no authentication code,
+unlike checkpoint journals): a consistently rewritten record, or an executable
+swapped behind an identical manifest, is not detected.
 
 Resume restores the latest completed node's output, named results, and working
 directory. It skips completed commands and saves, including commands that are not

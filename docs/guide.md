@@ -522,8 +522,23 @@ execute resume deploy.program --from-record .runs/deploy
 
 A prefix that no longer matches the record, bytes the record never kept, and a
 record that completed successfully are refused with the step and reason instead
-of re-running anything. The repair is logged in `repairs.jsonl` beside the
-record; `run.json` and `trace.jsonl` are never modified.
+of re-running anything. The same refusal covers records that outgrew their byte
+budget (`truncated`), traces the run died in the middle of (torn), records whose
+program copy no longer matches its recorded hash, and resumes under different
+applet manifests or from a different working directory than the recorded run:
+none of them can prove the completed prefix, so none of them re-runs it. The
+resume program must keep every byte before the recorded boundary; the boundary
+itself comes from the recorded program, never from the file being resumed. The
+repair is logged in `repairs.jsonl` beside the record; `run.json` and
+`trace.jsonl` are never modified.
+
+Records are not tamper-evident. Unlike checkpoint journals, `run.json` and
+`trace.jsonl` carry no authentication code, so an edit that rewrites those
+files consistently — for example flipping a step's failure flag together with
+its status — is not detected, and neither is swapping an executable behind an
+identical manifest. Only resume records written on this machine by a run you
+trust, from a record directory only you can write (record directories are
+private to their owner).
 
 ## Try statements in a session
 

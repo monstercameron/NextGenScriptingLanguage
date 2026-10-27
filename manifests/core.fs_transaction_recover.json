@@ -78,5 +78,26 @@
       "filesystem.lock"
     ],
     "result_envelope": true
-  }
+  },
+  "parameter_alternatives": [
+    {
+      "message": "lock_timeout_ms must be an integer from 0 through 300000",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "lock_timeout_ms"
+          }
+        ],
+        [
+          {
+            "test": "number_range",
+            "parameter": "lock_timeout_ms",
+            "minimum": 0,
+            "maximum": 300000
+          }
+        ]
+      ]
+    }
+  ]
 }

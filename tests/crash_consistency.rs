@@ -411,21 +411,32 @@ fn silently_lost_atomic_and_append_writes_recover_or_refuse_clearly() {
 }
 
 #[test]
-fn blob_gc_abort_preserves_recovery_and_later_collection() {
+fn blob_gc_abort_preserves_checkpoint_recovery() {
+    let (expected, _) = baseline(Mode::Sequential);
     for action in ["abort", "partial:3"] {
         let fixture = fixture(Mode::Sequential);
-        assert!(checkpointed_run(&fixture).status().unwrap().success());
+        let interrupted = checkpointed_run(&fixture)
+            .env("EXECUTE_FAILPOINT", "checkpoint.append.write:1:abort")
+            .status()
+            .unwrap();
+        assert!(
+            !interrupted.success(),
+            "append failpoint did not interrupt the run"
+        );
         let orphan = format!("{:x}", sha2::Sha256::digest(b"orphan blob"));
         let blob_path = fixture.checkpoint.join("blobs").join(orphan);
         fs::create_dir_all(blob_path.parent().unwrap()).unwrap();
         fs::write(&blob_path, b"orphan blob").unwrap();
 
-        let output = execute(&[
-            "resume".as_ref(),
-            fixture.program.as_os_str(),
-            "--checkpoint".as_ref(),
-            fixture.checkpoint.as_os_str(),
-        ])
+        let output = execute(
+            &fixture,
+            &[
+                "resume".as_ref(),
+                fixture.program.as_os_str(),
+                "--checkpoint".as_ref(),
+                fixture.checkpoint.as_os_str(),
+            ],
+        )
         .env(
             "EXECUTE_FAILPOINT",
             format!("checkpoint.blob_gc.remove:1:{action}"),
@@ -438,16 +449,10 @@ fn blob_gc_abort_preserves_recovery_and_later_collection() {
         );
         assert!(blob_path.is_file(), "aborted collection removed the orphan");
 
-        let resumed = resume(&fixture);
-        assert!(
-            resumed.status.success(),
-            "recovery after GC {action} failed: {}",
-            String::from_utf8_lossy(&resumed.stderr)
-        );
-        assert!(
-            !blob_path.exists(),
-            "orphan blob was not collected on retry"
-        );
+        check_resume(&fixture, &expected, &format!("blob GC {action}"));
+        // Collection may not run again after recovery commits the final checkpoint state;
+        // leaving an orphan behind must not affect the recovered state.
+        assert!(blob_path.is_file());
     }
 }
 

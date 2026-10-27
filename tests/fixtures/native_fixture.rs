@@ -20,8 +20,12 @@ fn main() {
         "invalid-utf8" => {
             // Raw bytes for the Windows console replacement contract: 0xFF is
             // not valid UTF-8, so a console must show U+FFFD while a pipe keeps
-            // the exact bytes.
-            std::io::stdout().write_all(&[0xFF, 0x41]).unwrap();
+            // the exact bytes. Flush while still attached so the bytes reach
+            // the ConPTY screen before teardown instead of being lost or
+            // landing on the test runner.
+            let mut stdout = std::io::stdout();
+            stdout.write_all(&[0xFF, 0x41]).unwrap();
+            stdout.flush().unwrap();
         }
         "repeat-byte" => {
             let mut remaining: usize = args[1].parse().unwrap();

@@ -665,9 +665,14 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         },
     };
 
+    // The ConPTY host pipes must never be inherited by the child: explicit
+    // FALSE keeps the host ends out of the child's handle table (no fd
+    // leaks), and CreateProcessW below uses bInheritHandles FALSE so the
+    // parent's redirected cargo-test stdio stays out as well.
     let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-        ..Default::default()
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: FALSE,
     };
     let mut in_read: HANDLE = std::ptr::null_mut();
     let mut in_write: HANDLE = std::ptr::null_mut();
@@ -750,9 +755,19 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         std::io::Error::last_os_error()
     );
 
+    // Per STARTUPINFO docs, without STARTF_USESTDHANDLES the hStd* members
+    // are ignored and stdio defaults to the console window's buffer. For a
+    // ConPTY child that buffer is the pseudo-console screen, not the
+    // parent's redirected cargo-test pipes, so attached output (including
+    // the console U+FFFD replacement) reaches the captured screen instead
+    // of leaking to the test runner. Explicit zeros lock that contract in.
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+            dwFlags: 0,
+            hStdInput: std::ptr::null_mut(),
+            hStdOutput: std::ptr::null_mut(),
+            hStdError: std::ptr::null_mut(),
             ..Default::default()
         },
         lpAttributeList: attr_list,

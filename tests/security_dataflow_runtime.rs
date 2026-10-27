@@ -69,6 +69,7 @@ fn remote_manifest(
             kind: OutputType::Text,
             encoding: flow::contracts::OutputEncoding::Raw,
             enum_values: None,
+            same_as_parameter: None,
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),

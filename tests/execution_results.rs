@@ -582,6 +582,7 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
         kind: OutputType::Json,
         encoding: OutputEncoding::Json,
         enum_values: None,
+        same_as_parameter: None,
         items: None,
         fields: BTreeMap::new(),
         required: Vec::new(),

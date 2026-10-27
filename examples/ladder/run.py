@@ -11,6 +11,7 @@ from pathlib import Path
 import selectors
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,8 @@ MAX_FIXTURES = 16 * 1024 * 1024
 MAX_CAPTURE = 16 * 1024 * 1024
 MAX_SOURCE = 64 * 1024
 SPECIAL_INPUTS = {'stdin', 'working directory', 'working_directory', '.'}
+ISOLATED_STATE_HOME = '.execute-state'
+WHAT_IF_KEY = Path(ISOLATED_STATE_HOME) / 'execute' / 'what-if.key'
 
 
 def relative_path(name):
@@ -214,7 +217,8 @@ def environment(cwd):
     env = {key: value for key, value in os.environ.items()
            if key not in {'BASH_ENV', 'ENV', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP'}
            and not key.startswith('BASH_FUNC_')}
-    env.update(LC_ALL='C', HOME=str(cwd), TMPDIR=str(cwd))
+    env.update(LC_ALL='C', HOME=str(cwd), TMPDIR=str(cwd),
+               XDG_STATE_HOME=str(cwd / ISOLATED_STATE_HOME))
     return env
 
 
@@ -400,6 +404,53 @@ def summarize(result, cwd, case, phase='first'):
     return report
 
 
+def verify_isolated_state(cwd, expected):
+    """Require only the private checkpoint key inside this case's state home."""
+    state_home = cwd / ISOLATED_STATE_HOME
+    if not expected:
+        if state_home.exists() or state_home.is_symlink():
+            raise AssertionError('unexpected per-user state was created')
+        return None
+
+    state_dir = state_home / 'execute'
+    key = cwd / WHAT_IF_KEY
+    for directory in (state_home, state_dir):
+        try:
+            metadata = directory.lstat()
+        except FileNotFoundError as error:
+            raise AssertionError(f'missing isolated state directory: {directory.relative_to(cwd)}') from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise AssertionError(f'isolated state path is not a directory: {directory.relative_to(cwd)}')
+        if os.name == 'posix' and stat.S_IMODE(metadata.st_mode) != 0o700:
+            raise AssertionError(f'isolated state directory is not mode 0700: {directory.relative_to(cwd)}')
+
+    try:
+        metadata = key.lstat()
+    except FileNotFoundError as error:
+        raise AssertionError(f'missing generated checkpoint key: {WHAT_IF_KEY.as_posix()}') from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise AssertionError('generated checkpoint key is not a regular file')
+    if os.name == 'posix' and stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise AssertionError('generated checkpoint key is not mode 0600')
+    contents = key.read_bytes()
+    if len(contents) != 32:
+        raise AssertionError('generated checkpoint key is not exactly 32 bytes')
+
+    actual = {path.relative_to(state_home).as_posix() for path in state_home.rglob('*')}
+    expected_paths = {'execute', 'execute/what-if.key'}
+    if actual != expected_paths:
+        raise AssertionError(f'unexpected isolated state entries: {sorted(actual - expected_paths)}')
+    return contents
+
+
+def audit_outputs(cwd, allowed, allowed_prefixes=()):
+    """Reject every output outside the case's exact oracle and allowances."""
+    for path in cwd.rglob('*'):
+        name = path.relative_to(cwd).as_posix()
+        if path.is_file() and name not in allowed and not any(name.startswith(prefix) for prefix in allowed_prefixes):
+            raise AssertionError(f'undeclared output file: {name}')
+
+
 def run_case(binary, case, program_dir=HERE, manifests=PROJECT / 'manifests'):
     with tempfile.TemporaryDirectory(prefix=f'execute-utility-{case["number"]:03}-') as tmp:
         cwd = Path(tmp)
@@ -414,21 +465,25 @@ def run_case(binary, case, program_dir=HERE, manifests=PROJECT / 'manifests'):
             args += ['--cache-dir', 'cache']
         first = interactive(binary, cwd, args, case) if case.get('mode') in {'interactive', 'tail', 'tail_stream'} else invoke(binary, cwd, args, case.get('timeout', 10), case.get('stdin', '').encode())
         verify(first, cwd, case)
+        key_contents = verify_isolated_state(cwd, case.get('mode') == 'cache')
         for name, data in mapping_bytes(case, 'fixtures', 'fixtures_base64').items():
             if name not in case['outputs']:
                 expected_input = data + case.get('stdin', '').encode() if name == case.get('append_path') else data
                 assert (cwd / name).read_bytes() == expected_input, f'undeclared mutation of input: {name}'
         allowed = set(mapping_bytes(case, 'fixtures', 'fixtures_base64')) | set(case['outputs']) | {case['file']}
-        for path in cwd.rglob('*'):
-            name = path.relative_to(cwd).as_posix()
-            if path.is_file() and name not in allowed and not (case.get('mode') == 'cache' and name.startswith('cache/')):
-                raise AssertionError(f'undeclared output file: {name}')
+        if key_contents is not None:
+            allowed.add(WHAT_IF_KEY.as_posix())
+        cache_prefixes = ('cache/',) if case.get('mode') == 'cache' else ()
+        audit_outputs(cwd, allowed, cache_prefixes)
         phases = {'first': summarize(first, cwd, case)}
         if case.get('mode') == 'cache':
             for name, text in case.get('mutate', {}).items():
                 (cwd / relative_path(name)).write_bytes(text.encode())
             after = invoke(binary, cwd, args, case.get('timeout', 10), case.get('stdin', '').encode())
             verify(after, cwd, case, 'after')
+            if verify_isolated_state(cwd, True) != key_contents:
+                raise AssertionError('checkpoint key changed during the cache reuse phase')
+            audit_outputs(cwd, allowed, cache_prefixes)
             traces = events(after)
             if case.get('after_event'):
                 assert any(e['event'] == case['after_event'] for e in traces), f'missing {case["after_event"]}'

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise utility-runner boundaries without running user-authored programs."""
 import importlib.util
+import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import unittest
@@ -59,6 +61,40 @@ class UtilityRunnerContracts(unittest.TestCase):
     def test_comment_normalization_preserves_hashes_inside_parameters(self):
         self.assertEqual(runner.normalized_source('# heading\nrun printf with message "a#b" # note\n'),
                          'run printf with message "a#b"')
+
+    def test_checkpoint_key_is_isolated_private_and_exactly_audited(self):
+        with tempfile.TemporaryDirectory() as name:
+            cwd = Path(name)
+            state_home = cwd / runner.ISOLATED_STATE_HOME
+            state_dir = state_home / 'execute'
+            state_dir.mkdir(parents=True, mode=0o700)
+            key = cwd / runner.WHAT_IF_KEY
+            key.write_bytes(b'k' * 32)
+            if os.name == 'posix':
+                state_home.chmod(0o700)
+                state_dir.chmod(0o700)
+                key.chmod(0o600)
+
+            contents = runner.verify_isolated_state(cwd, expected=True)
+            self.assertEqual(contents, b'k' * 32)
+            runner.audit_outputs(cwd, {runner.WHAT_IF_KEY.as_posix()})
+
+            if os.name == 'posix':
+                key.chmod(0o644)
+                with self.assertRaisesRegex(AssertionError, 'mode 0600'):
+                    runner.verify_isolated_state(cwd, expected=True)
+                key.chmod(0o600)
+
+            (cwd / 'unrelated.txt').write_text('unexpected')
+            with self.assertRaisesRegex(AssertionError, 'undeclared output file: unrelated.txt'):
+                runner.audit_outputs(cwd, {runner.WHAT_IF_KEY.as_posix()})
+
+    def test_unexpected_checkpoint_state_is_rejected_for_non_cache_case(self):
+        with tempfile.TemporaryDirectory() as name:
+            cwd = Path(name)
+            (cwd / runner.ISOLATED_STATE_HOME).mkdir()
+            with self.assertRaisesRegex(AssertionError, 'unexpected per-user state'):
+                runner.verify_isolated_state(cwd, expected=False)
 
 
 if __name__ == '__main__':

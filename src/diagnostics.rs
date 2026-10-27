@@ -232,6 +232,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a literal parameter value violates a statically known applet constraint",
         example: "run wait.until with probe \"tcp_port_open\" and host \"8.8.8.8\" and port 443 and timeout_ms 0",
         typical_fix: "Use a loopback IP address for the TCP port probe.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "applet.pipeline.incompatible",

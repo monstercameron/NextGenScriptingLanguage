@@ -1561,9 +1561,7 @@ fn complete_for_each(
     let Some(in_at) = words.iter().position(|word| *word == "in") else {
         // No `in` yet: `for each <name> ` expects it; anything shorter is
         // still the new iteration binding, which completes nothing.
-        if ends_with_space && words.len() >= 3 {
-            push_keyword(items, "in", "List value to iterate");
-        } else if !ends_with_space && words.len() == 4 {
+        if (ends_with_space && words.len() >= 3) || (!ends_with_space && words.len() == 4) {
             push_keyword(items, "in", "List value to iterate");
         }
         return;
@@ -1900,16 +1898,14 @@ fn complete_use(
             // (or any other) completion applies, matching every other new
             // binding position (`take ... as`, `spawn as`, `read ... as`).
         }
-        Some("without") => {
+        Some("without") if words.get(2).is_none() || (words.len() == 3 && !ends_with_space) => {
             // `use without environment [...]`: the only follow-up is the
             // `environment` keyword itself.
-            if words.get(2).is_none() || (words.len() == 3 && !ends_with_space) {
-                push_keyword(
-                    items,
-                    "environment",
-                    "Remove workflow environment variables",
-                );
-            }
+            push_keyword(
+                items,
+                "environment",
+                "Remove workflow environment variables",
+            );
         }
         _ => {}
     }
@@ -2114,7 +2110,6 @@ fn complete_then_statement(
                 if words.len() == 4 && !ends_with_space {
                     push_keyword(items, "as json", "Encode the value as JSON");
                 }
-                return;
             }
             // `then encode <value> as json` is complete.
         }
@@ -2654,7 +2649,7 @@ fn push_suffix_forms_filtered(
             max_core = Some(max_core.map_or(rank, |current: u8| current.max(rank)));
         }
     }
-    let ordered = |rank: u8| max_core.map_or(true, |maximum| maximum <= rank);
+    let ordered = |rank: u8| max_core.is_none_or(|maximum| maximum <= rank);
     for form in crate::parser::invocation_suffix_forms() {
         let offer = match form.label {
             "as" => !has_as && ordered(0),
@@ -2692,9 +2687,9 @@ fn push_suffix_forms_filtered(
     }
 }
 
-/// Suffix forms are always pushed filtered (see `push_suffix_forms_filtered`);
-/// there is no unfiltered push, so following a suggestion never teaches a
-/// rejected or misordered combination.
+// Suffix forms are always pushed filtered (see `push_suffix_forms_filtered`);
+// there is no unfiltered push, so following a suggestion never teaches a
+// rejected or misordered combination.
 
 /// Push applet names plus one snippet per applet with required parameters.
 fn push_applet_names(items: &mut Vec<JsonValue>, manifests: &[&crate::manifest::Manifest]) {

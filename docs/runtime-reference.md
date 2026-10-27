@@ -530,14 +530,12 @@ runs in cannot shadow bundled applets.
 
 **Bundled manifest index.** The shipped manifests are also embedded in the binary as
 one deflate stream per manifest with a generated index (names, phrases, sizes and
-offsets). When the default directory holds exactly the indexed files, with the same
-names and byte sizes, the registry is served from the index: a manifest body is
-inflated and parsed when it is first used, so startup does not read and validate every
-file. Any other
-default directory takes the full load with its usual errors, and a directory chosen
-with `--manifest-dir` or `--manifest-catalog` always takes the full validation. The
-match is by name and size, so an in-place edit that keeps a file's size is not seen
-by the default path; use `--manifest-dir` when you edit manifests. A test fails when
+offsets). The default directory must contain exactly the bundled JSON file set;
+extra, missing or non-regular entries are refused. A manifest's on-disk content is
+checked against the bundled SHA-256 digest before it is first used; `check` verifies
+all bundled entries. Use `--manifest-dir` or `--manifest-catalog` to load edited or
+custom manifests explicitly. Daemon cache validation hashes explicit sources on each
+request, so restored modification times do not hide edits. A test fails when
 the checked-in index no longer matches `manifests/`. The catalog includes `cd`, `pwd`, `ls`, `cat`, `printf`, `tr`,
 `wc`, `tail`, `grep`, `sort`, `uniq`, `cut`, `head`, `false`, and a `git.commit` mapping. Older aliases remain available.
 Git bindings are provided for inspection; the tests and demos do not commit/push.

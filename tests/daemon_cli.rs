@@ -1317,3 +1317,48 @@ fn daemon_rejects_invalid_run_limits_before_listening() {
         assert!(!default_socket_under(runtime.path()).exists());
     }
 }
+
+#[test]
+fn forwarded_run_reloads_same_size_manifest_changes_with_restored_mtime() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let manifests_dir = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let path = manifests_dir.path().join("printf.json");
+    fs::copy(manifests().join("printf.json"), &path).unwrap();
+    let first = run_with_manifests(
+        runtime.path(),
+        work.path(),
+        manifests_dir.path(),
+        &["--daemon"],
+    );
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(first.stdout, b"out\n");
+    let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+    let source = fs::read_to_string(&path).unwrap();
+    let changed = source.replace(r#"%s\\n"#, r#"%s\\t"#);
+    assert_ne!(changed, source);
+    assert_eq!(changed.len(), source.len());
+    fs::write(&path, changed).unwrap();
+    fs::File::open(&path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(mtime))
+        .unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), mtime);
+    let second = run_with_manifests(
+        runtime.path(),
+        work.path(),
+        manifests_dir.path(),
+        &["--daemon"],
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(second.stdout, b"out\t");
+}

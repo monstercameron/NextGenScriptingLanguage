@@ -13,7 +13,6 @@ use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 /// Entries kept at once. When a new entry arrives beyond this, the least recently used goes.
 const CAPACITY: usize = 8;
@@ -25,10 +24,9 @@ pub enum Source {
     Catalog(PathBuf),
 }
 
-/// The name, size and modification time of each file a registry was built from. The top-level
-/// JSON files of a directory are what the registry reads, so those are what it stamps.
+/// File names, resolved origins and content digests for the source used by the registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Stamp(Vec<(OsString, u64, Option<SystemTime>)>);
+struct Stamp(Vec<(OsString, PathBuf, [u8; 32])>);
 
 struct Entry {
     source: Source,
@@ -64,7 +62,11 @@ pub fn load(source: Source, build: impl FnOnce() -> Result<Registry>) -> Result<
         return Ok(copy);
     }
     let built = build()?;
-    keep(source, current, built.detached());
+    if built.loaded_file_fingerprint() == Some(current.0.as_slice())
+        && stamp(&source).is_ok_and(|after| after == current)
+    {
+        keep(source, current, built.detached());
+    }
     Ok(built)
 }
 
@@ -79,11 +81,15 @@ pub fn warm(source: Source, build: impl FnOnce() -> Result<Registry>) -> Result<
         return Ok(());
     }
     let built = build()?;
-    keep(source, current, built);
+    if built.loaded_file_fingerprint() == Some(current.0.as_slice())
+        && stamp(&source).is_ok_and(|after| after == current)
+    {
+        keep(source, current, built);
+    }
     Ok(())
 }
 
-/// The stamp of `source` now: one listing of a directory, or one stat of a catalog.
+/// Hash each manifest in a directory, or the bytes of one catalog.
 fn stamp(source: &Source) -> std::io::Result<Stamp> {
     match source {
         Source::Directory(path) => {
@@ -95,22 +101,40 @@ fn stamp(source: &Source) -> std::io::Result<Stamp> {
                     .extension()
                     .is_some_and(|ext| ext == "json")
                 {
-                    let metadata = fs::metadata(entry.path())?;
-                    files.push((name, metadata.len(), metadata.modified().ok()));
+                    let path = entry.path();
+                    files.push((name, fs::canonicalize(&path)?, digest(&path)?));
                 }
             }
             files.sort_by(|a, b| a.0.cmp(&b.0));
             Ok(Stamp(files))
         }
-        Source::Catalog(path) => {
-            let metadata = fs::metadata(path)?;
-            Ok(Stamp(vec![(
-                path.file_name().unwrap_or_default().to_owned(),
-                metadata.len(),
-                metadata.modified().ok(),
-            )]))
-        }
+        Source::Catalog(path) => Ok(Stamp(vec![(
+            path.file_name().unwrap_or_default().to_owned(),
+            fs::canonicalize(path)?,
+            digest(path)?,
+        )])),
     }
+}
+
+// Stream content so the stamp is independent of modification times without buffering
+// an entire manifest; never block on a FIFO masquerading as a JSON file.
+fn digest(path: &Path) -> std::io::Result<[u8; 32]> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "manifest is not a regular file",
+        ));
+    }
+    flow::manifest::fingerprint_exact(&mut file, metadata.len())
 }
 
 /// Applies `use_entry` to the cached registry for `source` when its stamp still matches, and
@@ -238,6 +262,174 @@ mod tests {
         })
         .unwrap();
         assert_eq!(builds, 1, "a changed size is a changed stamp");
+    }
+
+    #[test]
+    fn same_size_edit_with_restored_mtime_rebuilds_the_entry() {
+        let directory = manifest_dir(&["alpha"]);
+        let source = directory_source(&directory);
+        load(source.clone(), || Registry::load(directory.path())).unwrap();
+        let path = directory.path().join("alpha.json");
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        let original = fs::read_to_string(&path).unwrap();
+        let changed = original.replace("alpha", "bravo");
+        assert_ne!(changed, original);
+        assert_eq!(changed.len(), original.len());
+        fs::write(&path, changed).unwrap();
+        fs::File::open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(before))
+            .unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+        let result = load(source, || Registry::load(directory.path())).unwrap();
+        assert_eq!(names(&result), vec!["bravo".to_owned()]);
+    }
+
+    #[test]
+    fn same_size_catalog_edit_changes_stamp_even_when_mtime_is_restored() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("catalog.json");
+        fs::write(&path, b"{\"name\":\"alpha\"}").unwrap();
+        let source = Source::Catalog(path.clone());
+        let before = stamp(&source).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::write(&path, b"{\"name\":\"bravo\"}").unwrap();
+        fs::File::open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        assert_ne!(before, stamp(&source).unwrap());
+    }
+
+    #[test]
+    fn aba_changes_cannot_cache_registry_under_a_different_digest() {
+        for catalog in [false, true] {
+            for warming in [false, true] {
+                let directory = manifest_dir(&[]);
+                let path = directory.path().join(if catalog {
+                    "catalog.json"
+                } else {
+                    "entry.json"
+                });
+                let manifest =
+                    |name| format!(r#"{{"name":"{name}","binary":"printf","arguments":[]}}"#);
+                let source_text = |name| {
+                    if catalog {
+                        format!(
+                            r#"{{"format":"execute.manifest-catalog","version":1,"manifests":[{}]}}"#,
+                            manifest(name)
+                        )
+                    } else {
+                        manifest(name)
+                    }
+                };
+                let a = source_text("alpha");
+                let b = source_text("bravo");
+                assert_eq!(a.len(), b.len());
+                fs::write(&path, &a).unwrap();
+                let source = if catalog {
+                    Source::Catalog(path.clone())
+                } else {
+                    directory_source(&directory)
+                };
+                let build = || -> Result<Registry> {
+                    fs::write(&path, &b)?;
+                    let built = if catalog {
+                        Registry::load_catalog(&path)?
+                    } else {
+                        Registry::load(directory.path())?
+                    };
+                    fs::write(&path, &a)?;
+                    Ok(built)
+                };
+                if warming {
+                    warm(source.clone(), build).unwrap();
+                } else {
+                    assert_eq!(names(&load(source.clone(), build).unwrap()), vec!["bravo"]);
+                }
+                let mut rebuilt = false;
+                let current = load(source, || {
+                    rebuilt = true;
+                    if catalog {
+                        Registry::load_catalog(&path)
+                    } else {
+                        Registry::load(directory.path())
+                    }
+                })
+                .unwrap();
+                assert!(
+                    rebuilt,
+                    "ABA registry must not be cached (catalog={catalog}, warm={warming})"
+                );
+                assert_eq!(names(&current), vec!["alpha"]);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_sources_fail_without_blocking_even_on_stamp_fallback() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fifo.json");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
+        for catalog in [false, true] {
+            let path = path.clone();
+            let dir = directory.path().to_path_buf();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                enable();
+                let source = if catalog {
+                    Source::Catalog(path.clone())
+                } else {
+                    Source::Directory(dir.clone())
+                };
+                warm(source.clone(), || {
+                    if catalog {
+                        Registry::load_catalog(&path)
+                    } else {
+                        Registry::load(&dir)
+                    }
+                })
+                .unwrap();
+                let result = load(source, || {
+                    if catalog {
+                        Registry::load_catalog(&path)
+                    } else {
+                        Registry::load(&dir)
+                    }
+                });
+                tx.send(result.is_err()).unwrap();
+            });
+            assert!(rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("FIFO read blocked"));
+        }
+    }
+
+    #[test]
+    fn source_changed_during_build_is_not_cached() {
+        let directory = manifest_dir(&["alpha"]);
+        let source = directory_source(&directory);
+        load(source.clone(), || {
+            let registry = Registry::load(directory.path())?;
+            write_manifest(directory.path(), "beta");
+            Ok(registry)
+        })
+        .unwrap();
+        let mut rebuilt = false;
+        load(source, || {
+            rebuilt = true;
+            Registry::load(directory.path())
+        })
+        .unwrap();
+        assert!(rebuilt);
     }
 
     #[test]

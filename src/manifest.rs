@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 use std::any::{Any, TypeId};
 use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -288,6 +290,7 @@ struct RegistryData {
     manifests: Arc<Manifests>,
     names: Arc<BTreeMap<String, usize>>,
     module_root: Option<PathBuf>,
+    loaded_file_fingerprint: Option<Vec<(OsString, PathBuf, [u8; 32])>>,
     scope_identity: Option<String>,
     host_state: Arc<Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
 }
@@ -337,16 +340,111 @@ impl Default for Manifests {
     }
 }
 
+// Check the opened object, not an earlier path lookup. Unix opens are nonblocking
+// so a FIFO substituted during a lookup is refused without hanging. Bundled files
+// also reject symlinks and reparse points; explicit sources retain symlink support.
+fn open_regular_manifest(path: &Path, nofollow: bool) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(
+            libc::O_NONBLOCK | libc::O_CLOEXEC | if nofollow { libc::O_NOFOLLOW } else { 0 },
+        );
+    }
+    #[cfg(windows)]
+    if nofollow {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(not(any(unix, windows)))]
+    if nofollow && fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "manifest is a symbolic link",
+        ));
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "manifest is not a regular file",
+        ));
+    }
+    #[cfg(windows)]
+    if nofollow && crate::platform::windows::is_reparse(&metadata) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "manifest is a reparse point",
+        ));
+    }
+    Ok(file)
+}
+
+fn read_manifest_file(path: &Path) -> std::io::Result<String> {
+    let file = open_regular_manifest(path, false)?;
+    let size = file.metadata()?.len();
+    let limit = size.checked_add(1).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "manifest is too large")
+    })?;
+    let mut raw = String::new();
+    file.take(limit).read_to_string(&mut raw)?;
+    if raw.len() as u64 != size {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "manifest changed while being read",
+        ));
+    }
+    Ok(raw)
+}
+
+/// Hash exactly `size` bytes, reading at most one extra byte to detect growth.
+#[doc(hidden)]
+pub fn fingerprint_exact(reader: &mut impl Read, size: u64) -> std::io::Result<[u8; 32]> {
+    let limit = size.checked_add(1).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "manifest is too large")
+    })?;
+    let mut limited = reader.take(limit);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    let mut total = 0u64;
+    loop {
+        let count = limited.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total += count as u64;
+        hasher.update(&buffer[..count]);
+    }
+    if total != size {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "manifest changed while being read",
+        ));
+    }
+    Ok(hasher.finalize().into())
+}
+
 /// Whether the file for a bundled entry is still a plain file with indexed content.
 fn entry_matches(root: &Path, entry: &bundled_manifests::BundledEntry) -> bool {
-    let path = root.join(entry.file());
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
+    let Ok(mut file) = open_regular_manifest(&root.join(entry.file()), true) else {
         return false;
     };
-    if !metadata.is_file() || metadata.len() != entry.bytes() {
+    if !file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() == entry.bytes())
+    {
         return false;
     }
-    fs::read(path).is_ok_and(|contents| format!("{:x}", Sha256::digest(contents)) == entry.sha256())
+    fingerprint_exact(&mut file, entry.bytes()).is_ok_and(|digest| {
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            == entry.sha256()
+    })
 }
 
 fn manifest_mismatch_message(root: &Path, entry: &bundled_manifests::BundledEntry) -> String {
@@ -526,17 +624,24 @@ impl Registry {
             module_root,
             ..RegistryData::default()
         };
+        let mut fingerprint = Vec::new();
         for (path, plain) in paths {
-            let raw = fs::read_to_string(&path)
+            let raw = read_manifest_file(&path)
                 .with_context(|| format!("reading manifest {}", path.display()))?;
             let origin = match (&canonical_dir, path.file_name(), plain) {
                 (Some(root), Some(name), true) => root.join(name),
                 _ => fs::canonicalize(&path)
                     .with_context(|| format!("canonicalizing manifest {}", path.display()))?,
             };
+            fingerprint.push((
+                path.file_name().unwrap_or_default().to_owned(),
+                origin.clone(),
+                Sha256::digest(raw.as_bytes()).into(),
+            ));
             Self::insert_source(&mut data, &raw, Some(origin))
                 .with_context(|| format!("invalid manifest {}", path.display()))?;
         }
+        data.loaded_file_fingerprint = Some(fingerprint);
         Ok(Self {
             data: Arc::new(data),
         })
@@ -549,7 +654,7 @@ impl Registry {
     /// then runs in array order. A later syntax error therefore takes
     /// precedence over an earlier semantic manifest error.
     pub fn load_catalog(path: &Path) -> Result<Self> {
-        let raw = fs::read_to_string(path)
+        let raw = read_manifest_file(path)
             .with_context(|| format!("reading manifest catalog {}", path.display()))?;
         let origin = fs::canonicalize(path)
             .with_context(|| format!("canonicalizing manifest catalog {}", path.display()))?;
@@ -579,6 +684,11 @@ impl Registry {
 
         let mut data = RegistryData {
             module_root: Some(module_root),
+            loaded_file_fingerprint: Some(vec![(
+                origin.file_name().unwrap_or_default().to_owned(),
+                origin.clone(),
+                Sha256::digest(raw.as_bytes()).into(),
+            )]),
             ..RegistryData::default()
         };
         for (index, manifest) in catalog.manifests.iter().enumerate() {
@@ -630,6 +740,7 @@ impl Registry {
             manifests: Arc::new(Manifests::default()),
             names: Arc::new(names),
             module_root: self.data.module_root.clone(),
+            loaded_file_fingerprint: None,
             scope_identity: None,
             host_state: Arc::clone(&self.data.host_state),
         };
@@ -707,8 +818,9 @@ impl Registry {
     }
 
     /// Load the default manifest directory. When it holds the bundled file names (and,
-    /// with [`ManifestCheck::Full`], their contents), the bundled index serves it; any other
-    /// directory takes the full load. A missing directory is an empty registry.
+    /// with [`ManifestCheck::Full`], their contents), the bundled index serves it.
+    /// Other directory contents require an explicit manifest selector.
+    /// A missing directory is an empty registry.
     pub fn load_default(path: &Path, check: ManifestCheck) -> Result<Self> {
         match fs::metadata(path) {
             Ok(metadata) if metadata.is_dir() => {
@@ -729,8 +841,10 @@ impl Registry {
     ) -> Result<Self> {
         debug_assert!(metadata.is_dir());
         let index = bundled_manifests::index()?;
-        if !matches!(bundled_manifests::directory_matches(path, index), Ok(true)) {
-            return Self::load(path);
+        if !bundled_manifests::directory_matches(path, index)
+            .with_context(|| format!("checking default manifest directory {}", path.display()))?
+        {
+            bail!("default manifest directory {} differs from the bundled file set; pass --manifest-dir {} to load custom manifests as files", path.display(), path.display());
         }
         let canonical_root = fs::canonicalize(path)
             .with_context(|| format!("canonicalizing manifest root {}", path.display()))?;
@@ -872,6 +986,12 @@ impl Registry {
         self.data.scope_identity.as_deref()
     }
 
+    /// Digests of the exact file bytes parsed into this unmodified file-backed registry.
+    #[doc(hidden)]
+    pub fn loaded_file_fingerprint(&self) -> Option<&[(OsString, PathBuf, [u8; 32])]> {
+        self.data.loaded_file_fingerprint.as_deref()
+    }
+
     /// An independent registry over the same manifests, with a fresh host-state map. The
     /// manifests are copied, so host state set on the copy (a capability policy, for example)
     /// is visible neither to this registry nor to any other copy.
@@ -881,6 +1001,7 @@ impl Registry {
                 manifests: Arc::clone(&self.data.manifests),
                 names: Arc::clone(&self.data.names),
                 module_root: self.data.module_root.clone(),
+                loaded_file_fingerprint: self.data.loaded_file_fingerprint.clone(),
                 scope_identity: self.data.scope_identity.clone(),
                 host_state: Arc::new(Mutex::new(HashMap::new())),
             }),
@@ -3557,6 +3678,51 @@ mod tests {
                 .unwrap()
         );
         assert!(error.contains("differs from the bundled copy"), "{error}");
+    }
+
+    #[test]
+    fn fingerprint_reader_is_bounded_even_if_source_never_ends() {
+        struct Endless {
+            read: usize,
+        }
+        impl std::io::Read for Endless {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                buffer.fill(b'x');
+                self.read += buffer.len();
+                Ok(buffer.len())
+            }
+        }
+        let mut reader = Endless { read: 0 };
+        let error = fingerprint_exact(&mut reader, 8193).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(reader.read, 8194);
+        let mut short = &b"ab"[..];
+        assert!(fingerprint_exact(&mut short, 3).is_err());
+        let mut exact = &b"abc"[..];
+        assert_eq!(
+            fingerprint_exact(&mut exact, 3).unwrap().as_slice(),
+            Sha256::digest(b"abc").as_slice()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundled_manifest_open_refuses_links_and_fifos() {
+        let directory = tempdir().unwrap();
+        let file = directory.path().join("file.json");
+        fs::write(&file, "{}").unwrap();
+        let link = directory.path().join("link.json");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(open_regular_manifest(&link, true).is_err());
+        assert!(open_regular_manifest(&link, false).is_ok());
+        let fifo = directory.path().join("fifo.json");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(open_regular_manifest(&fifo, true).is_err());
+        assert!(open_regular_manifest(&fifo, false).is_err());
     }
 
     #[test]

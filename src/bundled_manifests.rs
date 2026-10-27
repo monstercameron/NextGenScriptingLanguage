@@ -458,13 +458,25 @@ mod tests {
         }
         let index = index().expect("index");
         assert!(directory_matches(dir.path(), index).expect("check"));
-        fs::write(dir.path().join("extra.json"), "{}").expect("extra");
+        let shipped = dir.path().join("awk.json");
+        let original = fs::read_to_string(&shipped).unwrap();
+        let changed = original.replace("\"binary\": \"awk\"", "\"binary\": \"sed\"");
+        assert_ne!(original, changed);
+        fs::write(&shipped, changed).unwrap();
+        fs::write(
+            dir.path().join("extra.json"),
+            r#"{"name":"custom.extra","binary":"printf","arguments":[]}"#,
+        )
+        .expect("extra");
         assert!(!directory_matches(dir.path(), index).expect("check"));
         assert!(Registry::load_default(dir.path(), crate::manifest::ManifestCheck::Lazy).is_err());
+        assert!(Registry::load_default(dir.path(), crate::manifest::ManifestCheck::Full).is_err());
+        assert!(Registry::load(dir.path()).is_ok());
         fs::remove_file(dir.path().join("extra.json")).expect("remove extra");
-        fs::remove_file(dir.path().join(index.entries()[0].file())).expect("remove indexed file");
+        fs::remove_file(dir.path().join("cat.json")).expect("remove indexed file");
         assert!(!directory_matches(dir.path(), index).expect("check missing"));
-        assert!(Registry::load_default(dir.path(), crate::manifest::ManifestCheck::Lazy).is_ok());
+        assert!(Registry::load_default(dir.path(), crate::manifest::ManifestCheck::Lazy).is_err());
+        assert!(Registry::load(dir.path()).is_ok());
     }
 
     #[test]

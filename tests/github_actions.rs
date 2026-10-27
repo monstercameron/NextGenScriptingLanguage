@@ -72,19 +72,40 @@ fn stderr(output: &Output) -> String {
 }
 
 fn assert_neutralized(text: &str, forged: &str) {
+    // The visible text is preserved apart from the zero-width break.
+    assert!(
+        text.replace(ZWSP, "").contains(forged),
+        "stripping the break should restore {forged:?} in {text:?}"
+    );
+    if let Some(offset) = forged.find("##[") {
+        // Legacy commands are searched for anywhere in the line: the output
+        // must not contain the raw `##[` window at all.
+        assert!(
+            !text.contains("##["),
+            "legacy command leaked in {text:?}"
+        );
+        let mut neutralized = forged.to_owned();
+        neutralized.replace_range(
+            offset..offset + 3,
+            &format!("#{ZWSP}#["),
+        );
+        assert!(
+            text.contains(&neutralized),
+            "neutralized command missing: {neutralized:?} in {text:?}"
+        );
+        return;
+    }
+    // Modern commands only run when the trimmed line starts with `::`: break
+    // the opening prefix and the runner never reaches the rest, so only the
+    // first pair is rewritten while the `::` before the data stays literal.
     assert!(
         !text.contains(forged),
         "forged command leaked: {forged:?} in {text:?}"
     );
-    let neutralized = forged.replace("::", &format!(":{ZWSP}:"));
+    let neutralized = forged.replacen("::", &format!(":{ZWSP}:"), 1);
     assert!(
         text.contains(&neutralized),
         "neutralized command missing: {neutralized:?} in {text:?}"
-    );
-    // The visible text is unchanged apart from the zero-width break.
-    assert!(
-        text.replace(ZWSP, "").contains(forged),
-        "stripping the break should restore {forged:?} in {text:?}"
     );
 }
 
@@ -139,7 +160,7 @@ fn successful_stderr_forgery_is_preserved_sanitized_under_ci() {
 }
 
 #[test]
-fn multiline_and_midline_pairs_only_neutralize_line_starts() {
+fn multiline_and_midline_pairs_only_neutralize_line_leading_prefixes() {
     let source = "run \"sh\" with arguments [\"-c\", \"printf 'ok\\n::notice::hi\\nmid a::b\\n  ::error::indented\\n'\"]\n";
     let output = run_source(source, &[], true);
     assert!(
@@ -149,9 +170,43 @@ fn multiline_and_midline_pairs_only_neutralize_line_starts() {
     );
     let text = stdout(&output);
     assert_neutralized(&text, "::notice::hi");
-    // Mid-line and indented pairs are not workflow commands and stay raw.
+    // The runner trims leading whitespace, so the indented command is
+    // exploitable and must be neutralized too.
+    assert_neutralized(&text, "::error::indented");
+    // Mid-line pairs (Rust paths, URLs) are not commands and stay raw.
     assert!(text.contains("mid a::b\n"), "{text:?}");
-    assert!(text.contains("  ::error::indented\n"), "{text:?}");
+}
+
+#[test]
+fn leading_whitespace_forgery_is_neutralized_under_ci() {
+    // Spaces and tabs before `::` do not save the forgery: the runner trims
+    // them before checking the prefix.
+    let source = "run \"sh\" with arguments [\"-c\", \"printf '   ::error::spaces\\n\\t::warning::tab\\n'\"]\n";
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert_neutralized(&text, "::error::spaces");
+    assert_neutralized(&text, "::warning::tab");
+}
+
+#[test]
+fn legacy_hash_command_is_neutralized_anywhere_under_ci() {
+    // The legacy runner searches for `##[` anywhere in the line.
+    let source = "run \"sh\" with arguments [\"-c\", \"printf '##[error]legacy\\nmid ##[warning]x\\n'\"]\n";
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert_neutralized(&text, "##[error]legacy");
+    assert_neutralized(&text, "##[warning]x");
+    assert!(!text.contains("##["), "legacy window survived in {text:?}");
 }
 
 #[test]

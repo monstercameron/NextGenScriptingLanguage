@@ -7,6 +7,15 @@ original version labels.
 
 ## Unreleased
 
+- `execute run GRAPH --events jsonl` streams one `execute.graph-event/1` JSON
+  line per terminal event as it arrives, flushing after every event and holding
+  no collected outputs. Graphs with persistent nodes (timers, listeners, native
+  streams, program services, or renderers) stream by default so a timer graph
+  prints each tick within milliseconds and runs indefinitely; closing the
+  reader (`| head -n 3`) cancels the session. Finite graphs keep the closing
+  `execute.graph-run/1` document unless `--events jsonl` is passed. The event
+  schema is `docs/schemas/graph-event.v1.schema.json`.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

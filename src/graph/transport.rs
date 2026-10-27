@@ -3039,6 +3039,47 @@ pub fn run(
     run_plan(plan, registry, options, cancelled, None)
 }
 
+/// One streamed terminal event as a single JSON line on stdout. The shape
+/// matches one entry of the closing `execute.graph-run/1` document's
+/// `outputs` array, wrapped with the `execute.graph-event/1` protocol, the
+/// graph name, and its generation/revision so a consumer can align a stream
+/// with a document. Callers write the compact rendering followed by `\n`
+/// and flush after every event so a tick is visible within milliseconds.
+pub fn graph_event_line(
+    graph_name: &str,
+    generation: u64,
+    revision: u64,
+    event: &EventEnvelope,
+) -> serde_json::Value {
+    serde_json::json!({
+        "protocol": "execute.graph-event/1",
+        "graph": graph_name,
+        "generation": generation,
+        "revision": revision,
+        "port": event.port,
+        "sequence": event.sequence,
+        "sensitivity": event.sensitivity,
+        "payload": event.payload
+    })
+}
+
+/// Start a live graph session with the same registry, policy, and module
+/// preflight as [`run`], without collecting terminal outputs. Use this for
+/// graphs with persistent nodes: consume terminal events through
+/// [`GraphSession::recv_output`] and render each with [`graph_event_line`]
+/// as it arrives, so memory stays flat no matter how many events flow.
+/// Checkpointed graphs are finite-only and keep the closing document path.
+pub fn start_session(
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+) -> Result<(String, GraphSession)> {
+    let session = prepare_session(plan, registry, options, cancelled, None)?.0;
+    let name = session.context().graph_name.clone();
+    Ok((name, session))
+}
+
 /// Run a finite applet graph with its node completions recorded in `store` (#71
 /// phase 1). Terminal outputs come in node completion order. A node recorded by an
 /// earlier run replays its outputs instead of running. `retry_uncertain` lets a node
@@ -3067,6 +3108,28 @@ fn run_plan(
     cancelled: Arc<AtomicBool>,
     checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
 ) -> Result<GraphRunResult> {
+    let (session, ordering_store) =
+        prepare_session(plan, registry, options, cancelled, checkpoint)?;
+    let mut result = session.run_to_completion()?;
+    if let Some(store) = ordering_store {
+        super::checkpoint::order_by_completion(&mut result.outputs, store.as_ref())?;
+    }
+    Ok(result)
+}
+
+/// Shared activation path for [`run`] and [`start_session`]: budget, input,
+/// registry, capability, data-flow, and module preflight, then worker start.
+/// Returns the live session plus the checkpoint ordering store, if any.
+fn prepare_session(
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
+) -> Result<(
+    GraphSession,
+    Option<Arc<dyn GraphCheckpointStore>>,
+)> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = options
@@ -3174,11 +3237,8 @@ fn run_plan(
         deadline,
         ..GraphRunOptions::default()
     };
-    let mut result = GraphSession::start(plan, executor, graph_options)?.run_to_completion()?;
-    if let Some(store) = ordering_store {
-        super::checkpoint::order_by_completion(&mut result.outputs, store.as_ref())?;
-    }
-    Ok(result)
+    let session = GraphSession::start(plan, executor, graph_options)?;
+    Ok((session, ordering_store))
 }
 
 fn graph_module_sensitivity_floor(

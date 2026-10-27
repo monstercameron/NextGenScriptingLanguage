@@ -3,7 +3,15 @@
 Current source accepts a `graph` block as a workflow file. Use the ordinary
 `execute check`, `inspect`, `explain` and `run` commands; `inspect` returns an
 `execute.graph/1` topology, `explain` prints Graphviz DOT, and `run` returns
-terminal port events as JSON. Graphs can declare the same typed top-level inputs
+terminal port events as JSON: one closing `execute.graph-run/1` document for
+finite graphs, and one `execute.graph-event/1` JSON line per terminal event as
+it arrives for graphs with persistent nodes (timers, listeners, native
+streams, program services, or renderers). `--events document` keeps the
+closing document and `--events jsonl` streams lines for any graph without a
+checkpoint; streamed runs hold no collected outputs, so a persistent graph can
+run indefinitely, and closing the reader (`| head -n 3`) cancels the session.
+The event schema is `docs/schemas/graph-event.v1.schema.json`.
+Graphs can declare the same typed top-level inputs
 as finite programs, then use those names in applet parameters. `--input` and
 declared positional arguments follow the ordinary workflow rules. Finite applet
 graphs can be checkpointed with `run --checkpoint DIR` and continued with

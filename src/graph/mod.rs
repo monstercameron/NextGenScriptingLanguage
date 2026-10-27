@@ -20,9 +20,9 @@ pub use plan::{
 };
 pub use syntax::{is_graph, parse};
 pub use transport::{
-    run, run_checkpointed, ChannelStdinSource, EventEnvelope, GraphContext, GraphExecutor,
-    GraphRunOptions, GraphRunResult, GraphSession, GraphStdinSource, NodeIo, PortEmitReport,
-    RemoteEventMetadata, RuntimeGraphExecutor, MAX_GRAPH_LISTENER_READERS,
+    graph_event_line, run, run_checkpointed, start_session, ChannelStdinSource, EventEnvelope,
+    GraphContext, GraphExecutor, GraphRunOptions, GraphRunResult, GraphSession, GraphStdinSource,
+    NodeIo, PortEmitReport, RemoteEventMetadata, RuntimeGraphExecutor, MAX_GRAPH_LISTENER_READERS,
     MAX_LISTENER_PORTS_PER_SOURCE,
 };
 

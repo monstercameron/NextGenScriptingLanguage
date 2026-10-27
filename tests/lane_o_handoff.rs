@@ -122,11 +122,18 @@ fn detached_launch_returns_while_the_child_keeps_running() {
     let directory = tempdir().unwrap();
     let marker = directory.path().join("detached.txt");
     // The child writes its marker after a short wait, so the script must not be
-    // waiting for it. The script continues and finishes first.
+    // waiting for it. The script continues and finishes first. PowerShell
+    // is the Windows sleeper: a `cmd /c ping` payload fails at once on hosted
+    // runners ("The system cannot find the path specified"), and the
+    // `& echo done` fallback would mask that by writing the marker immediately
+    // instead of after a wait.
     let child = if cfg!(windows) {
-        "\"C:/Windows/System32/cmd.exe\" with arguments [\"/c\", \"ping -n 2 127.0.0.1 >nul & echo done\"]"
+        format!(
+            "\"C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe\" with arguments [\"-NoProfile\", \"-NonInteractive\", \"-Command\", {}]",
+            serde_json::to_string("Start-Sleep -Seconds 2; 'done'").unwrap()
+        )
     } else {
-        "\"/bin/sh\" with arguments [\"-c\", \"sleep 0.5; printf done\"]"
+        "\"/bin/sh\" with arguments [\"-c\", \"sleep 0.5; printf done\"]".to_owned()
     };
     let program = write_program(
         directory.path(),
@@ -195,15 +202,20 @@ fn hand_over_replaces_the_script_and_passes_its_exit_status() {
 fn hand_over_enforces_the_workflow_deadline() {
     // Unix replaces the interpreter with `execve`, so no waiter remains to
     // enforce a deadline after the hand-over. This exercises the Windows wait:
-    // `ping -n 6` sleeps about five seconds, the 500 ms workflow deadline fires
-    // first, and the job object ends the child.
+    // PowerShell sleeps five seconds, the 500 ms workflow deadline fires
+    // first, and the job object ends the child. A `cmd /c ping` sleeper does
+    // not work here: on hosted runners it fails at once with "The system
+    // cannot find the path specified", exiting before the deadline can fire.
     if !cfg!(windows) {
         return;
     }
     let directory = tempdir().unwrap();
     let program = write_program(
         directory.path(),
-        "hand over to \"C:/Windows/System32/cmd.exe\" with arguments [\"/c\", \"ping -n 6 127.0.0.1 >nul\"]\n",
+        &format!(
+            "hand over to \"C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe\" with arguments [\"-NoProfile\", \"-NonInteractive\", \"-Command\", {}]\n",
+            serde_json::to_string("Start-Sleep -Seconds 5").unwrap()
+        ),
     );
     let output = execute(
         &[

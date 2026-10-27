@@ -498,6 +498,11 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         required.push("enabled".into());
     }
     let properties = ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Record,
         nullable: false,
         items: None,
@@ -507,6 +512,11 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
     };
     let mut inputs = BTreeMap::from([("properties".into(), PortSchema::single(properties))]);
     let updates = ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Record,
         nullable: false,
         items: None,
@@ -519,6 +529,11 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         BTreeMap::from([(
             "clicked".into(),
             PortSchema::events(ValueSchema {
+                scalar_only: false,
+                additional_properties: None,
+                min_properties: None,
+                max_properties: None,
+                nonempty: false,
                 kind: OutputType::Record,
                 nullable: false,
                 items: None,
@@ -632,6 +647,11 @@ fn node_for_call(
             .execution_contract()
             .and_then(|contract| contract.output.as_ref())
             .map(|schema| ValueSchema {
+                scalar_only: false,
+                additional_properties: None,
+                min_properties: None,
+                max_properties: None,
+                nonempty: false,
                 kind: schema.kind,
                 nullable: false,
                 items: schema.items.clone(),
@@ -794,6 +814,11 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
                 .unwrap_or_default();
             let enum_values = parse_string_enum(value)?;
             return Ok(ValueSchema {
+                scalar_only: false,
+                additional_properties: None,
+                min_properties: None,
+                max_properties: None,
+                nonempty: false,
                 kind,
                 nullable: false,
                 fields,
@@ -814,6 +839,11 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
     };
     let enum_values = parse_string_enum(value)?;
     Ok(ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind,
         nullable: false,
         fields: BTreeMap::new(),
@@ -825,6 +855,11 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
 
 fn leaf_schema(kind: OutputType) -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind,
         nullable: false,
         fields: BTreeMap::new(),

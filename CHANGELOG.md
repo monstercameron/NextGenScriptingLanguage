@@ -7,6 +7,10 @@ original version labels.
 
 ## Unreleased
 
+- Applet records can now validate arbitrary property names with per-value
+  schemas and property-count bounds. Object-only applet inputs reject known
+  non-object values during checking while retaining dynamic object keys.
+
 - Program inputs now support `list of integer` and `list of json`; integer list
   values are statically typed when iterated and invalid items fail before execution.
 

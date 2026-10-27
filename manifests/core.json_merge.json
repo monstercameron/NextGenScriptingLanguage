@@ -5,12 +5,20 @@
   "accepts_stdin": false,
   "parameters": {
     "left": {
-      "type": "json",
-      "required": true
+      "type": "record",
+      "required": true,
+      "fields": {},
+      "additional_properties": {
+        "type": "json"
+      }
     },
     "right": {
-      "type": "json",
-      "required": true
+      "type": "record",
+      "required": true,
+      "fields": {},
+      "additional_properties": {
+        "type": "json"
+      }
     }
   },
   "arguments": [
@@ -42,13 +50,21 @@
       "inputs": {
         "left": {
           "schema": {
-            "type": "json"
+            "type": "record",
+            "fields": {},
+            "additionalProperties": {
+              "type": "json"
+            }
           },
           "delivery": "single"
         },
         "right": {
           "schema": {
-            "type": "json"
+            "type": "record",
+            "fields": {},
+            "additionalProperties": {
+              "type": "json"
+            }
           },
           "delivery": "single"
         }

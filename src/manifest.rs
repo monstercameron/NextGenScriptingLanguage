@@ -19,6 +19,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+const OPEN_OBJECT_NONEMPTY_WHITESPACE_PATTERN: &str =
+    r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$";
+
 /// A declarative description of an applet. Argument nodes produce argv elements
 /// directly; no shell is involved in expanding a manifest.
 #[derive(Debug, Clone, Serialize)]
@@ -246,6 +249,14 @@ struct ParameterSpec {
     forbid_option_items: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    additional_properties: Option<Box<ParameterFieldSpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_properties: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_properties: Option<usize>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    nonempty: bool,
 }
 
 impl From<RawParameter> for ParameterSpec {
@@ -262,6 +273,10 @@ impl From<RawParameter> for ParameterSpec {
             deny_first_token: raw.deny_first_token,
             forbid_option_items: raw.forbid_option_items,
             fields: raw.fields,
+            additional_properties: raw.additional_properties,
+            min_properties: raw.min_properties,
+            max_properties: raw.max_properties,
+            nonempty: raw.nonempty,
         }
     }
 }
@@ -273,6 +288,14 @@ struct ParameterFieldSpec {
     required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    additional_properties: Option<Box<ParameterFieldSpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_properties: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_properties: Option<usize>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    nonempty: bool,
 }
 
 impl From<RawParameterField> for ParameterFieldSpec {
@@ -281,6 +304,10 @@ impl From<RawParameterField> for ParameterFieldSpec {
             kind: raw.kind,
             required: raw.required,
             fields: raw.fields,
+            additional_properties: raw.additional_properties,
+            min_properties: raw.min_properties,
+            max_properties: raw.max_properties,
+            nonempty: raw.nonempty,
         }
     }
 }
@@ -295,7 +322,6 @@ enum ParameterType {
     List,
     Json,
     Record,
-    #[serde(skip_deserializing)]
     Scalar,
 }
 
@@ -622,6 +648,10 @@ impl Registry {
                     deny_first_token: Vec::new(),
                     forbid_option_items: false,
                     fields: None,
+                    additional_properties: None,
+                    min_properties: None,
+                    max_properties: None,
+                    nonempty: false,
                 },
             )]),
             parameter_alternatives: Vec::new(),
@@ -1436,6 +1466,22 @@ impl Manifest {
                 if let Some(minimum) = spec.min_items {
                     schema["minItems"] = minimum.into();
                 }
+                if let Some(additional) = &spec.additional_properties {
+                    schema["additionalProperties"] = parameter_field_schema(additional);
+                }
+                if let Some(minimum) = spec.min_properties {
+                    schema["minProperties"] = minimum.into();
+                }
+                if let Some(maximum) = spec.max_properties {
+                    schema["maxProperties"] = maximum.into();
+                }
+                if spec.nonempty {
+                    schema["minLength"] = 1.into();
+                    schema["pattern"] = "^[^\\u0000]*$".into();
+                    schema["not"] = serde_json::json!({
+                        "pattern": OPEN_OBJECT_NONEMPTY_WHITESPACE_PATTERN
+                    });
+                }
                 (name.clone(), schema)
             })
             .collect::<serde_json::Map<_, _>>();
@@ -1985,7 +2031,8 @@ fn parameter_schema(
         ParameterType::List => serde_json::json!({"type": "array"}),
         ParameterType::Json => serde_json::json!({}),
         ParameterType::Record => {
-            let fields = fields.expect("record parameter fields validated");
+            let empty_fields = BTreeMap::new();
+            let fields = fields.unwrap_or(&empty_fields);
             let properties = fields
                 .iter()
                 .map(|(name, field)| (name.clone(), parameter_field_schema(field)))
@@ -2001,13 +2048,35 @@ fn parameter_schema(
         }
         ParameterType::Scalar => serde_json::json!({
             "anyOf": [parameter_schema(ParameterType::String, None),
-                parameter_schema(ParameterType::Integer, None), parameter_schema(ParameterType::Boolean, None)]
+                parameter_schema(ParameterType::Integer, None), {"type":"number"},
+                parameter_schema(ParameterType::Boolean, None)]
         }),
     }
 }
 
 fn parameter_field_schema(field: &ParameterFieldSpec) -> serde_json::Value {
-    parameter_schema(field.kind, field.fields.as_ref())
+    let mut schema = if field.kind == ParameterType::Record && field.fields.is_none() {
+        serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false})
+    } else {
+        parameter_schema(field.kind, field.fields.as_ref())
+    };
+    if let Some(additional) = &field.additional_properties {
+        schema["additionalProperties"] = parameter_field_schema(additional);
+    }
+    if let Some(minimum) = field.min_properties {
+        schema["minProperties"] = minimum.into();
+    }
+    if let Some(maximum) = field.max_properties {
+        schema["maxProperties"] = maximum.into();
+    }
+    if field.nonempty {
+        schema["minLength"] = 1.into();
+        schema["pattern"] = "^[^\\u0000]*$".into();
+        schema["not"] = serde_json::json!({
+            "pattern": OPEN_OBJECT_NONEMPTY_WHITESPACE_PATTERN
+        });
+    }
+    schema
 }
 
 /// Check whether a typed reference can satisfy an applet parameter. JSON is
@@ -2027,6 +2096,10 @@ fn parameter_accepts_reference(
         (ParameterType::String | ParameterType::Path, InputType::Text)
             | (ParameterType::Integer, InputType::Integer)
             | (ParameterType::Boolean, InputType::Boolean)
+            | (
+                ParameterType::Scalar,
+                InputType::Text | InputType::Integer | InputType::Boolean
+            )
             | (ParameterType::Json, _)
             | (ParameterType::Record, InputType::Json)
     ) || (expected == ParameterType::List
@@ -2089,6 +2162,10 @@ fn validate_value(
             ParameterType::String | ParameterType::Path,
             Value::String(_)
         ) | (ParameterType::Integer, Value::Integer(_))
+            | (
+                ParameterType::Scalar,
+                Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_)
+            )
             | (ParameterType::Boolean, Value::Bool(_))
             | (ParameterType::List, Value::List(_))
             | (
@@ -2131,12 +2208,19 @@ fn validate_value(
                 bail!("parameter {name:?} must be one of {values:?}, got {string:?}");
             }
         }
+        if spec.nonempty && string.trim().is_empty() {
+            bail!("parameter {name:?} must be nonempty");
+        }
     }
     if let (ParameterType::Record, Value::Record(values)) = (spec.kind, value) {
+        let empty_fields = BTreeMap::new();
         validate_record_parameter(
             name,
             values,
-            spec.fields.as_ref().expect("record schema validated"),
+            spec.fields.as_ref().unwrap_or(&empty_fields),
+            spec.additional_properties.as_deref(),
+            spec.min_properties,
+            spec.max_properties,
             allow_reference_items,
             bindings,
         )?;
@@ -2292,13 +2376,30 @@ fn is_plain_number(text: &str) -> bool {
     digits(integer) && parts.next().is_none_or(digits)
 }
 
+// Keep the recursive map policy and reference context explicit at each level.
+#[allow(clippy::too_many_arguments)]
 fn validate_record_parameter(
     name: &str,
     values: &BTreeMap<String, Value>,
     fields: &BTreeMap<String, ParameterFieldSpec>,
+    additional_properties: Option<&ParameterFieldSpec>,
+    min_properties: Option<usize>,
+    max_properties: Option<usize>,
     allow_references: bool,
     bindings: &BTreeMap<String, InputType>,
 ) -> Result<()> {
+    if min_properties.is_some_and(|minimum| values.len() < minimum) {
+        bail!(
+            "parameter {name:?} needs at least {} properties",
+            min_properties.unwrap()
+        );
+    }
+    if max_properties.is_some_and(|maximum| values.len() > maximum) {
+        bail!(
+            "parameter {name:?} allows at most {} properties",
+            max_properties.unwrap()
+        );
+    }
     for (field_name, field) in fields {
         match values.get(field_name) {
             None if field.required => {
@@ -2314,8 +2415,18 @@ fn validate_record_parameter(
             )?,
         }
     }
-    for field_name in values.keys() {
+    for (field_name, value) in values {
         if !fields.contains_key(field_name) {
+            if let Some(field) = additional_properties {
+                validate_parameter_field(
+                    &format!("{name}.{field_name}"),
+                    value,
+                    field,
+                    allow_references,
+                    bindings,
+                )?;
+                continue;
+            }
             bail!("parameter {name:?} has undeclared field {field_name:?}");
         }
     }
@@ -2356,7 +2467,11 @@ fn validate_parameter_field(
                 | Value::Null
         ),
         ParameterType::Record => matches!(value, Value::Record(_)),
-        ParameterType::List | ParameterType::Scalar => false,
+        ParameterType::Scalar => matches!(
+            value,
+            Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_)
+        ),
+        ParameterType::List => false,
     };
     if !valid {
         bail!(
@@ -2372,18 +2487,22 @@ fn validate_parameter_field(
         if field.kind == ParameterType::Path && string.is_empty() {
             bail!("path field {name:?} must be nonempty");
         }
+        if field.nonempty && string.trim().is_empty() {
+            bail!("field {name:?} must be nonempty");
+        }
     }
     if field.kind == ParameterType::Record {
         let Value::Record(values) = value else {
             unreachable!("type checked above")
         };
+        let empty_fields = BTreeMap::new();
         validate_record_parameter(
             name,
             values,
-            field
-                .fields
-                .as_ref()
-                .expect("record field schema validated"),
+            field.fields.as_ref().unwrap_or(&empty_fields),
+            field.additional_properties.as_deref(),
+            field.min_properties,
+            field.max_properties,
             allow_references,
             bindings,
         )?;
@@ -2410,7 +2529,7 @@ fn is_scalar_type(value: &Value, expected: ParameterType) -> bool {
             )
             | (
                 ParameterType::Scalar,
-                Value::String(_) | Value::Integer(_) | Value::Bool(_)
+                Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_)
             )
     )
 }
@@ -2765,6 +2884,14 @@ struct RawParameter {
     forbid_option_items: bool,
     #[serde(default, deserialize_with = "deserialize_unique_optional_map")]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
+    #[serde(default)]
+    additional_properties: Option<Box<ParameterFieldSpec>>,
+    #[serde(default)]
+    min_properties: Option<usize>,
+    #[serde(default)]
+    max_properties: Option<usize>,
+    #[serde(default)]
+    nonempty: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2776,6 +2903,14 @@ struct RawParameterField {
     required: bool,
     #[serde(default, deserialize_with = "deserialize_unique_optional_map")]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
+    #[serde(default)]
+    additional_properties: Option<Box<ParameterFieldSpec>>,
+    #[serde(default)]
+    min_properties: Option<usize>,
+    #[serde(default)]
+    max_properties: Option<usize>,
+    #[serde(default)]
+    nonempty: bool,
 }
 
 #[derive(Debug)]
@@ -2983,7 +3118,39 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         if spec.forbid_option_items && (!is_list || spec.item_type != Some(ParameterType::String)) {
             bail!("parameter {name:?}: forbid_option_items applies only to string lists");
         }
-        validate_parameter_fields(spec.kind, spec.fields.as_ref(), name)?;
+        if spec.nonempty && spec.kind != ParameterType::String {
+            bail!("parameter {name:?}: nonempty only applies to string parameters");
+        }
+        if spec
+            .min_properties
+            .zip(spec.max_properties)
+            .is_some_and(|(min, max)| min > max)
+        {
+            bail!("parameter {name:?}: min_properties cannot exceed max_properties");
+        }
+        if spec
+            .additional_properties
+            .as_ref()
+            .is_some_and(|field| field.required)
+        {
+            bail!("parameter {name:?}: additional_properties cannot be required");
+        }
+        if (spec.additional_properties.is_some()
+            || spec.min_properties.is_some()
+            || spec.max_properties.is_some())
+            && spec.kind != ParameterType::Record
+        {
+            bail!("parameter {name:?}: object constraints only apply to record parameters");
+        }
+        validate_parameter_fields(
+            spec.kind,
+            spec.fields.as_ref(),
+            spec.additional_properties.as_deref(),
+            spec.min_properties,
+            spec.max_properties,
+            spec.nonempty,
+            name,
+        )?;
     }
     validate_parameter_alternatives(&raw.parameter_alternatives, &parameters)?;
     if let Some(contract) = &raw.contract {
@@ -3169,17 +3336,41 @@ fn validate_builtin(manifest: &Manifest) -> Result<()> {
 fn validate_parameter_fields(
     kind: ParameterType,
     fields: Option<&BTreeMap<String, ParameterFieldSpec>>,
+    additional_properties: Option<&ParameterFieldSpec>,
+    min_properties: Option<usize>,
+    max_properties: Option<usize>,
+    nonempty: bool,
     name: &str,
 ) -> Result<()> {
+    if nonempty && kind != ParameterType::String {
+        bail!("parameter {name:?}: nonempty only applies to strings");
+    }
+    if min_properties
+        .zip(max_properties)
+        .is_some_and(|(min, max)| min > max)
+    {
+        bail!("parameter {name:?}: min_properties cannot exceed max_properties");
+    }
+    if additional_properties.is_some_and(|field| field.required) {
+        bail!("parameter {name:?}: additional_properties cannot be required");
+    }
     match (kind, fields) {
         // A declared empty record is a valid zero-field value, such as a
         // button's clicked signal. `None` still means the schema is missing.
         (ParameterType::Record, Some(fields)) => {
+            if additional_properties.is_none()
+                && (min_properties.is_some_and(|minimum| minimum > fields.len())
+                    || max_properties.is_some_and(|maximum| {
+                        maximum < fields.values().filter(|field| field.required).count()
+                    }))
+            {
+                bail!("parameter {name:?}: property-count constraints cannot be satisfied by its fields");
+            }
             for (field_name, field) in fields {
                 if field_name.trim().is_empty() {
                     bail!("record parameter {name:?} has an empty field name");
                 }
-                if matches!(field.kind, ParameterType::List | ParameterType::Scalar) {
+                if field.kind == ParameterType::List {
                     bail!(
                         "record field {field_name:?} in parameter {name:?} has unsupported type {}",
                         field.kind
@@ -3188,15 +3379,63 @@ fn validate_parameter_fields(
                 validate_parameter_fields(
                     field.kind,
                     field.fields.as_ref(),
+                    field.additional_properties.as_deref(),
+                    field.min_properties,
+                    field.max_properties,
+                    field.nonempty,
                     &format!("{name}.{field_name}"),
+                )?;
+            }
+            if let Some(field) = additional_properties {
+                if field.kind == ParameterType::List {
+                    bail!(
+                        "additional property in parameter {name:?} has unsupported type {}",
+                        field.kind
+                    );
+                }
+                validate_parameter_fields(
+                    field.kind,
+                    field.fields.as_ref(),
+                    field.additional_properties.as_deref(),
+                    field.min_properties,
+                    field.max_properties,
+                    field.nonempty,
+                    &format!("{name} additional property"),
                 )?;
             }
             Ok(())
         }
+        (ParameterType::Record, None) if additional_properties.is_some() => {
+            let field = additional_properties.expect("checked above");
+            if field.kind == ParameterType::List {
+                bail!(
+                    "additional property in parameter {name:?} has unsupported type {}",
+                    field.kind
+                );
+            }
+            validate_parameter_fields(
+                field.kind,
+                field.fields.as_ref(),
+                field.additional_properties.as_deref(),
+                field.min_properties,
+                field.max_properties,
+                field.nonempty,
+                &format!("{name} additional property"),
+            )
+        }
         (ParameterType::Record, None) => {
             bail!("record parameter {name:?} requires fields")
         }
-        (_, Some(_)) => bail!("fields only apply to record parameter {name:?}"),
+        (_, Some(_)) => {
+            bail!("fields only apply to record parameter {name:?}")
+        }
+        (_, None)
+            if additional_properties.is_some()
+                || min_properties.is_some()
+                || max_properties.is_some() =>
+        {
+            bail!("object constraints only apply to record parameter {name:?}")
+        }
         (_, None) => Ok(()),
     }
 }
@@ -3334,7 +3573,13 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
         OutputType::Integer => kind == InputType::Integer,
         OutputType::Number => matches!(kind, InputType::Integer | InputType::Json),
         OutputType::Boolean => kind == InputType::Boolean,
-        OutputType::Json => true,
+        OutputType::Json => {
+            !schema.scalar_only
+                || matches!(
+                    kind,
+                    InputType::Text | InputType::Integer | InputType::Boolean | InputType::Json
+                )
+        }
         OutputType::Record => kind == InputType::Json,
         OutputType::List => {
             kind == InputType::Json
@@ -3375,6 +3620,16 @@ fn validate_port_value_with_references(
 ) -> Result<()> {
     if schema.kind == OutputType::Json {
         validate_json_references(value, bindings)?;
+        if let Value::Reference(reference) = value {
+            let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
+            if !schema_accepts_reference(schema, kind) {
+                bail!("reference {reference:?} of type {kind} does not satisfy JSON schema");
+            }
+            return Ok(());
+        }
+        if schema.scalar_only {
+            return schema.validate_value(value);
+        }
         return Ok(());
     }
     match (schema.kind, value) {
@@ -3389,13 +3644,35 @@ fn validate_port_value_with_references(
             Ok(())
         }
         (OutputType::Record, Value::Record(fields)) => {
+            if schema
+                .min_properties
+                .is_some_and(|minimum| fields.len() < minimum)
+            {
+                bail!(
+                    "object must contain at least {} properties",
+                    schema.min_properties.unwrap()
+                );
+            }
+            if schema
+                .max_properties
+                .is_some_and(|maximum| fields.len() > maximum)
+            {
+                bail!(
+                    "object must contain at most {} properties",
+                    schema.max_properties.unwrap()
+                );
+            }
             for name in &schema.required {
                 if !fields.contains_key(name) {
                     bail!("record is missing required field {name:?}");
                 }
             }
             for (name, value) in fields {
-                let Some(field_schema) = schema.fields.get(name) else {
+                let Some(field_schema) = schema
+                    .fields
+                    .get(name)
+                    .or(schema.additional_properties.as_deref())
+                else {
                     bail!("record contains undeclared field {name:?}");
                 };
                 validate_port_value_with_references(field_schema, value, bindings)
@@ -3456,8 +3733,13 @@ fn contains_parameter_reference(value: &Value) -> bool {
 fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
     if spec.kind == ParameterType::List {
         let item_type = spec.item_type.expect("list parameter validated");
-        let item = parameter_field_value_schema(item_type, None)?;
+        let item = parameter_field_value_schema(item_type, None, None, None, None, false)?;
         return Ok(ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::List,
             nullable: false,
             items: Some(Box::new(item)),
@@ -3466,7 +3748,14 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
             enum_values: None,
         });
     }
-    let mut schema = parameter_field_value_schema(spec.kind, spec.fields.as_ref())?;
+    let mut schema = parameter_field_value_schema(
+        spec.kind,
+        spec.fields.as_ref(),
+        spec.additional_properties.as_deref(),
+        spec.min_properties,
+        spec.max_properties,
+        spec.nonempty,
+    )?;
     schema.enum_values = spec.enum_values.clone();
     Ok(schema)
 }
@@ -3500,7 +3789,12 @@ fn parameter_input_kind(spec: &ParameterSpec) -> Result<InputType> {
 fn parameter_field_value_schema(
     kind: ParameterType,
     fields: Option<&BTreeMap<String, ParameterFieldSpec>>,
+    additional_properties: Option<&ParameterFieldSpec>,
+    min_properties: Option<usize>,
+    max_properties: Option<usize>,
+    nonempty: bool,
 ) -> Result<ValueSchema> {
+    let scalar_only = kind == ParameterType::Scalar;
     let kind = match kind {
         ParameterType::String => OutputType::Text,
         ParameterType::Path => OutputType::Path,
@@ -3508,25 +3802,49 @@ fn parameter_field_value_schema(
         ParameterType::Boolean => OutputType::Boolean,
         ParameterType::Json => OutputType::Json,
         ParameterType::Record => OutputType::Record,
-        ParameterType::Scalar => bail!("mixed scalar parameter lists have no single port schema"),
+        ParameterType::Scalar => OutputType::Json,
         ParameterType::List => bail!("nested parameter lists are not supported"),
     };
     let mut value_fields = BTreeMap::new();
     let mut required = Vec::new();
     if kind == OutputType::Record {
-        for (name, field) in
-            fields.ok_or_else(|| anyhow!("record parameter schema is missing fields"))?
-        {
+        let empty_fields = BTreeMap::new();
+        for (name, field) in fields.unwrap_or(&empty_fields) {
             value_fields.insert(
                 name.clone(),
-                parameter_field_value_schema(field.kind, field.fields.as_ref())?,
+                parameter_field_value_schema(
+                    field.kind,
+                    field.fields.as_ref(),
+                    field.additional_properties.as_deref(),
+                    field.min_properties,
+                    field.max_properties,
+                    field.nonempty,
+                )?,
             );
             if field.required {
                 required.push(name.clone());
             }
         }
     }
+    let additional_properties = additional_properties
+        .map(|field| {
+            parameter_field_value_schema(
+                field.kind,
+                field.fields.as_ref(),
+                field.additional_properties.as_deref(),
+                field.min_properties,
+                field.max_properties,
+                field.nonempty,
+            )
+            .map(Box::new)
+        })
+        .transpose()?;
     Ok(ValueSchema {
+        scalar_only,
+        additional_properties,
+        min_properties,
+        max_properties,
+        nonempty,
         kind,
         nullable: false,
         items: None,
@@ -3538,6 +3856,11 @@ fn parameter_field_value_schema(
 
 fn output_value_schema(output: &OutputSchema) -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: output.kind,
         nullable: false,
         items: output.items.clone(),
@@ -3549,6 +3872,11 @@ fn output_value_schema(output: &OutputSchema) -> ValueSchema {
 
 fn leaf_value_schema(kind: OutputType) -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind,
         nullable: false,
         items: None,
@@ -3884,6 +4212,82 @@ mod tests {
                 Value::String("\u{FEFF}".into())
             )]))
             .is_ok());
+    }
+
+    #[test]
+    fn open_record_parameters_accept_arbitrary_keys_and_enforce_value_shapes() {
+        let dynamic = parse_manifest(
+            r#"{"name":"dynamic","binary":"echo","parameters":{"value":{"type":"record","required":true,"fields":{},"additional_properties":{"type":"json"}}},"arguments":[{"json_parameter":"value"}]}"#,
+        )
+        .unwrap();
+        let dynamic_value = Value::Record(BTreeMap::from([
+            ("user key".into(), Value::List(vec![Value::Integer(1)])),
+            (
+                "nested".into(),
+                Value::Record(BTreeMap::from([("ok".into(), Value::Bool(true))])),
+            ),
+        ]));
+        assert!(dynamic
+            .validate_argument_values(&BTreeMap::from([("value".into(), dynamic_value)]))
+            .is_ok());
+        assert_eq!(
+            dynamic.contract()["parameters_schema"]["properties"]["value"]["additionalProperties"],
+            serde_json::json!({})
+        );
+
+        let scalars = parse_manifest(
+            r#"{"name":"scalars","binary":"echo","parameters":{"values":{"type":"record","required":true,"fields":{},"additional_properties":{"type":"scalar"}}},"arguments":[{"json_parameter":"values"}]}"#,
+        )
+        .unwrap();
+        assert!(scalars
+            .validate_argument_values(&BTreeMap::from([(
+                "values".into(),
+                Value::Record(BTreeMap::from([
+                    ("text".into(), Value::String("hello".into())),
+                    ("integer".into(), Value::Integer(1)),
+                    (
+                        "number".into(),
+                        Value::Number(serde_json::Number::from_f64(1.5).unwrap()),
+                    ),
+                    ("boolean".into(), Value::Bool(true)),
+                ]))
+            )]))
+            .is_ok());
+        assert!(scalars
+            .validate_argument_values(&BTreeMap::from([(
+                "values".into(),
+                Value::Record(BTreeMap::from([("bad".into(), Value::Null)]))
+            )]))
+            .is_err());
+
+        let criteria = parse_manifest(
+            r#"{"name":"criteria","binary":"echo","parameters":{"values":{"type":"record","required":true,"fields":{},"additional_properties":{"type":"string","nonempty":true},"min_properties":2,"max_properties":3}},"arguments":[{"json_parameter":"values"}]}"#,
+        )
+        .unwrap();
+        let values = |entries| BTreeMap::from([("values".into(), Value::Record(entries))]);
+        assert!(criteria
+            .validate_argument_values(&values(BTreeMap::from([
+                ("first".into(), Value::String("description".into())),
+                ("second".into(), Value::String("another".into())),
+            ])))
+            .is_ok());
+        assert!(criteria
+            .validate_argument_values(&values(BTreeMap::new()))
+            .is_err());
+        assert!(criteria
+            .validate_argument_values(&values(BTreeMap::from([
+                ("first".into(), Value::String(" ".into())),
+                ("second".into(), Value::String("another".into())),
+            ])))
+            .is_err());
+        assert!(criteria
+            .validate_argument_values(&values(BTreeMap::from([
+                ("first".into(), Value::String("one".into())),
+                ("second".into(), Value::String("two".into())),
+                ("third".into(), Value::String("three".into())),
+                ("fourth".into(), Value::String("four".into())),
+            ])))
+            .is_err());
     }
 
     #[test]
@@ -4968,6 +5372,10 @@ mod first_token_rule_tests {
             deny_first_token: vec!["exec".into(), "execr".into()],
             forbid_option_items: false,
             fields: None,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
         }
     }
 

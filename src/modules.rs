@@ -1976,6 +1976,11 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         bail!("program module service event output cannot contain raw bytes");
     }
     let value_schema = ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: output.kind,
         nullable: false,
         items: output.items.clone(),
@@ -1987,6 +1992,11 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         return Ok(value_schema);
     }
     let text_schema = || ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Text,
         nullable: false,
         items: None,
@@ -1995,6 +2005,11 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         enum_values: None,
     };
     let integer_schema = ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Integer,
         nullable: false,
         items: None,
@@ -2003,6 +2018,11 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         enum_values: None,
     };
     Ok(ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Record,
         nullable: false,
         items: None,
@@ -2472,6 +2492,11 @@ mod tests {
                 (
                     "text".into(),
                     ValueSchema {
+                        scalar_only: false,
+                        additional_properties: None,
+                        min_properties: None,
+                        max_properties: None,
+                        nonempty: false,
                         kind: OutputType::Text,
                         nullable: false,
                         items: None,
@@ -2483,6 +2508,11 @@ mod tests {
                 (
                     "length".into(),
                     ValueSchema {
+                        scalar_only: false,
+                        additional_properties: None,
+                        min_properties: None,
+                        max_properties: None,
+                        nonempty: false,
                         kind: OutputType::Integer,
                         nullable: false,
                         items: None,
@@ -2909,6 +2939,11 @@ mod tests {
     #[test]
     fn path_ports_supply_program_text_inputs() {
         let path_schema = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Path,
             nullable: false,
             items: None,
@@ -2919,6 +2954,11 @@ mod tests {
         assert!(port_schema_accepts_input(&path_schema, InputType::Text));
 
         let path_list_schema = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::List,
             nullable: false,
             items: Some(Box::new(path_schema)),

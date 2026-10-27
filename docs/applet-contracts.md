@@ -183,8 +183,16 @@ There is no nominal Path value in the `.program` AST: path semantics are checked
 at the manifest boundary, while program bindings remain text.
 
 Recursive `ValueSchema` values support scalars, records and lists. Records may
-declare `fields` and `required`; lists declare `items`. Those structural fields
-are rejected on other schema kinds. `nullable: true` explicitly permits JSON
+declare `fields` and `required`; lists declare `items`. Records stay closed by
+default. A record can accept arbitrary property names with
+`additionalProperties`, whose value is a recursive schema; `min_properties` and
+`max_properties` constrain the number of keys. For example, an open string map
+uses `{"type":"record","fields":{},"additionalProperties":{"type":"text"}}`.
+The parameter form uses `additional_properties` with a parameter field schema.
+`scalar_only: true` on a JSON value schema restricts it to text, number or
+boolean values, and `nonempty: true` on text rejects empty, whitespace-only or
+NUL-containing strings. Those structural fields are rejected on other schema
+kinds. `nullable: true` explicitly permits JSON
 `null` in addition to the declared type, including for nested record fields and
 list items. Bytes cannot be nullable or embedded in a JSON record/list.
 For typed connections, every field a producer may emit must be accepted by

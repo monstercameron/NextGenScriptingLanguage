@@ -937,6 +937,11 @@ fn endpoint(manifest: &Manifest, name: &str, port: &AppletPort) -> Endpoint {
 
 fn schema_from_output(output: &OutputSchema) -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: output.kind,
         nullable: false,
         items: output.items.clone(),
@@ -1040,6 +1045,11 @@ mod tests {
     #[test]
     fn nested_schema_similarity_ranks_matching_list_item_types() {
         let text_items = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Text,
             nullable: false,
             items: None,
@@ -1048,15 +1058,30 @@ mod tests {
             enum_values: None,
         };
         let integer_items = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Integer,
             ..text_items.clone()
         };
         let text_list = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::List,
             items: Some(Box::new(text_items)),
             ..integer_items.clone()
         };
         let integer_list = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::List,
             items: Some(Box::new(integer_items)),
             ..text_list.clone()
@@ -1337,6 +1362,11 @@ mod tests {
         ])
         .unwrap();
         let source_schema = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Record,
             nullable: false,
             items: None,
@@ -1912,6 +1942,11 @@ mod tests {
 
     fn text_schema() -> ValueSchema {
         ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Text,
             nullable: false,
             items: None,

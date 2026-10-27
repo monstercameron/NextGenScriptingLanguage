@@ -653,6 +653,11 @@ fn run_mixed_stress(total: usize, window_ms: u64, evidence: &mut Evidence) -> Re
     let mut plan = graph::parse(&fixture.graph_source, &fixture.registry)
         .context("parsing mixed runtime graph")?;
     let timer_schema = flow::contracts::ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: flow::contracts::OutputType::Integer,
         nullable: false,
         items: None,
@@ -1848,6 +1853,11 @@ fn readiness_watchdog_cancels_a_stalled_terminal_graph_at_its_deadline() {
         outputs: BTreeMap::from([(
             "result".into(),
             PortSchema::single(flow::contracts::ValueSchema {
+                scalar_only: false,
+                additional_properties: None,
+                min_properties: None,
+                max_properties: None,
+                nonempty: false,
                 kind: flow::contracts::OutputType::Integer,
                 nullable: false,
                 items: None,

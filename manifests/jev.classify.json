@@ -18,7 +18,14 @@
       "min_items": 2
     },
     "criteria": {
-      "type": "json"
+      "type": "record",
+      "fields": {},
+      "additional_properties": {
+        "type": "string",
+        "nonempty": true
+      },
+      "min_properties": 2,
+      "max_properties": 128
     },
     "model": {
       "type": "string",

@@ -55,6 +55,11 @@ fn record_output() -> OutputSchema {
             (
                 "name".into(),
                 ValueSchema {
+                    scalar_only: false,
+                    additional_properties: None,
+                    min_properties: None,
+                    max_properties: None,
+                    nonempty: false,
                     kind: OutputType::Text,
                     nullable: false,
                     enum_values: None,
@@ -66,6 +71,11 @@ fn record_output() -> OutputSchema {
             (
                 "count".into(),
                 ValueSchema {
+                    scalar_only: false,
+                    additional_properties: None,
+                    min_properties: None,
+                    max_properties: None,
+                    nonempty: false,
                     kind: OutputType::Integer,
                     nullable: false,
                     enum_values: None,

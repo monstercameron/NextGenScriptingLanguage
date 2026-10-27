@@ -35,6 +35,11 @@ fn options(cwd: &Path) -> runtime::RunOptions {
 fn text_port(sensitivity: Sensitivity) -> AppletPort {
     AppletPort {
         schema: ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Text,
             nullable: false,
             enum_values: None,
@@ -419,6 +424,11 @@ fn retained_worker_secret_flows_through_a_later_graph_to_remote_authorization() 
     };
 
     let mut worker_output = PortSchema::single(ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Text,
         nullable: false,
         enum_values: None,

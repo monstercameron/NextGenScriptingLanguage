@@ -1598,6 +1598,11 @@ mod payload_size_tests {
 
     fn scalar_schema(kind: OutputType) -> ValueSchema {
         ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind,
             nullable: false,
             items: None,
@@ -3324,6 +3329,11 @@ mod input_cursor_tests {
         let input_schemas = BTreeMap::from([(
             "alpha".into(),
             PortSchema::single(crate::contracts::ValueSchema {
+                scalar_only: false,
+                additional_properties: None,
+                min_properties: None,
+                max_properties: None,
+                nonempty: false,
                 kind: OutputType::Integer,
                 nullable: false,
                 items: None,
@@ -3409,6 +3419,11 @@ mod input_cursor_tests {
         let input_schemas = BTreeMap::from([(
             "alpha".into(),
             PortSchema::single(crate::contracts::ValueSchema {
+                scalar_only: false,
+                additional_properties: None,
+                min_properties: None,
+                max_properties: None,
+                nonempty: false,
                 kind: OutputType::Integer,
                 nullable: false,
                 items: None,
@@ -3883,6 +3898,11 @@ mod emit_fanout_tests {
 
     fn value_schema(kind: OutputType) -> ValueSchema {
         ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind,
             nullable: false,
             items: None,

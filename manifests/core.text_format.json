@@ -9,8 +9,12 @@
       "required": true
     },
     "values": {
-      "type": "json",
-      "required": true
+      "type": "record",
+      "required": true,
+      "fields": {},
+      "additional_properties": {
+        "type": "scalar"
+      }
     },
     "escape": {
       "type": "string",
@@ -61,7 +65,12 @@
         },
         "values": {
           "schema": {
-            "type": "json"
+            "type": "record",
+            "fields": {},
+            "additionalProperties": {
+              "type": "json",
+              "scalar_only": true
+            }
           },
           "delivery": "single"
         },

@@ -11,8 +11,12 @@
       "type": "path"
     },
     "values": {
-      "type": "json",
-      "required": true
+      "type": "record",
+      "required": true,
+      "fields": {},
+      "additional_properties": {
+        "type": "scalar"
+      }
     }
   },
   "arguments": [
@@ -57,7 +61,12 @@
         },
         "values": {
           "schema": {
-            "type": "json"
+            "type": "record",
+            "fields": {},
+            "additionalProperties": {
+              "type": "json",
+              "scalar_only": true
+            }
           },
           "delivery": "single"
         }

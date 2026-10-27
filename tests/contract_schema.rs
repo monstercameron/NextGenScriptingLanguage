@@ -110,6 +110,169 @@ fn json_outputs_validate_types_records_and_duplicate_keys() {
 }
 
 #[test]
+fn open_records_validate_dynamic_values_and_keep_closed_records_closed() {
+    let open: ValueSchema = serde_json::from_value(json!({
+        "type":"record",
+        "fields":{},
+        "additionalProperties":{"type":"json"},
+        "min_properties":1
+    }))
+    .unwrap();
+    let dynamic = Value::Record(BTreeMap::from([
+        ("user-key".into(), Value::List(vec![Value::Integer(3)])),
+        ("another.key".into(), Value::Bool(true)),
+    ]));
+    assert!(open.validate_value(&dynamic).is_ok());
+    assert!(open
+        .validate_value(&Value::Record(BTreeMap::new()))
+        .is_err());
+    assert!(open.validate_value(&Value::List(Vec::new())).is_err());
+    assert_eq!(open.json_schema()["additionalProperties"], json!({}));
+    assert_eq!(open.json_schema()["minProperties"], 1);
+
+    let closed: ValueSchema = serde_json::from_value(json!({
+        "type":"record","fields":{"known":{"type":"integer"}}
+    }))
+    .unwrap();
+    assert!(closed
+        .validate_value(&Value::Record(BTreeMap::from([(
+            "arbitrary".into(),
+            Value::Integer(1)
+        )])))
+        .is_err());
+}
+
+#[test]
+fn open_record_value_constraints_validate_scalars_and_nonempty_text() {
+    let scalar_values: ValueSchema = serde_json::from_value(json!({
+        "type":"record","fields":{},
+        "additionalProperties":{"type":"json","scalar_only":true}
+    }))
+    .unwrap();
+    for value in [
+        Value::String("x".into()),
+        Value::Integer(2),
+        Value::Number(serde_json::Number::from_f64(2.5).unwrap()),
+        Value::Bool(false),
+    ] {
+        assert!(scalar_values
+            .validate_value(&Value::Record(BTreeMap::from([("key".into(), value)])))
+            .is_ok());
+    }
+    assert!(scalar_values
+        .validate_value(&Value::Record(BTreeMap::from([(
+            "key".into(),
+            Value::Null
+        )])))
+        .is_err());
+
+    let descriptions: ValueSchema = serde_json::from_value(json!({
+        "type":"record","fields":{},"min_properties":2,"max_properties":128,
+        "additionalProperties":{"type":"text","nonempty":true}
+    }))
+    .unwrap();
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String(" description ".into())),
+            ("no".into(), Value::String("\t ".into()))
+        ])))
+        .is_err());
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String("description".into())),
+            ("no".into(), Value::String("other".into()))
+        ])))
+        .is_ok());
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String("\u{0085}".into())),
+            ("no".into(), Value::String("other".into()))
+        ])))
+        .is_err());
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String("\u{FEFF}".into())),
+            ("no".into(), Value::String("other".into()))
+        ])))
+        .is_ok());
+}
+
+#[test]
+fn open_record_assignability_accounts_for_dynamic_keys_and_named_overrides() {
+    let open_json: ValueSchema = serde_json::from_value(json!({
+        "type":"record","fields":{},
+        "additionalProperties":{"type":"json"}
+    }))
+    .unwrap();
+    let named_text: ValueSchema = serde_json::from_value(json!({
+        "type":"record","fields":{"special":{"type":"text"}}
+    }))
+    .unwrap();
+    assert!(!open_json.is_assignable_to(&named_text));
+
+    let source_with_override: ValueSchema = serde_json::from_value(json!({
+        "type":"record",
+        "fields":{"special":{"type":"text"}},
+        "additionalProperties":{"type":"json"}
+    }))
+    .unwrap();
+    let target_with_override: ValueSchema = serde_json::from_value(json!({
+        "type":"record",
+        "fields":{"special":{"type":"text"}},
+        "additionalProperties":{"type":"json"}
+    }))
+    .unwrap();
+    assert!(source_with_override.is_assignable_to(&target_with_override));
+}
+
+#[test]
+fn manifest_check_accepts_dynamic_scalar_maps_and_rejects_wrong_roots() {
+    let manifest = load(json!({
+        "name":"typed",
+        "binary":"fixture",
+        "parameters":{"values":{
+            "type":"record","required":true,"fields":{},
+            "additional_properties":{"type":"scalar"}
+        }},
+        "arguments":[],
+        "contract":{"version":1,"ports":{"inputs":{"values":{
+            "schema":{"type":"record","fields":{},
+                "additionalProperties":{"type":"json","scalar_only":true}},
+            "delivery":"single"
+        }}}}
+    }));
+    let invocation = |value| Invocation {
+        operation: "typed".into(),
+        direct: false,
+        discard_stderr: false,
+        parameters: BTreeMap::from([("values".into(), value)]),
+        binding: None,
+        cache: false,
+        status_binding: None,
+        result_binding: None,
+        retry: None,
+    };
+    let valid = Value::Record(BTreeMap::from([
+        ("arbitrary key".into(), Value::String("hello".into())),
+        (
+            "another".into(),
+            Value::Number(serde_json::Number::from_f64(2.5).unwrap()),
+        ),
+        ("flag".into(), Value::Bool(true)),
+    ]));
+    assert!(manifest.validate(&invocation(valid)).is_ok());
+    assert!(manifest
+        .validate(&invocation(Value::List(Vec::new())))
+        .is_err());
+    assert!(manifest
+        .validate(&invocation(Value::Record(BTreeMap::from([(
+            "null".into(),
+            Value::Null
+        )]))))
+        .is_err());
+}
+
+#[test]
 fn recursive_list_outputs_use_typed_items_and_reject_nested_bytes() {
     let manifest = load(base(json!({
         "version":1,
@@ -693,6 +856,11 @@ fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
     );
 
     let nullable = ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Text,
         nullable: true,
         items: None,

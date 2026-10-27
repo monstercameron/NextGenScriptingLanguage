@@ -7,8 +7,14 @@
   "uncertain_on_failure": true,
   "parameters": {
     "questions": {
-      "type": "json",
-      "required": true
+      "type": "record",
+      "required": true,
+      "fields": {},
+      "additional_properties": {
+        "type": "json"
+      },
+      "min_properties": 1,
+      "max_properties": 32
     },
     "model": {
       "type": "string",

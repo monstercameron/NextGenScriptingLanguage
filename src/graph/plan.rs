@@ -63,6 +63,11 @@ impl PortSchema {
 
 pub(crate) fn value_schema_from_output(output: &OutputSchema) -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: output.kind,
         nullable: false,
         items: output.items.clone(),
@@ -810,6 +815,11 @@ impl GraphPlan {
                         crate::ast::ListenSource::Stdin => BTreeMap::from([(
                             "line".to_owned(),
                             PortSchema::events(ValueSchema {
+                                scalar_only: false,
+                                additional_properties: None,
+                                min_properties: None,
+                                max_properties: None,
+                                nonempty: false,
                                 kind: OutputType::Bytes,
                                 nullable: false,
                                 items: None,
@@ -844,6 +854,11 @@ impl GraphPlan {
                         crate::ast::ListenSource::Applet(_) => BTreeMap::from([(
                             "line".to_owned(),
                             PortSchema::events(ValueSchema {
+                                scalar_only: false,
+                                additional_properties: None,
+                                min_properties: None,
+                                max_properties: None,
+                                nonempty: false,
                                 kind: OutputType::Bytes,
                                 nullable: false,
                                 items: None,
@@ -1586,6 +1601,11 @@ fn validate_result_event_node(
         value_schema_from_output(output)
     } else {
         ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Bytes,
             nullable: false,
             items: None,

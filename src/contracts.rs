@@ -13,6 +13,9 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::path::PathBuf;
 
+const NONEMPTY_TEXT_WHITESPACE_PATTERN: &str =
+    r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$";
+
 /// How a host should connect one standard stream for a manifest's native
 /// command. An omitted stream in [`StdioContract`] keeps the host's legacy
 /// behavior.
@@ -562,6 +565,25 @@ pub enum OutputType {
 pub struct ValueSchema {
     #[serde(rename = "type")]
     pub kind: OutputType,
+    /// Restrict a JSON value to the scalar types accepted by text templates.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub scalar_only: bool,
+    /// Schema applied to arbitrary property names on an open record. Records
+    /// remain closed when this is omitted.
+    #[serde(
+        default,
+        rename = "additionalProperties",
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub additional_properties: Option<Box<ValueSchema>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_properties: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_properties: Option<usize>,
+    /// Require text to contain at least one non-whitespace character.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub nonempty: bool,
     /// Permit JSON null in addition to `kind`. JSON itself already includes
     /// null; this flag is useful for typed union fields such as envelopes.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -690,6 +712,11 @@ impl ValueSchema {
     pub fn validate(&self) -> Result<()> {
         validate_schema_parts(
             self.kind,
+            self.additional_properties.as_deref(),
+            self.min_properties,
+            self.max_properties,
+            self.nonempty,
+            self.scalar_only,
             self.items.as_deref(),
             &self.fields,
             &self.required,
@@ -702,6 +729,11 @@ impl ValueSchema {
     pub fn json_schema(&self) -> serde_json::Value {
         schema_json(
             self.kind,
+            self.additional_properties.as_deref(),
+            self.min_properties,
+            self.max_properties,
+            self.nonempty,
+            self.scalar_only,
             self.items.as_deref(),
             &self.fields,
             &self.required,
@@ -754,22 +786,61 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
     }
     match source.kind {
         OutputType::Text => {
-            enum_assignable(source.enum_values.as_deref(), target.enum_values.as_deref())
+            (!target.nonempty || source.nonempty)
+                && enum_assignable(source.enum_values.as_deref(), target.enum_values.as_deref())
         }
         OutputType::Record => {
             // A target may declare optional fields the source never emits.
             // Conversely, every source field must be accepted by the target,
             // and any target-required field must always be present in source
             // values.
+            let source_min_properties = source
+                .min_properties
+                .unwrap_or(0)
+                .max(source.required.len());
+            let source_max_properties = if source.additional_properties.is_none() {
+                Some(
+                    source
+                        .max_properties
+                        .map_or(source.fields.len(), |maximum| {
+                            maximum.min(source.fields.len())
+                        }),
+                )
+            } else {
+                source.max_properties
+            };
             source.fields.iter().all(|(name, source_field)| {
                 target
                     .fields
                     .get(name)
+                    .or(target.additional_properties.as_deref())
                     .is_some_and(|target_field| schema_is_assignable(source_field, target_field))
-            }) && target
-                .required
-                .iter()
-                .all(|name| source.required.contains(name))
+            }) && source
+                .additional_properties
+                .as_deref()
+                .is_none_or(|source_value| {
+                    target
+                        .fields
+                        .iter()
+                        .filter(|(name, _)| !source.fields.contains_key(*name))
+                        .all(|(_, target_field)| schema_is_assignable(source_value, target_field))
+                        && target
+                            .additional_properties
+                            .as_deref()
+                            .is_some_and(|target_value| {
+                                schema_is_assignable(source_value, target_value)
+                            })
+                })
+                && target
+                    .required
+                    .iter()
+                    .all(|name| source.required.contains(name))
+                && target
+                    .min_properties
+                    .is_none_or(|minimum| source_min_properties >= minimum)
+                && target.max_properties.is_none_or(|maximum| {
+                    source_max_properties.is_some_and(|source_maximum| source_maximum <= maximum)
+                })
         }
         OutputType::List => match (source.items.as_deref(), target.items.as_deref()) {
             (Some(source_item), Some(target_item)) => {
@@ -777,6 +848,7 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
             }
             _ => false,
         },
+        OutputType::Json => !target.scalar_only || source.scalar_only,
         _ => true,
     }
 }
@@ -813,6 +885,24 @@ fn validate_enum_value(values: Option<&[String]>, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_property_count(
+    count: usize,
+    minimum: Option<usize>,
+    maximum: Option<usize>,
+) -> Result<()> {
+    if let Some(minimum) = minimum {
+        if count < minimum {
+            bail!("object must contain at least {minimum} properties");
+        }
+    }
+    if let Some(maximum) = maximum {
+        if count > maximum {
+            bail!("object must contain at most {maximum} properties");
+        }
+    }
+    Ok(())
+}
+
 fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
     if matches!(value, Value::Null) && schema.nullable {
         return Ok(());
@@ -822,7 +912,11 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
             bail!("bytes use the raw byte transport and cannot be represented as a Value")
         }
         (OutputType::Text, Value::String(text)) => {
-            validate_enum_value(schema.enum_values.as_deref(), text)
+            validate_enum_value(schema.enum_values.as_deref(), text)?;
+            if schema.nonempty && (text.trim().is_empty() || text.contains('\0')) {
+                bail!("text value must be nonempty");
+            }
+            Ok(())
         }
         (OutputType::Path, Value::String(path)) => {
             if path.is_empty() || path.contains('\0') {
@@ -833,17 +927,32 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
         (OutputType::Integer, Value::Integer(_))
         | (OutputType::Number, Value::Integer(_) | Value::Number(_))
         | (OutputType::Boolean, Value::Bool(_)) => Ok(()),
-        (OutputType::Json, value) => crate::structured::to_json(value)
-            .context("validating value as JSON")
-            .map(|_| ()),
+        (OutputType::Json, value) => {
+            if schema.scalar_only
+                && !matches!(
+                    value,
+                    Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_)
+                )
+            {
+                bail!("expected a text, number, or boolean scalar");
+            }
+            crate::structured::to_json(value)
+                .context("validating value as JSON")
+                .map(|_| ())
+        }
         (OutputType::Record, Value::Record(values)) => {
+            validate_property_count(values.len(), schema.min_properties, schema.max_properties)?;
             for name in &schema.required {
                 if !values.contains_key(name) {
                     bail!("record is missing required field {name:?}");
                 }
             }
             for (name, value) in values {
-                let Some(field_schema) = schema.fields.get(name) else {
+                let Some(field_schema) = schema
+                    .fields
+                    .get(name)
+                    .or(schema.additional_properties.as_deref())
+                else {
                     bail!("record contains undeclared field {name:?}");
                 };
                 validate_ast_value(field_schema, value)
@@ -1007,7 +1116,11 @@ pub(crate) fn schema_at_pointer(root: &ValueSchema, pointer: &str) -> Result<Opt
         match current.kind {
             OutputType::Json => return Ok(None),
             OutputType::Record => {
-                let Some(next) = current.fields.get(&segment) else {
+                let Some(next) = current
+                    .fields
+                    .get(&segment)
+                    .or(current.additional_properties.as_deref())
+                else {
                     bail!("JSON pointer selects undeclared record field {segment:?}");
                 };
                 current = next.clone();
@@ -1037,6 +1150,11 @@ impl OutputSchema {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_schema_parts(
             self.kind,
+            None,
+            None,
+            None,
+            false,
+            false,
             self.items.as_deref(),
             &self.fields,
             &self.required,
@@ -1165,6 +1283,11 @@ impl OutputSchema {
             | OutputType::List => {
                 validate_json_value(
                     self.kind,
+                    None,
+                    None,
+                    None,
+                    false,
+                    false,
                     self.items.as_deref(),
                     &self.fields,
                     &self.required,
@@ -1214,6 +1337,11 @@ impl OutputSchema {
     pub fn json_schema(&self) -> serde_json::Value {
         let mut schema = schema_json(
             self.kind,
+            None,
+            None,
+            None,
+            false,
+            false,
             self.items.as_deref(),
             &self.fields,
             &self.required,
@@ -1231,8 +1359,16 @@ impl OutputSchema {
     }
 }
 
+// Keep the recursive schema fields explicit here so both output and value
+// schemas can share the same validation without constructing temporary trees.
+#[allow(clippy::too_many_arguments)]
 fn validate_schema_parts(
     kind: OutputType,
+    additional_properties: Option<&ValueSchema>,
+    min_properties: Option<usize>,
+    max_properties: Option<usize>,
+    nonempty: bool,
+    scalar_only: bool,
     items: Option<&ValueSchema>,
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
@@ -1240,8 +1376,32 @@ fn validate_schema_parts(
     nullable: bool,
     top_level: bool,
 ) -> Result<()> {
-    if kind != OutputType::Record && (!fields.is_empty() || !required.is_empty()) {
-        bail!("fields and required only apply to record schemas");
+    if kind != OutputType::Record
+        && (!fields.is_empty()
+            || !required.is_empty()
+            || additional_properties.is_some()
+            || min_properties.is_some()
+            || max_properties.is_some())
+    {
+        bail!("record constraints only apply to record schemas");
+    }
+    if min_properties
+        .zip(max_properties)
+        .is_some_and(|(min, max)| min > max)
+    {
+        bail!("minProperties cannot exceed maxProperties");
+    }
+    if additional_properties.is_none()
+        && (min_properties.is_some_and(|minimum| minimum > fields.len())
+            || max_properties.is_some_and(|maximum| maximum < required.len()))
+    {
+        bail!("record property-count constraints cannot be satisfied by its fields");
+    }
+    if nonempty && kind != OutputType::Text {
+        bail!("nonempty only applies to text schemas");
+    }
+    if scalar_only && kind != OutputType::Json {
+        bail!("scalar_only applies only to JSON schemas");
     }
     if (kind == OutputType::List) != items.is_some() {
         bail!("list schemas require items, and non-list schemas cannot declare items");
@@ -1265,6 +1425,30 @@ fn validate_schema_parts(
         }
         validate_schema_parts(
             schema.kind,
+            schema.additional_properties.as_deref(),
+            schema.min_properties,
+            schema.max_properties,
+            schema.nonempty,
+            schema.scalar_only,
+            schema.items.as_deref(),
+            &schema.fields,
+            &schema.required,
+            schema.enum_values.as_deref(),
+            schema.nullable,
+            false,
+        )?;
+    }
+    if let Some(schema) = additional_properties {
+        if schema.kind == OutputType::Bytes {
+            bail!("bytes cannot be nested in a JSON record");
+        }
+        validate_schema_parts(
+            schema.kind,
+            schema.additional_properties.as_deref(),
+            schema.min_properties,
+            schema.max_properties,
+            schema.nonempty,
+            schema.scalar_only,
             schema.items.as_deref(),
             &schema.fields,
             &schema.required,
@@ -1279,6 +1463,11 @@ fn validate_schema_parts(
         }
         validate_schema_parts(
             items.kind,
+            items.additional_properties.as_deref(),
+            items.min_properties,
+            items.max_properties,
+            items.nonempty,
+            items.scalar_only,
             items.items.as_deref(),
             &items.fields,
             &items.required,
@@ -1293,8 +1482,16 @@ fn validate_schema_parts(
     Ok(())
 }
 
+// This mirrors `ValueSchema`'s recursive shape and avoids cloning it for
+// projection into the public JSON Schema representation.
+#[allow(clippy::too_many_arguments)]
 fn schema_json(
     kind: OutputType,
+    additional_properties: Option<&ValueSchema>,
+    min_properties: Option<usize>,
+    max_properties: Option<usize>,
+    nonempty: bool,
+    scalar_only: bool,
     items: Option<&ValueSchema>,
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
@@ -1305,6 +1502,13 @@ fn schema_json(
         OutputType::Bytes => serde_json::json!({"type":"bytes"}),
         OutputType::Text => {
             let mut schema = serde_json::json!({"type":"string"});
+            if nonempty {
+                schema["minLength"] = serde_json::json!(1);
+                schema["pattern"] = serde_json::json!("^[^\\u0000]*$");
+                schema["not"] = serde_json::json!({
+                    "pattern": NONEMPTY_TEXT_WHITESPACE_PATTERN
+                });
+            }
             if let Some(values) = enum_values {
                 schema["enum"] = serde_json::json!(values);
             }
@@ -1319,6 +1523,9 @@ fn schema_json(
         }),
         OutputType::Number => serde_json::json!({"type":"number"}),
         OutputType::Boolean => serde_json::json!({"type":"boolean"}),
+        OutputType::Json if scalar_only => serde_json::json!({
+            "anyOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]
+        }),
         OutputType::Json => serde_json::json!({}),
         OutputType::Record => {
             let properties = fields
@@ -1328,6 +1535,11 @@ fn schema_json(
                         name.clone(),
                         schema_json(
                             schema.kind,
+                            schema.additional_properties.as_deref(),
+                            schema.min_properties,
+                            schema.max_properties,
+                            schema.nonempty,
+                            schema.scalar_only,
                             schema.items.as_deref(),
                             &schema.fields,
                             &schema.required,
@@ -1337,26 +1549,53 @@ fn schema_json(
                     )
                 })
                 .collect::<serde_json::Map<_, _>>();
-            serde_json::json!({
-                "type":"object",
-                "properties":properties,
-                "required":required,
-                "additionalProperties":false
-            })
+            let additional =
+                additional_properties.map_or(serde_json::Value::Bool(false), |schema| {
+                    schema_json(
+                        schema.kind,
+                        schema.additional_properties.as_deref(),
+                        schema.min_properties,
+                        schema.max_properties,
+                        schema.nonempty,
+                        schema.scalar_only,
+                        schema.items.as_deref(),
+                        &schema.fields,
+                        &schema.required,
+                        schema.enum_values.as_deref(),
+                        schema.nullable,
+                    )
+                });
+            let mut object = serde_json::json!({
+                "type":"object", "properties":properties,
+                "required":required, "additionalProperties":additional
+            });
+            if let Some(minimum) = min_properties {
+                object["minProperties"] = serde_json::json!(minimum);
+            }
+            if let Some(maximum) = max_properties {
+                object["maxProperties"] = serde_json::json!(maximum);
+            }
+            object
         }
         OutputType::List => {
             let item = items.expect("list schema validated");
-            serde_json::json!({
+            let list = serde_json::json!({
                 "type":"array",
                 "items":schema_json(
                     item.kind,
+                    item.additional_properties.as_deref(),
+                    item.min_properties,
+                    item.max_properties,
+                    item.nonempty,
+                    item.scalar_only,
                     item.items.as_deref(),
                     &item.fields,
                     &item.required,
                     item.enum_values.as_deref(),
                     item.nullable,
                 )
-            })
+            });
+            list
         }
     };
     if nullable && kind != OutputType::Json {
@@ -1380,8 +1619,15 @@ fn schema_json(
     schema
 }
 
+// This mirrors `ValueSchema`'s recursive shape and validates borrowed JSON.
+#[allow(clippy::too_many_arguments)]
 fn validate_json_value(
     kind: OutputType,
+    additional_properties: Option<&ValueSchema>,
+    min_properties: Option<usize>,
+    max_properties: Option<usize>,
+    nonempty: bool,
+    scalar_only: bool,
     items: Option<&ValueSchema>,
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
@@ -1407,7 +1653,11 @@ fn validate_json_value(
                 }
             }
             if kind == OutputType::Text {
-                validate_enum_value(enum_values, value.as_str().expect("string checked above"))?;
+                let text = value.as_str().expect("string checked above");
+                validate_enum_value(enum_values, text)?;
+                if nonempty && (text.trim().is_empty() || text.contains('\0')) {
+                    bail!("text value must be nonempty");
+                }
             }
         }
         OutputType::Integer => {
@@ -1428,25 +1678,35 @@ fn validate_json_value(
                 bail!("expected JSON boolean, got {}", json_kind(value));
             }
         }
-        OutputType::Json => {}
+        OutputType::Json => {
+            if scalar_only && !(value.is_string() || value.is_number() || value.is_boolean()) {
+                bail!("expected JSON text, number, or boolean scalar");
+            }
+        }
         OutputType::Record => {
             let object = value
                 .as_object()
                 .ok_or_else(|| anyhow!("expected JSON object, got {}", json_kind(value)))?;
+            validate_property_count(object.len(), min_properties, max_properties)?;
             for name in required {
                 if !object.contains_key(name) {
                     bail!("record output is missing required field {name:?}");
                 }
             }
             for name in object.keys() {
-                if !fields.contains_key(name) {
+                if !fields.contains_key(name) && additional_properties.is_none() {
                     bail!("record output contains undeclared field {name:?}");
                 }
             }
-            for (name, schema) in fields {
-                if let Some(value) = object.get(name) {
+            for (name, value) in object {
+                if let Some(schema) = fields.get(name).or(additional_properties) {
                     validate_json_value(
                         schema.kind,
+                        schema.additional_properties.as_deref(),
+                        schema.min_properties,
+                        schema.max_properties,
+                        schema.nonempty,
+                        schema.scalar_only,
                         schema.items.as_deref(),
                         &schema.fields,
                         &schema.required,
@@ -1466,6 +1726,11 @@ fn validate_json_value(
             for (index, value) in values.iter().enumerate() {
                 validate_json_value(
                     item_schema.kind,
+                    item_schema.additional_properties.as_deref(),
+                    item_schema.min_properties,
+                    item_schema.max_properties,
+                    item_schema.nonempty,
+                    item_schema.scalar_only,
                     item_schema.items.as_deref(),
                     &item_schema.fields,
                     &item_schema.required,
@@ -1908,6 +2173,11 @@ impl AppletContract {
         }
         let output = self.output.as_ref()?;
         let value_schema = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: output.kind,
             nullable: true,
             items: output.items.clone(),
@@ -1916,6 +2186,11 @@ impl AppletContract {
             enum_values: output.enum_values.clone(),
         };
         let text_schema = || ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Text,
             nullable: false,
             items: None,
@@ -1924,6 +2199,11 @@ impl AppletContract {
             enum_values: None,
         };
         let integer_schema = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Integer,
             nullable: false,
             items: None,
@@ -1939,6 +2219,11 @@ impl AppletContract {
             ("status".into(), integer_schema),
         ]);
         Some(ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Record,
             nullable: false,
             items: None,

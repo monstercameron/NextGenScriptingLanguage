@@ -22,6 +22,11 @@ fn digest(bytes: &[u8]) -> String {
 
 fn integer_schema() -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Integer,
         nullable: false,
         items: None,
@@ -46,6 +51,11 @@ fn output_schema() -> OutputSchema {
 
 fn decoded_output_port_schema() -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Record,
         nullable: false,
         items: None,
@@ -63,6 +73,11 @@ fn result_envelope_port_schema() -> ValueSchema {
         ..decoded_output_port_schema()
     };
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Record,
         nullable: false,
         items: None,
@@ -86,6 +101,11 @@ fn result_envelope_port_schema() -> ValueSchema {
 
 fn text_schema() -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Text,
         nullable: false,
         items: None,

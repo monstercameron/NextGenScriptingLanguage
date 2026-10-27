@@ -5200,12 +5200,22 @@ mod tests {
     #[test]
     fn schema_mismatches_explain_nested_types() {
         let output = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Record,
             nullable: false,
             items: None,
             fields: BTreeMap::from([(
                 "count".into(),
                 ValueSchema {
+                    scalar_only: false,
+                    additional_properties: None,
+                    min_properties: None,
+                    max_properties: None,
+                    nonempty: false,
                     kind: OutputType::Text,
                     nullable: false,
                     items: None,
@@ -5218,12 +5228,22 @@ mod tests {
             enum_values: None,
         };
         let input = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Record,
             nullable: false,
             items: None,
             fields: BTreeMap::from([(
                 "count".into(),
                 ValueSchema {
+                    scalar_only: false,
+                    additional_properties: None,
+                    min_properties: None,
+                    max_properties: None,
+                    nonempty: false,
                     kind: OutputType::Integer,
                     nullable: false,
                     items: None,
@@ -5244,6 +5264,11 @@ mod tests {
     #[test]
     fn nullable_output_flows_only_to_nullable_or_nonnullable_inputs_safely() {
         let nonnullable = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Text,
             nullable: false,
             items: None,
@@ -5268,6 +5293,11 @@ mod tests {
     #[test]
     fn compatibility_uses_directional_json_subtypes_and_record_width_variance() {
         let text = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Text,
             nullable: false,
             items: None,
@@ -5276,10 +5306,20 @@ mod tests {
             enum_values: None,
         };
         let json = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Json,
             ..text.clone()
         };
         let bytes = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Bytes,
             ..text.clone()
         };
@@ -5288,6 +5328,11 @@ mod tests {
         assert!(!schemas_compatible(&bytes, &json));
 
         let text_list = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::List,
             items: Some(Box::new(text.clone())),
             ..text.clone()
@@ -5300,6 +5345,11 @@ mod tests {
         assert!(!schemas_compatible(&json_list, &text_list));
 
         let output_record = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind: OutputType::Record,
             fields: BTreeMap::from([("name".into(), text.clone())]),
             required: vec!["name".into()],
@@ -5342,6 +5392,11 @@ mod tests {
     #[test]
     fn numeric_and_enum_schemas_are_directional_refinements() {
         let schema = |kind, enum_values| ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             kind,
             nullable: false,
             items: None,

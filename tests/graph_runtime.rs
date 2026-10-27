@@ -29,6 +29,11 @@ fn options(cwd: &Path) -> RunOptions {
 
 fn bytes() -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Bytes,
         nullable: false,
         enum_values: None,
@@ -40,6 +45,11 @@ fn bytes() -> ValueSchema {
 
 fn int() -> ValueSchema {
     ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Integer,
         nullable: false,
         enum_values: None,
@@ -113,6 +123,11 @@ fn fanout_merges_record_ports_in_order_with_lossless_bounded_queues() {
         BTreeMap::from([(
             "joined".into(),
             PortSchema::single(ValueSchema {
+                scalar_only: false,
+                additional_properties: None,
+                min_properties: None,
+                max_properties: None,
+                nonempty: false,
                 kind: OutputType::List,
                 nullable: false,
                 enum_values: None,
@@ -366,6 +381,11 @@ impl GraphExecutor for SecretFlowExecutor {
 #[test]
 fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
     let mut secret = PortSchema::single(ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Text,
         nullable: false,
         enum_values: None,
@@ -375,6 +395,11 @@ fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
     });
     secret.sensitivity = flow::contracts::Sensitivity::Secret;
     let mut declared_public_in = PortSchema::single(ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Text,
         nullable: false,
         enum_values: None,
@@ -476,6 +501,11 @@ fn runtime_provenance_union_denies_remote_before_invocation() {
     };
 
     let mut source = PortSchema::single(ValueSchema {
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
         kind: OutputType::Text,
         nullable: false,
         enum_values: None,

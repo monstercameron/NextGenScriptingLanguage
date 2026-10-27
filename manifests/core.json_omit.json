@@ -5,8 +5,12 @@
   "accepts_stdin": false,
   "parameters": {
     "document": {
-      "type": "json",
-      "required": true
+      "type": "record",
+      "required": true,
+      "fields": {},
+      "additional_properties": {
+        "type": "json"
+      }
     },
     "keys": {
       "type": "list",
@@ -43,7 +47,11 @@
       "inputs": {
         "document": {
           "schema": {
-            "type": "json"
+            "type": "record",
+            "fields": {},
+            "additionalProperties": {
+              "type": "json"
+            }
           },
           "delivery": "single"
         },

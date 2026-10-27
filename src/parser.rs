@@ -219,58 +219,268 @@ pub(crate) struct StatementCompletionForm {
 /// a form is added here too.
 pub(crate) fn statement_completion_forms() -> &'static [StatementCompletionForm] {
     const FORMS: &[StatementCompletionForm] = &[
-        StatementCompletionForm { label: "accept", detail: "Declare a typed program input", snippet: Some("accept ${1:name} as ${2:text}") },
-        StatementCompletionForm { label: "break", detail: "Exit the innermost active loop", snippet: None },
-        StatementCompletionForm { label: "cancel", detail: "Cancel a named background job", snippet: Some("cancel ${1:job}") },
-        StatementCompletionForm { label: "catch", detail: "Catch a failure inside a try block", snippet: Some("catch ${1:error}\n  ${2}") },
-        StatementCompletionForm { label: "continue", detail: "Continue the innermost active loop", snippet: None },
-        StatementCompletionForm { label: "define a program named", detail: "Define a reusable program", snippet: Some("define a program named ${1:name}\n  ${2}") },
-        StatementCompletionForm { label: "every", detail: "Run on a time interval trigger", snippet: Some("every ${1:5} ${2:minutes}\n  ${3}") },
-        StatementCompletionForm { label: "execute 1", detail: "Language version marker, first line only", snippet: None },
-        StatementCompletionForm { label: "exit with status", detail: "Exit with an integer status", snippet: Some("exit with status ${1:0}") },
-        StatementCompletionForm { label: "fail with message", detail: "Fail with a text message", snippet: Some("fail with message ${1:\"reason\"}") },
-        StatementCompletionForm { label: "finally", detail: "Cleanup body of a try block", snippet: Some("finally\n  ${1}") },
-        StatementCompletionForm { label: "for each", detail: "Loop over a list value", snippet: Some("for each ${1:item} in ${2:items}\n  ${3}") },
-        StatementCompletionForm { label: "hand over to", detail: "Replace this script with a native command", snippet: Some("hand over to ${1:\"program\"}") },
-        StatementCompletionForm { label: "if", detail: "Branch on a value or command condition", snippet: Some("if ${1:value} is ${2:other}\n  ${3}") },
-        StatementCompletionForm { label: "inspect", detail: "Read a snapshot of a named job", snippet: Some("inspect ${1:job} as ${2:state}") },
-        StatementCompletionForm { label: "launch detached", detail: "Start an unowned native command", snippet: Some("launch detached ${1:\"program\"}") },
-        StatementCompletionForm { label: "listen to", detail: "Listen trigger for lines or applet events", snippet: Some("listen to ${1:stdin}\nwhenever a line arrives as ${2:message}\n  ${3}") },
-        StatementCompletionForm { label: "on exit", detail: "Cleanup block running on every exit path", snippet: Some("on exit\n  ${1}") },
-        StatementCompletionForm { label: "on interrupt", detail: "Cleanup block running on first interrupt", snippet: Some("on interrupt\n  ${1}") },
-        StatementCompletionForm { label: "on schedule", detail: "Run on a cron schedule trigger", snippet: Some("on schedule ${1:\"*/5 * * * *\"}\n  ${2}") },
-        StatementCompletionForm { label: "otherwise", detail: "Default branch of an if block", snippet: Some("otherwise\n  ${1}") },
-        StatementCompletionForm { label: "otherwise if", detail: "Else-if branch of an if block", snippet: Some("otherwise if ${1:value} is ${2:other}\n  ${3}") },
-        StatementCompletionForm { label: "parallel", detail: "Run independent tasks and join them", snippet: Some("parallel at most ${1:4} as ${2:results}\n  ${3}") },
-        StatementCompletionForm { label: "parallel for each", detail: "Run one task per list element", snippet: Some("parallel for each ${1:item} in ${2:items} at most ${3:4} as ${4:results}\n  ${5}") },
-        StatementCompletionForm { label: "pipe to", detail: "Pipe stdout into the next command", snippet: Some("pipe to ${1:tool}") },
-        StatementCompletionForm { label: "race", detail: "Return the first successful task", snippet: Some("race at most ${1:4} as ${2:result}\n  ${3}") },
-        StatementCompletionForm { label: "read", detail: "Read a file into a binding", snippet: Some("read ${1:\"file\"} as ${2:content}") },
-        StatementCompletionForm { label: "read from stdin", detail: "Read stdin into a binding", snippet: Some("read from stdin as ${1:input}") },
-        StatementCompletionForm { label: "repeat", detail: "Repeat a body N times", snippet: Some("repeat ${1:3} times\n  ${2}") },
-        StatementCompletionForm { label: "return", detail: "Return from a reusable program", snippet: None },
-        StatementCompletionForm { label: "run", detail: "Run an applet or native command", snippet: Some("run ${1:tool} with ${2:parameter} ${3:value}") },
-        StatementCompletionForm { label: "run program", detail: "Call a reusable program", snippet: Some("run program ${1:name}") },
-        StatementCompletionForm { label: "run program file", detail: "Call another .program file", snippet: Some("run program file ${1:\"path.program\"}") },
-        StatementCompletionForm { label: "spawn as", detail: "Spawn a named background pipeline", snippet: Some("spawn as ${1:job}\n  run ${2:tool}") },
-        StatementCompletionForm { label: "await", detail: "Wait for a background job", snippet: Some("await ${1:job}") },
-        StatementCompletionForm { label: "take", detail: "Read a typed value out of JSON", snippet: Some("take ${1:text} at ${2:\"/pointer\"} from ${3:source} as ${4:name}") },
-        StatementCompletionForm { label: "then", detail: "Run after the previous statement", snippet: Some("then ${1:tool}") },
-        StatementCompletionForm { label: "then append to", detail: "Append pipeline output to a file", snippet: Some("then append to ${1:\"out.txt\"}") },
-        StatementCompletionForm { label: "then capture bytes as", detail: "Bind raw pipeline bytes", snippet: Some("then capture bytes as ${1:bytes}") },
-        StatementCompletionForm { label: "then encode", detail: "Encode a value as JSON", snippet: Some("then encode ${1:value} as json") },
-        StatementCompletionForm { label: "then parse json as", detail: "Parse pipeline output as JSON", snippet: Some("then parse json as ${1:data}") },
-        StatementCompletionForm { label: "then save to", detail: "Replace a file with pipeline output", snippet: Some("then save to ${1:\"out.txt\"}") },
-        StatementCompletionForm { label: "try", detail: "Guard a body with catch/finally", snippet: Some("try\n  ${1}\ncatch ${2:error}\n  ${3}\nfinally\n  ${4}") },
-        StatementCompletionForm { label: "use bytes", detail: "Set pipeline input from a byte binding", snippet: Some("use bytes ${1:payload}") },
-        StatementCompletionForm { label: "use environment", detail: "Set workflow environment variables", snippet: Some("use environment {${1:\"NAME\": \"value\"}}") },
-        StatementCompletionForm { label: "use folder", detail: "Set the working directory", snippet: Some("use folder ${1:\"work\"}") },
-        StatementCompletionForm { label: "use value", detail: "Set pipeline input to a value", snippet: Some("use value ${1:\"text\"}") },
-        StatementCompletionForm { label: "use without environment", detail: "Remove workflow environment variables", snippet: Some("use without environment [${1:\"NAME\"}]") },
-        StatementCompletionForm { label: "whenever a line arrives as", detail: "Listener event header binding", snippet: Some("whenever a line arrives as ${1:message}\n  ${2}") },
-        StatementCompletionForm { label: "while", detail: "Loop while a condition holds", snippet: Some("while ${1:ready} is ${2:value}\n  ${3}") },
-        StatementCompletionForm { label: "with temporary directory as", detail: "Scoped fresh private directory", snippet: Some("with temporary directory as ${1:scratch}\n  ${2}") },
-        StatementCompletionForm { label: "with temporary file as", detail: "Scoped fresh private file", snippet: Some("with temporary file as ${1:scratch}\n  ${2}") },
+        StatementCompletionForm {
+            label: "accept",
+            detail: "Declare a typed program input",
+            snippet: Some("accept ${1:name} as ${2:text}"),
+        },
+        StatementCompletionForm {
+            label: "break",
+            detail: "Exit the innermost active loop",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "cancel",
+            detail: "Cancel a named background job",
+            snippet: Some("cancel ${1:job}"),
+        },
+        StatementCompletionForm {
+            label: "catch",
+            detail: "Catch a failure inside a try block",
+            snippet: Some("catch ${1:error}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "continue",
+            detail: "Continue the innermost active loop",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "define a program named",
+            detail: "Define a reusable program",
+            snippet: Some("define a program named ${1:name}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "every",
+            detail: "Run on a time interval trigger",
+            snippet: Some("every ${1:5} ${2:minutes}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "execute 1",
+            detail: "Language version marker, first line only",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "exit with status",
+            detail: "Exit with an integer status",
+            snippet: Some("exit with status ${1:0}"),
+        },
+        StatementCompletionForm {
+            label: "fail with message",
+            detail: "Fail with a text message",
+            snippet: Some("fail with message ${1:\"reason\"}"),
+        },
+        StatementCompletionForm {
+            label: "finally",
+            detail: "Cleanup body of a try block",
+            snippet: Some("finally\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "for each",
+            detail: "Loop over a list value",
+            snippet: Some("for each ${1:item} in ${2:items}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "hand over to",
+            detail: "Replace this script with a native command",
+            snippet: Some("hand over to ${1:\"program\"}"),
+        },
+        StatementCompletionForm {
+            label: "if",
+            detail: "Branch on a value or command condition",
+            snippet: Some("if ${1:value} is ${2:other}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "inspect",
+            detail: "Read a snapshot of a named job",
+            snippet: Some("inspect ${1:job} as ${2:state}"),
+        },
+        StatementCompletionForm {
+            label: "launch detached",
+            detail: "Start an unowned native command",
+            snippet: Some("launch detached ${1:\"program\"}"),
+        },
+        StatementCompletionForm {
+            label: "listen to",
+            detail: "Listen trigger for lines or applet events",
+            snippet: Some("listen to ${1:stdin}\nwhenever a line arrives as ${2:message}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "on exit",
+            detail: "Cleanup block running on every exit path",
+            snippet: Some("on exit\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "on interrupt",
+            detail: "Cleanup block running on first interrupt",
+            snippet: Some("on interrupt\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "on schedule",
+            detail: "Run on a cron schedule trigger",
+            snippet: Some("on schedule ${1:\"*/5 * * * *\"}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "otherwise",
+            detail: "Default branch of an if block",
+            snippet: Some("otherwise\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "otherwise if",
+            detail: "Else-if branch of an if block",
+            snippet: Some("otherwise if ${1:value} is ${2:other}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "parallel",
+            detail: "Run independent tasks and join them",
+            snippet: Some("parallel at most ${1:4} as ${2:results}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "parallel for each",
+            detail: "Run one task per list element",
+            snippet: Some(
+                "parallel for each ${1:item} in ${2:items} at most ${3:4} as ${4:results}\n  ${5}",
+            ),
+        },
+        StatementCompletionForm {
+            label: "pipe to",
+            detail: "Pipe stdout into the next command",
+            snippet: Some("pipe to ${1:tool}"),
+        },
+        StatementCompletionForm {
+            label: "race",
+            detail: "Return the first successful task",
+            snippet: Some("race at most ${1:4} as ${2:result}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "read",
+            detail: "Read a file into a binding",
+            snippet: Some("read ${1:\"file\"} as ${2:content}"),
+        },
+        StatementCompletionForm {
+            label: "read from stdin",
+            detail: "Read stdin into a binding",
+            snippet: Some("read from stdin as ${1:input}"),
+        },
+        StatementCompletionForm {
+            label: "repeat",
+            detail: "Repeat a body N times",
+            snippet: Some("repeat ${1:3} times\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "return",
+            detail: "Return from a reusable program",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "run",
+            detail: "Run an applet or native command",
+            snippet: Some("run ${1:tool} with ${2:parameter} ${3:value}"),
+        },
+        StatementCompletionForm {
+            label: "run program",
+            detail: "Call a reusable program",
+            snippet: Some("run program ${1:name}"),
+        },
+        StatementCompletionForm {
+            label: "run program file",
+            detail: "Call another .program file",
+            snippet: Some("run program file ${1:\"path.program\"}"),
+        },
+        StatementCompletionForm {
+            label: "spawn as",
+            detail: "Spawn a named background pipeline",
+            snippet: Some("spawn as ${1:job}\n  run ${2:tool}"),
+        },
+        StatementCompletionForm {
+            label: "await",
+            detail: "Wait for a background job",
+            snippet: Some("await ${1:job}"),
+        },
+        StatementCompletionForm {
+            label: "take",
+            detail: "Read a typed value out of JSON",
+            snippet: Some("take ${1:text} at ${2:\"/pointer\"} from ${3:source} as ${4:name}"),
+        },
+        StatementCompletionForm {
+            label: "then",
+            detail: "Run after the previous statement",
+            snippet: Some("then ${1:tool}"),
+        },
+        StatementCompletionForm {
+            label: "then append to",
+            detail: "Append pipeline output to a file",
+            snippet: Some("then append to ${1:\"out.txt\"}"),
+        },
+        StatementCompletionForm {
+            label: "then capture bytes as",
+            detail: "Bind raw pipeline bytes",
+            snippet: Some("then capture bytes as ${1:bytes}"),
+        },
+        StatementCompletionForm {
+            label: "then encode",
+            detail: "Encode a value as JSON",
+            snippet: Some("then encode ${1:value} as json"),
+        },
+        StatementCompletionForm {
+            label: "then parse json as",
+            detail: "Parse pipeline output as JSON",
+            snippet: Some("then parse json as ${1:data}"),
+        },
+        StatementCompletionForm {
+            label: "then save to",
+            detail: "Replace a file with pipeline output",
+            snippet: Some("then save to ${1:\"out.txt\"}"),
+        },
+        StatementCompletionForm {
+            label: "try",
+            detail: "Guard a body with catch/finally",
+            snippet: Some("try\n  ${1}\ncatch ${2:error}\n  ${3}\nfinally\n  ${4}"),
+        },
+        StatementCompletionForm {
+            label: "use bytes",
+            detail: "Set pipeline input from a byte binding",
+            snippet: Some("use bytes ${1:payload}"),
+        },
+        StatementCompletionForm {
+            label: "use environment",
+            detail: "Set workflow environment variables",
+            snippet: Some("use environment {${1:\"NAME\": \"value\"}}"),
+        },
+        StatementCompletionForm {
+            label: "use folder",
+            detail: "Set the working directory",
+            snippet: Some("use folder ${1:\"work\"}"),
+        },
+        StatementCompletionForm {
+            label: "use value",
+            detail: "Set pipeline input to a value",
+            snippet: Some("use value ${1:\"text\"}"),
+        },
+        StatementCompletionForm {
+            label: "use without environment",
+            detail: "Remove workflow environment variables",
+            snippet: Some("use without environment [${1:\"NAME\"}]"),
+        },
+        StatementCompletionForm {
+            label: "whenever a line arrives as",
+            detail: "Listener event header binding",
+            snippet: Some("whenever a line arrives as ${1:message}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "while",
+            detail: "Loop while a condition holds",
+            snippet: Some("while ${1:ready} is ${2:value}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "with temporary directory as",
+            detail: "Scoped fresh private directory",
+            snippet: Some("with temporary directory as ${1:scratch}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "with temporary file as",
+            detail: "Scoped fresh private file",
+            snippet: Some("with temporary file as ${1:scratch}\n  ${2}"),
+        },
     ];
     FORMS
 }
@@ -298,29 +508,100 @@ pub(crate) struct SuffixCompletionForm {
 /// relative order and follow the core families.
 pub(crate) fn invocation_suffix_forms() -> &'static [SuffixCompletionForm] {
     const FORMS: &[SuffixCompletionForm] = &[
-        SuffixCompletionForm { label: "as", detail: "Bind the output to a name", snippet: Some("as ${1:binding}") },
-        SuffixCompletionForm { label: "and discard stderr", detail: "Discard stderr of a direct command", snippet: None },
-        SuffixCompletionForm { label: "and keep status as", detail: "Bind the exit status", snippet: Some("and keep status as ${1:status}") },
-        SuffixCompletionForm { label: "and keep result as", detail: "Bind the execution result", snippet: Some("and keep result as ${1:result}") },
-        SuffixCompletionForm { label: "and keep secret", detail: "Mark the bound output sensitive", snippet: None },
-        SuffixCompletionForm { label: "and cache", detail: "Cache a deterministic applet call", snippet: None },
-        SuffixCompletionForm { label: "and retry up to", detail: "Retry a run command", snippet: Some("and retry up to ${1:3} times") },
-        SuffixCompletionForm { label: "and stdin from", detail: "Feed a file as stdin", snippet: Some("and stdin from ${1:\"input.txt\"}") },
-        SuffixCompletionForm { label: "and stderr to", detail: "Redirect stderr to a file", snippet: Some("and stderr to ${1:\"errors.txt\"}") },
-        SuffixCompletionForm { label: "and stderr appended to", detail: "Append stderr to a file", snippet: Some("and stderr appended to ${1:\"errors.txt\"}") },
-        SuffixCompletionForm { label: "and stderr merged", detail: "Merge stderr into stdout", snippet: None },
-        SuffixCompletionForm { label: "and stdout to stderr", detail: "Redirect stdout to stderr", snippet: None },
-        SuffixCompletionForm { label: "and environment", detail: "Set per-command environment", snippet: Some("and environment {${1:\"NAME\": \"value\"}}") },
-        SuffixCompletionForm { label: "and without environment", detail: "Remove per-command environment", snippet: Some("and without environment [${1:\"NAME\"}]") },
-        SuffixCompletionForm { label: "and output to", detail: "Detached launch output file", snippet: Some("and output to ${1:\"out.txt\"}") },
-        SuffixCompletionForm { label: "interactively", detail: "Run a top-level native command interactively", snippet: None },
+        SuffixCompletionForm {
+            label: "as",
+            detail: "Bind the output to a name",
+            snippet: Some("as ${1:binding}"),
+        },
+        SuffixCompletionForm {
+            label: "and discard stderr",
+            detail: "Discard stderr of a direct command",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and keep status as",
+            detail: "Bind the exit status",
+            snippet: Some("and keep status as ${1:status}"),
+        },
+        SuffixCompletionForm {
+            label: "and keep result as",
+            detail: "Bind the execution result",
+            snippet: Some("and keep result as ${1:result}"),
+        },
+        SuffixCompletionForm {
+            label: "and keep secret",
+            detail: "Mark the bound output sensitive",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and cache",
+            detail: "Cache a deterministic applet call",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and retry up to",
+            detail: "Retry a run command",
+            snippet: Some("and retry up to ${1:3} times"),
+        },
+        SuffixCompletionForm {
+            label: "and stdin from",
+            detail: "Feed a file as stdin",
+            snippet: Some("and stdin from ${1:\"input.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "and stderr to",
+            detail: "Redirect stderr to a file",
+            snippet: Some("and stderr to ${1:\"errors.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "and stderr appended to",
+            detail: "Append stderr to a file",
+            snippet: Some("and stderr appended to ${1:\"errors.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "and stderr merged",
+            detail: "Merge stderr into stdout",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and stdout to stderr",
+            detail: "Redirect stdout to stderr",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and environment",
+            detail: "Set per-command environment",
+            snippet: Some("and environment {${1:\"NAME\": \"value\"}}"),
+        },
+        SuffixCompletionForm {
+            label: "and without environment",
+            detail: "Remove per-command environment",
+            snippet: Some("and without environment [${1:\"NAME\"}]"),
+        },
+        SuffixCompletionForm {
+            label: "and output to",
+            detail: "Detached launch output file",
+            snippet: Some("and output to ${1:\"out.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "interactively",
+            detail: "Run a top-level native command interactively",
+            snippet: None,
+        },
     ];
     FORMS
 }
 
 /// Value-comparison operators from `parse_condition`, for `if`/`otherwise if`/`while`.
 pub(crate) fn condition_operator_forms() -> &'static [&'static str] {
-    &["is", "is not", "contains", "does not contain", "succeeds", "fails"]
+    &[
+        "is",
+        "is not",
+        "contains",
+        "does not contain",
+        "succeeds",
+        "fails",
+    ]
 }
 
 /// Value types accepted by `take` (see `parse_take_json`).

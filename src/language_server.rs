@@ -1199,7 +1199,15 @@ fn complete_at_cursor(
     }
     // Conditions: `if`, `otherwise if`, `while`.
     if words[0] == "if" || words[0] == "while" || trimmed.starts_with("otherwise if ") {
-        complete_condition(items, source, line, tokens, &words, ends_with_space, manifests);
+        complete_condition(
+            items,
+            source,
+            line,
+            tokens,
+            &words,
+            ends_with_space,
+            manifests,
+        );
         return;
     }
     if trimmed.starts_with("otherwise") || words[0] == "else" {
@@ -1281,7 +1289,10 @@ fn complete_at_cursor(
     // Statement heads that merely contain `with`/`and`/`as` (`take ... as`,
     // `spawn as`, ...) are complete statements, not invocations.
     if trimmed.contains(" with ") || trimmed.contains(" and ") || trimmed.contains(" as ") {
-        if words.first().is_some_and(|word| is_statement_head_word(word)) {
+        if words
+            .first()
+            .is_some_and(|word| is_statement_head_word(word))
+        {
             push_statement_forms_scoped(items, source, line, indent);
         } else {
             complete_invocation(
@@ -1332,7 +1343,15 @@ fn complete_accept_line(items: &mut Vec<JsonValue>, words: &[&str], ends_with_sp
     let after = &words[as_index + 1..];
     // Still typing the type, or the cursor sits right after `as `.
     if after.is_empty() || (after.len() == 1 && !ends_with_space) {
-        for form in ["text", "integer", "boolean", "json", "list of text", "list of integer", "list of json"] {
+        for form in [
+            "text",
+            "integer",
+            "boolean",
+            "json",
+            "list of text",
+            "list of integer",
+            "list of json",
+        ] {
             push_keyword(items, form, "Input value type");
         }
         return;
@@ -1391,10 +1410,7 @@ fn complete_take(
             return;
         }
         cursor += 3;
-    } else if matches!(
-        bare(cursor),
-        Some("text" | "integer" | "boolean" | "json")
-    ) {
+    } else if matches!(bare(cursor), Some("text" | "integer" | "boolean" | "json")) {
         cursor += 1;
     } else {
         // Missing (`take `) or partial (`take te...`) type.
@@ -1492,9 +1508,9 @@ fn complete_condition(
         }
         return;
     }
-    let operator_at = rest.iter().position(|word| {
-        matches!(*word, "is" | "contains" | "does" | "succeeds" | "fails")
-    });
+    let operator_at = rest
+        .iter()
+        .position(|word| matches!(*word, "is" | "contains" | "does" | "succeeds" | "fails"));
     match operator_at {
         None => {
             if rest.is_empty() || (rest.len() == 1 && !ends_with_space) {
@@ -1650,8 +1666,7 @@ fn complete_task_limit_tail(
     base: usize,
 ) {
     if words.get(base) != Some(&"at") {
-        if (ends_with_space && words.len() == base)
-            || (!ends_with_space && words.len() == base + 1)
+        if (ends_with_space && words.len() == base) || (!ends_with_space && words.len() == base + 1)
         {
             push_keyword(items, "at most", "Bound the task group size");
         }
@@ -1851,7 +1866,13 @@ fn complete_use(
 ) {
     match words.get(1).copied() {
         None | Some("") => {
-            for form in ["use value", "use bytes", "use folder", "use environment", "use without environment"] {
+            for form in [
+                "use value",
+                "use bytes",
+                "use folder",
+                "use environment",
+                "use without environment",
+            ] {
                 push_keyword(items, form, "Pipeline input or directory form");
             }
         }
@@ -1862,8 +1883,7 @@ fn complete_use(
             // A quoted literal never reaches `words`, so a trailing quote
             // with a space after it is a complete value even when no bare
             // word follows the parameter name.
-            let quoted_value =
-                ends_with_space && tokens.last().is_some_and(|token| token.quoted);
+            let quoted_value = ends_with_space && tokens.last().is_some_and(|token| token.quoted);
             let value_present = words.len() > 2 || quoted_value;
             if !value_present || !ends_with_space {
                 push_value_items(items, source, line, None, None);
@@ -1884,7 +1904,11 @@ fn complete_use(
             // `use without environment [...]`: the only follow-up is the
             // `environment` keyword itself.
             if words.get(2).is_none() || (words.len() == 3 && !ends_with_space) {
-                push_keyword(items, "environment", "Remove workflow environment variables");
+                push_keyword(
+                    items,
+                    "environment",
+                    "Remove workflow environment variables",
+                );
             }
         }
         _ => {}
@@ -1911,9 +1935,7 @@ fn complete_read(
     // `read from stdin [as <name>]`.
     if words.get(1) == Some(&"from") {
         if words.get(2) != Some(&"stdin") {
-            if (ends_with_space && words.len() == 2)
-                || (!ends_with_space && words.len() == 3)
-            {
+            if (ends_with_space && words.len() == 2) || (!ends_with_space && words.len() == 3) {
                 push_keyword(items, "from stdin", "Read standard input");
             }
             return;
@@ -2005,8 +2027,7 @@ fn complete_value_statement(
                     }
                     return;
                 }
-                let complete =
-                    ends_with_space && (words.len() > and_at + 2 || quoted_trailing);
+                let complete = ends_with_space && (words.len() > and_at + 2 || quoted_trailing);
                 if !complete {
                     push_value_items(items, source, line, None, None);
                 }
@@ -2046,9 +2067,7 @@ fn complete_then_statement(
         "parse" => {
             // `then parse json as <name>`.
             if words.get(2) != Some(&"json") {
-                if (ends_with_space && words.len() == 2)
-                    || (!ends_with_space && words.len() == 3)
-                {
+                if (ends_with_space && words.len() == 2) || (!ends_with_space && words.len() == 3) {
                     push_keyword(items, "json", "Parse pipeline output as JSON");
                 }
                 return;
@@ -2103,9 +2122,7 @@ fn complete_then_statement(
             // `then save to <value>` (with an optional `file` keyword) and
             // `then append to <value>`.
             if words.get(2) != Some(&"to") {
-                if (ends_with_space && words.len() == 2)
-                    || (!ends_with_space && words.len() == 3)
-                {
+                if (ends_with_space && words.len() == 2) || (!ends_with_space && words.len() == 3) {
                     push_keyword(items, "to", "File to write pipeline output to");
                 }
                 return;
@@ -2114,8 +2131,7 @@ fn complete_then_statement(
             if words.get(cursor) == Some(&"file") {
                 cursor += 1;
             }
-            let value_complete =
-                ends_with_space && (words.len() > cursor || quoted_trailing);
+            let value_complete = ends_with_space && (words.len() > cursor || quoted_trailing);
             if words.len() == cursor && !ends_with_space {
                 push_keyword(items, "to", "File to write pipeline output to");
             } else if !value_complete {
@@ -2129,9 +2145,7 @@ fn complete_then_statement(
         _ => {
             // `then capture bytes as <name>`.
             if words.get(2) != Some(&"bytes") {
-                if (ends_with_space && words.len() == 2)
-                    || (!ends_with_space && words.len() == 3)
-                {
+                if (ends_with_space && words.len() == 2) || (!ends_with_space && words.len() == 3) {
                     push_keyword(items, "bytes", "Bind raw pipeline bytes");
                 }
                 return;
@@ -2242,7 +2256,8 @@ fn complete_invocation(
     } else if words.first() == Some(&"launch") && words.get(1) == Some(&"detached") {
         head_len = 2;
         head = InvocationHead::Launch;
-    } else if matches!(words.first(), Some(first) if matches!(*first, "run" | "then" | "interactively")) {
+    } else if matches!(words.first(), Some(first) if matches!(*first, "run" | "then" | "interactively"))
+    {
         head_len = 1;
         head = if words[0] == "then" {
             InvocationHead::Then
@@ -2323,8 +2338,16 @@ fn complete_invocation(
         && tail.first().is_some_and(|word| {
             matches!(
                 *word,
-                "keep" | "retry" | "cache" | "discard" | "stdin" | "stderr" | "stdout"
-                    | "environment" | "without" | "output"
+                "keep"
+                    | "retry"
+                    | "cache"
+                    | "discard"
+                    | "stdin"
+                    | "stderr"
+                    | "stdout"
+                    | "environment"
+                    | "without"
+                    | "output"
             )
         })
     {
@@ -2864,7 +2887,10 @@ fn parameter_value_schema(
     if let Some(program_name) = operation.strip_prefix("program ") {
         let program = crate::parser::parse(source).ok()?;
         let definition = program.definitions.get(program_name)?;
-        let input = definition.inputs.iter().find(|input| input.name == parameter)?;
+        let input = definition
+            .inputs
+            .iter()
+            .find(|input| input.name == parameter)?;
         let choices = input.choices.clone().unwrap_or_default();
         if choices.is_empty() {
             return None;
@@ -3011,9 +3037,7 @@ fn collect_inputs(source: &str) -> Vec<InputDecl> {
             continue;
         }
         let mut end = 3;
-        while end < words.len()
-            && !matches!(words[end], "one" | "from" | "with" | "described")
-        {
+        while end < words.len() && !matches!(words[end], "one" | "from" | "with" | "described") {
             end += 1;
         }
         let kind = if end > 3 {
@@ -3181,10 +3205,7 @@ fn collect_bindings(source: &str, before_line: usize) -> Vec<BindingDecl> {
             }
             continue;
         }
-        if words[0] == "parallel"
-            && words.get(1) == Some(&"for")
-            && words.get(2) == Some(&"each")
-        {
+        if words[0] == "parallel" && words.get(1) == Some(&"for") && words.get(2) == Some(&"each") {
             if let Some(name) = words.get(3) {
                 if is_completion_binding_word(name) {
                     bindings.push(BindingDecl {
@@ -5504,10 +5525,7 @@ mod tests {
         }
         let statement = items.iter().find(|item| item["label"] == "try").unwrap();
         assert_eq!(statement["insertTextFormat"], 2);
-        assert!(statement["insertText"]
-            .as_str()
-            .unwrap()
-            .contains("${"));
+        assert!(statement["insertText"].as_str().unwrap().contains("${"));
         // Loop-only, reusable-only and clause forms are hidden outside their
         // blocks (see `completion_scope`); they are covered by the scoped
         // test below instead.
@@ -5533,8 +5551,16 @@ mod tests {
             if ["cd", "interactively", "redirect", "until"].contains(keyword) {
                 continue;
             }
-            if ["break", "continue", "return", "catch", "finally", "otherwise", "whenever"]
-                .contains(keyword)
+            if [
+                "break",
+                "continue",
+                "return",
+                "catch",
+                "finally",
+                "otherwise",
+                "whenever",
+            ]
+            .contains(keyword)
             {
                 continue;
             }
@@ -5656,7 +5682,9 @@ mod tests {
             );
         }
         assert!(
-            !items.iter().any(|item| item["label"] == "and discard stderr"),
+            !items
+                .iter()
+                .any(|item| item["label"] == "and discard stderr"),
             "bare commands must not offer `and discard stderr`, got {items:?}"
         );
     }
@@ -5686,8 +5714,7 @@ mod tests {
             items.iter().any(|item| item["label"] == "as"),
             "take source completion is missing `as`, got {items:?}"
         );
-        let result =
-            complete_source("take text at \"/p\" from src as n ", 0, 32, &registry, &[]);
+        let result = complete_source("take text at \"/p\" from src as n ", 0, 32, &registry, &[]);
         let items = result["items"].as_array().unwrap();
         assert!(
             items.is_empty(),
@@ -5984,10 +6011,7 @@ mod tests {
         let manifests = registry.manifests().unwrap();
         // `parse_interactive_run` rejects `run program` outright, so neither
         // the `with`-pair nor the `as`-binding suffix path may suggest it.
-        for source in [
-            "run program emit with foo bar ",
-            "run program emit as out ",
-        ] {
+        for source in ["run program emit with foo bar ", "run program emit as out "] {
             let character = source.chars().count() as u64;
             let result = complete_source(source, 0, character, &registry, &manifests);
             let items = result["items"].as_array().unwrap();

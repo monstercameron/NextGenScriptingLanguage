@@ -95,6 +95,7 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `check.bound_output_withheld` | validate | a final bound value is internal; explicitly reuse it to produce program stdout |
 | `parse.lexical` | parse | a line has an unterminated or invalid quoted or bracketed token |
 | `parse.syntax` | parse | a statement does not match the grammar |
+| `parse.suffix_order` | parse | invocation suffixes are out of canonical order |
 | `parse.indentation` | parse | a line is indented with tabs, or its indentation does not nest |
 | `parse.control` | parse | a control construct is unsupported or nested beyond the supported depth |
 | `source.invisible_format` | validate | source contains a Unicode format control that can change how it is displayed |

@@ -67,3 +67,120 @@ fn model_manifest_contracts_reject_known_invalid_inputs_before_earlier_effects()
         assert!(result.stdout.is_empty());
     }
 }
+
+#[test]
+fn jev_classify_requires_exactly_one_label_source_in_check_and_offline_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("classify.program");
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let invalid = [
+        "run jev.classify with question \"Pick one\" as raw\n",
+        "run jev.classify with question \"Pick one\" and labels [\"a\", \"b\"] and criteria {\"a\": \"first\", \"b\": \"second\"} as raw\n",
+    ];
+
+    for source in invalid {
+        fs::write(&file, source).unwrap();
+        for mode in ["check", "run"] {
+            let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+                .arg(mode)
+                .arg(&file)
+                .arg("--manifest-dir")
+                .arg(project.join("manifests"))
+                .env("EXECUTE_MODELS_OFFLINE", "1")
+                .env_remove("JEV_API_KEY")
+                .env_remove("jev")
+                .current_dir(directory.path())
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert!(
+                !result.status.success(),
+                "{mode} accepted an invalid label source: {source}"
+            );
+            assert!(
+                stderr.contains("jev.classify requires exactly one of labels or criteria"),
+                "{mode} reported an unexpected error for {source:?}: {stderr}"
+            );
+            assert!(
+                result.stdout.is_empty(),
+                "{mode} emitted output before rejection"
+            );
+        }
+    }
+
+    for source in [
+        "run jev.classify with question \"Pick one\" and labels [\"a\", \"b\"] as raw\n",
+        "run jev.classify with question \"Pick one\" and criteria {\"a\": \"first\", \"b\": \"second\"} as raw\n",
+    ] {
+        fs::write(&file, source).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("check")
+            .arg(&file)
+            .arg("--manifest-dir")
+            .arg(project.join("manifests"))
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "check rejected valid label source {source:?}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+}
+
+#[test]
+fn jev_classify_alternatives_accept_dynamic_label_or_criteria_references() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("dynamic-classify.program");
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cases = [
+        (
+            "accept labels as json\nrun jev.classify with question \"Pick one\" and labels labels as raw\n",
+            r#"labels=["a","b"]"#,
+        ),
+        (
+            "accept criteria as json\nrun jev.classify with question \"Pick one\" and criteria criteria as raw\n",
+            r#"criteria={"a":"first","b":"second"}"#,
+        ),
+    ];
+
+    for (source, input) in cases {
+        fs::write(&file, source).unwrap();
+        let checked = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("check")
+            .arg(&file)
+            .arg("--manifest-dir")
+            .arg(project.join("manifests"))
+            .arg("--input")
+            .arg(input)
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "check rejected dynamic alternative input {input}: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+
+        let ran = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("run")
+            .arg(&file)
+            .arg("--manifest-dir")
+            .arg(project.join("manifests"))
+            .arg("--input")
+            .arg(input)
+            .env("EXECUTE_MODELS_OFFLINE", "1")
+            .env_remove("JEV_API_KEY")
+            .env_remove("jev")
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&ran.stderr);
+        assert!(!ran.status.success(), "offline run unexpectedly succeeded");
+        assert!(
+            stderr.contains("offline") && !stderr.contains("jev.classify requires exactly one"),
+            "dynamic source was rejected as a missing/conflicting alternative: {stderr}"
+        );
+    }
+}

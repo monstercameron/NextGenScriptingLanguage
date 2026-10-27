@@ -208,5 +208,32 @@
         "accepted"
       ]
     }
-  }
+  },
+  "parameter_alternatives": [
+    {
+      "message": "jev.classify requires exactly one of labels or criteria",
+      "any_of": [
+        [
+          {
+            "test": "present",
+            "parameter": "labels"
+          },
+          {
+            "test": "absent",
+            "parameter": "criteria"
+          }
+        ],
+        [
+          {
+            "test": "absent",
+            "parameter": "labels"
+          },
+          {
+            "test": "present",
+            "parameter": "criteria"
+          }
+        ]
+      ]
+    }
+  ]
 }

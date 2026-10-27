@@ -688,10 +688,10 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     // uniquely owned here.
     let (in_read, in_write, out_read, out_write) = unsafe {
         (
-            OwnedHandle::from_raw_handle(in_read as *mut std::ffi::c_void),
-            OwnedHandle::from_raw_handle(in_write as *mut std::ffi::c_void),
-            OwnedHandle::from_raw_handle(out_read as *mut std::ffi::c_void),
-            OwnedHandle::from_raw_handle(out_write as *mut std::ffi::c_void),
+            OwnedHandle::from_raw_handle(in_read),
+            OwnedHandle::from_raw_handle(in_write),
+            OwnedHandle::from_raw_handle(out_read),
+            OwnedHandle::from_raw_handle(out_write),
         )
     };
 
@@ -799,10 +799,10 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     }
     // SAFETY: CreateProcessW succeeded, so the process handle is valid and
     // uniquely owned here.
-    let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess as *mut std::ffi::c_void) };
+    let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess) };
     // SAFETY: same successful launch owns the primary thread handle; the
     // thread runs independently, so its handle closes at once.
-    let thread = unsafe { OwnedHandle::from_raw_handle(info.hThread as *mut std::ffi::c_void) };
+    let thread = unsafe { OwnedHandle::from_raw_handle(info.hThread) };
     drop(thread);
     let mut session = ConptySession {
         process,

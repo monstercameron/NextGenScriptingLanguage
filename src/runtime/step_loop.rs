@@ -1970,13 +1970,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         signals,
                                         options.command_timeout,
                                     )?;
-                                // Under Actions hardening this is the last
-                                // Execute-owned output before the child takes
-                                // the terminal, so it shares the stdout
-                                // sanitizer with streamed writes; the flush
-                                // releases a trailing line-leading `:` at true
-                                // end of stream. The handed-over child writes
-                                // raw after `exec`.
+                                // Under Actions hardening this arm is
+                                // unreachable: `handoff::validate` refuses
+                                // `hand over to` before any step runs, because
+                                // the handed-over child would write raw after
+                                // `exec`. Without hardening the pending output
+                                // below shares the stdout sanitizer with
+                                // streamed writes; the flush releases a
+                                // trailing line-leading `:` at true end of
+                                // stream.
                                 let filtered =
                                     crate::github_actions::filter_stdout_final(&pending);
                                 std::io::stdout()

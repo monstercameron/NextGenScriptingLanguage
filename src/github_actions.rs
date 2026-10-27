@@ -24,10 +24,11 @@
 //! through the sanitizing writers instead of inheriting the raw descriptors,
 //! including manifest `inherit` dispositions and the streamed-step inherit
 //! fast path. Program-level redirects to files stay raw in their files; only
-//! the bytes Execute itself copies to the log are filtered. A handed-over
-//! child writes raw after `exec` by construction, so only the pending output
-//! flushed before the handover is filtered. `execute check --format github`
-//! intentionally emits workflow commands and is unaffected.
+//! the bytes Execute itself copies to the log are filtered. `hand over to`
+//! is refused before any step runs: the handed-over child would inherit the
+//! terminal and write raw after `exec`, which sanitization cannot intercept.
+//! `execute check --format github` intentionally emits workflow commands and
+//! is unaffected.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};

@@ -220,8 +220,12 @@ the untrusted applet.
 `run` and `resume` opt in when `GITHUB_ACTIONS` is exactly `"true"`. While
 enabled, Execute neutralizes line-leading `::` sequences in the bytes it
 forwards to the job log (streamed step output, re-emitted captured stderr on
-the success path, final program output, handover pending output and final
-diagnostics) by inserting a zero-width space between the colons. The text
+the success path, final program output and final diagnostics) by inserting a
+zero-width space between the colons. Manifest `inherit` stdio dispositions are
+force-captured and sanitized like any other terminal output. `hand over to`
+is refused before any step runs: the handed-over program would inherit the
+terminal and write to the log after `exec`, past the point sanitization can
+intercept, so hardening fails closed instead of allowing command forgery. The text
 still reads the same, but the runner no longer parses it as a workflow
 command. Only line starts (buffer start or after `\n`/`\r`) are rewritten;
 mid-line pairs such as Rust paths or URLs and indented pairs stay

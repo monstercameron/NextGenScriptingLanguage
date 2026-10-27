@@ -15,6 +15,9 @@ fn execute(args: &[&str], directory: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(args)
         .current_dir(directory)
+        // Handover is refused under Actions hardening, so never inherit an
+        // ambient CI marker: these tests pin the non-hardened contract.
+        .env_remove("GITHUB_ACTIONS")
         .output()
         .unwrap()
 }
@@ -271,6 +274,7 @@ fn run_control_refuses_hand_over_and_detached_launch() {
         let output = Command::new(env!("CARGO_BIN_EXE_execute"))
             .args(["run", program.to_str().unwrap(), "--control"])
             .current_dir(directory.path())
+            .env_remove("GITHUB_ACTIONS")
             .stdin(std::process::Stdio::null())
             .output()
             .unwrap();

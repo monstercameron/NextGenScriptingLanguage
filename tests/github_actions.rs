@@ -26,6 +26,43 @@ fn run_source(source: &str, args: &[&str], github_actions: bool) -> Output {
     command.output().unwrap()
 }
 
+fn run_with_manifests(
+    source: &str,
+    manifests: &std::path::Path,
+    github_actions: bool,
+) -> Output {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("job.program");
+    fs::write(&program, source).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    command
+        .args(["run"])
+        .arg(&program)
+        .args(["--manifest-dir"])
+        .arg(manifests)
+        .current_dir(directory.path());
+    // Same hermetic marker handling as `run_source`.
+    command.env_remove("GITHUB_ACTIONS");
+    if github_actions {
+        command.env("GITHUB_ACTIONS", "true");
+    }
+    command.output().unwrap()
+}
+
+fn inherit_manifests() -> tempfile::TempDir {
+    // One applet whose manifest declares `inherit` stdout: without hardening
+    // the child writes straight to the terminal descriptor.
+    let root = tempfile::tempdir().unwrap();
+    let manifests = root.path().join("manifests");
+    fs::create_dir(&manifests).unwrap();
+    fs::write(
+        manifests.join("forge-inherit.json"),
+        r#"{"name":"forge-inherit","binary":"sh","arguments":[{"literal":"-c"},{"literal":"printf '::error::via-inherit\n'"}],"stdio":{"stdout":"inherit"}}"#,
+    )
+    .unwrap();
+    root
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -184,4 +221,80 @@ fn once_final_output_forgery_is_neutralized_under_ci() {
     );
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     assert_neutralized(&text, "::error::once-final");
+}
+
+#[test]
+fn manifest_inherit_forgery_is_neutralized_under_ci() {
+    // A manifest `inherit` disposition must not bypass sanitization: under
+    // hardening the stream is force-captured and re-emitted filtered.
+    let root = inherit_manifests();
+    let output = run_with_manifests(
+        "run forge-inherit\n",
+        &root.path().join("manifests"),
+        true,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert_neutralized(&stdout(&output), "::error::via-inherit");
+}
+
+#[test]
+fn manifest_inherit_output_stays_raw_without_the_ci_marker() {
+    let root = inherit_manifests();
+    let output = run_with_manifests(
+        "run forge-inherit\n",
+        &root.path().join("manifests"),
+        false,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert!(text.contains("::error::via-inherit\n"), "{text:?}");
+    assert!(!text.contains(ZWSP), "non-CI output was rewritten: {text:?}");
+}
+
+#[test]
+fn handover_is_refused_under_ci_before_the_child_runs() {
+    // Post-`exec` bytes cannot be sanitized, so hardening fails closed: the
+    // run is refused before any step runs and the child never starts.
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("handover-ran.txt");
+    let program = directory.path().join("job.program");
+    fs::write(
+        &program,
+        format!(
+            "hand over to \"/bin/sh\" with arguments [\"-c\", \"printf '::error::handover-raw\\n'; touch '{}'\"]\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run"])
+        .arg(&program)
+        .current_dir(directory.path())
+        .env_remove("GITHUB_ACTIONS")
+        .env("GITHUB_ACTIONS", "true")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "handover ran under hardening: {output:?}"
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("`hand over to` is refused"),
+        "refusal missing in {diagnostic:?}"
+    );
+    assert!(!marker.exists(), "the refused child must never run");
+    assert!(
+        !stdout(&output).contains("::error::handover-raw"),
+        "forged command reached the log: {:?}",
+        stdout(&output)
+    );
 }

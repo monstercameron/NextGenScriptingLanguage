@@ -29,6 +29,17 @@ fn shell_free_literal_arguments_do_not_warn() {
 }
 
 #[test]
+fn shell_expansion_in_path_is_also_reported() {
+    let diagnostics = analyze_source(
+        "run fs.read with path \"$HOME/input.txt\"\n",
+        &Registry::default(),
+    );
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
 fn matching_per_line_suppression_hides_only_the_selected_warning() {
     let source =
         "run \"echo\" with arguments [\"$HOME\"] # execute-allow: lint.shell_expansion_literal\n";

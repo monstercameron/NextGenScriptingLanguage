@@ -258,7 +258,7 @@ pub const CODES: &[CodeInfo] = &[
     CodeInfo {
         code: "lint.shell_expansion_literal",
         family: "lint",
-        meaning: "shell-like expansion syntax in a literal argument is passed literally",
+        meaning: "shell-like expansion syntax in a literal argument or path is passed literally",
         example: "run \"echo\" with arguments [\"$HOME/path\"]",
         typical_fix: "Declare and use the environment value, or format a checked value explicitly.",
         severity: DiagnosticSeverity::Warning,
@@ -905,6 +905,10 @@ fn collect_lint_diagnostics(
             None,
         );
     }
+    collect_path_literal_diagnostics(source, &program.steps, line_starts, diagnostics);
+    for definition in program.definitions.values() {
+        collect_path_literal_diagnostics(source, &definition.steps, line_starts, diagnostics);
+    }
     let mut calls = Vec::new();
     collect_calls(&program.steps, &mut calls);
     for definition in program.definitions.values() {
@@ -968,6 +972,55 @@ fn collect_lint_diagnostics(
                     fixes: Vec::new(),
                 });
             }
+        }
+    }
+}
+
+fn collect_path_literal_diagnostics(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut calls = Vec::new();
+    collect_calls(steps, &mut calls);
+    for (line, call) in calls {
+        for (name, value) in &call.parameters {
+            if !matches!(
+                name.as_str(),
+                "path" | "file" | "directory" | "output" | "working_directory"
+            ) {
+                continue;
+            }
+            if matches!(value, Value::String(text) if has_shell_expansion(text)) {
+                diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    code: "lint.shell_expansion_literal".into(),
+                    message: format!("path parameter {name:?} contains shell expansion syntax, but Execute passes it literally; use an explicit environment input or format the path"),
+                    span: parameter_value_span_at(source, line, name, line_starts).unwrap_or_else(|| line_starts.span(source, line)),
+                    fixes: Vec::new(),
+                });
+            }
+        }
+    }
+    for step in steps {
+        let path = match &step.kind {
+            StepKind::UseFolder { path }
+            | StepKind::Read { path, .. }
+            | StepKind::Save { path, .. }
+            | StepKind::Append { path } => Some(path),
+            StepKind::LaunchDetached { output } => output.as_ref(),
+            StepKind::Redirect { path, .. } => path.as_ref(),
+            _ => None,
+        };
+        if matches!(path, Some(Value::String(text)) if has_shell_expansion(text)) {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "lint.shell_expansion_literal".into(),
+                message: "path contains shell expansion syntax, but Execute treats it literally; use an explicit environment input or format the path".into(),
+                span: line_starts.span(source, step.line),
+                fixes: Vec::new(),
+            });
         }
     }
 }

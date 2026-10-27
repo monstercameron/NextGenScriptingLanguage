@@ -13,13 +13,13 @@ fn run_source(source: &str, max_output_bytes: usize) -> Result<flow::runtime::Ru
         command_timeout: Some(Duration::from_secs(30)),
         ..flow::runtime::RunOptions::new(root.to_path_buf())
     };
-    Ok(flow::runtime::run(&program, &registry, &options)?)
+    flow::runtime::run(&program, &registry, &options)
 }
 
 #[test]
 fn native_parallel_each_under_limit_keeps_all_encoded_results() -> Result<()> {
     let fixture = serde_json::to_string(env!("CARGO_BIN_EXE_native-fixture"))?;
-    let items = vec!["\"5899\""; 10].join(", ");
+    let items = ["\"5899\""; 10].join(", ");
     let source = format!(
         "parallel for each n in [{items}] at most 8 as results\n  run {fixture} with arguments [\"repeat-byte\", n]\nthen encode results as json\n"
     );

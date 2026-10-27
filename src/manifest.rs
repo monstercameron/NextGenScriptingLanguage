@@ -3751,6 +3751,7 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         });
     }
     let mut schema = parameter_field_value_schema(
@@ -3856,6 +3857,7 @@ fn parameter_field_value_schema(
         fields: value_fields,
         required,
         enum_values: None,
+        single_line: false,
     })
 }
 
@@ -3872,6 +3874,7 @@ fn output_value_schema(output: &OutputSchema) -> ValueSchema {
         fields: output.fields.clone(),
         required: output.required.clone(),
         enum_values: output.enum_values.clone(),
+        single_line: false,
     }
 }
 
@@ -3888,6 +3891,7 @@ fn leaf_value_schema(kind: OutputType) -> ValueSchema {
         fields: BTreeMap::new(),
         required: Vec::new(),
         enum_values: None,
+        single_line: false,
     }
 }
 

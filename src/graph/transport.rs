@@ -1609,6 +1609,7 @@ mod payload_size_tests {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         }
     }
 
@@ -3340,6 +3341,7 @@ mod input_cursor_tests {
                 fields: BTreeMap::new(),
                 required: Vec::new(),
                 enum_values: None,
+                single_line: false,
             }),
         )]);
         node_io_with_initial(
@@ -3430,6 +3432,7 @@ mod input_cursor_tests {
                 fields: BTreeMap::new(),
                 required: Vec::new(),
                 enum_values: None,
+                single_line: false,
             }),
         )]);
         let mut io = node_io_with_initial(
@@ -3909,6 +3912,7 @@ mod emit_fanout_tests {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         }
     }
 

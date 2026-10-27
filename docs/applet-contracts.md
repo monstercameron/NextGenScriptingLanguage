@@ -211,6 +211,10 @@ consumer: an enum containing only `json` can feed one containing `json` and
 `yaml`, while unconstrained text or an enum containing `xml` cannot. Graph
 preflight uses a declared allowed value when it validates a parameter binding.
 
+Input text schemas may also set `single_line: true` to reject carriage returns
+and line feeds. The empty string remains valid. Literal values are checked
+statically; references are checked when their values are resolved.
+
 ## Named applet ports
 
 The optional `contract.ports` object describes typed `inputs`, `outputs` and
@@ -831,7 +835,8 @@ conflict rather than losing that edit.
 
 - `fs.ensure_file` takes `path`, `content` (text) and an optional `mode`. It
   returns `changed`, `path` and `mode_applied`.
-- `fs.ensure_line` takes `path`, `line` (one line without a line break) and
+- `fs.ensure_line` takes `path`, `line` (text without CR or LF; empty text is
+  valid) and
   `state` of `"present"` (the default) or `"absent"`. Matching ignores a trailing
   CR, and other bytes are kept exactly. A missing file is created only for
   `present`. It returns `changed` and `path`.

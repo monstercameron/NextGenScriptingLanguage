@@ -1987,6 +1987,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         fields: output.fields.clone(),
         required: output.required.clone(),
         enum_values: output.enum_values.clone(),
+        single_line: false,
     };
     if !result_envelope {
         return Ok(value_schema);
@@ -2003,6 +2004,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         fields: BTreeMap::new(),
         required: Vec::new(),
         enum_values: None,
+        single_line: false,
     };
     let integer_schema = ValueSchema {
         scalar_only: false,
@@ -2016,6 +2018,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         fields: BTreeMap::new(),
         required: Vec::new(),
         enum_values: None,
+        single_line: false,
     };
     Ok(ValueSchema {
         scalar_only: false,
@@ -2047,6 +2050,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
             "status".into(),
         ],
         enum_values: None,
+        single_line: false,
     })
 }
 
@@ -2503,6 +2507,7 @@ mod tests {
                         fields: BTreeMap::new(),
                         required: Vec::new(),
                         enum_values: None,
+                        single_line: false,
                     },
                 ),
                 (
@@ -2519,6 +2524,7 @@ mod tests {
                         fields: BTreeMap::new(),
                         required: Vec::new(),
                         enum_values: None,
+                        single_line: false,
                     },
                 ),
             ]),
@@ -2950,6 +2956,7 @@ mod tests {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         };
         assert!(port_schema_accepts_input(&path_schema, InputType::Text));
 
@@ -2965,6 +2972,7 @@ mod tests {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         };
         assert!(port_schema_accepts_input(
             &path_list_schema,

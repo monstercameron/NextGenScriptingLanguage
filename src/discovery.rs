@@ -948,6 +948,7 @@ fn schema_from_output(output: &OutputSchema) -> ValueSchema {
         fields: output.fields.clone(),
         required: output.required.clone(),
         enum_values: output.enum_values.clone(),
+        single_line: false,
     }
 }
 
@@ -1056,6 +1057,7 @@ mod tests {
             fields: Default::default(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         };
         let integer_items = ValueSchema {
             scalar_only: false,
@@ -1373,6 +1375,7 @@ mod tests {
             fields: [("left".to_owned(), text_schema())].into(),
             required: vec!["left".into()],
             enum_values: None,
+            single_line: false,
         };
         let wrong_input_schema = ValueSchema {
             fields: [("right".to_owned(), text_schema())].into(),
@@ -1953,6 +1956,7 @@ mod tests {
             fields: Default::default(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         }
     }
 }

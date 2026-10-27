@@ -867,6 +867,7 @@ fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
         fields: BTreeMap::new(),
         required: Vec::new(),
         enum_values: Some(vec!["red".into(), "blue".into()]),
+        single_line: false,
     };
     assert!(nullable.validate_value(&Value::Null).is_ok());
     assert!(nullable
@@ -878,6 +879,85 @@ fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
     let json_schema = nullable.json_schema();
     assert_eq!(json_schema["anyOf"][0]["enum"], json!(["red", "blue"]));
     assert_eq!(json_schema["anyOf"][1]["type"], "null");
+}
+
+#[test]
+fn single_line_text_schemas_reject_cr_and_lf_but_allow_empty_text() {
+    let single_line = ValueSchema {
+        kind: OutputType::Text,
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
+        nullable: false,
+        items: None,
+        fields: BTreeMap::new(),
+        required: Vec::new(),
+        enum_values: None,
+        single_line: true,
+    };
+    let unrestricted = ValueSchema {
+        single_line: false,
+        ..single_line.clone()
+    };
+
+    assert!(single_line
+        .validate_value(&Value::String(String::new()))
+        .is_ok());
+    assert!(single_line
+        .validate_value(&Value::String("plain text".into()))
+        .is_ok());
+    assert!(single_line
+        .validate_value(&Value::String("a\nb".into()))
+        .is_err());
+    assert!(single_line
+        .validate_value(&Value::String("a\rb".into()))
+        .is_err());
+    assert!(single_line.is_assignable_to(&unrestricted));
+    assert!(!unrestricted.is_assignable_to(&single_line));
+    assert_eq!(single_line.json_schema()["pattern"], json!("^[^\\r\\n]*$"));
+}
+
+#[test]
+fn manifest_single_line_ports_check_literals_but_defer_references() {
+    let manifest = json!({
+        "name":"fixture.line",
+        "binary":"fixture",
+        "parameters":{"line":{"type":"string","required":true}},
+        "arguments":[],
+        "contract":{
+            "version":1,
+            "backend":"command",
+            "lifecycle":{"kind":"oneshot"},
+            "ports":{"inputs":{
+                "line":{"schema":{"type":"text","single_line":true},"delivery":"single"}
+            }}
+        }
+    });
+    let registry = Registry::from_sources(&[manifest.to_string()]).unwrap();
+    let manifest = registry.resolve("fixture.line").unwrap();
+    let invocation = |line| Invocation {
+        operation: "fixture.line".into(),
+        direct: false,
+        discard_stderr: false,
+        parameters: BTreeMap::from([("line".into(), line)]),
+        binding: None,
+        cache: false,
+        status_binding: None,
+        result_binding: None,
+        retry: None,
+    };
+
+    assert!(manifest
+        .validate(&invocation(Value::String("left\nright".into())))
+        .is_err());
+    assert!(manifest
+        .validate(&invocation(Value::String(String::new())))
+        .is_ok());
+    assert!(manifest
+        .validate(&invocation(Value::Reference("runtime_line".into())))
+        .is_ok());
 }
 
 #[test]

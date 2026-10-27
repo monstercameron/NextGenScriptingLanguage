@@ -74,6 +74,7 @@ pub(crate) fn value_schema_from_output(output: &OutputSchema) -> ValueSchema {
         fields: output.fields.clone(),
         required: output.required.clone(),
         enum_values: output.enum_values.clone(),
+        single_line: false,
     }
 }
 
@@ -826,6 +827,7 @@ impl GraphPlan {
                                 fields: BTreeMap::new(),
                                 required: Vec::new(),
                                 enum_values: None,
+                                single_line: false,
                             }),
                         )]),
                         crate::ast::ListenSource::Applet(_)
@@ -865,6 +867,7 @@ impl GraphPlan {
                                 fields: BTreeMap::new(),
                                 required: Vec::new(),
                                 enum_values: None,
+                                single_line: false,
                             }),
                         )]),
                     };
@@ -1612,6 +1615,7 @@ fn validate_result_event_node(
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         }
     };
     if node.events[event_port].schema != canonical_result_schema {

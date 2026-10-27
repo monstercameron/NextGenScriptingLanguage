@@ -72,7 +72,8 @@
         },
         "line": {
           "schema": {
-            "type": "text"
+            "type": "text",
+            "single_line": true
           },
           "delivery": "single"
         },

@@ -5222,10 +5222,12 @@ mod tests {
                     fields: BTreeMap::new(),
                     required: vec![],
                     enum_values: None,
+                    single_line: false,
                 },
             )]),
             required: vec!["count".into()],
             enum_values: None,
+            single_line: false,
         };
         let input = ValueSchema {
             scalar_only: false,
@@ -5250,10 +5252,12 @@ mod tests {
                     fields: BTreeMap::new(),
                     required: vec![],
                     enum_values: None,
+                    single_line: false,
                 },
             )]),
             required: vec!["count".into()],
             enum_values: None,
+            single_line: false,
         };
         assert_eq!(
             schema_mismatch_reasons(&output, &input, "stdout", "stdin"),
@@ -5275,6 +5279,7 @@ mod tests {
             fields: BTreeMap::new(),
             required: vec![],
             enum_values: None,
+            single_line: false,
         };
         let nullable = ValueSchema {
             nullable: true,
@@ -5304,6 +5309,7 @@ mod tests {
             fields: BTreeMap::new(),
             required: vec![],
             enum_values: None,
+            single_line: false,
         };
         let json = ValueSchema {
             scalar_only: false,
@@ -5403,6 +5409,7 @@ mod tests {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values,
+            single_line: false,
         };
         let integer = schema(OutputType::Integer, None);
         let number = schema(OutputType::Number, None);

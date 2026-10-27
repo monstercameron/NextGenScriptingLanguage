@@ -33,6 +33,7 @@ fn integer_schema() -> ValueSchema {
         fields: BTreeMap::new(),
         required: Vec::new(),
         enum_values: None,
+        single_line: false,
     }
 }
 
@@ -62,6 +63,7 @@ fn decoded_output_port_schema() -> ValueSchema {
         fields: output_schema().fields,
         required: vec!["count".into()],
         enum_values: None,
+        single_line: false,
     }
 }
 
@@ -96,6 +98,7 @@ fn result_envelope_port_schema() -> ValueSchema {
             "status".into(),
         ],
         enum_values: None,
+        single_line: false,
     }
 }
 
@@ -112,6 +115,7 @@ fn text_schema() -> ValueSchema {
         fields: BTreeMap::new(),
         required: Vec::new(),
         enum_values: None,
+        single_line: false,
     }
 }
 

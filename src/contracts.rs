@@ -610,6 +610,10 @@ pub struct ValueSchema {
         skip_serializing_if = "Option::is_none"
     )]
     pub enum_values: Option<Vec<String>>,
+    /// Require text values to contain neither carriage returns nor line feeds.
+    /// Empty text remains valid.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub single_line: bool,
 }
 
 /// A named typed port on a versioned applet interface.
@@ -721,6 +725,7 @@ impl ValueSchema {
             &self.fields,
             &self.required,
             self.enum_values.as_deref(),
+            self.single_line,
             self.nullable,
             true,
         )
@@ -738,6 +743,7 @@ impl ValueSchema {
             &self.fields,
             &self.required,
             self.enum_values.as_deref(),
+            self.single_line,
             self.nullable,
         )
     }
@@ -787,6 +793,11 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
     match source.kind {
         OutputType::Text => {
             (!target.nonempty || source.nonempty)
+                && (!target.single_line
+                    || source.single_line
+                    || source.enum_values.as_ref().is_some_and(|values| {
+                        values.iter().all(|value| !value.contains(['\n', '\r']))
+                    }))
                 && enum_assignable(source.enum_values.as_deref(), target.enum_values.as_deref())
         }
         OutputType::Record => {
@@ -913,6 +924,9 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
         }
         (OutputType::Text, Value::String(text)) => {
             validate_enum_value(schema.enum_values.as_deref(), text)?;
+            if schema.single_line && (text.contains('\n') || text.contains('\r')) {
+                bail!("text value must not contain a carriage return or line feed");
+            }
             if schema.nonempty && (text.trim().is_empty() || text.contains('\0')) {
                 bail!("text value must be nonempty");
             }
@@ -1160,6 +1174,7 @@ impl OutputSchema {
             &self.required,
             self.enum_values.as_deref(),
             false,
+            false,
             true,
         )?;
         if self
@@ -1347,6 +1362,7 @@ impl OutputSchema {
             &self.required,
             self.enum_values.as_deref(),
             false,
+            false,
         );
         let object = schema
             .as_object_mut()
@@ -1373,6 +1389,7 @@ fn validate_schema_parts(
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
     enum_values: Option<&[String]>,
+    single_line: bool,
     nullable: bool,
     top_level: bool,
 ) -> Result<()> {
@@ -1410,6 +1427,14 @@ fn validate_schema_parts(
         bail!("bytes schemas cannot be nullable; use the JSON output kind for null");
     }
     validate_enum_schema(kind, enum_values)?;
+    if single_line && kind != OutputType::Text {
+        bail!("single_line constraint applies only to text schemas");
+    }
+    if single_line
+        && enum_values.is_some_and(|values| values.iter().any(|value| value.contains(['\n', '\r'])))
+    {
+        bail!("single_line text enums cannot contain carriage returns or line feeds");
+    }
     let mut unique = BTreeSet::new();
     for name in required {
         if !fields.contains_key(name) || !unique.insert(name) {
@@ -1434,6 +1459,7 @@ fn validate_schema_parts(
             &schema.fields,
             &schema.required,
             schema.enum_values.as_deref(),
+            schema.single_line,
             schema.nullable,
             false,
         )?;
@@ -1453,6 +1479,7 @@ fn validate_schema_parts(
             &schema.fields,
             &schema.required,
             schema.enum_values.as_deref(),
+            schema.single_line,
             schema.nullable,
             false,
         )?;
@@ -1472,6 +1499,7 @@ fn validate_schema_parts(
             &items.fields,
             &items.required,
             items.enum_values.as_deref(),
+            items.single_line,
             items.nullable,
             false,
         )?;
@@ -1496,6 +1524,7 @@ fn schema_json(
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
     enum_values: Option<&[String]>,
+    single_line: bool,
     nullable: bool,
 ) -> serde_json::Value {
     let mut schema = match kind {
@@ -1504,13 +1533,21 @@ fn schema_json(
             let mut schema = serde_json::json!({"type":"string"});
             if nonempty {
                 schema["minLength"] = serde_json::json!(1);
-                schema["pattern"] = serde_json::json!("^[^\\u0000]*$");
                 schema["not"] = serde_json::json!({
                     "pattern": NONEMPTY_TEXT_WHITESPACE_PATTERN
                 });
             }
             if let Some(values) = enum_values {
                 schema["enum"] = serde_json::json!(values);
+            }
+            if single_line {
+                schema["pattern"] = serde_json::json!(if nonempty {
+                    "^[^\\u0000\\r\\n]*$"
+                } else {
+                    "^[^\\r\\n]*$"
+                });
+            } else if nonempty {
+                schema["pattern"] = serde_json::json!("^[^\\u0000]*$");
             }
             schema
         }
@@ -1544,6 +1581,7 @@ fn schema_json(
                             &schema.fields,
                             &schema.required,
                             schema.enum_values.as_deref(),
+                            schema.single_line,
                             schema.nullable,
                         ),
                     )
@@ -1562,6 +1600,7 @@ fn schema_json(
                         &schema.fields,
                         &schema.required,
                         schema.enum_values.as_deref(),
+                        schema.single_line,
                         schema.nullable,
                     )
                 });
@@ -1592,6 +1631,7 @@ fn schema_json(
                     &item.fields,
                     &item.required,
                     item.enum_values.as_deref(),
+                    item.single_line,
                     item.nullable,
                 )
             });
@@ -2184,6 +2224,7 @@ impl AppletContract {
             fields: output.fields.clone(),
             required: output.required.clone(),
             enum_values: output.enum_values.clone(),
+            single_line: false,
         };
         let text_schema = || ValueSchema {
             scalar_only: false,
@@ -2197,6 +2238,7 @@ impl AppletContract {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         };
         let integer_schema = ValueSchema {
             scalar_only: false,
@@ -2210,6 +2252,7 @@ impl AppletContract {
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
         };
         let fields = BTreeMap::from([
             ("value".into(), value_schema),
@@ -2236,6 +2279,7 @@ impl AppletContract {
                 "status".into(),
             ],
             enum_values: None,
+            single_line: false,
         })
     }
 

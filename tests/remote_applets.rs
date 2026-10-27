@@ -192,6 +192,7 @@ fn schema(kind: OutputType) -> ValueSchema {
         kind,
         nullable: false,
         enum_values: None,
+        single_line: false,
         items: None,
         fields: BTreeMap::new(),
         required: Vec::new(),

@@ -359,6 +359,11 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
             cold,
             forwarded
         );
+        assert!(!cold.status.success(), "local run must fail closed");
+        assert!(
+            !forwarded.status.success(),
+            "forwarded run must fail closed"
+        );
         assert_eq!(cold.status.code(), forwarded.status.code());
         eprintln!("sandbox namespace probe unavailable; verified local and daemon fail closed");
         return;
@@ -973,6 +978,14 @@ fn forwarded_runs_do_not_share_capability_policies() {
                 bubblewrap_namespaces_unavailable(&output)
                     && bubblewrap_namespaces_unavailable(&local),
                 "step {index}: daemon and local runs must both fail closed when namespaces are unavailable"
+            );
+            assert!(
+                !output.status.success(),
+                "step {index}: daemon run must fail closed"
+            );
+            assert!(
+                !local.status.success(),
+                "step {index}: local run must fail closed"
             );
             eprintln!(
                 "step {index}: sandbox namespace probe unavailable; verified local and daemon fail closed"

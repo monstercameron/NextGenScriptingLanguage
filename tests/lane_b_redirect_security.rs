@@ -183,7 +183,22 @@ fn a_new_redirect_file_is_owner_only() {
     }));
     // The command fails with usage on stderr, so its stderr lands in the file.
     let program = parser::parse("run fixture.echo and stderr to \"allowed/new.txt\"\n").unwrap();
-    let _ = runtime::run(&program, &registry, &options(directory.path()));
+    let result = runtime::run(&program, &registry, &options(directory.path()));
+    if let Err(error) = result {
+        let message = format!("{error:#}");
+        if message.contains("bubblewrap could not establish the required namespaces") {
+            assert!(
+                !allowed.join("new.txt").exists(),
+                "an unavailable required sandbox must fail before creating the redirect target"
+            );
+            eprintln!("redirect mode skipped: sandbox namespace probe unavailable");
+            return;
+        }
+        assert!(
+            message.contains("applet \"fixture.echo\" failed (exit status: 1)"),
+            "redirect run failed unexpectedly: {message}"
+        );
+    }
     let mode = fs::metadata(allowed.join("new.txt"))
         .unwrap()
         .permissions()

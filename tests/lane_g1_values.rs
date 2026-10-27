@@ -51,6 +51,39 @@ fn cli(source: &str, command: &str, extra: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn repeated_reusable_calls_have_isolated_local_bindings() {
+    let source = "define a program named one\n  run printf with message \"local\" and keep status as inner\nrun program one\nrun program one\n";
+    let output = cli(source, "check", &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn mutually_exclusive_branches_can_bind_the_same_name() {
+    let source = "accept enabled as boolean with default false\nif enabled is true\n  use value \"yes\" as selected\notherwise\n  use value \"no\" as selected\nuse value selected\n";
+    let output = cli(source, "check", &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn separate_loops_have_isolated_local_bindings() {
+    let source = "accept names as list of text with default [\"one\"]\nfor each first in names\n  run \"printf\" with arguments [first] as local_output\nfor each second in names\n  run \"printf\" with arguments [second] as local_output\n";
+    let output = cli(source, "check", &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn typed_literals_and_aliases_bind_without_processes() {
     let source = "use value \"CLEAR\" as state\nuse value 3 as count\nuse value true as enabled\nuse value [\"a\", \"b\"] as items\nuse value {\"state\": state, \"count\": count, \"enabled\": enabled, \"items\": items} as record\nuse value record as alias\nthen encode alias as json\n";
     let out = cli(source, "run", &["--trace"]);

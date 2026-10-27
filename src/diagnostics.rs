@@ -3404,40 +3404,177 @@ fn collect_duplicate_call_bindings(
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut seen = BTreeSet::new();
-    for step in steps {
-        let calls: Vec<&Invocation> = match &step.kind {
-            StepKind::Invoke { call, .. } | StepKind::CallProgram { call, .. } => vec![call],
-            StepKind::TaskGroup { tasks, .. } => tasks.iter().collect(),
-            StepKind::SpawnJob { stages, .. } => stages.iter().map(|stage| &stage.call).collect(),
-            _ => Vec::new(),
-        };
-        for call in calls {
-            for name in call
-                .binding
-                .iter()
-                .chain(call.status_binding.iter())
-                .chain(call.result_binding.iter())
-            {
-                if seen.insert(name.as_str()) {
-                    continue;
-                }
-                let words = line_words_from_start(source, line_starts.start(step.line));
-                let span = words
-                    .windows(2)
-                    .find(|pair| !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name.as_str())
-                    .map(|pair| {
-                        line_starts.span_at(source, pair[1].1, pair[1].2, SpanPrecision::Token)
-                    })
-                    .unwrap_or_else(|| line_starts.span(source, step.line));
-                diagnostics.push(Diagnostic::error(
-                    "check.duplicate_name",
-                    format!("result name {name:?} is bound more than once"),
-                    span,
-                ));
+    fn record_call_bindings(
+        source: &str,
+        call: &Invocation,
+        line: usize,
+        line_starts: &LineStarts,
+        seen: &mut BTreeSet<String>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        for name in call
+            .binding
+            .iter()
+            .chain(call.status_binding.iter())
+            .chain(call.result_binding.iter())
+        {
+            if seen.insert(name.clone()) {
+                continue;
             }
+            let words = line_words_from_start(source, line_starts.start(line));
+            let span = words
+                .windows(2)
+                .find(|pair| !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name.as_str())
+                .map(|pair| line_starts.span_at(source, pair[1].1, pair[1].2, SpanPrecision::Token))
+                .unwrap_or_else(|| line_starts.span(source, line));
+            diagnostics.push(Diagnostic::error(
+                "check.duplicate_name",
+                format!("result name {name:?} is bound more than once"),
+                span,
+            ));
         }
     }
+
+    fn visit(
+        source: &str,
+        steps: &[Step],
+        line_starts: &LineStarts,
+        seen: &mut BTreeSet<String>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let mut index = 0;
+        while index < steps.len() {
+            let step = &steps[index];
+            match &step.kind {
+                StepKind::Invoke { call, .. } => {
+                    record_call_bindings(source, call, step.line, line_starts, seen, diagnostics)
+                }
+                StepKind::CallProgram { call, end, .. } => {
+                    // Call-site result names belong to the caller. The expanded body has
+                    // a fresh local binding scope, just like runtime/calls.rs restores the
+                    // caller's values at EndCall.
+                    record_call_bindings(source, call, step.line, line_starts, seen, diagnostics);
+                    let finish = index.saturating_add(*end).min(steps.len());
+                    if finish > index + 1 {
+                        let body_end = if matches!(steps[finish - 1].kind, StepKind::EndCall) {
+                            finish - 1
+                        } else {
+                            finish
+                        };
+                        let mut local_names = BTreeSet::new();
+                        visit(
+                            source,
+                            &steps[index + 1..body_end],
+                            line_starts,
+                            &mut local_names,
+                            diagnostics,
+                        );
+                    }
+                    index = finish.max(index + 1);
+                    continue;
+                }
+                StepKind::Loop { end, .. } => {
+                    // Runtime removes body-local names when a loop exits. Bindings in
+                    // separate loops therefore do not share a duplicate-name scope.
+                    let finish = index.saturating_add(*end).min(steps.len());
+                    if finish > index + 1 {
+                        let body_end = if matches!(steps[finish - 1].kind, StepKind::EndLoop { .. })
+                        {
+                            finish - 1
+                        } else {
+                            finish
+                        };
+                        let mut local_names = BTreeSet::new();
+                        visit(
+                            source,
+                            &steps[index + 1..body_end],
+                            line_starts,
+                            &mut local_names,
+                            diagnostics,
+                        );
+                    }
+                    index = finish.max(index + 1);
+                    continue;
+                }
+                StepKind::If { otherwise, end, .. }
+                | StepKind::IfCommand { otherwise, end, .. } => {
+                    let finish = index.saturating_add(*end).min(steps.len());
+                    if finish > index + 1 {
+                        let has_else = *otherwise < *end;
+                        // `otherwise` is the offset to the first else-body step;
+                        // the marker immediately before it is part of neither arm.
+                        let then_finish = if has_else {
+                            index + otherwise.saturating_sub(1)
+                        } else {
+                            finish - 1
+                        };
+                        let else_start = if has_else { index + *otherwise } else { finish };
+                        let mut then_names = seen.clone();
+                        if index + 1 < then_finish {
+                            visit(
+                                source,
+                                &steps[index + 1..then_finish],
+                                line_starts,
+                                &mut then_names,
+                                diagnostics,
+                            );
+                        }
+                        let mut else_names = seen.clone();
+                        if has_else && else_start < finish - 1 {
+                            visit(
+                                source,
+                                &steps[else_start..finish - 1],
+                                line_starts,
+                                &mut else_names,
+                                diagnostics,
+                            );
+                        }
+                        // Branches are mutually exclusive, so equal names across branches
+                        // are one binding at the join point. Keep names from both arms to
+                        // catch later rebindings after the conditional.
+                        seen.extend(then_names);
+                        seen.extend(else_names);
+                    }
+                    index = finish.max(index + 1);
+                    continue;
+                }
+                StepKind::TaskGroup { tasks, .. } => {
+                    for call in tasks {
+                        record_call_bindings(
+                            source,
+                            call,
+                            step.line,
+                            line_starts,
+                            seen,
+                            diagnostics,
+                        );
+                    }
+                }
+                StepKind::SpawnJob { stages, .. } => {
+                    for stage in stages {
+                        record_call_bindings(
+                            source,
+                            &stage.call,
+                            stage.line,
+                            line_starts,
+                            seen,
+                            diagnostics,
+                        );
+                    }
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+
+    visit(
+        source,
+        steps,
+        line_starts,
+        &mut BTreeSet::new(),
+        diagnostics,
+    );
 }
 
 fn collect_program_input_diagnostics(

@@ -65,10 +65,16 @@ pub(super) fn run(
             let difference = left
                 .checked_sub(right)
                 .ok_or_else(|| invalid("time difference overflow"))?;
-            Ok(Value::Number(
-                Number::from_f64(difference as f64 / multiplier as f64)
-                    .ok_or_else(|| invalid("time difference is not finite"))?,
-            ))
+            if difference % multiplier == 0 {
+                // Keep exact whole-unit values as integers; converting first to
+                // binary64 loses seconds beyond 2^53 even when no division is needed.
+                Ok(Value::from(difference / multiplier))
+            } else {
+                Ok(Value::Number(
+                    Number::from_f64(difference as f64 / multiplier as f64)
+                        .ok_or_else(|| invalid("time difference is not finite"))?,
+                ))
+            }
         }
         _ => Err(invalid("unsupported time operation")),
     }

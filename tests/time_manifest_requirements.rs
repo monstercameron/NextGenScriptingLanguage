@@ -55,7 +55,7 @@ fn complete_time_calls_check_and_run_with_optional_zone() {
         ("run time.format with epoch 0 and format \"%Y-%m-%d %H:%M\" and zone \"3600\"\n", json!("1970-01-01 01:00")),
         ("run time.parse with text \"1970-01-01T00:00:00+0000\" and format \"%Y-%m-%dT%H:%M:%S%z\"\n", json!(0)),
         ("run time.add with epoch 0 and amount 2 and unit \"minutes\"\n", json!(120)),
-        ("run time.diff with left 120 and right 0 and unit \"minutes\"\n", json!(2.0)),
+        ("run time.diff with left 120 and right 0 and unit \"minutes\"\n", json!(2)),
     ];
     let root = tempfile::tempdir().unwrap();
     for disk in [false, true] {

@@ -543,3 +543,12 @@ integer counts since the Unix epoch, with `iso` representing the same instant.
 Milliseconds are rounded down to the containing millisecond. If the instant's
 nanosecond count is outside the signed 64-bit range, the applet returns a
 permanent `invalid_request` error instead of a partial or saturated record.
+
+`time.diff` subtracts `right` from `left` as signed 64-bit epoch seconds.
+It accepts the full signed 64-bit input range without applying calendar range
+limits; a subtraction overflow is an `invalid_request` error. It returns exact
+JSON integers for whole numbers of the requested unit (including every
+difference in seconds).
+Nonintegral differences in minutes, hours, or days return a binary64 number,
+which can be approximate for large values. Callers that inspect the JSON number
+representation should allow either integers or floating-point values.

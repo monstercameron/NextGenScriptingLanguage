@@ -226,12 +226,58 @@ fn hand_over_enforces_the_workflow_deadline() {
     );
 }
 
+/// Read a PID published by a fixture script. PowerShell `Out-File` appends a
+/// newline, so the first whitespace-separated token is parsed and zero is
+/// refused; anything else means the fixture has not published yet.
+fn read_pid_file(path: &Path) -> Option<u32> {
+    fs::read_to_string(path)
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid != 0)
+}
+
+/// Fail-closed liveness probe: a failed `tasklist` invocation fails the test
+/// instead of reading an empty listing as "gone". A PID counts as running only
+/// when a CSV field equals it exactly, so a PID that is a substring of another
+/// process's PID never matches.
+fn pid_is_running(pid: u32) -> bool {
+    let probe = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+        .expect("the tasklist liveness probe must run");
+    assert!(
+        probe.status.success(),
+        "the tasklist probe for PID {pid} failed: {}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
+    let want = pid.to_string();
+    String::from_utf8_lossy(&probe.stdout).lines().any(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("INFO:") {
+            return false;
+        }
+        line.split(',')
+            .any(|field| field.trim().trim_matches('"') == want)
+    })
+}
+
+/// Best-effort cleanup: ending an already-dead process reports failure, which
+/// is fine when sweeping up after a probe that already says it is gone.
+fn kill_pid(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .output();
+}
+
 #[test]
 fn hand_over_kill_ends_the_handed_over_child() {
     // Windows-only acceptance for the job object behind `hand over`: killing
-    // the interpreter must end the handed-over child instead of orphaning it.
-    // Unix replaces the interpreter with `execve`, so there is no waiter to
-    // kill and nothing to orphan.
+    // the interpreter must end the handed-over child and the descendant it
+    // started instead of orphaning them. Unix replaces the interpreter with
+    // `execve`, so there is no waiter to kill and nothing to orphan.
     if !cfg!(windows) {
         return;
     }
@@ -239,13 +285,21 @@ fn hand_over_kill_ends_the_handed_over_child() {
 
     let directory = tempdir().unwrap();
     let pid_file = directory.path().join("handed-over.pid");
+    let descendant_pid_file = directory.path().join("descendant.pid");
     let pid_forward = pid_file.to_str().unwrap().replace('\\', "/");
-    // The handed-over program records its own PID and then sleeps for a
-    // minute, so the test can kill the interpreter and probe for the orphan
+    let descendant_forward = descendant_pid_file.to_str().unwrap().replace('\\', "/");
+    // The handed-over program records its own PID, starts a descendant
+    // sleeper in the same job, records the descendant PID, and sleeps for a
+    // minute, so the test can kill the interpreter and probe for both
     // directly. PowerShell is an inbox native fixture; `tasklist`/`taskkill`
     // below are inbox probes and bounded cleanup.
+    let powershell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
     let script = format!(
-        "$PID | Out-File -FilePath '{pid_forward}' -Encoding ascii; Start-Sleep -Seconds 60"
+        "$PID | Out-File -FilePath '{pid_forward}' -Encoding ascii; \
+         $desc = Start-Process -FilePath '{powershell}' \
+         -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60' -PassThru; \
+         $desc.Id | Out-File -FilePath '{descendant_forward}' -Encoding ascii; \
+         Start-Sleep -Seconds 60"
     );
     let program = write_program(
         directory.path(),
@@ -263,25 +317,32 @@ fn hand_over_kill_ends_the_handed_over_child() {
         .spawn()
         .unwrap();
 
-    // Wait for the handed-over child to publish its PID. The 20 second bound
-    // keeps a slow hosted runner from hanging the suite.
+    // Wait for the handed-over child and its descendant to publish their PIDs.
+    // The 20 second bound keeps a slow hosted runner from hanging the suite.
+    // Both PIDs must be observed running before the kill: a gone-after probe
+    // proves the job ended them only if they demonstrably existed first.
     let pid_by = Instant::now() + Duration::from_secs(20);
-    let child_pid: u32 = loop {
-        if let Ok(text) = fs::read_to_string(&pid_file) {
-            if let Ok(pid) = text.trim().parse::<u32>() {
-                if pid != 0 {
-                    break pid;
-                }
+    let (child_pid, descendant_pid) = loop {
+        let pair = (read_pid_file(&pid_file), read_pid_file(&descendant_pid_file));
+        if let (Some(child), Some(descendant)) = pair {
+            if pid_is_running(child) && pid_is_running(descendant) {
+                break (child, descendant);
             }
         }
         if interpreter.try_wait().unwrap().is_some() {
             let _ = interpreter.wait();
-            panic!("the interpreter exited before the handed-over child wrote its pid");
+            panic!("the interpreter exited before the handed-over child started");
         }
         if Instant::now() >= pid_by {
             let _ = interpreter.kill();
             let _ = interpreter.wait();
-            panic!("the handed-over child never wrote its pid");
+            if let Some(pid) = read_pid_file(&pid_file) {
+                kill_pid(pid);
+            }
+            if let Some(pid) = read_pid_file(&descendant_pid_file) {
+                kill_pid(pid);
+            }
+            panic!("the handed-over child and its descendant never started");
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -291,40 +352,28 @@ fn hand_over_kill_ends_the_handed_over_child() {
     );
 
     // Killing the interpreter closes the job handle, and KILL_ON_JOB_CLOSE
-    // must end the handed-over child with it.
+    // must end the handed-over child and its descendant with it.
     let _ = interpreter.kill();
     let _ = interpreter.wait();
 
     let gone_by = Instant::now() + Duration::from_secs(10);
     loop {
-        let probe = Command::new("tasklist")
-            .args([
-                "/FI",
-                &format!("PID eq {child_pid}"),
-                "/FO",
-                "CSV",
-                "/NH",
-            ])
-            .output()
-            .unwrap();
-        let listing = String::from_utf8_lossy(&probe.stdout);
-        if !listing.contains(&format!("\"{child_pid}\"")) {
+        if !pid_is_running(child_pid) && !pid_is_running(descendant_pid) {
             break;
         }
         if Instant::now() >= gone_by {
-            let _ = Command::new("taskkill")
-                .args(["/PID", &child_pid.to_string(), "/F"])
-                .output();
+            kill_pid(child_pid);
+            kill_pid(descendant_pid);
             panic!(
-                "handed-over child {child_pid} survived killing the interpreter: {listing}"
+                "handed-over child {child_pid} or descendant {descendant_pid} \
+                 survived killing the interpreter"
             );
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    // Belt and braces: leave no minute-long sleeper behind even on success.
-    let _ = Command::new("taskkill")
-        .args(["/PID", &child_pid.to_string(), "/F"])
-        .output();
+    // Belt and braces: leave no minute-long sleepers behind even on success.
+    kill_pid(child_pid);
+    kill_pid(descendant_pid);
 }
 
 #[test]

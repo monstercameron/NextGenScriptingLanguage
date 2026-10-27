@@ -250,3 +250,92 @@ fn list_shaping_covers_ranges_slices_and_sequences() {
     assert!(run("list.slice", json!({"items":[1,2],"offset":2,"length":1})).is_err());
     assert!(run("list.first", json!({"items":[]})).is_err());
 }
+
+#[test]
+fn round_decimal_values_at_positive_and_negative_places() {
+    for (value, digits, expected) in [
+        (124.5, -1, 120.0),
+        (125.1, -1, 130.0),
+        (-124.5, -1, -120.0),
+        (-125.1, -1, -130.0),
+        (125.0, -1, 130.0),
+        (-125.0, -1, -130.0),
+        (1.005, 2, 1.01),
+        (-1.005, 2, -1.01),
+        (1.004, 2, 1.0),
+        (-1.004, 2, -1.0),
+        (2.5, 0, 3.0),
+        (-2.5, 0, -3.0),
+        (9.995, 2, 10.0),
+        (0.005, 2, 0.01),
+        (4.999, -1, 0.0),
+        (5.0, -1, 10.0),
+        (0.5, 0, 1.0),
+        (-0.5, 0, -1.0),
+    ] {
+        let result = run("number.round", json!({"value":value,"digits":digits})).unwrap();
+        assert_eq!(
+            result.as_f64().unwrap(),
+            expected,
+            "value={value} digits={digits}"
+        );
+    }
+}
+
+#[test]
+fn round_float_extremes_without_intermediate_overflow() {
+    for (value, digits, expected) in [
+        (1e308, 308, 1e308),
+        (-1e308, 308, -1e308),
+        (5e-309, 308, 1e-308),
+        (-5e-309, 308, -1e-308),
+        (1e-308, -308, 0.0),
+        (5e307, -308, 1e308),
+        (-5e307, -308, -1e308),
+        (f64::from_bits(1), 308, 0.0),
+        (f64::MAX, 308, f64::MAX),
+        (1.25e308, -307, 1.3e308),
+    ] {
+        let result = run("number.round", json!({"value":value,"digits":digits})).unwrap();
+        assert_eq!(
+            result.as_f64().unwrap(),
+            expected,
+            "value={value} digits={digits}"
+        );
+    }
+    let negative_zero = run("number.round", json!({"value":-0.004,"digits":2}))
+        .unwrap()
+        .as_f64()
+        .unwrap();
+    assert_eq!(negative_zero, 0.0);
+    assert!(negative_zero.is_sign_negative());
+    for value in [1.79e308, -1.79e308] {
+        let error = run("number.round", json!({"value":value,"digits":-307})).unwrap_err();
+        assert_eq!(error.code, "overflow");
+    }
+    for digits in [-309, 309] {
+        let error = run("number.round", json!({"value":1.5,"digits":digits})).unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+    }
+}
+
+#[test]
+fn round_integer_behavior_remains_exact() {
+    for (value, digits, expected) in [
+        (125, -1, 130),
+        (-125, -1, -130),
+        (124, -1, 120),
+        (123, 3, 123),
+    ] {
+        assert_eq!(
+            run("number.round", json!({"value":value,"digits":digits})).unwrap(),
+            json!(expected)
+        );
+    }
+    assert_eq!(
+        run("number.round", json!({"value":u64::MAX,"digits":-1}))
+            .unwrap_err()
+            .code,
+        "overflow"
+    );
+}

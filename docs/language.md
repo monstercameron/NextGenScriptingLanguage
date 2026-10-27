@@ -744,6 +744,14 @@ transformation programs. See
 [json-event-names.program](../examples/json-event-names.program) and
 [json-compact.program](../examples/json-compact.program).
 
+`number.round` rounds to `digits` decimal places (zero by default); negative
+`digits` round to tens, hundreds, and so on. Halfway values round away from
+zero. Integer input uses exact integer arithmetic and permits `digits` from
+-38 through 38. Floating-point input permits -308 through 308 and rounds the
+shortest decimal representation of its binary64 value, then converts the
+result back to binary64. A result outside the finite float range returns an
+`overflow` error; non-finite inputs are invalid JSON numbers.
+
 <a id="reusable-finite-programs-pending-source-candidate"></a>
 
 ### Reusable finite programs

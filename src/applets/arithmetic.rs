@@ -27,6 +27,70 @@ fn from_float(value: f64) -> Result<Value, AppletError> {
         .ok_or_else(|| failed("non_finite", "numeric result is not finite"))
 }
 
+// Round the shortest decimal representation of the JSON float, with ties away
+// from zero. Decimal digit manipulation avoids overflowing a floating-point scale
+// or losing a tie while multiplying by a power of ten.
+fn round_float(value: f64, digits: i64) -> Result<Value, AppletError> {
+    if !value.is_finite() {
+        return Err(invalid("args.value must be finite"));
+    }
+    let representation = value.abs().to_string();
+    let (mantissa, exponent) = representation.split_once(['e', 'E']).map_or(
+        (representation.as_str(), 0),
+        |(mantissa, exponent)| {
+            // The exponent comes from f64's own formatter, so it is always valid.
+            (mantissa, exponent.parse::<i32>().expect("float exponent"))
+        },
+    );
+    let decimal_position = mantissa.find('.').unwrap_or(mantissa.len()) as i32 + exponent;
+    let mut coefficient: Vec<u8> = mantissa.bytes().filter(|byte| *byte != b'.').collect();
+    let cutoff = i64::from(decimal_position) + digits;
+    if cutoff >= coefficient.len() as i64 {
+        return from_float(value);
+    }
+    if cutoff < 0 {
+        return from_float(0.0f64.copysign(value));
+    }
+    let cutoff = cutoff as usize;
+    let increment = coefficient[cutoff] >= b'5';
+    coefficient.truncate(cutoff);
+    if increment {
+        let mut carry = true;
+        for digit in coefficient.iter_mut().rev() {
+            if *digit == b'9' {
+                *digit = b'0';
+            } else {
+                *digit += 1;
+                carry = false;
+                break;
+            }
+        }
+        if carry {
+            coefficient.insert(0, b'1');
+        }
+    }
+    if coefficient.is_empty() {
+        return from_float(0.0f64.copysign(value));
+    }
+    let coefficient = String::from_utf8(coefficient).expect("decimal digits are ASCII");
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    let rounded = format!("{sign}{coefficient}e{}", -digits)
+        .parse::<f64>()
+        .map_err(|_| {
+            failed(
+                "overflow",
+                "rounded number is outside the finite float range",
+            )
+        })?;
+    if !rounded.is_finite() {
+        return Err(failed(
+            "overflow",
+            "rounded number is outside the finite float range",
+        ));
+    }
+    from_float(rounded)
+}
+
 pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, AppletError> {
     if operation == "number.format" {
         let value = number(args, "value")?;
@@ -199,12 +263,7 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
                 if !(-308..=308).contains(&digits) {
                     return Err(invalid("args.digits must be between -308 and 308"));
                 }
-                let scale = 10f64.powi(digits as i32);
-                if digits >= 0 {
-                    (value * scale).round() / scale
-                } else {
-                    (value / scale).round() * scale
-                }
+                return round_float(value, digits);
             }
             "number.abs" => value.abs(),
             "number.sign" => value.signum(),
@@ -468,4 +527,16 @@ fn normalized_hex(value: &str) -> Option<String> {
     let hex = value.strip_prefix('#').unwrap_or(value);
     (hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| hex.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod round_tests {
+    use super::round_float;
+
+    #[test]
+    fn non_finite_float_is_rejected() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(round_float(value, 0).unwrap_err().code, "invalid_request");
+        }
+    }
 }

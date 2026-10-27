@@ -182,8 +182,8 @@ fn a_new_redirect_file_is_owner_only() {
         )]),
     }));
     // The command fails with usage on stderr, so its stderr lands in the file.
-    let program = parser::parse("run fixture.echo and stderr to \"allowed/new.txt\"\n").unwrap();
-    let result = runtime::run(&program, &registry, &options(directory.path()));
+    let program = parser::parse("run fixture.echo and stderr to \"new.txt\"\n").unwrap();
+    let result = runtime::run(&program, &registry, &options(&allowed));
     if let Err(error) = result {
         let message = format!("{error:#}");
         if message.contains("bubblewrap could not establish the required namespaces") {

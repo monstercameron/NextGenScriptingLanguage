@@ -1005,20 +1005,28 @@ fn collect_lint_diagnostics(
 }
 
 fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option<usize> {
+    fn executable_name(value: &str) -> &str {
+        std::path::Path::new(value)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(value)
+    }
     fn shell_name(value: &str) -> bool {
         matches!(
-            std::path::Path::new(value)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(value),
+            executable_name(value),
             "sh" | "bash" | "dash" | "zsh" | "ksh" | "fish"
         )
     }
-    let executable = std::path::Path::new(executable)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(executable);
-    fn shell_script_index(arguments: &[Value]) -> Option<usize> {
+    let executable = executable_name(executable);
+    fn shell_script_index(shell: &str, arguments: &[Value]) -> Option<usize> {
+        fn simple_option(shell: &str, flag: char) -> bool {
+            match shell {
+                "bash" => "abefhiklmnprstuvxB".contains(flag),
+                "sh" | "dash" | "zsh" | "ksh" => "efhkmnuvx".contains(flag),
+                "fish" => "ilnpsqvx".contains(flag),
+                _ => false,
+            }
+        }
         let mut index = 0;
         while let Some(value) = arguments.get(index) {
             let Value::String(argument) = value else {
@@ -1030,14 +1038,31 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
             if argument == "--" || !argument.starts_with('-') {
                 return None;
             }
-            if matches!(argument.as_str(), "-o" | "-O" | "--rcfile" | "--init-file") {
+            if shell == "bash" && matches!(argument.as_str(), "-O" | "--rcfile" | "--init-file")
+                || matches!(shell, "sh" | "bash" | "dash" | "zsh" | "ksh") && argument == "-o"
+            {
                 if !matches!(arguments.get(index + 1), Some(Value::String(_))) {
                     return None;
                 }
                 index += 2;
-            } else {
-                index += 1;
+                continue;
             }
+            let Some(flags) = argument.strip_prefix('-') else {
+                return None;
+            };
+            let chars = flags.chars().collect::<Vec<_>>();
+            if chars.last() == Some(&'c')
+                && chars[..chars.len() - 1]
+                    .iter()
+                    .all(|flag| simple_option(shell, *flag))
+            {
+                return Some(index + 1);
+            }
+            if !chars.is_empty() && chars.iter().all(|flag| simple_option(shell, *flag)) {
+                index += 1;
+                continue;
+            }
+            return None;
         }
         None
     }
@@ -1088,7 +1113,7 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         })
     }
     if shell_name(executable) {
-        return shell_script_index(arguments);
+        return shell_script_index(executable, arguments);
     }
     let (child_index, child_args) = match executable {
         "env" => {
@@ -1106,7 +1131,10 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         return None;
     };
     shell_name(child)
-        .then(|| shell_script_index(child_args).map(|index| child_index + 1 + index))
+        .then(|| {
+            shell_script_index(executable_name(child), child_args)
+                .map(|index| child_index + 1 + index)
+        })
         .flatten()
 }
 

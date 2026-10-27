@@ -1957,13 +1957,16 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
 }
 
 fn applets_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute applets list [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets inspect NAME_OR_PHRASE [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets discover\n       execute applets match --json REQUEST [--manifest-dir PATH | --manifest-catalog FILE]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Inspect emits validated contract metadata without executing applets. Discover reports installed commands using PATH metadata only. Match ranks declared typed ports without running applets. Versioned contracts expose typed I/O, outcomes, effects, backends, and lifecycle while retaining legacy fields for compatibility.\nUse -- before a name or phrase beginning with a hyphen.";
+    const HELP: &str = "Usage: execute applets list [--names | --signatures] [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets search QUERY [--limit N] [--json] [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets inspect NAME_OR_PHRASE [--json=compact] [--verbose] [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets discover\n       execute applets match --json REQUEST [--manifest-dir PATH | --manifest-catalog FILE]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. List signatures and search provide compact contract-derived discovery. Inspect emits validated contract metadata without executing applets; --json=compact omits in-process argv templates unless --verbose is supplied. Discover reports installed commands using PATH metadata only. Match ranks declared typed ports without running applets. Versioned contracts expose typed I/O, outcomes, effects, backends, and lifecycle while retaining legacy fields for compatibility.\nUse -- before a name or phrase beginning with a hyphen.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
     }
     let command = arguments.first().context(HELP)?;
-    if !matches!(command.as_str(), "list" | "inspect" | "discover" | "match") {
+    if !matches!(
+        command.as_str(),
+        "list" | "search" | "inspect" | "discover" | "match"
+    ) {
         bail!("unknown applets command {command:?}\n{HELP}");
     }
     #[cfg(not(feature = "tooling"))]
@@ -1975,6 +1978,12 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
     let mut name = None;
     let mut request = None;
     let mut request_file = None;
+    let mut search_words = Vec::new();
+    let mut search_limit = 10usize;
+    let mut search_json = false;
+    let mut list_mode = None;
+    let mut compact = false;
+    let mut verbose = false;
     let mut literal = false;
     let mut index = 1;
     while index < arguments.len() {
@@ -2027,10 +2036,34 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
                 "--json-file",
                 "a JSON request file",
             )?));
+        } else if !literal && argument == "--names" && command == "list" {
+            if list_mode.replace("names").is_some() {
+                bail!("choose only one of --names and --signatures");
+            }
+        } else if !literal && argument == "--signatures" && command == "list" {
+            if list_mode.replace("signatures").is_some() {
+                bail!("choose only one of --names and --signatures");
+            }
+        } else if !literal && argument == "--json" && command == "search" {
+            search_json = true;
+        } else if !literal && argument == "--json=compact" && command == "inspect" {
+            compact = true;
+        } else if !literal && argument == "--verbose" && command == "inspect" {
+            verbose = true;
+        } else if !literal && argument == "--limit" && command == "search" {
+            let raw = take_option_value(arguments, &mut index, "--limit", "a result limit")?;
+            search_limit = raw
+                .parse()
+                .context("--limit must be an integer from 1 to 100")?;
+            if !(1..=100).contains(&search_limit) {
+                bail!("--limit must be an integer from 1 to 100");
+            }
         } else if !literal && argument.starts_with('-') {
             bail!("unknown or unsupported applets option `{argument}`");
         } else if command == "inspect" && name.is_none() {
             name = Some(argument.as_str());
+        } else if command == "search" {
+            search_words.push(argument.as_str());
         } else {
             bail!("unexpected applets argument {argument:?}\n{HELP}");
         }
@@ -2038,6 +2071,12 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
     }
     if command == "inspect" && name.is_none() {
         bail!("applets inspect requires a name or phrase\n{HELP}");
+    }
+    if command == "search" && search_words.is_empty() {
+        bail!("applets search requires a query\n{HELP}");
+    }
+    if command != "list" && list_mode.is_some() {
+        bail!("--names and --signatures apply only to applets list");
     }
     #[cfg(feature = "tooling")]
     if command == "discover" {
@@ -2089,18 +2128,377 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             "matches": matches
         }));
     }
+    if command == "search" {
+        let query = search_words.join(" ");
+        let mut manifests = registry.manifests()?;
+        manifests.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut ranked = manifests
+            .into_iter()
+            .map(|manifest| {
+                let contract = manifest.contract();
+                let score = applet_search_score(&query, &contract);
+                (contract, score)
+            })
+            .filter(|(_, score)| *score > 0.0)
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            right.1.total_cmp(&left.1).then_with(|| {
+                left.0["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right.0["name"].as_str().unwrap_or_default())
+            })
+        });
+        ranked.truncate(search_limit);
+        if search_json {
+            return write_json(&serde_json::json!({
+                "protocol": "execute.applet-search/1",
+                "query": query,
+                "results": ranked.iter().map(|(contract, score)| serde_json::json!({
+                    "name": contract["name"],
+                    "score": (score * 100.0).round() / 100.0,
+                    "signature": applet_signature_with_description(contract, true),
+                    "description": contract["description"]
+                })).collect::<Vec<_>>()
+            }));
+        }
+        for (contract, score) in ranked {
+            let line = format!(
+                "{score:.2} {}",
+                applet_signature_with_description(&contract, true)
+            );
+            writeln!(io::stdout(), "{}", escape_applet_text_line(&line))?;
+        }
+        return Ok(());
+    }
     if let Some(name) = name {
+        let manifest = match registry.discover(name) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                let mut candidates = registry
+                    .manifests()?
+                    .into_iter()
+                    .map(|manifest| {
+                        let contract = manifest.contract();
+                        (manifest.name.clone(), applet_search_score(name, &contract))
+                    })
+                    .collect::<Vec<_>>();
+                candidates.sort_by(|left, right| {
+                    right
+                        .1
+                        .total_cmp(&left.1)
+                        .then_with(|| left.0.cmp(&right.0))
+                });
+                let suggestions = candidates
+                    .into_iter()
+                    .filter(|(_, score)| *score > 0.0)
+                    .take(3)
+                    .map(|(name, _)| escape_applet_text_line(&name))
+                    .collect::<Vec<_>>();
+                if suggestions.is_empty() {
+                    return Err(error);
+                }
+                bail!(
+                    "unknown applet {name:?}; did you mean: {}?",
+                    suggestions.join(", ")
+                );
+            }
+        };
+        let mut contract = manifest.contract();
+        if compact && !verbose && contract["execution"]["contract_backend"] == "in_process" {
+            contract
+                .as_object_mut()
+                .expect("contract is an object")
+                .remove("argv_template");
+        }
         write_json(&serde_json::json!({
             "protocol": "execute.applet/1", "validation": "manifest_static",
-            "applet": registry.discover(name)?.contract()
+            "applet": contract
         }))
     } else {
         let mut manifests = registry.manifests()?;
         manifests.sort_by(|left, right| left.name.cmp(&right.name));
+        if let Some(mode) = list_mode {
+            for manifest in manifests {
+                let contract = manifest.contract();
+                if mode == "names" {
+                    writeln!(io::stdout(), "{}", escape_applet_text_line(&manifest.name))?;
+                } else {
+                    writeln!(
+                        io::stdout(),
+                        "{}",
+                        escape_applet_text_line(&applet_signature(&contract))
+                    )?;
+                }
+            }
+            return Ok(());
+        }
         write_json(&serde_json::json!({
             "protocol": "execute.applets/1", "validation": "manifest_static",
             "applets": manifests.iter().map(|manifest| manifest.contract()).collect::<Vec<_>>()
         }))
+    }
+}
+
+fn applet_signature(contract: &serde_json::Value) -> String {
+    applet_signature_with_description(contract, false)
+}
+
+fn escape_applet_text_line(text: &str) -> String {
+    flow::terminal_text::escape_controls(text)
+        .replace('\n', r"\n")
+        .replace('\t', r"\t")
+        .replace('\u{2028}', r"\u{2028}")
+        .replace('\u{2029}', r"\u{2029}")
+}
+
+fn applet_signature_with_description(
+    contract: &serde_json::Value,
+    include_redundant: bool,
+) -> String {
+    let name = contract["name"].as_str().unwrap_or("<unknown>");
+    let properties = contract["parameters_schema"]["properties"].as_object();
+    let required = contract["parameters_schema"]["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let parameters = properties
+        .into_iter()
+        .flat_map(|properties| properties.iter())
+        .map(|(parameter, schema)| {
+            let mut ty = match schema["type"].as_str().unwrap_or("value") {
+                "string" => "text".to_owned(),
+                "integer" => "integer".to_owned(),
+                "number" => "number".to_owned(),
+                "boolean" => "boolean".to_owned(),
+                other => other.to_owned(),
+            };
+            if ty == "array" {
+                ty = format!(
+                    "list<{}>",
+                    schema["items"]["type"].as_str().unwrap_or("value")
+                );
+            } else if ty == "object" {
+                ty = "record".to_owned();
+            }
+            if !required.contains(parameter.as_str()) {
+                format!("{parameter}?: {ty}")
+            } else {
+                format!("{parameter}: {ty}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let output_schema = &contract["io"]["output_schema"];
+    let output = match output_schema["type"].as_str().unwrap_or("bytes") {
+        "string" => "text",
+        "array" => "list",
+        "object" => "record",
+        output => output,
+    };
+    let mut line = format!("{name}({parameters}) -> {output}");
+    if let Some(description) = contract["description"].as_str().filter(|text| {
+        !text.is_empty() && (include_redundant || !is_redundant_applet_description(name, text))
+    }) {
+        line.push_str("  ");
+        line.push_str(description);
+    }
+    line
+}
+
+fn is_redundant_applet_description(name: &str, description: &str) -> bool {
+    let normalized_name = name
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    description == format!("Provides the {normalized_name} operation for controlled scripts.")
+}
+
+fn applet_search_score(query: &str, contract: &serde_json::Value) -> f64 {
+    let query_tokens = applet_search_tokens(query);
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+    let fields = vec![
+        (
+            contract["name"].as_str().unwrap_or_default().to_owned(),
+            4.0,
+        ),
+        (
+            contract["phrases"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+            3.2,
+        ),
+        (
+            contract["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            2.0,
+        ),
+        (
+            contract["parameters_schema"]["properties"]
+                .as_object()
+                .map(|properties| properties.keys().cloned().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default(),
+            2.4,
+        ),
+    ];
+    let name = contract["name"].as_str().unwrap_or_default();
+    let fields = fields
+        .into_iter()
+        .map(|(field, weight)| {
+            let synonyms = if name == "fs.glob" {
+                "file files folder folders directory directories path paths glob list"
+            } else if name == "list.sort" {
+                "sort sorting order ordered list array records"
+            } else if name == "hash.sha256" {
+                "sha256 sha 256 checksum digest hash"
+            } else if name == "fs.read" {
+                "file files read reading content contents"
+            } else if name == "fs.write_atomic" {
+                "file files write writing atomic"
+            } else if name == "fs.ensure_dir" {
+                "directory directories folder folders create creation"
+            } else if name == "fs.test" {
+                "file files path paths check exists existence"
+            } else if name == "json.stringify" {
+                "format formatted serialize serialization"
+            } else {
+                ""
+            };
+            (format!("{field} {synonyms}"), weight)
+        })
+        .collect::<Vec<_>>();
+    let tokens = fields
+        .iter()
+        .map(|(text, weight)| (applet_search_tokens(text), *weight))
+        .collect::<Vec<_>>();
+    let mut total = 0.0;
+    for query_token in &query_tokens {
+        let best = tokens
+            .iter()
+            .map(|(field_tokens, weight)| {
+                let similarity = field_tokens
+                    .iter()
+                    .map(|candidate| token_similarity(query_token, candidate))
+                    .fold(0.0, f64::max);
+                similarity * weight
+            })
+            .fold(0.0, f64::max);
+        total += best;
+    }
+    let coverage = total / (query_tokens.len() as f64 * 4.0);
+    let exact_phrase = contract["phrases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .any(|phrase| normalize_search_text(phrase) == normalize_search_text(query));
+    let exact_name = contract["name"]
+        .as_str()
+        .is_some_and(|name| normalize_search_text(name) == normalize_search_text(query));
+    (coverage * 100.0)
+        + if exact_name {
+            100.0
+        } else if exact_phrase {
+            70.0
+        } else {
+            0.0
+        }
+}
+
+fn applet_search_tokens(text: &str) -> Vec<String> {
+    normalize_search_text(text)
+        .split_whitespace()
+        .filter(|token| {
+            !matches!(
+                *token,
+                "a" | "an"
+                    | "and"
+                    | "by"
+                    | "for"
+                    | "from"
+                    | "in"
+                    | "of"
+                    | "on"
+                    | "or"
+                    | "the"
+                    | "to"
+                    | "with"
+            )
+        })
+        .map(|token| {
+            if token.len() > 4 && token.ends_with("ies") {
+                format!("{}y", &token[..token.len() - 3])
+            } else if token.len() > 3 && token.ends_with('s') {
+                token[..token.len() - 1].to_owned()
+            } else {
+                token.to_owned()
+            }
+        })
+        .collect()
+}
+
+fn normalize_search_text(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn token_similarity(left: &str, right: &str) -> f64 {
+    if left == right {
+        return 1.0;
+    }
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let left = left.chars().collect::<Vec<_>>();
+    let right = right.chars().collect::<Vec<_>>();
+    let mut row = (0..=right.len()).collect::<Vec<_>>();
+    for (i, left_char) in left.iter().enumerate() {
+        let mut previous = row[0];
+        row[0] = i + 1;
+        for (j, right_char) in right.iter().enumerate() {
+            let old = row[j + 1];
+            row[j + 1] = (row[j + 1] + 1)
+                .min(row[j] + 1)
+                .min(previous + usize::from(left_char != right_char));
+            previous = old;
+        }
+    }
+    let distance = row[right.len()];
+    let longest = left.len().max(right.len());
+    if (distance > 1 && longest <= 5) || distance > 2 {
+        0.0
+    } else {
+        1.0 - distance as f64 / longest as f64
     }
 }
 
@@ -2800,7 +3198,8 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
+
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

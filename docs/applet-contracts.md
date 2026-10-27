@@ -11,8 +11,14 @@ do not include them.
 
 ```sh
 execute applets list
+execute applets list --names
+execute applets list --signatures
+execute applets search "sort a list" --limit 5
+execute applets search "list files" --json
 execute applets inspect printf
 execute applets inspect "count lines"
+execute applets inspect "text.replace" --json=compact
+execute applets inspect "text.replace" --json=compact --verbose
 execute applets list --manifest-dir ./my-applets
 execute applets list --manifest-catalog ./my-applets.catalog
 ```
@@ -31,13 +37,25 @@ The check does not read file contents, so an edit that keeps a file's byte size
 is not detected. Editing a system-wide directory needs root in any case. An
 explicit `--manifest-dir` or `--manifest-catalog` always gets full validation.
 
-`list` returns protocol `execute.applets/1` with applets sorted by canonical
-name. `inspect` returns `execute.applet/1`; canonical names and phrases resolve
-to the same validated manifest. Discovery validates manifest data without
-locating or launching executables. Native availability is deliberately reported
-as not checked: a binary may be missing, resolve differently from another cwd
-or PATH, require credentials, or reject its argv. Direct quoted commands remain
-available separately from catalog discovery.
+`list` without a mode returns protocol `execute.applets/1` with applets sorted by
+canonical name. `--names` prints only one canonical name per line. `--signatures`
+prints one concise callable signature and description per line, derived from the
+validated parameter and output schemas. Repetitive descriptions that merely
+restate the applet name are omitted in this compact view. Text output visibly
+escapes terminal controls and line separators so manifest text stays on one line.
+`search` ranks name, phrase, description, and parameter matches using token
+overlap and edit distance; it does not execute
+applets. `--json` returns protocol `execute.applet-search/1` with scores,
+signatures, and descriptions. The default result limit is 10; `--limit` accepts
+1 through 100. `inspect` returns `execute.applet/1`; canonical names and phrases
+resolve to the same validated manifest. An unmatched inspect query includes up
+to three ranked suggestions. `--json=compact` omits the argv template for
+in-process applets because it is implementation detail; `--verbose` restores it.
+Discovery validates manifest data without locating or launching executables.
+Native availability is deliberately reported as not checked: a binary may be
+missing, resolve differently from another cwd or PATH, require credentials, or
+reject its argv. Direct quoted commands remain available separately from catalog
+discovery.
 
 Each inspected applet includes its canonical name and aliases, resolved
 parameter schema, ordered argv template, stdin/stdout contract and execution

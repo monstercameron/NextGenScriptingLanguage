@@ -230,6 +230,269 @@ fn invalid_requests_and_invalid_catalogs_fail_without_partial_json() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("without executing applets"));
 }
 
+
+#[test]
+fn compact_signatures_and_ranked_search_keep_catalog_discovery_small_and_usable() {
+    let cwd = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let signatures = cli(cwd, &["applets", "list", "--signatures"]);
+    assert!(
+        signatures.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signatures.stderr)
+    );
+    assert!(
+        signatures.stdout.len() < 20_000,
+        "{} bytes",
+        signatures.stdout.len()
+    );
+    let names = cli(cwd, &["applets", "list", "--names"]);
+    assert!(names.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&names.stdout).lines().count(),
+        String::from_utf8_lossy(&signatures.stdout).lines().count()
+    );
+
+    let sort = value(cli(cwd, &["applets", "search", "sort a list", "--json"]));
+    assert_eq!(sort["protocol"], "execute.applet-search/1");
+    assert_eq!(sort["results"][0]["name"], "list.sort");
+    let files = value(cli(cwd, &["applets", "search", "list files", "--json"]));
+    let file_names = files["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .take(3)
+        .filter_map(|item| item["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(file_names.contains(&"fs.glob"), "{file_names:?}");
+
+    let cases = [
+        ("uppercase text", "text.upper"),
+        ("lowercase text", "text.lower"),
+        ("render template", "text.render"),
+        ("count lines", "count.lines"),
+        ("parse yaml", "yaml.parse"),
+        ("stringify yaml", "yaml.stringify"),
+        ("replace text", "text.replace"),
+        ("sort a list", "list.sort"),
+        ("list files", "fs.glob"),
+        ("sha256 digest", "hash.sha256"),
+        ("parse json", "json.parse"),
+        ("format json", "json.stringify"),
+        ("get json value", "json.get"),
+        ("set json value", "json.set"),
+        ("delete json value", "json.delete"),
+        ("merge json objects", "json.merge"),
+        ("filter json array", "json.filter"),
+        ("map json values", "json.map"),
+        ("group json records", "json.group_by"),
+        ("sort json records", "json.sort_by"),
+        ("split text", "text.split"),
+        ("join text", "text.join"),
+        ("trim text", "text.trim"),
+        ("count text length", "text.length"),
+        ("find text substring", "text.substring"),
+        ("check text contains", "text.contains_any"),
+        ("pad text", "text.pad"),
+        ("truncate text", "text.truncate"),
+        ("parse csv", "csv.parse"),
+        ("write csv", "csv.stringify"),
+        ("parse toml", "toml.parse"),
+        ("write toml", "toml.stringify"),
+        ("parse ini", "ini.parse"),
+        ("write ini", "ini.stringify"),
+        ("encode base64", "encode.base64"),
+        ("decode base64", "decode.base64"),
+        ("encode url", "encode.url"),
+        ("decode url", "decode.url"),
+        ("encode hex", "encode.hex"),
+        ("decode hex", "decode.hex"),
+        ("add numbers", "number.add"),
+        ("subtract numbers", "number.subtract"),
+        ("multiply numbers", "number.multiply"),
+        ("divide numbers", "number.divide"),
+        ("parse integer", "number.parse_integer"),
+        ("format number", "number.format"),
+        ("read file", "fs.read"),
+        ("write file atomically", "fs.write_atomic"),
+        ("create directory", "fs.ensure_dir"),
+        ("check file path", "fs.test"),
+    ];
+    assert_eq!(cases.len(), 50);
+    for (query, expected) in cases {
+        let result = value(cli(
+            cwd,
+            &["applets", "search", query, "--json", "--limit", "3"],
+        ));
+        let top = result["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            top.contains(&expected),
+            "{query:?} expected {expected}; got {top:?}"
+        );
+    }
+
+    let compact = value(cli(
+        cwd,
+        &["applets", "inspect", "text.replace", "--json=compact"],
+    ));
+    assert!(compact["applet"].get("argv_template").is_none());
+    let verbose = value(cli(
+        cwd,
+        &[
+            "applets",
+            "inspect",
+            "text.replace",
+            "--json=compact",
+            "--verbose",
+        ],
+    ));
+    assert!(verbose["applet"].get("argv_template").is_some());
+    let full = value(cli(cwd, &["applets", "inspect", "text.replace"]));
+    assert!(full["applet"].get("argv_template").is_some());
+    let typo = cli(cwd, &["applets", "inspect", "sort a list"]);
+    assert!(!typo.status.success());
+    assert!(String::from_utf8_lossy(&typo.stderr).contains("did you mean"));
+}
+
+
+#[test]
+fn text_discovery_escapes_terminal_controls_but_json_preserves_descriptions() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest_path = directory.path().join("hostile.json");
+    let description = "show \u{1b}[31m red \u{9b}31m and \u{202e}text";
+    write_manifest(
+        &manifest_path,
+        &json!({
+            "name": "safe.description",
+            "description": description,
+            "binary": "printf",
+            "arguments": []
+        }),
+    );
+    let manifest_path = manifest_path.to_str().unwrap();
+
+    for args in [
+        vec![
+            "applets",
+            "list",
+            "--signatures",
+            "--manifest-dir",
+            manifest_path,
+        ],
+        vec!["applets", "search", "show", "--manifest-dir", manifest_path],
+    ] {
+        let output = cli(directory.path(), &args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains(r"\u{1b}"), "{stdout:?}");
+        assert!(stdout.contains(r"\u{9b}"), "{stdout:?}");
+        assert!(stdout.contains(r"\u{202e}"), "{stdout:?}");
+        assert!(!stdout.contains('\u{1b}'));
+        assert!(!stdout.contains('\u{9b}'));
+        assert!(!stdout.contains('\u{202e}'));
+    }
+
+    let json_result = value(cli(
+        directory.path(),
+        &[
+            "applets",
+            "search",
+            "show",
+            "--json",
+            "--manifest-dir",
+            manifest_path,
+        ],
+    ));
+    assert_eq!(json_result["results"][0]["description"], description);
+    assert!(json_result["results"][0]["signature"]
+        .as_str()
+        .unwrap()
+        .contains('\u{202e}'));
+}
+
+
+#[test]
+fn single_line_discovery_escapes_newlines_and_tabs_in_manifest_names_and_keys() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest_path = directory.path().join("multiline.json");
+    let name = "bad\nname\tvalue";
+    let parameter = "key\ncolumn\t";
+    write_manifest(
+        &manifest_path,
+        &json!({
+            "name": name,
+            "description": "find this applet",
+            "binary": "printf",
+            "parameters": {(parameter): {"type": "string", "required": true}},
+            "arguments": []
+        }),
+    );
+    let manifest_path = manifest_path.to_str().unwrap();
+
+    let names = cli(
+        directory.path(),
+        &[
+            "applets",
+            "list",
+            "--names",
+            "--manifest-dir",
+            manifest_path,
+        ],
+    );
+    assert!(
+        names.status.success(),
+        "{}",
+        String::from_utf8_lossy(&names.stderr)
+    );
+    assert_eq!(names.stdout, b"bad\\nname\\tvalue\n");
+
+    for args in [
+        vec![
+            "applets",
+            "list",
+            "--signatures",
+            "--manifest-dir",
+            manifest_path,
+        ],
+        vec!["applets", "search", "find", "--manifest-dir", manifest_path],
+    ] {
+        let output = cli(directory.path(), &args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "{stdout:?}");
+        assert!(stdout.contains(r"bad\nname\tvalue"), "{stdout:?}");
+        assert!(stdout.contains(r"key\ncolumn\t: text"), "{stdout:?}");
+        assert!(!stdout.contains("bad\nname"), "{stdout:?}");
+        assert!(!stdout.contains("key\ncolumn"), "{stdout:?}");
+        assert!(!stdout.contains('\t'), "{stdout:?}");
+    }
+
+    let listed = value(cli(
+        directory.path(),
+        &["applets", "list", "--manifest-dir", manifest_path],
+    ));
+    let contract = &listed["applets"][0];
+    assert_eq!(contract["name"], name);
+    assert!(
+        contract["parameters_schema"]["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key(parameter)
+    );
+}
+
 #[test]
 fn contract_projection_preserves_checkpoint_serialization_and_tracks_catalog_changes() {
     let mut source = manifest();

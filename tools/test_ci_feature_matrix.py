@@ -54,6 +54,21 @@ class FeatureMatrixTests(unittest.TestCase):
         self.assertIn("--test prompt_inputs", command)
         self.assertIn("--test child_env_minimize_windows", command)
 
+    def test_windows_service_answers_privacy_regression_requires_tooling_and_runs_in_ci(self) -> None:
+        source = (ROOT / "tests/lane_w1_regressions.rs").read_text(encoding="utf-8")
+        self.assertRegex(
+            source,
+            r'(?s)#\[cfg\(all\(windows,\s*feature\s*=\s*"tooling"\)\)\]\s*#\[test\]\s*fn\s+service_generate_accepts_answers_option_and_rejects_nonprivate_acl',
+        )
+        windows = self.workflow.split("  windows:\n", maxsplit=1)[1]
+        command = next(
+            line for line in windows.splitlines()
+            if "cargo test --locked --target ${{ matrix.target }}" in line
+            and "--test lane_w1_regressions" in line
+        )
+        self.assertIn("--features full,test-fixtures", command)
+        self.assertIn("private Windows DACL", source)
+
     def test_fixture_is_test_only_and_built_for_ci(self) -> None:
         manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
         full = re.search(r'(?m)^full\s*=\s*\[(.*?)\]', manifest)

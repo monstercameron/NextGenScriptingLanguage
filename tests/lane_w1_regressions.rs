@@ -87,7 +87,7 @@ fn service_generate_forwards_private_answers_file_by_path() {
     assert!(!rendered.contains("CANARY-SVC-1"));
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "tooling"))]
 #[test]
 fn service_generate_accepts_answers_option_and_rejects_nonprivate_acl() {
     let work = tempfile::tempdir().unwrap();

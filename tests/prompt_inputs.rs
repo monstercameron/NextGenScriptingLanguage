@@ -310,8 +310,12 @@ fn answers_reject_inherited_acls_and_reparse_points() {
     private_answers::make_private(&answers);
     assert!(flow::prompt::answers_from_file(&answers).is_ok());
     let link = root.path().join("link.json");
-    if std::os::windows::fs::symlink_file(&answers, &link).is_ok() {
-        assert!(flow::prompt::answers_from_file(&link).is_err());
+    match std::os::windows::fs::symlink_file(&answers, &link) {
+        Ok(()) => assert!(flow::prompt::answers_from_file(&link).is_err()),
+        Err(error) => assert!(
+            std::env::var_os("CI").is_none(),
+            "CI must create the reparse-point fixture to verify answers-file rejection: {error}"
+        ),
     }
     let status = Command::new("icacls")
         .arg(&answers)

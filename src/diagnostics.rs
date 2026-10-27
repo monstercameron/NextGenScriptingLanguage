@@ -2596,6 +2596,7 @@ pub fn resolve_executable_diagnostics(
             message,
             span: span.clone(),
             fixes: Vec::new(),
+            related: Vec::new(),
         };
         if let Some(name) = path_suggestion {
             diagnostic.fixes.push(SuggestedFix::replace(

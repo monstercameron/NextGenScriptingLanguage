@@ -530,6 +530,7 @@ pub(super) fn execute_group_with_sink(
         job_launch_ack: signals.job_launch_ack.clone(),
         job_output_budget: signals.job_output_budget.clone(),
         job_output_limit: signals.job_output_limit,
+        group_diagnostic_budget: signals.group_diagnostic_budget.clone(),
         prepared_job_commands: signals.prepared_job_commands.clone(),
         job_diagnostic_truncation: signals.job_diagnostic_truncation.clone(),
         job_stage_results: signals.job_stage_results.clone(),

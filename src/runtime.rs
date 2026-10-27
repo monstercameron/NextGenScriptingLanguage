@@ -523,6 +523,7 @@ pub(crate) struct Signals {
     job_launch_ack: Option<Arc<Mutex<Option<jobs::LaunchAcknowledger>>>>,
     job_output_budget: Option<Arc<AtomicUsize>>,
     job_output_limit: Option<usize>,
+    group_diagnostic_budget: Option<(Arc<AtomicUsize>, usize)>,
     prepared_job_commands: Option<Arc<PreparedJobCommands>>,
     job_diagnostic_truncation: Option<Arc<Mutex<Vec<bool>>>>,
     job_stage_results: Option<Arc<Mutex<Vec<Option<execution_result::StageResult>>>>>,
@@ -639,6 +640,7 @@ impl Signals {
             job_launch_ack: None,
             job_output_budget: None,
             job_output_limit: None,
+            group_diagnostic_budget: None,
             prepared_job_commands: None,
             job_diagnostic_truncation: None,
             job_stage_results: None,
@@ -702,6 +704,7 @@ impl Signals {
             job_launch_ack: None,
             job_output_budget: None,
             job_output_limit: None,
+            group_diagnostic_budget: None,
             prepared_job_commands: None,
             job_diagnostic_truncation: None,
             job_stage_results: None,
@@ -734,6 +737,7 @@ impl Signals {
             job_launch_ack: None,
             job_output_budget: None,
             job_output_limit: None,
+            group_diagnostic_budget: None,
             prepared_job_commands: None,
             job_diagnostic_truncation: None,
             job_stage_results: None,
@@ -741,6 +745,52 @@ impl Signals {
             #[cfg(test)]
             job_panic_before_ack: None,
         }
+    }
+
+    /// A module may replace intermediate output before returning. Keep the
+    /// parent group's capture budget for the final module result, not for its
+    /// internal commands; those retain their own per-invocation limit.
+    fn module_capture_scope(&self) -> Option<Self> {
+        let (group_budget, _) = self.group_diagnostic_budget.as_ref()?;
+        let group_owns_stdout = self
+            .job_output_budget
+            .as_ref()
+            .is_some_and(|budget| Arc::ptr_eq(budget, group_budget));
+        Some(Self {
+            cancelled: Arc::clone(&self.cancelled),
+            drain: Arc::clone(&self.drain),
+            drain_stop: None,
+            registrations: Vec::new(),
+            capture_diagnostics: self.capture_diagnostics,
+            deadline: self.deadline,
+            graph_service_cancellation: self.graph_service_cancellation,
+            background_jobs_allowed: self.background_jobs_allowed,
+            program_modules: Arc::clone(&self.program_modules),
+            sensitivity_floor: Arc::clone(&self.sensitivity_floor),
+            process_launches: Arc::clone(&self.process_launches),
+            process_observer: Arc::clone(&self.process_observer),
+            worker_pool: self.worker_pool.clone(),
+            outer_cancelled: self.outer_cancelled.clone(),
+            job_cancelled: self.job_cancelled.clone(),
+            job_launch_ack: self.job_launch_ack.clone(),
+            job_output_budget: if group_owns_stdout {
+                None
+            } else {
+                self.job_output_budget.clone()
+            },
+            job_output_limit: if group_owns_stdout {
+                None
+            } else {
+                self.job_output_limit
+            },
+            group_diagnostic_budget: None,
+            prepared_job_commands: self.prepared_job_commands.clone(),
+            job_diagnostic_truncation: self.job_diagnostic_truncation.clone(),
+            job_stage_results: self.job_stage_results.clone(),
+            job_run_context: Arc::clone(&self.job_run_context),
+            #[cfg(test)]
+            job_panic_before_ack: self.job_panic_before_ack.clone(),
+        })
     }
 
     pub(crate) fn inherit_applet_context(
@@ -753,6 +803,7 @@ impl Signals {
         self.job_run_context = Arc::clone(&context.job_run_context);
         self.background_jobs_allowed = context.background_jobs_allowed;
         if let Some((budget, limit)) = &context.group_output_budget {
+            self.group_diagnostic_budget = Some((Arc::clone(budget), *limit));
             if self.job_output_budget.is_none() {
                 self.job_output_budget = Some(Arc::clone(budget));
                 self.job_output_limit = Some(*limit);
@@ -1490,7 +1541,7 @@ fn scan_child_statuses(
         *observer = None;
     }
     for (index, managed) in children.0.iter_mut().enumerate() {
-        drain_diagnostic(managed)?;
+        drain_diagnostic(managed, signals)?;
         if !managed.reaped {
             // An applet must stay alive until its work is complete. Reclaim descendants
             // that outlive their owning applet: reap_exited signals the group before reaping.
@@ -1552,7 +1603,7 @@ fn scan_child_statuses(
                     continue;
                 }
                 if !(implicit_success || status_kept) {
-                    drain_diagnostic(managed)?;
+                    drain_diagnostic(managed, signals)?;
                     return Err(CommandFailed {
                         line: calls[index].2,
                         operation: calls[index].1.name_for(calls[index].0).to_owned(),
@@ -3665,6 +3716,19 @@ pub(crate) fn invoke_call_with_context(
             signals: &signals,
             registry,
         })?;
+        // Native streams reserve as they are read. Other backends return a
+        // completed buffer; account it atomically before publishing the result.
+        // Program modules isolate intermediate output and charge their final
+        // returned buffer here along with the other non-native backends.
+        if manifest.execution_backend() != AppletBackend::Command {
+            if let Some((budget, limit)) = &signals.group_diagnostic_budget {
+                let captured = completed
+                    .bytes
+                    .len()
+                    .saturating_add(completed.diagnostic.len());
+                reserve_group_capture(budget, *limit, captured)?;
+            }
+        }
         let status = completed
             .status
             .context("applet invocation finished without an exit status")?;
@@ -3921,7 +3985,7 @@ fn drain_exited_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Resul
             bail!("workflow cancelled while draining diagnostics");
         }
         let before = child.diagnostic.len();
-        drain_diagnostic(child)?;
+        drain_diagnostic(child, signals)?;
         if child.diagnostic.len() == before {
             break;
         }
@@ -3929,8 +3993,24 @@ fn drain_exited_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Resul
     Ok(())
 }
 
+fn reserve_group_capture(budget: &AtomicUsize, limit: usize, requested: usize) -> Result<()> {
+    let mut retained = budget.load(Ordering::Acquire);
+    loop {
+        let Some(next) = retained
+            .checked_add(requested)
+            .filter(|next| *next <= limit)
+        else {
+            bail!("captured output exceeds the shared group limit of {limit} bytes");
+        };
+        match budget.compare_exchange_weak(retained, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return Ok(()),
+            Err(observed) => retained = observed,
+        }
+    }
+}
+
 #[cfg(unix)]
-fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
+fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
     let mut reached_eof = false;
     let Some(stderr) = child.stderr.as_mut() else {
         return Ok(());
@@ -3950,6 +4030,9 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
                 };
                 let remaining = limit.saturating_sub(child.diagnostic.len());
                 let keep = count.min(remaining);
+                if let Some((budget, limit)) = &signals.group_diagnostic_budget {
+                    reserve_group_capture(budget, *limit, keep)?;
+                }
                 child.diagnostic.extend_from_slice(&buffer[..keep]);
                 child.diagnostic_truncated |= keep < count;
             }
@@ -5349,8 +5432,10 @@ mod drain_tests {
         assert_eq!(commits, vec![1, 2]);
         let value = crate::structured::to_json(&result.value).unwrap();
         let items = value["items"].as_array().unwrap();
-        assert_eq!(items[0]["output_text"], "restored-a");
-        assert_eq!(items[1]["output_text"], "b\n");
+        assert_eq!(items[0]["output_encoding"], "utf8");
+        assert_eq!(items[0]["output"], "restored-a");
+        assert_eq!(items[1]["output_encoding"], "utf8");
+        assert_eq!(items[1]["output"], "b\n");
     }
 
     #[test]

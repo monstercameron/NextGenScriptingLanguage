@@ -88,12 +88,14 @@ pub(super) fn execute(
             )
         })?;
     let process_count_before = signals.process_launch_count();
+    let module_signals = signals.module_capture_scope();
+    let child_signals = module_signals.as_ref().unwrap_or(signals);
     let child = run_finite_inner(
         FiniteRun {
             program: &child_program,
             registry,
             options: &configured,
-            signals,
+            signals: child_signals,
         },
         input,
         None,

@@ -8,6 +8,7 @@ use crate::manifest::{AppletBackend, Registry};
 use crate::modules::ProgramModuleSession;
 use crate::tasks::{TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
@@ -29,6 +30,7 @@ struct PreparedTask {
     applet: String,
     parameters: std::collections::BTreeMap<String, Value>,
     uncertain_on_error: bool,
+    native_command: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +61,7 @@ impl TaskState {
 struct TaskRecord {
     id: String,
     state: TaskState,
-    invocation: Option<AppletInvocationResult>,
+    invocation: Option<Box<AppletInvocationResult>>,
     launched_processes: usize,
     error: Option<String>,
     uncertain: bool,
@@ -80,7 +82,9 @@ impl TaskRecord {
 
 /// Failure raised when a joined task group contains an execution error or a
 /// non-success applet outcome. `partial_results` preserves every known result
-/// plus cancellation and uncertainty state for the rest of the group.
+/// plus cancellation and uncertainty state for the rest of the group. For
+/// `parallel for each`, `partial_results_schema_version` identifies the
+/// compact record encoding used in this list.
 #[derive(Debug)]
 pub struct TaskGroupFailure {
     pub mode: TaskGroupMode,
@@ -89,6 +93,10 @@ pub struct TaskGroupFailure {
     pub outcome: Option<Outcome>,
     pub uncertain: bool,
     pub partial_results: Value,
+    /// Encoding version for compact `parallel for each` partial results.
+    /// Ordinary `parallel` and `race` partial results retain their legacy
+    /// `u8_array` representation and report `None`.
+    pub partial_results_schema_version: Option<u8>,
     pub launched_processes: usize,
 }
 
@@ -283,6 +291,7 @@ pub(super) fn run_group(
             applet: manifest.name.clone(),
             parameters: call.parameters,
             uncertain_on_error: manifest.uncertain_on_failure,
+            native_command: manifest.execution_backend() == AppletBackend::Command,
         })
     })
     .collect::<Result<Vec<_>>>()?;
@@ -473,7 +482,7 @@ pub(super) fn run_group(
                 } else {
                     TaskState::NonSuccess
                 };
-                records[index].invocation = Some(result);
+                records[index].invocation = Some(Box::new(result));
                 if total_output_bytes > max_output_bytes {
                     first_failure = Some((
                         index,
@@ -568,6 +577,7 @@ pub(super) fn run_group(
                     records[index].uncertain,
                     &records,
                     &secret_redactor,
+                    false,
                 )
             })?;
             return Ok(TaskGroupResult {
@@ -584,6 +594,7 @@ pub(super) fn run_group(
                 uncertain,
                 &records,
                 &secret_redactor,
+                false,
             )
             .into());
         }
@@ -613,6 +624,7 @@ pub(super) fn run_group(
                 records[failed_index].uncertain,
                 &records,
                 &secret_redactor,
+                false,
             )
             .into());
         }
@@ -633,6 +645,7 @@ pub(super) fn run_group(
             record.uncertain,
             &records,
             &secret_redactor,
+            false,
         )
         .into());
     }
@@ -730,9 +743,10 @@ pub(super) fn run_each(
         }
         prepared.push(PreparedTask {
             id: index.to_string(),
-            applet: call.operation.clone(),
-            parameters: call.parameters.clone(),
+            applet: String::new(),
+            parameters: BTreeMap::new(),
             uncertain_on_error: manifest.uncertain_on_failure,
+            native_command: manifest.execution_backend() == AppletBackend::Command,
         });
         calls.push(call);
     }
@@ -746,17 +760,32 @@ pub(super) fn run_each(
         )
         .with_context(|| format!("preflighting module body call {:?}", invocation.operation))?;
     }
+    // The invocation list already owns every resolved argument map through
+    // capability preflight. Move those maps into launch records afterwards so
+    // 10,000 elements do not retain a second copy while preflight runs.
+    for (task, call) in prepared.iter_mut().zip(calls.drain(..)) {
+        task.applet = call.operation;
+        task.parameters = call.parameters;
+    }
     drop(calls);
 
     let secret_redactor = crate::security::secret_redactor(registry);
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     if prepared.is_empty() {
         return Ok(TaskGroupResult {
-            value: each_value(&records, &items, &secret_redactor),
+            value: each_value(&mut records, items.into_iter(), &secret_redactor),
             launched_processes: 0,
         });
     }
     let max_output_bytes = options.max_output_bytes;
+    // Reject a result whose static element metadata cannot fit before any
+    // command starts. This does not reserve space for captured output: the
+    // output budget is enforced separately as elements run.
+    ensure_encoded_limit(
+        &each_value(&mut records, items.iter().cloned(), &secret_redactor),
+        max_output_bytes,
+    )
+    .context("parallel for each result metadata exceeds the configured output limit")?;
     let direct = template.direct;
     let limit = limit.min(prepared.len());
     // Divide the in-flight budget among active elements, then enforce the true
@@ -779,11 +808,32 @@ pub(super) fn run_each(
         records[index] = TaskRecord {
             id: prepared[index].id.clone(),
             state: TaskState::Succeeded,
-            invocation: Some(outcome.clone().into_result()),
+            invocation: Some(Box::new(outcome.clone().into_result())),
             launched_processes: outcome.launched_processes,
             error: None,
             uncertain: outcome.uncertain,
         };
+    }
+    // Restored outputs count against this run's limit before new effects start.
+    // A smaller limit on resume must not admit a new element into an already
+    // exhausted group.
+    if total_output_bytes > max_output_bytes {
+        for record in &mut records {
+            if record.state == TaskState::Pending {
+                record.state = TaskState::NotStarted;
+            }
+        }
+        return Err(task_group_failure(
+            TaskGroupMode::Join,
+            &prepared[0].id,
+            format!("restored parallel for each output exceeded {max_output_bytes} bytes"),
+            None,
+            false,
+            &records,
+            &secret_redactor,
+            true,
+        )
+        .into());
     }
     // Native element output is charged against one shared budget as it arrives, so
     // an element that would cross the aggregate limit stops then, not at completion.
@@ -815,14 +865,25 @@ pub(super) fn run_each(
             if let Some(sink) = sink.as_deref_mut() {
                 sink.begin(index)?;
             }
-            let task = prepared[index].clone();
+            // A `parallel for each` element is admitted exactly once. Move its
+            // resolved parameters into the worker instead of retaining a
+            // second copy of every element's parameter map until the group
+            // finishes.
+            let applet = std::mem::take(&mut prepared[index].applet);
+            let parameters = std::mem::take(&mut prepared[index].parameters);
+            let native_command = prepared[index].native_command;
             let registry = registry.clone();
             let mut context = context.clone();
             context.group_output_budget = Some((Arc::clone(&group_budget), max_output_bytes));
             let parent_cancelled = Arc::clone(&cancelled);
             let mut task_options = options.clone();
-            task_options.max_output_bytes =
-                task_options.max_output_bytes.min(per_task_output_limit);
+            // Native stdout and retained stderr share the incremental group
+            // budget, so an individual element can use the available budget.
+            // Other backends retain their conservative per-worker cap.
+            if !native_command {
+                task_options.max_output_bytes =
+                    task_options.max_output_bytes.min(per_task_output_limit);
+            }
             if let Some(deadline) = outer_deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 task_options.total_timeout = Some(
@@ -842,9 +903,9 @@ pub(super) fn run_each(
                     super::invoke_call_with_context(
                         super::AppletInvocation {
                             registry: &registry,
-                            name: &task.applet,
+                            name: &applet,
                             direct,
-                            parameters: task.parameters,
+                            parameters,
                             input: Vec::new(),
                             options: &task_options,
                         },
@@ -994,6 +1055,7 @@ pub(super) fn run_each(
             false,
             &records,
             &secret_redactor,
+            true,
         )
         .into());
     }
@@ -1004,8 +1066,27 @@ pub(super) fn run_each(
             record.state = TaskState::NotStarted;
         }
     }
-    let value = each_value(&records, &items, &secret_redactor);
-    ensure_encoded_limit(&value, max_output_bytes)?;
+    // All workers are joined; release preflight calls and scheduling state
+    // before materializing the potentially large result tree.
+    drop(prepared);
+    drop(handles);
+    drop(scope);
+    drop(receiver);
+    drop(sender);
+    drop(skip);
+    let item_count = items.len();
+    let value = each_value(&mut records, items.into_iter(), &secret_redactor);
+    // `max_output_bytes` accounts for captured stdout and stderr. The result
+    // record has a different JSON representation: redaction can expand each
+    // captured stderr byte to the 10-byte `[REDACTED]` marker. JSON string
+    // escaping can expand unredacted text, and invalid redacted UTF-8 is
+    // base64 encoded. The 16x envelope covers those expansions plus per-item
+    // metadata, without charging representation overhead to the raw capture
+    // budget.
+    ensure_encoded_limit(
+        &value,
+        each_result_encoded_limit(max_output_bytes, item_count),
+    )?;
     Ok(TaskGroupResult {
         value,
         launched_processes: launched_processes(&records),
@@ -1013,11 +1094,10 @@ pub(super) fn run_each(
 }
 
 /// `{mode, items, succeeded, failed, cancelled, not_started}`; each element
-/// record extends the task record with its `index`, the bound `item` and,
-/// when the bytes are valid UTF-8, `output_text`/`stderr_text` copies.
+/// record extends the task record with its `index` and the bound `item`.
 fn each_value(
-    records: &[TaskRecord],
-    items: &[Value],
+    records: &mut [TaskRecord],
+    items: impl IntoIterator<Item = Value>,
     secret_redactor: &crate::security::SecretRedactor,
 ) -> Value {
     let count = |states: &[TaskState]| {
@@ -1028,39 +1108,35 @@ fn each_value(
                 .count() as i64,
         )
     };
+    let succeeded = count(&[TaskState::Succeeded]);
+    let failed = count(&[TaskState::NonSuccess, TaskState::Failed]);
+    let cancelled = count(&[TaskState::Cancelled]);
+    let not_started = count(&[TaskState::NotStarted]);
     let elements = records
-        .iter()
+        .iter_mut()
         .zip(items)
         .enumerate()
         .map(|(index, (record, item))| {
-            let mut value = task_value(record, secret_redactor);
+            // Move the captured stdout allocation into its UTF-8 record value
+            // when possible. This avoids holding both a full raw capture and
+            // its copied text representation while the fan-out result is
+            // materialized.
+            let mut value = each_task_value(record, secret_redactor);
             if let Value::Record(fields) = &mut value {
-                fields.remove("id");
                 fields.insert("index".into(), Value::Integer(index as i64));
-                fields.insert("item".into(), item.clone());
-                if let Some(result) = &record.invocation {
-                    if let Ok(text) = std::str::from_utf8(&result.output) {
-                        fields.insert("output_text".into(), Value::String(text.to_owned()));
-                    }
-                    let stderr = secret_redactor.redact_bytes(&result.stderr);
-                    if let Ok(text) = std::str::from_utf8(&stderr) {
-                        fields.insert("stderr_text".into(), Value::String(text.to_owned()));
-                    }
-                }
+                fields.insert("item".into(), item);
             }
             value
         })
         .collect();
     Value::Record(BTreeMap::from([
         ("mode".into(), Value::String("for_each".into())),
+        ("schema_version".into(), Value::Integer(3)),
         ("items".into(), Value::List(elements)),
-        ("succeeded".into(), count(&[TaskState::Succeeded])),
-        (
-            "failed".into(),
-            count(&[TaskState::NonSuccess, TaskState::Failed]),
-        ),
-        ("cancelled".into(), count(&[TaskState::Cancelled])),
-        ("not_started".into(), count(&[TaskState::NotStarted])),
+        ("succeeded".into(), succeeded),
+        ("failed".into(), failed),
+        ("cancelled".into(), cancelled),
+        ("not_started".into(), not_started),
     ]))
 }
 
@@ -1100,7 +1176,7 @@ fn update_record(
             };
             record.uncertain = result.uncertain;
             record.launched_processes = launched_processes;
-            record.invocation = Some(result);
+            record.invocation = Some(Box::new(result));
         }
         Err(error) => {
             record.state = if cancelled {
@@ -1134,7 +1210,7 @@ fn group_value(
             Value::List(
                 records
                     .iter()
-                    .map(|record| task_value(record, secret_redactor))
+                    .map(|record| task_value(record, secret_redactor, false))
                     .collect(),
             ),
         ),
@@ -1145,7 +1221,11 @@ fn group_value(
     Value::Record(group)
 }
 
-fn task_value(record: &TaskRecord, secret_redactor: &crate::security::SecretRedactor) -> Value {
+fn task_value(
+    record: &TaskRecord,
+    secret_redactor: &crate::security::SecretRedactor,
+    compact: bool,
+) -> Value {
     let mut fields = std::collections::BTreeMap::from([
         ("id".into(), Value::String(record.id.clone())),
         ("state".into(), Value::String(record.state.as_str().into())),
@@ -1168,17 +1248,82 @@ fn task_value(record: &TaskRecord, secret_redactor: &crate::security::SecretReda
             "outcome_kind".into(),
             Value::String(result.outcome.kind.as_str().into()),
         );
-        fields.insert("output_encoding".into(), Value::String("u8_array".into()));
-        fields.insert("output".into(), byte_array(&result.output));
-        fields.insert("stderr_encoding".into(), Value::String("u8_array".into()));
+        let encode = |bytes: &[u8]| {
+            if compact {
+                match std::str::from_utf8(bytes) {
+                    Ok(text) => ("utf8", Value::String(text.to_owned())),
+                    Err(_) => ("base64", Value::String(BASE64.encode(bytes))),
+                }
+            } else {
+                ("u8_array", byte_array(bytes))
+            }
+        };
+        let (output_encoding, output) = encode(&result.output);
+        fields.insert("output_encoding".into(), Value::String(output_encoding.into()));
+        fields.insert("output".into(), output);
+        let redacted_stderr = secret_redactor.redact_bytes(&result.stderr);
+        let (stderr_encoding, stderr) = encode(&redacted_stderr);
+        fields.insert("stderr_encoding".into(), Value::String(stderr_encoding.into()));
         // Keep the raw bytes on AppletInvocationResult for callers that need
         // exact diagnostics; only the task-group presentation is redacted.
         fields.insert(
             "stderr".into(),
-            byte_array(&secret_redactor.redact_bytes(&result.stderr)),
+            stderr,
         );
         if let Some(value) = &result.value {
             fields.insert("value".into(), value.clone());
+        }
+    }
+    Value::Record(fields)
+}
+
+fn each_task_value(
+    record: &mut TaskRecord,
+    secret_redactor: &crate::security::SecretRedactor,
+) -> Value {
+    let mut fields = BTreeMap::from([
+        ("state".into(), Value::String(record.state.as_str().into())),
+        ("uncertain".into(), Value::Bool(record.uncertain)),
+        (
+            "launched_processes".into(),
+            Value::Integer(i64::try_from(record.launched_processes).unwrap_or(i64::MAX)),
+        ),
+    ]);
+    if let Some(error) = &record.error {
+        fields.insert(
+            "error".into(),
+            Value::String(secret_redactor.redact_text(error)),
+        );
+    }
+    if let Some(result) = record.invocation.take() {
+        let mut result = *result;
+        fields.insert("status".into(), Value::Integer(i64::from(result.status)));
+        fields.insert("outcome".into(), Value::String(result.outcome.name));
+        fields.insert(
+            "outcome_kind".into(),
+            Value::String(result.outcome.kind.as_str().into()),
+        );
+        let (output_encoding, output) = match String::from_utf8(result.output) {
+            Ok(text) => ("utf8", Value::String(text)),
+            Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()))),
+        };
+        fields.insert(
+            "output_encoding".into(),
+            Value::String(output_encoding.into()),
+        );
+        fields.insert("output".into(), output);
+        let stderr = secret_redactor.redact_bytes(&result.stderr);
+        let (stderr_encoding, stderr) = match String::from_utf8(stderr) {
+            Ok(text) => ("utf8", Value::String(text)),
+            Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()))),
+        };
+        fields.insert(
+            "stderr_encoding".into(),
+            Value::String(stderr_encoding.into()),
+        );
+        fields.insert("stderr".into(), stderr);
+        if let Some(value) = result.value.take() {
+            fields.insert("value".into(), value);
         }
     }
     Value::Record(fields)
@@ -1194,11 +1339,42 @@ fn byte_array(bytes: &[u8]) -> Value {
 }
 
 fn ensure_encoded_limit(value: &Value, limit: usize) -> Result<()> {
-    let encoded = serde_json::to_vec(value)?;
-    if encoded.len() > limit {
+    // Count as the serializer writes so checking a large record never creates
+    // a second full-sized JSON buffer just to discard it.
+    struct Counter {
+        remaining: usize,
+        exceeded: bool,
+    }
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.remaining {
+                self.exceeded = true;
+                return Err(std::io::Error::other("task group result limit exceeded"));
+            }
+            self.remaining -= bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter {
+        remaining: limit,
+        exceeded: false,
+    };
+    let result = serde_json::to_writer(&mut counter, value);
+    if counter.exceeded {
         bail!("task group result exceeds maximum of {limit} bytes")
     }
+    result?;
     Ok(())
+}
+
+pub(super) fn each_result_encoded_limit(raw_limit: usize, item_count: usize) -> usize {
+    raw_limit
+        .saturating_mul(16)
+        .saturating_add(item_count.saturating_mul(512))
+        .saturating_add(1024)
 }
 
 fn task_group_failure(
@@ -1209,6 +1385,7 @@ fn task_group_failure(
     uncertain: bool,
     records: &[TaskRecord],
     secret_redactor: &crate::security::SecretRedactor,
+    compact: bool,
 ) -> TaskGroupFailure {
     TaskGroupFailure {
         mode,
@@ -1222,9 +1399,10 @@ fn task_group_failure(
         partial_results: Value::List(
             records
                 .iter()
-                .map(|record| task_value(record, secret_redactor))
+                .map(|record| task_value(record, secret_redactor, compact))
                 .collect(),
         ),
+        partial_results_schema_version: compact.then_some(3),
         launched_processes: launched_processes(records),
     }
 }

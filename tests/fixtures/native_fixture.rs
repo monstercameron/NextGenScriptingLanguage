@@ -17,6 +17,16 @@ fn main() {
         "write" => {
             std::io::stdout().write_all(args[1].as_bytes()).unwrap();
         }
+        "repeat-byte" => {
+            let mut remaining: usize = args[1].parse().unwrap();
+            let bytes = [b'x'; 4096];
+            let mut stdout = std::io::stdout().lock();
+            while remaining > 0 {
+                let next = remaining.min(bytes.len());
+                stdout.write_all(&bytes[..next]).unwrap();
+                remaining -= next;
+            }
+        }
         "copy" => {
             std::io::copy(&mut std::io::stdin(), &mut std::io::stdout()).unwrap();
         }

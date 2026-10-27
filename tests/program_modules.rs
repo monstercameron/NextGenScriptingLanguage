@@ -1006,3 +1006,65 @@ fn module_loop_uses_the_callers_iteration_limit() {
     let result = flow::runtime::run(&program, &registry, &options).unwrap();
     assert_eq!(result.output, b"done");
 }
+
+#[cfg(unix)]
+#[test]
+fn parallel_module_accounts_final_output_not_discarded_intermediate_bytes() {
+    let temp = tempdir().unwrap();
+    let catalog = temp.path().join("applets");
+    write_direct_applet(
+        &catalog,
+        "test.module",
+        "define a program named entry\n  run \"sh\" with arguments [\"-c\", \"echo effect >> ledger; head -c 3000 /dev/zero\"]\n  then encode \"ok\" as json\n",
+    );
+    let registry = flow::manifest::Registry::load(&catalog).unwrap();
+    let program = flow::parser::parse(
+        "parallel for each item in [\"a\", \"b\"] at most 1 as results\n  run test.module\nuse value \"done\"\n",
+    ).unwrap();
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    let result = flow::runtime::run(&program, &registry, &options)
+        .unwrap_or_else(|error| panic!("{error:#}"));
+    assert_eq!(result.output, b"done");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("ledger"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn parallel_module_final_output_counts_toward_shared_budget() {
+    let temp = tempdir().unwrap();
+    let catalog = temp.path().join("applets");
+    write_direct_applet(
+        &catalog,
+        "test.module",
+        &format!("define a program named entry\n  run \"sh\" with arguments [\"-c\", \"echo effect >> ledger\"]\n  then encode \"{}\" as json\n", "x".repeat(3000)),
+    );
+    let registry = flow::manifest::Registry::load(&catalog).unwrap();
+    let program = flow::parser::parse(
+        "parallel for each item in [\"a\", \"b\", \"c\"] at most 1 as results\n  run test.module\n",
+    )
+    .unwrap();
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    let error = flow::runtime::run(&program, &registry, &options)
+        .err()
+        .expect("group output exceeds limit");
+    assert!(format!("{error:#}").contains("parallel for each output exceeded"));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("ledger"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+}

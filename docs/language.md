@@ -474,17 +474,31 @@ element and does not stop its siblings. The result binding is JSON with `mode`
 `"for_each"`, `items` in list order and the counts `succeeded`, `failed`,
 `cancelled` and `not_started`. Each item has `index`, `item`, `state`,
 `status`, `outcome`, `outcome_kind`, `uncertain`, `launched_processes`, the
-captured `output`/`stderr` bytes, `output_text`/`stderr_text` copies when the
-bytes are valid UTF-8, and `value` for typed applet results. The encoded record
-also becomes the pipeline value.
+captured `output`/`stderr` bytes, and `value` for typed applet results. The
+encoded record also becomes the pipeline value. Result records have
+`schema_version: 3`: valid UTF-8 output is stored directly as a string with
+`output_encoding` or `stderr_encoding` set to `"utf8"`; other bytes are stored
+as base64 with the encoding set to `"base64"`. Decode base64 fields to recover
+their exact bytes. This replaces schema version 2's duplicate UTF-8 convenience
+fields (`output_text` and `stderr_text`) to keep captured output from being
+stored twice. Earlier parallel-for-each results used `"u8_array"` arrays and
+have no schema version. Saved earlier results retain their representation, so
+consumers reading persisted results should check the encoding field. Ordinary
+`parallel` and `race` task records continue to use `u8_array`.
+
+When `parallel for each` fails, the Rust `TaskGroupFailure` error keeps
+`partial_results` as a list and sets `partial_results_schema_version` to `3`;
+its captured output fields use the same UTF-8/base64 encoding as successful
+for-each records. Failures from ordinary `parallel` and `race` leave that
+version field unset and retain `u8_array` output fields.
 
 Interpreter cancellation, the total timeout or exceeding `--max-output-bytes`
 stops new elements, cancels and reaps running ones and fails the group; running
 elements are marked `cancelled` and the rest `not_started`. The elements in
-flight share the byte limit evenly, and all retained element output counts
-against one group-wide limit: a native element's stdout is charged as it
-arrives, so the element that crosses the limit is stopped at that point rather
-than when it finishes. Lists hold at most 10,000
+flight share one group-wide byte limit. Native elements charge retained stdout
+and stderr as they arrive; one element can use the available budget, and the
+element that crosses the limit is stopped at that point. Other backends still
+receive an even share of the limit while they are in flight. Lists hold at most 10,000
 elements. Without `--checkpoint` the group is one unit. Under `--checkpoint`, a
 top-level group records each element, so resume skips the committed elements; see
 [per-element checkpoints](#per-element-checkpoints). A nested group is one

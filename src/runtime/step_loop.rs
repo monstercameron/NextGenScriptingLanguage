@@ -1106,15 +1106,60 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     result.launched_processes += group.launched_processes;
                     signals.account_child_process_launches(group.launched_processes);
                     let value = group.value;
-                    let bytes = crate::structured::encode(&value, options.max_output_bytes)
-                        .with_context(|| format!("line {}: task group output", step.line))?;
+                    let pipeline_is_replaced = each.is_some()
+                        && !options.trace
+                        && journal.is_none()
+                        && program.steps.get(index + 1).is_some_and(|next| {
+                            let replacement_fits = |value: &Value| match value {
+                                Value::String(text) => text.len() <= options.max_output_bytes,
+                                Value::Integer(number) => {
+                                    number.to_string().len() <= options.max_output_bytes
+                                }
+                                Value::Bool(true) => options.max_output_bytes >= 4,
+                                Value::Bool(false) => options.max_output_bytes >= 5,
+                                Value::Null => options.max_output_bytes >= 4,
+                                Value::Number(number) => {
+                                    number.to_string().len() <= options.max_output_bytes
+                                }
+                                _ => false,
+                            };
+                            match &next.kind {
+                                StepKind::UseValue { source }
+                                | StepKind::BindValue { source, .. } => {
+                                    replacement_fits(source)
+                                }
+                                _ => false,
+                            }
+                        });
+                    let output_limit = if each.is_some() {
+                        let item_count = match &value {
+                            crate::ast::Value::Record(fields) => match fields.get("items") {
+                                Some(crate::ast::Value::List(items)) => items.len(),
+                                _ => 0,
+                            },
+                            _ => 0,
+                        };
+                        tasks::each_result_encoded_limit(options.max_output_bytes, item_count)
+                    } else {
+                        options.max_output_bytes
+                    };
+                    let bytes = if pipeline_is_replaced {
+                        Vec::new()
+                    } else {
+                        crate::structured::encode(&value, output_limit)
+                            .with_context(|| format!("line {}: task group output", step.line))?
+                    };
                     bindings.insert(binding.clone(), value);
                     lazy_event(
                         options.trace,
                         signals,
                         || serde_json::json!({"event":"task_group","line":step.line,"mode":mode,"tasks":tasks.len(),"output_bytes":bytes.len()}),
                     )?;
-                    data = Input::Bytes(bytes);
+                    data = if pipeline_is_replaced {
+                        Input::Empty
+                    } else {
+                        Input::Bytes(bytes)
+                    };
                 }
                 StepKind::SpawnJob { name, stages } => {
                     let scope = call_frames.last().map_or(0, |frame| frame.job_scope);

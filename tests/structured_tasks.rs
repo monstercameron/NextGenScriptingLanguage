@@ -268,6 +268,48 @@ fn parallel_for_each_runs_every_element_and_keeps_failures_as_records() {
     assert_eq!(items[2]["value"], 4.0);
 }
 
+#[cfg(unix)]
+#[test]
+fn parallel_for_each_failure_identifies_compact_partial_result_schema() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = "parallel for each n in [\"a\", \"b\"] at most 1 as results\n  run \"sh\" with arguments [\"-c\", \"if [ $0 = a ]; then printf xx; else head -c 2000 /dev/zero; fi\", n]\n";
+    let program = flow::parser::parse(source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 1500,
+        command_timeout: Some(Duration::from_secs(8)),
+        ..flow::runtime::RunOptions::new(root.to_path_buf())
+    };
+    let error = match flow::runtime::run(&program, &registry, &options) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "second element did not exceed the shared raw output limit"
+            ));
+        }
+    };
+    let failure = error
+        .downcast_ref::<flow::runtime::tasks::TaskGroupFailure>()
+        .expect("task-group failure keeps typed partial results");
+    assert_eq!(failure.partial_results_schema_version, Some(3));
+    let flow::ast::Value::List(records) = &failure.partial_results else {
+        panic!("partial results should remain a list")
+    };
+    let flow::ast::Value::Record(first) = &records[0] else {
+        panic!("first partial result should be a record")
+    };
+    assert_eq!(
+        first.get("output_encoding"),
+        Some(&flow::ast::Value::String("utf8".into()))
+    );
+    assert_eq!(
+        first.get("output"),
+        Some(&flow::ast::Value::String("xx".into()))
+    );
+    Ok(())
+}
+
 #[test]
 fn parallel_for_each_of_an_empty_list_returns_empty_records() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -375,7 +417,8 @@ fn parallel_for_each_bounds_concurrent_direct_executables() -> Result<()> {
     let result = run_program(&source, &manifests, directory.path())?;
     let value: serde_json::Value = serde_json::from_slice(&result.output)?;
     assert_eq!(value["succeeded"], 6);
-    assert_eq!(value["items"][3]["output_text"], "done 4\n");
+    assert_eq!(value["items"][3]["output_encoding"], "utf8");
+    assert_eq!(value["items"][3]["output"], "done 4\n");
     assert_eq!(result.launched_processes, 6);
     let seen = std::fs::read_to_string(directory.path().join("seen"))?;
     let peak = seen
@@ -803,6 +846,59 @@ fn task_group_json_redacts_declared_secret_stderr_but_api_keeps_raw_bytes() -> R
         .output
         .windows(secret.len())
         .any(|window| window == secret));
+
+    // V3 element records redact before encoding, while leaving the backend's
+    // raw API unchanged.
+    let program = flow::parser::parse(
+        "parallel for each item in [\"one\"] at most 1 as results\n  run secret.echo\nthen encode results as json\n",
+    )?;
+    let result = flow::runtime::run(&program, &make_registry()?, &options)?;
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    let element = &value["items"][0];
+    assert_eq!(element["stderr_encoding"], "utf8");
+    assert_eq!(element["stderr"], "[REDACTED]");
+    assert!(!result
+        .output
+        .windows(secret.len())
+        .any(|window| window == secret));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn parallel_each_bounds_one_byte_secret_redaction_expansion() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let source = serde_json::json!({
+        "name": "secret.repeat",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "echo completed >> ledger; head -c 3500 /dev/zero | tr '\\000' \"$FLOW_SENTINEL\" >&2; printf output"}
+        ],
+        "stdio": {"stderr": "capture"},
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": "x"}}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[source.to_string()])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.repeat":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let program = flow::parser::parse(
+        "parallel for each item in [\"one\"] at most 1 as results\n  run secret.repeat\nuse value \"done\"\n",
+    )?;
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    assert_eq!(result.output, b"done");
+    assert_eq!(std::fs::read_to_string(temp.path().join("ledger"))?, "completed\n");
     Ok(())
 }
 

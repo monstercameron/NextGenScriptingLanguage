@@ -861,3 +861,46 @@ fn malformed_or_missing_response_kills_worker_without_replay() {
         assert_reaped(line.parse().expect("numeric worker pid"));
     }
 }
+
+#[test]
+fn parallel_elements_charge_completed_worker_output_to_group_budget() {
+    let _guard = lock_worker_tests();
+    let directory = TempDir::new().unwrap();
+    let launch_marker = directory.path().join("launches");
+    let effect_marker = directory.path().join("effects");
+    let manifest_source = serde_json::json!({
+        "name": "worker.fixture",
+        "binary": python3().to_string_lossy(),
+        "arguments": [],
+        "contract": {
+            "version": 1,
+            "backend": "json_lines_worker",
+            "lifecycle": {
+                "kind": "json_lines",
+                "startup_arguments": [fixture().to_string_lossy(), "--worker", "large_output_effect", launch_marker.to_string_lossy(), effect_marker.to_string_lossy()]
+            }
+        }
+    });
+    let registry = manifest::Registry::from_sources(&[manifest_source.to_string()]).unwrap();
+    let options = runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let items = (0..20).map(|_| "\"x\"").collect::<Vec<_>>().join(", ");
+    let program = parser::parse(&format!(
+        "parallel for each item in [{items}] at most 1 as results\n  run worker.fixture\n"
+    ))
+    .unwrap();
+    let error = runtime::run(&program, &registry, &options)
+        .err()
+        .expect("group must exceed the shared output budget");
+    assert!(format!("{error:#}").contains("parallel for each output exceeded"));
+    assert_eq!(
+        std::fs::read_to_string(effect_marker)
+            .unwrap()
+            .lines()
+            .count(),
+        17
+    );
+}

@@ -32,7 +32,7 @@ impl Drop for Children {
         }
     }
 }
-fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
+fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
     if let Some(reader) = child.stderr.as_mut() {
         let mut buffer = [0u8; 8192];
         // A continuously writable stderr must yield to stdout, status,
@@ -53,6 +53,9 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
                     };
                     let remaining = limit.saturating_sub(child.diagnostic.len());
                     let keep = count.min(remaining);
+                    if let Some((budget, limit)) = &signals.group_diagnostic_budget {
+                        reserve_group_capture(budget, *limit, keep)?;
+                    }
                     child.diagnostic.extend_from_slice(&buffer[..keep]);
                     child.diagnostic_truncated |= keep < count;
                     if count == 0 {
@@ -93,7 +96,7 @@ fn windows_statuses(
     started: Instant,
 ) -> Result<()> {
     for (index, managed) in children.0.iter_mut().enumerate() {
-        drain_diagnostic(managed)?;
+        drain_diagnostic(managed, signals)?;
         if !managed.reaped {
             if let Some(status) = managed.child.try_wait()? {
                 managed.reaped = true;
@@ -149,7 +152,7 @@ fn windows_statuses(
                 }
                 if !(implicit_success || calls[index].0.status_binding.is_some() && code.is_some())
                 {
-                    drain_diagnostic(managed)?;
+                    drain_diagnostic(managed, signals)?;
                     return Err(CommandFailed {
                         line: calls[index].2,
                         operation: calls[index].1.name_for(calls[index].0).to_owned(),
@@ -216,6 +219,7 @@ fn execute_group_with_sink(
         job_launch_ack: signals.job_launch_ack.clone(),
         job_output_budget: signals.job_output_budget.clone(),
         job_output_limit: signals.job_output_limit,
+        group_diagnostic_budget: signals.group_diagnostic_budget.clone(),
         prepared_job_commands: signals.prepared_job_commands.clone(),
         job_diagnostic_truncation: signals.job_diagnostic_truncation.clone(),
         job_stage_results: signals.job_stage_results.clone(),

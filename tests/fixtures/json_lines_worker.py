@@ -43,7 +43,10 @@ for line in sys.stdin.buffer:
             record.write("received\n")
         time.sleep(0.3)
         output = list(remembered)
-    elif mode == "large_output":
+    elif mode in ("large_output", "large_output_effect"):
+        if mode == "large_output_effect":
+            with open(effects, "a", encoding="ascii") as record:
+                record.write("effect\n")
         output = list(b"x" * 256)
     elif mode == "large_stderr":
         stderr = "e" * 128

@@ -2041,15 +2041,49 @@ fn load_snapshot(
     })
 }
 
-/// Whether `key` is an execution record's `output` or `stderr` field that its
-/// `<field>_encoding` sibling declares as `u8_array` (#185).
-fn is_byte_array_field(record: &BTreeMap<String, Value>, key: &str) -> bool {
+/// Raw byte size for a captured output field whose encoding is declared next
+/// to it. Invalid encodings fall back to ordinary value sizing.
+fn encoded_byte_field_size(record: &BTreeMap<String, Value>, key: &str) -> Option<usize> {
     let encoding = match key {
         "output" => "output_encoding",
         "stderr" => "stderr_encoding",
-        _ => return false,
+        _ => return None,
     };
-    matches!(record.get(encoding), Some(Value::String(value)) if value == "u8_array")
+    match (record.get(encoding), record.get(key)) {
+        (Some(Value::String(encoding)), Some(Value::List(items))) if encoding == "u8_array" => {
+            Some(byte_array_size(items))
+        }
+        (Some(Value::String(encoding)), Some(Value::String(value))) if encoding == "utf8" => {
+            Some(value.len())
+        }
+        (Some(Value::String(encoding)), Some(Value::String(value))) if encoding == "base64" => {
+            base64_decoded_size(value)
+        }
+        _ => None,
+    }
+}
+
+fn base64_decoded_size(value: &str) -> Option<usize> {
+    let bytes = value.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return None;
+    }
+    let padding = if bytes.ends_with(b"==") {
+        2
+    } else if bytes.ends_with(b"=") {
+        1
+    } else {
+        0
+    };
+    if bytes[..bytes.len().saturating_sub(padding)]
+        .iter()
+        .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'+' | b'/'))
+        || (padding > 0 && bytes[bytes.len() - padding..].iter().any(|byte| *byte != b'='))
+        || (padding == 1 && bytes.len() >= 2 && bytes[bytes.len() - 2] == b'=')
+    {
+        return None;
+    }
+    bytes.len().checked_div(4)?.checked_mul(3)?.checked_sub(padding)
 }
 
 /// A `u8_array` holds one byte per item, so each integer in 0..=255 counts as one
@@ -2072,10 +2106,7 @@ fn value_size(value: &Value) -> usize {
         Value::Null => 0,
         Value::Number(value) => value.to_string().len(),
         Value::Record(values) => values.iter().fold(0usize, |size, (key, value)| {
-            let field_size = match value {
-                Value::List(items) if is_byte_array_field(values, key) => byte_array_size(items),
-                _ => value_size(value),
-            };
+            let field_size = encoded_byte_field_size(values, key).unwrap_or_else(|| value_size(value));
             size.saturating_add(key.len()).saturating_add(field_size)
         }),
         Value::List(values) => values
@@ -3361,6 +3392,48 @@ mod record_size_and_log_bound_tests {
             + "stderr".len()
             + 2 * std::mem::size_of::<i64>();
         assert_eq!(value_size(&record), expected);
+    }
+
+    #[test]
+    fn schema_v3_capture_strings_are_sized_as_raw_bytes() {
+        let record = Value::Record(BTreeMap::from([
+            ("output".to_owned(), Value::String("hello".to_owned())),
+            (
+                "output_encoding".to_owned(),
+                Value::String("utf8".to_owned()),
+            ),
+            ("stderr".to_owned(), Value::String("YWJj".to_owned())),
+            (
+                "stderr_encoding".to_owned(),
+                Value::String("base64".to_owned()),
+            ),
+        ]));
+        assert_eq!(
+            value_size(&record),
+            "output".len()
+                + 5
+                + "output_encoding".len()
+                + "utf8".len()
+                + "stderr".len()
+                + 3
+                + "stderr_encoding".len()
+                + "base64".len()
+        );
+    }
+
+    #[test]
+    fn invalid_claimed_base64_is_sized_as_a_regular_string() {
+        let record = Value::Record(BTreeMap::from([
+            ("output".to_owned(), Value::String("not base64".to_owned())),
+            (
+                "output_encoding".to_owned(),
+                Value::String("base64".to_owned()),
+            ),
+        ]));
+        assert_eq!(
+            value_size(&record),
+            "output".len() + "not base64".len() + "output_encoding".len() + "base64".len()
+        );
     }
 
     #[test]

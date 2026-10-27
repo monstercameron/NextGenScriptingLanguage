@@ -425,3 +425,55 @@ fn checkpointed_on_exit_completed_run_resumes_without_rerunning_cleanup() {
         vec!["one", "cleanup"]
     );
 }
+
+#[test]
+fn parallel_each_rejects_restored_output_over_new_limit_before_effects() {
+    let directory = tempdir().unwrap();
+    let keys = tempdir().unwrap();
+    write_step(directory.path());
+    fs::write(directory.path().join("a"), "a".repeat(3000)).unwrap();
+    fs::write(directory.path().join("b"), "b".repeat(3000)).unwrap();
+    fs::write(directory.path().join("c"), "c".repeat(20000)).unwrap();
+    fs::write(
+        directory.path().join("p.program"),
+        format!(
+            "parallel for each item in [\"a\", \"b\", \"c\"] at most 1 as results\n  {}\n",
+            element_call()
+        ),
+    )
+    .unwrap();
+    let first = execute(
+        &[
+            "run",
+            "p.program",
+            "--checkpoint",
+            "ck",
+            "--max-output-bytes",
+            "10000",
+        ],
+        directory.path(),
+        keys.path(),
+    );
+    assert!(!first.status.success(), "{}", text(&first.stderr));
+    let prior = fs::read(directory.path().join("log.txt")).unwrap();
+    let resumed = execute(
+        &[
+            "resume",
+            "p.program",
+            "--checkpoint",
+            "ck",
+            "--retry-uncertain",
+            "--max-output-bytes",
+            "5000",
+        ],
+        directory.path(),
+        keys.path(),
+    );
+    assert!(!resumed.status.success());
+    assert!(
+        text(&resumed.stderr).contains("restored parallel for each output exceeded"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert_eq!(fs::read(directory.path().join("log.txt")).unwrap(), prior);
+}

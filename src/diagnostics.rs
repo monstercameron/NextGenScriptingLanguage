@@ -150,6 +150,14 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
+        code: "parse.suffix_order",
+        family: "parse",
+        meaning: "invocation suffixes are out of canonical order",
+        example: "run \"ls\" and keep status as s as out",
+        typical_fix: "Reorder the suffixes to `as`, `and discard stderr`, `and keep status as`, `and keep result as`, `and keep secret`, `and cache`, `and retry`.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
         code: "parse.indentation",
         family: "parse",
         meaning: "a line is indented with tabs, or its indentation does not nest",
@@ -603,6 +611,19 @@ fn analyze_source_impl(
             let message = format!("{error:#}");
             let mut diagnostic =
                 classified_parse_error(source, &message, line_number, &line_starts);
+            if message.contains("stray token") {
+                if let Some(repair) = suffix_order_repair(
+                    source,
+                    content,
+                    tokens,
+                    token_ranges,
+                    content_source_offset,
+                    line_number,
+                    &line_starts,
+                ) {
+                    diagnostic = repair;
+                }
+            }
             if let Some(span) = error
                 .downcast_ref::<parser::LocatedParseError>()
                 .and_then(parser::LocatedParseError::token_index)
@@ -3374,6 +3395,74 @@ fn syntax_code(message: &str) -> &'static str {
     } else {
         "parse.syntax"
     }
+}
+
+/// When a stray-token failure is only an invocation suffix-order error, build a
+/// targeted `parse.suffix_order` diagnostic with a machine-applicable reorder
+/// fix. Returns `None` when no safe reorder exists, so callers keep the generic
+/// `parse.syntax` diagnostic instead of a misleading fix.
+#[allow(clippy::too_many_arguments)]
+fn suffix_order_repair(
+    source: &str,
+    content: &str,
+    tokens: &[parser::Token<'_>],
+    token_ranges: &[std::ops::Range<usize>],
+    content_source_offset: Option<usize>,
+    line_number: usize,
+    line_starts: &LineStarts,
+) -> Option<Diagnostic> {
+    let offset = content_source_offset?;
+    let repair = parser::suffix_order_fix(tokens)?;
+    if repair.suffix_order.is_empty() || repair.suffix_start >= tokens.len() {
+        return None;
+    }
+    let mut parts = Vec::with_capacity(repair.suffix_order.len());
+    for pos in &repair.suffix_order {
+        let range = token_ranges.get(*pos)?;
+        parts.push(content.get(range.clone())?);
+    }
+    if parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+    let replacement = parts.join(" ");
+    // Verify the replacement preserves syntax semantics: splicing it over the
+    // suffix region must tokenize and validate, and must differ from the
+    // original suffix text (otherwise there is nothing to fix).
+    let original_suffix = content.get(token_ranges[repair.suffix_start].start..)?;
+    if original_suffix == replacement {
+        return None;
+    }
+    let mut reordered_content = String::with_capacity(content.len() + replacement.len());
+    reordered_content.push_str(&content[..token_ranges[repair.suffix_start].start]);
+    reordered_content.push_str(&replacement);
+    let Ok((reordered_tokens, _)) = parser::tokenize_with_ranges(&reordered_content) else {
+        return None;
+    };
+    // The reordered line must parse on its own; redirect and environment
+    // handling is included because the repair keeps those suffixes trailing.
+    if parser::validate_statement(&reordered_tokens).is_err() {
+        return None;
+    }
+    let start_range = token_ranges.get(repair.suffix_start)?;
+    let end_range = token_ranges.last()?;
+    let span = line_starts.span_at(
+        source,
+        offset + start_range.start,
+        offset + end_range.end,
+        SpanPrecision::Token,
+    );
+    let mut diagnostic = Diagnostic::error(
+        "parse.suffix_order",
+        "suffixes are out of order; expected `as NAME` before `and discard stderr` before `and keep status as NAME` before `and keep result as NAME` before `and keep secret` before `and cache` before `and retry ...`; reordering preserves meaning",
+        span.clone(),
+    );
+    diagnostic.fixes.push(SuggestedFix::replace(
+        "reorder the suffixes into canonical order",
+        span,
+        replacement,
+    ));
+    let _ = line_number;
+    Some(diagnostic)
 }
 
 /// Return a line-precision span for a validation error tied to a source line.

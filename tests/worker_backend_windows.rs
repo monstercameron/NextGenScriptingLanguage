@@ -88,6 +88,10 @@ fn registry() -> manifest::Registry {
 }
 
 fn launch(directory: &TempDir, mode: &str) -> WorkerLaunch {
+    launch_with_protocol(directory, mode, 1)
+}
+
+fn launch_with_protocol(directory: &TempDir, mode: &str, protocol_version: u32) -> WorkerLaunch {
     let marker = directory.path().join("launches");
     let effects = directory.path().join("effects");
     WorkerLaunch::inherited(
@@ -102,7 +106,7 @@ fn launch(directory: &TempDir, mode: &str) -> WorkerLaunch {
             effects.into_os_string(),
         ],
         worker_backend::WorkerLimits {
-            protocol_version: 1,
+            protocol_version,
             timeout: Duration::from_secs(5),
             max_frame_bytes: MAX_FRAME,
             max_stderr_bytes: MAX_STDERR,
@@ -363,6 +367,81 @@ fn typed_worker_output_flows_through_the_runtime_contract() {
         .trim()
         .parse::<u32>()
         .unwrap();
+    drop(registry);
+    assert_reaped(pid);
+}
+
+#[test]
+fn v2_worker_base64_round_trip_fits_1_4_mb_frame_on_windows() {
+    let directory = TempDir::new().expect("temporary v2 worker directory");
+    let payload = vec![0xA5; 1024 * 1024];
+    let mut worker_launch = launch_with_protocol(&directory, "echo", 2);
+    worker_launch.max_frame_bytes = 1_400_000;
+    let response = WorkerPool::default()
+        .invoke(worker_launch, request(&payload))
+        .expect("v2 Base64 frames should fit the Windows worker frame cap");
+    assert_eq!(response.output, payload);
+    assert!(response.typed_json.is_none());
+    assert!(response.spawned_process);
+    assert_reaped(marker_pid(&directory));
+}
+
+#[test]
+fn v2_typed_json_input_and_output_flow_through_runtime_on_windows() {
+    let directory = TempDir::new().expect("temporary typed v2 worker directory");
+    let marker = directory.path().join("typed-v2-launches");
+    let source = json!({
+        "name": "worker.fixture",
+        "binary": fixture(),
+        "parameters": {
+            "payload": {
+                "type": "record",
+                "required": true,
+                "fields": {"n": {"type": "integer"}}
+            }
+        },
+        "arguments": [
+            {"literal": "echo-value"},
+            {"json_parameter": "payload"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "json_lines_worker",
+            "output": {
+                "type": "record",
+                "encoding": "json",
+                "fields": {"n": {"type": "integer"}},
+                "required": ["n"]
+            },
+            "lifecycle": {
+                "kind": "json_lines",
+                "protocol_version": 2,
+                "startup_arguments": [
+                    "json-lines", "echo-value", marker.to_string_lossy()
+                ]
+            }
+        }
+    });
+    let registry = manifest::Registry::from_sources(&[source.to_string()])
+        .expect("valid v2 typed worker manifest");
+    let options = runtime::RunOptions {
+        max_output_bytes: MAX_FRAME,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let program = parser::parse(
+        "run worker.fixture with payload {\"n\":42} as result\ntake integer at \"/n\" from result as number\nthen encode number as json\n",
+    )
+    .expect("valid typed v2 worker program");
+
+    let result = runtime::run(&program, &registry, &options)
+        .expect("v2 typed worker value should feed the following take");
+    assert_eq!(result.output, b"42");
+    let pid = std::fs::read_to_string(marker)
+        .expect("v2 worker launch marker")
+        .trim()
+        .parse::<u32>()
+        .expect("numeric worker process id");
     drop(registry);
     assert_reaped(pid);
 }

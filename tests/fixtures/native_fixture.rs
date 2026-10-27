@@ -245,6 +245,19 @@ fn main() {
     }
 }
 
+fn is_handshake_request(request: &serde_json::Value) -> bool {
+    request.get("type").and_then(serde_json::Value::as_str) == Some("handshake")
+        && request.get("protocol").and_then(serde_json::Value::as_str)
+            == Some("ngsl.json-lines-worker")
+        && request
+            .get("versions")
+            .and_then(serde_json::Value::as_array)
+            .is_some()
+        && !request
+            .as_object()
+            .is_some_and(|object| object.contains_key("id") || object.contains_key("arguments"))
+}
+
 fn json_lines_worker(arguments: &[String]) {
     let mode = arguments.first().map(String::as_str).unwrap_or("echo");
     let marker = arguments
@@ -268,20 +281,118 @@ fn json_lines_worker(arguments: &[String]) {
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
     let mut sequence = 0u64;
+    let mut v2_negotiated = false;
     for line in stdin.lock().lines() {
         let line = line.expect("reading worker request");
         let request: serde_json::Value =
             serde_json::from_str(&line).expect("decoding worker request");
+        if is_handshake_request(&request) {
+            if v2_negotiated {
+                let response = serde_json::json!({
+                    "type":"handshake",
+                    "protocol":"ngsl.json-lines-worker",
+                    "error":"protocol version cannot be renegotiated"
+                });
+                serde_json::to_writer(&mut stdout, &response)
+                    .expect("encoding renegotiation error");
+                stdout
+                    .write_all(b"\n")
+                    .expect("terminating renegotiation error");
+                stdout.flush().expect("flushing renegotiation error");
+                continue;
+            }
+            let valid = request.get("protocol").and_then(serde_json::Value::as_str)
+                == Some("ngsl.json-lines-worker")
+                && request
+                    .get("versions")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|versions| {
+                        versions.iter().any(|version| version.as_u64() == Some(2))
+                    });
+            v2_negotiated |= valid;
+            let response = if valid {
+                serde_json::json!({
+                    "type":"handshake",
+                    "protocol":"ngsl.json-lines-worker",
+                    "version":2
+                })
+            } else {
+                serde_json::json!({"type":"handshake","version":1})
+            };
+            serde_json::to_writer(&mut stdout, &response).expect("encoding handshake response");
+            stdout
+                .write_all(b"\n")
+                .expect("terminating handshake response");
+            stdout.flush().expect("flushing handshake response");
+            continue;
+        }
+        let request_version = request.get("version").and_then(serde_json::Value::as_u64);
+        if !v2_negotiated
+            && request_version == Some(2)
+            && request.get("input_base64").is_some()
+            && request.get("input").is_none()
+        {
+            let response = serde_json::json!({
+                "id": request.get("id").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                "status": 2,
+                "output": [],
+                "stderr": "fixture: v2 frame received before handshake"
+            });
+            serde_json::to_writer(&mut stdout, &response)
+                .expect("encoding unnegotiated v2 frame error");
+            stdout
+                .write_all(b"\n")
+                .expect("terminating unnegotiated v2 frame error");
+            stdout
+                .flush()
+                .expect("flushing unnegotiated v2 frame error");
+            continue;
+        }
+        if v2_negotiated && request_version != Some(2) {
+            let mut response = serde_json::json!({
+                "version": 2,
+                "id": request.get("id").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                "status": 2,
+            });
+            if request["json_output"].as_bool().unwrap_or(false) {
+                response["value"] = serde_json::Value::Null;
+            } else {
+                response["output_base64"] = serde_json::Value::String(String::new());
+            }
+            response["stderr"] = serde_json::Value::String(
+                "fixture: frame version is missing or unsupported after v2 handshake".into(),
+            );
+            serde_json::to_writer(&mut stdout, &response).expect("encoding v2 version error");
+            stdout
+                .write_all(b"\n")
+                .expect("terminating v2 version error");
+            stdout.flush().expect("flushing v2 version error");
+            continue;
+        }
+        let protocol_v2 = v2_negotiated && request_version == Some(2);
         let request_id = request["id"].as_u64().expect("request id");
-        let input = request["input"]
-            .as_array()
-            .expect("request input bytes")
-            .iter()
-            .map(|byte| u8::try_from(byte.as_u64().expect("byte value")).expect("byte in range"))
-            .collect::<Vec<_>>();
+        let input = if protocol_v2 {
+            base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                request["input_base64"]
+                    .as_str()
+                    .expect("v2 input Base64 string"),
+            )
+            .expect("decoding v2 input Base64")
+        } else {
+            request["input"]
+                .as_array()
+                .expect("request input bytes")
+                .iter()
+                .map(|byte| {
+                    u8::try_from(byte.as_u64().expect("byte value")).expect("byte in range")
+                })
+                .collect::<Vec<_>>()
+        };
         let mut response_id = request_id;
         let mut status = 0i32;
         let mut output = input;
+        let mut typed_value = None;
         let mut stderr = None;
 
         match mode {
@@ -292,6 +403,15 @@ fn json_lines_worker(arguments: &[String]) {
             "typed" => {
                 output = br#"{"n":42}"#.to_vec();
                 stderr = Some("é: diagnostic");
+            }
+            "echo-value" => {
+                typed_value = request
+                    .get("value")
+                    .and_then(|value| value.get("payload"))
+                    .cloned();
+                if typed_value.is_none() {
+                    status = 2;
+                }
             }
             "status" => {
                 status = -17;
@@ -325,12 +445,35 @@ fn json_lines_worker(arguments: &[String]) {
             _ => {}
         }
 
-        let response = serde_json::json!({
-            "id": response_id,
-            "status": status,
-            "output": output,
-            "stderr": stderr,
-        });
+        let response = if protocol_v2 {
+            let mut response = serde_json::json!({
+                "version": 2,
+                "id": response_id,
+                "status": status,
+            });
+            if request["json_output"].as_bool().unwrap_or(false) {
+                let value = typed_value.unwrap_or_else(|| {
+                    serde_json::from_slice(&output).expect("typed JSON worker output")
+                });
+                response["value"] = value;
+            } else {
+                response["output_base64"] = serde_json::Value::String(base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &output,
+                ));
+            }
+            if let Some(stderr) = stderr {
+                response["stderr"] = serde_json::Value::String(stderr.to_owned());
+            }
+            response
+        } else {
+            serde_json::json!({
+                "id": response_id,
+                "status": status,
+                "output": output,
+                "stderr": stderr,
+            })
+        };
         serde_json::to_writer(&mut stdout, &response).expect("encoding worker response");
         stdout.write_all(b"\n").expect("terminating worker frame");
         stdout.flush().expect("flushing worker response");
@@ -348,5 +491,29 @@ fn json_lines_worker(arguments: &[String]) {
         if mode == "exit-after-one" {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_handshake_request;
+
+    #[test]
+    fn handshake_discriminator_preserves_legacy_extension_requests() {
+        let handshake = serde_json::json!({
+            "type": "handshake",
+            "protocol": "ngsl.json-lines-worker",
+            "versions": [2]
+        });
+        assert!(is_handshake_request(&handshake));
+
+        let legacy_request = serde_json::json!({
+            "type": "handshake",
+            "protocol": "ngsl.json-lines-worker",
+            "versions": [2],
+            "id": 8,
+            "arguments": ["legacy.operation"]
+        });
+        assert!(!is_handshake_request(&legacy_request));
     }
 }

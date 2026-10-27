@@ -819,3 +819,226 @@ fn legacy_record_replay_preserves_shared_loop_budget_across_loops() {
         "{stderr}"
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn a_real_denial_is_recorded_with_policy_identity_and_a_seal() {
+    let work = tempfile::tempdir().unwrap();
+    fs::write(
+        work.path().join("denied.program"),
+        "accept key as text from environment \"LANE_Q493_DENIED\"\nfail with message \"completed\"\n",
+    )
+    .unwrap();
+    let policy = work.path().join("policy.json");
+    fs::write(&policy, r#"{"version":1,"applets":{}}"#).unwrap();
+    private_answers::make_private(&policy);
+    let record = work.path().join("record");
+
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args([
+            "run",
+            "denied.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+            "--capability-policy",
+            policy.to_str().unwrap(),
+        ])
+        .env("LANE_Q493_DENIED", "record-fixture-secret-must-not-appear")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("capability policy denies reading environment variable"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("record-fixture-secret-must-not-appear"),
+        "stderr: {stderr}"
+    );
+
+    // The denial went through a real policy check, so the record names the
+    // policy that produced it: status, version and a one-way content digest.
+    let document: Value =
+        serde_json::from_slice(&fs::read(record.join("run.json")).unwrap()).unwrap();
+    assert_eq!(document["policy"]["execution_mode"], "untrusted");
+    assert_eq!(document["policy"]["capability_policy"]["status"], "configured");
+    assert_eq!(document["policy"]["capability_policy"]["version"], 1);
+    assert_eq!(
+        document["policy"]["capability_policy"]["sha256"]
+            .as_str()
+            .map(str::len),
+        Some(64),
+        "{document}"
+    );
+    let denied = document["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|decision| decision["outcome"] == "denied")
+        .expect("the real denial is in the persisted log");
+    assert_eq!(denied["action"], "environment.read");
+    assert!(
+        document["audit_mac"].as_str().map(str::len) == Some(64),
+        "{document}"
+    );
+
+    // `show-run` verifies the real seal against the same per-user key the
+    // recording CLI sealed it with.
+    let summary = execute(
+        work.path(),
+        &["show-run", record.to_str().unwrap(), "--json"],
+    );
+    assert!(
+        summary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    let report: Value = serde_json::from_slice(&summary.stdout).unwrap();
+    assert_eq!(report["audit_verified"], true);
+    assert_eq!(report["audit_error"], Value::Null);
+    assert_eq!(report["audit_mac"], document["audit_mac"]);
+    assert!(
+        report["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|decision| decision["action"] == "environment.read"
+                && decision["outcome"] == "denied"),
+        "{report}"
+    );
+    let text = execute(work.path(), &["show-run", record.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&text.stdout).into_owned();
+    assert!(text.contains("environment.read"), "{text}");
+    assert!(text.contains("denied"), "{text}");
+    assert!(!text.contains("warning"), "{text}");
+}
+
+#[test]
+fn a_real_record_without_a_policy_is_sealed_and_shows_its_baseline() {
+    let work = tempfile::tempdir().unwrap();
+    fs::write(
+        work.path().join("ok.program"),
+        "run printf with message \"hello\"\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "ok.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let document: Value =
+        serde_json::from_slice(&fs::read(record.join("run.json")).unwrap()).unwrap();
+    assert_eq!(document["policy"]["execution_mode"], "trusted");
+    assert_eq!(document["policy"]["capability_policy"]["status"], "absent");
+    assert_eq!(document["policy"]["data_flow_policy"]["status"], "absent");
+    assert!(
+        document["audit_mac"].as_str().map(str::len) == Some(64),
+        "{document}"
+    );
+
+    let summary = execute(
+        work.path(),
+        &["show-run", record.to_str().unwrap(), "--json"],
+    );
+    assert!(
+        summary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    let report: Value = serde_json::from_slice(&summary.stdout).unwrap();
+    assert_eq!(report["audit_verified"], true);
+    assert_eq!(report["audit_error"], Value::Null);
+    let text = execute(work.path(), &["show-run", record.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&text.stdout).into_owned();
+    assert!(text.contains("no confinement: no policy was active"), "{text}");
+}
+
+#[test]
+fn a_tampered_real_record_is_shown_as_untrusted_not_hidden() {
+    let work = tempfile::tempdir().unwrap();
+    fs::write(
+        work.path().join("ok.program"),
+        "run printf with message \"hello\"\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "ok.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // Flip the first kept decision the way a naive edit would, without
+    // recomputing its chain link or the seal.
+    let path = record.join("run.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert!(
+        !document["decisions"].as_array().unwrap().is_empty(),
+        "{document}"
+    );
+    let flipped = if document["decisions"][0]["outcome"] == "approved" {
+        "denied"
+    } else {
+        "approved"
+    };
+    document["decisions"][0]["outcome"] = Value::String(flipped.to_owned());
+    fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    // Warn-open: both renderings still succeed and label the audit untrusted,
+    // with the tampered content left visible for review.
+    let text = execute(work.path(), &["show-run", record.to_str().unwrap()]);
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let text = String::from_utf8_lossy(&text.stdout).into_owned();
+    assert!(text.contains("warning"), "{text}");
+    assert!(text.contains("untrusted"), "{text}");
+    let summary = execute(
+        work.path(),
+        &["show-run", record.to_str().unwrap(), "--json"],
+    );
+    assert!(
+        summary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    let report: Value = serde_json::from_slice(&summary.stdout).unwrap();
+    assert_eq!(report["audit_verified"], false);
+    assert!(
+        report["audit_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("modified")),
+        "{report}"
+    );
+    assert_eq!(report["decisions"][0]["outcome"], flipped);
+}

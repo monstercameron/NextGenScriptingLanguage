@@ -14,6 +14,7 @@ use anyhow::{anyhow, Result};
 use anyhow::{bail, Context};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs::File;
@@ -122,6 +123,10 @@ impl SensitivitySet {
     }
 }
 
+/// Version of the data-flow policy document format. Parsing rejects anything
+/// else, so an installed (active) policy is always this version.
+pub const DATA_FLOW_POLICY_VERSION: u8 = 1;
+
 const MAX_POLICY_BYTES: usize = 64 * 1024;
 const MAX_ORIGINS: usize = 256;
 const MAX_TRUSTED_CACHE_APPLETS: usize = 1024;
@@ -184,7 +189,7 @@ struct RemoteSinkGrant {
 }
 
 /// Kinds of persistence that can retain applet data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PersistenceKind {
     Cache,
@@ -242,7 +247,7 @@ struct CachePurityGrant {
 /// active; its default behavior denies remote egress and non-public
 /// persistence. The inactive default preserves legacy behavior when the user
 /// did not opt into data-flow policy enforcement.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DataFlowPolicy {
     active: bool,
     remote_sinks: BTreeMap<String, BTreeSet<Sensitivity>>,
@@ -281,6 +286,20 @@ impl DataFlowPolicy {
     /// only a parsed policy constrains egress and persistence.
     pub fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// Canonical content digest of the parsed policy: the SHA-256 of its
+    /// canonical JSON encoding. Run records store this digest so a reviewer
+    /// can tell which policy produced an allow/deny log. A digest is one-way:
+    /// it names the policy without recording any origin, label, or other
+    /// policy content.
+    pub fn canonical_digest(&self) -> String {
+        let encoded =
+            serde_json::to_vec(self).expect("a parsed data-flow policy is serializable");
+        Sha256::digest(encoded)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     /// Load a bounded, owner-private policy file. The file contains only
@@ -995,6 +1014,17 @@ fn effective_labels(sensitivities: &SensitivitySet) -> BTreeSet<Sensitivity> {
 pub fn authorize_cache_purity(registry: &Registry, manifest: &Manifest) -> Result<(), PolicyError> {
     let policy = registry.host_state::<DataFlowPolicy>();
     if !policy.active {
+        // Without a data-flow policy every cache lookup is allowed, and the
+        // audit says so explicitly instead of staying silent about it.
+        record_policy_decision(
+            registry,
+            &manifest.name,
+            "cache.purity",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     }
 
@@ -1149,12 +1179,32 @@ impl DecisionRecorder {
             .records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The sequence is assigned under the queue lock, so a snapshot taken
+        // under the same lock always agrees with the lifetime total: every
+        // assigned sequence is already queued, and no assigned decision is
+        // still waiting for its number.
         decision.sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
         if records.len() == MAX_DECISION_RECORDS {
             records.pop_front();
         }
         records.push_back(decision.clone());
         decision
+    }
+
+    /// Snapshot the bounded window together with the lifetime total, under one
+    /// lock acquisition. Reading the two separately can observe a push in
+    /// between, so an audit built from separate reads can claim a total past
+    /// its own last sequence and fail its own contiguity check. This pair
+    /// never disagrees, even while other threads are recording.
+    pub fn snapshot_with_total(&self) -> (Vec<PolicyDecision>, u64) {
+        let records = self
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            records.iter().cloned().collect(),
+            self.sequence.load(Ordering::Relaxed),
+        )
     }
 
     /// How many decisions have ever been recorded through this recorder. The
@@ -1199,6 +1249,14 @@ pub fn policy_decisions(registry: &Registry) -> Vec<PolicyDecision> {
 /// the decisions it kept, so truncation is explicit rather than silent.
 pub fn policy_decision_total(registry: &Registry) -> u64 {
     registry.host_state::<DecisionRecorder>().total()
+}
+
+/// The bounded decision window together with the lifetime total, read under
+/// one lock acquisition so the two cannot disagree. A persisted audit must be
+/// built from this pair, never from separate `policy_decisions` and
+/// `policy_decision_total` reads with pushes in between.
+pub fn policy_decisions_with_total(registry: &Registry) -> (Vec<PolicyDecision>, u64) {
+    registry.host_state::<DecisionRecorder>().snapshot_with_total()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -6,15 +6,19 @@
 //!
 //! - `run.json`: protocol `execute.record/1`. Program hash, plan (explain text) and
 //!   its hash, redacted inputs, timing, the final result and output hash, the
-//!   limits that applied, the policy in force (execution mode and which policies
-//!   were configured, never policy contents), and the bounded policy-decision
-//!   audit: what effects were allowed or denied and why. Each kept decision
-//!   carries a link in a hash chain headed by `audit_head`; `show-run`
-//!   re-verifies the links, the sequence order and the truncation accounting
-//!   before presenting the audit. The chain is unanchored (it lives in the
-//!   same file it protects): it evidences edits made without recomputing it,
-//!   not a same-user forger who rewrites the audit and the head together.
-//!   Whole-record tamper evidence belongs to the record-integrity work.
+//!   limits that applied, the policy in force (execution mode and each
+//!   configured policy's version and content digest, never policy contents),
+//!   and the bounded policy-decision audit: what effects were allowed or
+//!   denied and why. Each kept decision carries a link in a hash chain headed
+//!   by `audit_head`, and the head plus the truncation accounting carry a
+//!   keyed seal (`audit_mac`, an HMAC under the per-user key). `show-run` is
+//!   warn-open: it always presents the audit and labels anything short of a
+//!   fully verified chain and seal as unsealed or untrusted, so a tampered
+//!   record stays reviewable instead of hiding its own evidence. The chain
+//!   evidences edits made without recomputing it; the seal raises the bar to
+//!   key holders, but a same-user forger with key access can still rewrite
+//!   the audit and reseal it. Whole-record tamper evidence belongs to the
+//!   record-integrity work.
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
 //!   resolved argv, status, declared outcome, wall time, and the stdout and stderr
@@ -91,6 +95,12 @@ pub struct RecordStart<'a> {
     /// Inputs as JSON; string values are redacted before they are stored.
     pub inputs: Json,
     pub registry: &'a Registry,
+    /// The per-user key that seals the policy-decision audit (`audit_mac`).
+    /// `None` writes an unsealed record: the hash chain is still checked, but
+    /// `show-run` warns that the seal is missing. A key holder can always
+    /// rewrite the audit and reseal it, so the seal evidences naive edits and
+    /// corruption, not a same-user forger with key access.
+    pub audit_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
 }
 
 /// Writes one finite run's record. Install it with `runtime::observe::install`.
@@ -104,6 +114,8 @@ pub struct Recorder {
     redactor: Arc<SecretRedactor>,
     /// Consulted for the data-flow persistence policy before any output is kept.
     registry: Registry,
+    /// Key for the audit seal, or `None` for an unsealed record.
+    audit_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
     started: Instant,
     started_unix_ms: u128,
     plan_sha256: String,
@@ -207,23 +219,62 @@ fn audit_link(previous_head_hex: &str, decision: &Json) -> String {
     sha256_hex(&audit_link_encoding(previous_head_hex, decision))
 }
 
-/// The policy in force for a run: the execution mode and which policies were
-/// configured. Policy contents (grants, paths, digests) are never recorded;
-/// presence alone tells a reviewer whether any confinement applied.
+/// Domain string for the audit seal. A seal is only meaningful next to the
+/// algorithm and fields it covers; changing this string retires old seals.
+const AUDIT_SEAL_DOMAIN: &str = "execute.policy-audit-seal/1";
+
+/// Length-prefixed encoding of the sealed values: the lifetime total, the
+/// truncation flag, and the chain head. The head transitively binds every kept
+/// decision, so sealing the head seals the audit. Everything covered is public
+/// by construction (counts, a flag, a chain hash), so the seal cannot confirm
+/// a guess at a secret.
+fn audit_seal_encoding(total: u64, truncated: bool, head_hex: &str) -> Vec<u8> {
+    let mut encoding = Vec::new();
+    push_audit_field(&mut encoding, AUDIT_SEAL_DOMAIN);
+    push_audit_field(&mut encoding, &total.to_string());
+    push_audit_field(
+        &mut encoding,
+        if truncated { "truncated" } else { "complete" },
+    );
+    push_audit_field(&mut encoding, head_hex);
+    encoding
+}
+
+/// The keyed seal over a persisted audit: HMAC-SHA256 under the per-user key.
+/// A same-user holder of the key can recompute this seal over a rewritten
+/// audit, so it evidences edits made without the key (mistakes, corruption,
+/// naive tampering), not a forger with key access.
+fn audit_seal_hex(key: &[u8], total: u64, truncated: bool, head_hex: &str) -> String {
+    crate::agent::what_if_key::hmac_sha256(key, &audit_seal_encoding(total, truncated, head_hex))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The policy in force for a run: the execution mode and, for each policy, its
+/// presence plus the version and canonical content digest when configured.
+/// Policy contents (grants, paths, origins or other policy material) are never
+/// recorded; the digests are one-way, so they name the policy that produced
+/// the allow/deny log without recording what it contains. Absence still tells
+/// a reviewer that no confinement applied.
 fn policy_context_json(registry: &Registry) -> Json {
-    let capability = if crate::capabilities::capability_policy_active(registry) {
-        "configured"
-    } else {
-        "absent"
-    };
-    let data_flow = if registry
-        .host_state::<security::DataFlowPolicy>()
-        .is_active()
-    {
-        "configured"
-    } else {
-        "absent"
-    };
+    let capability = policy_identity_json(
+        crate::capabilities::capability_policy_active(registry),
+        registry
+            .host_state::<Option<crate::capabilities::CapabilityPolicy>>()
+            .as_ref()
+            .map(|policy| (u64::from(policy.version), policy.canonical_digest())),
+    );
+    let data_flow_policy = registry.host_state::<security::DataFlowPolicy>();
+    let data_flow = policy_identity_json(
+        data_flow_policy.is_active(),
+        data_flow_policy.is_active().then(|| {
+            (
+                u64::from(crate::security::DATA_FLOW_POLICY_VERSION),
+                data_flow_policy.canonical_digest(),
+            )
+        }),
+    );
     json!({
         "execution_mode": crate::capabilities::execution_mode(registry).as_str(),
         "capability_policy": capability,
@@ -231,18 +282,48 @@ fn policy_context_json(registry: &Registry) -> Json {
     })
 }
 
+/// One policy's recorded identity: whether it was active, and the version and
+/// content digest when it was. An absent policy carries nulls, so a reviewer
+/// can distinguish "no policy" from "identity missing".
+fn policy_identity_json(configured: bool, identity: Option<(u64, String)>) -> Json {
+    match (configured, identity) {
+        (true, Some((version, sha256))) => json!({
+            "status": "configured",
+            "version": version,
+            "sha256": sha256,
+        }),
+        (true, None) => json!({
+            "status": "configured",
+            "version": Json::Null,
+            "sha256": Json::Null,
+        }),
+        (false, _) => json!({
+            "status": "absent",
+            "version": Json::Null,
+            "sha256": Json::Null,
+        }),
+    }
+}
+
 /// The bounded durable audit of policy/effect decisions: the most recent
 /// decisions, each linked onto a hash chain, with the lifetime total, whether
-/// the tail was cut, and the head of the chain. The total comes from the
+/// the tail was cut, the head of the chain, and the keyed seal (`audit_mac`)
+/// over the total, the truncation flag and the head. The total comes from the
 /// recorder's counter, not the bounded window, so it stays honest even after
-/// the window has dropped the prefix.
-fn decision_audit_json(registry: &Registry) -> (Json, u64, bool, String) {
-    let mut decisions = security::policy_decisions(registry);
-    // Sequence numbers are assigned before the recorder's queue lock is taken,
-    // so concurrent pushes can land out of order. The audit persists sequence
-    // order, which is what verification checks for contiguity.
+/// the window has dropped the prefix. With no key the seal is JSON null and
+/// the record is unsealed.
+fn decision_audit_json(
+    registry: &Registry,
+    audit_key: Option<&[u8]>,
+) -> (Json, u64, bool, String, Json) {
+    // The snapshot and the lifetime total come from one lock acquisition, so
+    // the total can never run past the snapshot's own last sequence, even
+    // while other threads are still recording.
+    let (mut decisions, total) = security::policy_decisions_with_total(registry);
+    // Insertion order is already sequence order (sequences are assigned under
+    // the queue lock), but sort defensively: verification checks contiguity
+    // in sequence order.
     decisions.sort_by_key(|decision| decision.sequence);
-    let total = security::policy_decision_total(registry);
     let start = decisions.len().saturating_sub(MAX_AUDIT_DECISIONS);
     let mut head = audit_genesis();
     let items = decisions[start..]
@@ -255,19 +336,109 @@ fn decision_audit_json(registry: &Registry) -> (Json, u64, bool, String) {
         })
         .collect::<Vec<_>>();
     let truncated = total > items.len() as u64;
-    (Json::Array(items), total, truncated, head)
+    let seal = audit_key
+        .map(|key| Json::String(audit_seal_hex(key, total, truncated, &head)))
+        .unwrap_or(Json::Null);
+    (Json::Array(items), total, truncated, head, seal)
 }
 
-/// What verification of a persisted decision audit concluded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which key `show-run` verifies the audit seal against.
+#[derive(Debug, Clone, Copy)]
+pub enum SealKey<'a> {
+    /// Verify against this exact key. Tests use a fixed key so the seal check
+    /// is deterministic; production code never embeds a key here.
+    Explicit(&'a [u8]),
+    /// Verify against the per-user key from its usual location, if one exists.
+    /// A missing key is not an error: the audit is shown unsealed instead.
+    System,
+    /// Never check the seal. The audit is shown unsealed at best.
+    Unavailable,
+}
+
+impl SealKey<'_> {
+    /// The key bytes to verify against, or `None` when there is nothing to
+    /// check with. Reading the system key never creates one: a missing key
+    /// means "cannot verify", not "mint a replacement".
+    fn resolve(&self) -> Option<[u8; crate::agent::what_if_key::KEY_BYTES]> {
+        match self {
+            SealKey::Explicit(key) => {
+                let mut fixed = [0u8; crate::agent::what_if_key::KEY_BYTES];
+                if key.len() != fixed.len() {
+                    return None;
+                }
+                fixed.copy_from_slice(key);
+                Some(fixed)
+            }
+            SealKey::System => crate::agent::what_if_key::load_existing().ok(),
+            SealKey::Unavailable => None,
+        }
+    }
+}
+
+/// What verification of a persisted decision audit concluded. `show-run` is
+/// warn-open: every state is presented, and anything short of `Verified`
+/// carries a warning plus an `audit_error` in JSON output. Hiding the steps,
+/// the result and the policy on tamper would turn `show-run` into an oracle
+/// that confirms a record is clean by refusing to show it; showing untrusted
+/// data labeled as untrusted keeps the record reviewable.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AuditVerification {
     /// No `decisions` key at all: a record written before the audit existed.
     PreAudit,
     /// Decisions with no chain head: written between the bounded audit and the
     /// chained audit. Shown, but explicitly not verified.
     UnchainedLegacy,
-    /// A chained audit whose links, order, count and truncation flag all check.
+    /// The chain checks, but there is no usable seal: either the record
+    /// predates the seal or no key is available to check it with. Shown with
+    /// an "unsealed" warning.
+    Unsealed {
+        approved: usize,
+        denied: usize,
+        reason: &'static str,
+    },
+    /// A chain or seal check failed. The audit is shown anyway, labeled
+    /// untrusted, with the first failing check as the error.
+    Untrusted {
+        approved: usize,
+        denied: usize,
+        error: String,
+    },
+    /// A chained audit whose links, order, count, truncation flag and keyed
+    /// seal all check.
     Verified { approved: usize, denied: usize },
+}
+
+impl AuditVerification {
+    fn counts(decisions: &[Json]) -> (usize, usize) {
+        let approved = decisions
+            .iter()
+            .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("approved"))
+            .count();
+        let denied = decisions
+            .iter()
+            .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("denied"))
+            .count();
+        (approved, denied)
+    }
+
+    fn untrusted(decisions: &[Json], error: String) -> Self {
+        let (approved, denied) = Self::counts(decisions);
+        AuditVerification::Untrusted {
+            approved,
+            denied,
+            error,
+        }
+    }
+
+    /// The machine-readable failure, if any, for `audit_error` JSON output.
+    fn error(&self) -> Option<&str> {
+        match self {
+            AuditVerification::PreAudit | AuditVerification::UnchainedLegacy => None,
+            AuditVerification::Unsealed { reason, .. } => Some(reason),
+            AuditVerification::Untrusted { error, .. } => Some(error),
+            AuditVerification::Verified { .. } => None,
+        }
+    }
 }
 
 /// Verify the persisted decision audit in a `run.json` document.
@@ -275,110 +446,169 @@ enum AuditVerification {
 /// The checks catch a decision edited in place (link mismatch), a decision
 /// removed from the middle (sequence gap), a reordered audit (same sequences,
 /// wrong order), a dropped prefix or suffix (first/last sequence against the
-/// total), and a truncation flag that disagrees with the total. A record that
-/// fails any check is reported, not presented as trustworthy.
+/// total), a truncation flag that disagrees with the total, and a seal that
+/// does not match the total, the flag and the head under the given key.
+/// Nothing here fails the read: a failed check labels the audit untrusted or
+/// unsealed and the audit is still shown, so a tampered record stays
+/// reviewable instead of hiding its own evidence.
 ///
 /// Trust boundary: the chain is unanchored — it lives in the same file it
-/// protects — so it evidences edits made without recomputing it (mistakes,
-/// corruption, naive tampering), not a same-user editor who rewrites the
-/// decisions, the total and the head together (threat-model A4). Whole-record
+/// protects — and the seal is keyed under a per-user key that a same-user
+/// editor can also read. Together they evidence edits made without recomputing
+/// them (mistakes, corruption, naive tampering), not a same-user editor who
+/// rewrites the decisions, the total, the head and the seal together
+/// (threat-model A4). The seal raises the bar from "recompute hashes" to
+/// "hold the key", and it still does not stop the key holder. Whole-record
 /// tamper evidence, which would also cover that forger, belongs to the
-/// record-integrity work (issue #414), not to this chain.
-fn verify_decision_audit(run: &Json) -> Result<AuditVerification> {
+/// record-integrity work (issue #414), not to this chain and seal.
+fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
     let Some(decisions_value) = run.get("decisions") else {
-        return Ok(AuditVerification::PreAudit);
+        return AuditVerification::PreAudit;
     };
     let Some(decisions) = decisions_value.as_array() else {
-        bail!("policy audit is not an array; the record may have been modified after the run");
+        return AuditVerification::untrusted(
+            &[],
+            "policy audit is not an array; the record may have been modified after the run"
+                .to_owned(),
+        );
     };
     let Some(head) = run.get("audit_head").and_then(Json::as_str) else {
-        return Ok(AuditVerification::UnchainedLegacy);
+        return AuditVerification::UnchainedLegacy;
     };
+    let untrusted = |message: String| AuditVerification::untrusted(decisions, message);
     let Some(total) = run.get("decision_count").and_then(Json::as_u64) else {
-        bail!(
+        return untrusted(
             "policy audit has no decision total; the record may have been modified after the run"
+                .to_owned(),
         );
     };
     let Some(truncated) = run.get("decisions_truncated").and_then(Json::as_bool) else {
-        bail!(
+        return untrusted(
             "policy audit has no truncation flag; the record may have been modified after the run"
+                .to_owned(),
         );
     };
     if decisions.len() > MAX_AUDIT_DECISIONS {
-        bail!(
+        return untrusted(format!(
             "policy audit keeps {} decisions, past the {MAX_AUDIT_DECISIONS}-decision bound; the record may have been modified after the run",
             decisions.len()
-        );
+        ));
     }
     if truncated != (total > decisions.len() as u64) {
-        bail!(
+        return untrusted(format!(
             "policy audit truncation flag disagrees with its total ({total}) and kept decisions ({}); the record may have been modified after the run",
             decisions.len()
-        );
+        ));
     }
+    // The chain check below establishes the counts; the seal check after it
+    // needs them even when the audit turns out unsealed rather than verified.
+    let chained = verify_audit_chain(decisions, head, total);
+    let (approved, denied) = AuditVerification::counts(decisions);
+    let chain_error = match chained {
+        Ok(()) => None,
+        Err(error) => Some(error),
+    };
+    if let Some(error) = chain_error {
+        return AuditVerification::Untrusted {
+            approved,
+            denied,
+            error,
+        };
+    }
+    let stored_seal = run.get("audit_mac").and_then(Json::as_str);
+    let Some(stored_seal) = stored_seal else {
+        return AuditVerification::Unsealed {
+            approved,
+            denied,
+            reason: "this record carries no audit seal; it predates the seal or was recorded without a key",
+        };
+    };
+    let Some(key) = seal_key.resolve() else {
+        return AuditVerification::Unsealed {
+            approved,
+            denied,
+            reason: "the per-user key is unavailable, so the audit seal was not checked",
+        };
+    };
+    if audit_seal_hex(&key, total, truncated, head) != stored_seal {
+        return AuditVerification::Untrusted {
+            approved,
+            denied,
+            error: "policy audit seal does not match its total, truncation flag and head; the audit was modified after the run or sealed under a different key"
+                .to_owned(),
+        };
+    }
+    AuditVerification::Verified { approved, denied }
+}
+
+/// Check the hash chain, the sequence order and the truncation accounting of
+/// an audit whose envelope (total, flag, bound) already parsed. Returns the
+/// first failing check as an error string.
+fn verify_audit_chain(decisions: &[Json], head: &str, total: u64) -> Result<(), String> {
     if decisions.is_empty() {
         if total != 0 {
-            bail!("policy audit kept no decisions but claims a total of {total}; the record may have been modified after the run");
+            return Err(format!(
+                "policy audit kept no decisions but claims a total of {total}; the record may have been modified after the run"
+            ));
         }
         if head != audit_genesis() {
-            bail!("policy audit head does not match an empty audit; the record may have been modified after the run");
+            return Err(
+                "policy audit head does not match an empty audit; the record may have been modified after the run"
+                    .to_owned(),
+            );
         }
-        return Ok(AuditVerification::Verified {
-            approved: 0,
-            denied: 0,
-        });
+        return Ok(());
     }
     let sequences = decisions
         .iter()
         .map(|decision| decision.get("sequence").and_then(Json::as_u64))
         .collect::<Option<Vec<_>>>();
     let Some(sequences) = sequences else {
-        bail!("policy audit has a decision without a sequence number; the record may have been modified after the run");
+        return Err("policy audit has a decision without a sequence number; the record may have been modified after the run".to_owned());
     };
     let first_expected = total
         .checked_sub(decisions.len() as u64)
         .and_then(|first| first.checked_add(1));
     let Some(first_expected) = first_expected else {
-        bail!("policy audit total ({total}) is below its kept decisions ({}); the record may have been modified after the run", decisions.len());
+        return Err(format!("policy audit total ({total}) is below its kept decisions ({}); the record may have been modified after the run", decisions.len()));
     };
     let expected: Vec<u64> = (first_expected..=total).collect();
     let mut ordered = sequences.clone();
     ordered.sort_unstable();
     if ordered != expected {
-        bail!(
+        return Err(format!(
             "policy audit sequences run {first_expected}..={total} with a gap; a decision was removed after the run"
-        );
+        ));
     }
     if sequences != expected {
-        bail!("policy audit decisions are out of sequence order; the audit was reordered after the run");
+        return Err(
+            "policy audit decisions are out of sequence order; the audit was reordered after the run"
+                .to_owned(),
+        );
     }
     let mut running = audit_genesis();
     for decision in decisions {
+        let sequence = decision
+            .get("sequence")
+            .and_then(Json::as_u64)
+            .unwrap_or(0);
         let Some(stored) = decision.get("audit_hash").and_then(Json::as_str) else {
-            bail!("policy audit decision #{} has no chain link; the record may have been modified after the run", decision.get("sequence").and_then(Json::as_u64).unwrap_or(0));
+            return Err(format!("policy audit decision #{sequence} has no chain link; the record may have been modified after the run"));
         };
         running = audit_link(&running, decision);
         if stored != running {
-            bail!(
-                "policy audit decision #{} does not match its chain link; it was modified after the run",
-                decision.get("sequence").and_then(Json::as_u64).unwrap_or(0)
-            );
+            return Err(format!(
+                "policy audit decision #{sequence} does not match its chain link; it was modified after the run"
+            ));
         }
     }
     if head != running {
-        bail!(
+        return Err(
             "policy audit head does not match its decisions; the audit was modified after the run"
+                .to_owned(),
         );
     }
-    let approved = decisions
-        .iter()
-        .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("approved"))
-        .count();
-    let denied = decisions
-        .iter()
-        .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("denied"))
-        .count();
-    Ok(AuditVerification::Verified { approved, denied })
+    Ok(())
 }
 
 /// Whether the data-flow persistence policy lets output with these labels be kept
@@ -437,6 +667,7 @@ impl Recorder {
             #[cfg(unix)]
             blobs_handle,
             registry: start.registry.clone(),
+            audit_key: start.audit_key,
             started: Instant::now(),
             started_unix_ms: unix_ms(),
             plan_sha256,
@@ -520,8 +751,8 @@ impl Recorder {
         // Snapshot after the persistence checks above, so the record's own
         // persistence decisions are part of the audit too.
         let policy = policy_context_json(&self.registry);
-        let (decisions, decision_count, decisions_truncated, audit_head) =
-            decision_audit_json(&self.registry);
+        let (decisions, decision_count, decisions_truncated, audit_head, audit_mac) =
+            decision_audit_json(&self.registry, self.audit_key.as_ref().map(|key| &key[..]));
         let document = json!({
             "protocol": PROTOCOL,
             "finished": finished,
@@ -550,6 +781,7 @@ impl Recorder {
             "decision_count": decision_count,
             "decisions_truncated": decisions_truncated,
             "audit_head": audit_head,
+            "audit_mac": audit_mac,
             "limits": {
                 "loop_iterations_max": state.loop_limit,
                 "loop_iterations_scope": state.loop_scope.map(|scope| match scope {
@@ -1090,8 +1322,21 @@ fn strings(value: &Json) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// A short summary of a record for `show-run`, as text or as JSON.
+/// A short summary of a record for `show-run`, as text or as JSON. The audit
+/// seal is verified against the per-user key from its usual location; a
+/// missing key shows the audit unsealed rather than failing the read.
 pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
+    show_run_with_key(directory, as_json, SealKey::System)
+}
+
+/// [`show_run`] with an explicit seal key. Unit and integration tests pass
+/// [`SealKey::Explicit`] so the seal check does not depend on ambient user
+/// state; callers without a key pass [`SealKey::Unavailable`].
+pub fn show_run_with_key(
+    directory: &Path,
+    as_json: bool,
+    seal_key: SealKey<'_>,
+) -> Result<String> {
     let record = StoredRecord::open(directory)?;
     let failed = record
         .steps
@@ -1127,11 +1372,15 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
         .get("decisions_truncated")
         .and_then(Json::as_bool)
         .unwrap_or(false);
-    // Verify before presenting: a tampered audit is reported, never printed
-    // as if it were the run's own. Legacy records without a chain stay
-    // readable but are labeled unverified (see below).
-    let audit = verify_decision_audit(&record.run)?;
+    // Verify before presenting. Anything short of verified is still shown,
+    // labeled: unsealed or untrusted data with a warning is reviewable, while
+    // refusing to show it would hide the record's own evidence of tampering.
+    let audit = verify_decision_audit(&record.run, &seal_key);
     let audit_verified = matches!(audit, AuditVerification::Verified { .. });
+    let audit_error: Json = audit
+        .error()
+        .map(Json::String)
+        .unwrap_or(Json::Null);
     if as_json {
         let document = json!({
             "protocol": "execute.show-run/1",
@@ -1150,7 +1399,9 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
             "decision_count": decision_count,
             "decisions_truncated": decisions_truncated,
             "audit_head": record.run.get("audit_head").cloned().unwrap_or(Json::Null),
+            "audit_mac": record.run.get("audit_mac").cloned().unwrap_or(Json::Null),
             "audit_verified": audit_verified,
+            "audit_error": audit_error,
         });
         return Ok(serde_json::to_string_pretty(&document)? + "\n");
     }
@@ -1189,10 +1440,24 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
         decision_count,
         decisions_truncated,
     ));
-    if audit == AuditVerification::UnchainedLegacy {
-        text.push_str(
-            "note: this decision audit predates chaining; edits after the run are not detectable (re-record for a verifiable audit)\n",
-        );
+    match &audit {
+        AuditVerification::PreAudit => {}
+        AuditVerification::UnchainedLegacy => {
+            text.push_str(
+                "note: this decision audit predates chaining; edits after the run are not detectable (re-record for a verifiable audit)\n",
+            );
+        }
+        AuditVerification::Unsealed { reason, .. } => {
+            text.push_str(&format!(
+                "warning: the policy audit is unsealed ({reason}); it is shown as recorded, but edits after the run may not be detectable\n",
+            ));
+        }
+        AuditVerification::Untrusted { error, .. } => {
+            text.push_str(&format!(
+                "warning: the policy audit failed verification ({error}); the decisions below are untrusted\n",
+            ));
+        }
+        AuditVerification::Verified { .. } => {}
     }
     if record.run["truncated"].as_bool().unwrap_or(false) {
         text.push_str(
@@ -1217,22 +1482,46 @@ fn policy_summary_text(run: &Json) -> String {
         .get("execution_mode")
         .and_then(Json::as_str)
         .unwrap_or("unknown");
-    let capability = policy
-        .get("capability_policy")
-        .and_then(Json::as_str)
-        .unwrap_or("unknown");
-    let data_flow = policy
-        .get("data_flow_policy")
-        .and_then(Json::as_str)
-        .unwrap_or("unknown");
+    let (capability, capability_detail) = policy_identity_text(policy.get("capability_policy"));
+    let (data_flow, data_flow_detail) = policy_identity_text(policy.get("data_flow_policy"));
     let mut line = format!(
-        "policy: execution_mode={mode} capability_policy={capability} data_flow_policy={data_flow}"
+        "policy: execution_mode={mode} capability_policy={capability}{capability_detail} data_flow_policy={data_flow}{data_flow_detail}"
     );
     if mode == "trusted" && capability == "absent" && data_flow == "absent" {
         line.push_str(" (no confinement: no policy was active)");
     }
     line.push('\n');
     line
+}
+
+/// The text form of one recorded policy identity: its status plus, when
+/// configured, the version and content digest that name which policy ran.
+/// Records written before identities carry a bare presence string; those read
+/// back unchanged.
+fn policy_identity_text(identity: Option<&Json>) -> (&str, String) {
+    let Some(identity) = identity else {
+        return ("unknown", String::new());
+    };
+    if let Some(status) = identity.as_str() {
+        return (status, String::new());
+    }
+    let status = identity
+        .get("status")
+        .and_then(Json::as_str)
+        .unwrap_or("unknown");
+    if status != "configured" {
+        return (status, String::new());
+    }
+    let version = identity
+        .get("version")
+        .and_then(Json::as_u64)
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| "?".to_owned());
+    let digest = identity
+        .get("sha256")
+        .and_then(Json::as_str)
+        .unwrap_or("?");
+    (status, format!(" version={version} sha256={digest}"))
 }
 
 /// The durable policy-decision audit for `show-run`. Decisions carry bounded
@@ -1723,6 +2012,7 @@ mod bounded_record_tests {
             plan: "plan",
             inputs: json!({}),
             registry: &registry,
+            audit_key: None,
         })
         .unwrap();
         drop(recorder);
@@ -1735,11 +2025,19 @@ mod bounded_record_tests {
 #[cfg(test)]
 mod policy_audit_tests {
     use super::{
-        show_run, RecordStart, Recorder, RunSummary, StoredRecord, MAX_AUDIT_DECISIONS,
-        MAX_RUN_BYTES,
+        show_run, show_run_with_key, RecordStart, Recorder, RunSummary, SealKey, StoredRecord,
+        MAX_AUDIT_DECISIONS, MAX_RUN_BYTES,
     };
     use crate::security::{self, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk};
     use serde_json::{json, Value};
+
+    /// The fixed seal key for audit tests, so the seal check never depends on
+    /// ambient user state. Production code never embeds a key like this.
+    static TEST_AUDIT_KEY: [u8; 32] = [0x51; 32];
+
+    fn test_seal() -> SealKey<'static> {
+        SealKey::Explicit(&TEST_AUDIT_KEY)
+    }
 
     fn finished_recorder(directory: &tempfile::TempDir, registry: &crate::manifest::Registry) {
         let recorder = Recorder::start(RecordStart {
@@ -1748,6 +2046,7 @@ mod policy_audit_tests {
             plan: "plan",
             inputs: json!({}),
             registry,
+            audit_key: Some(TEST_AUDIT_KEY),
         })
         .unwrap();
         recorder
@@ -1773,14 +2072,21 @@ mod policy_audit_tests {
 
         let document = run_document(&directory);
         assert_eq!(document["policy"]["execution_mode"], "trusted");
-        assert_eq!(document["policy"]["capability_policy"], "absent");
-        assert_eq!(document["policy"]["data_flow_policy"], "absent");
-        // The policy context names only presence, never contents: no paths,
-        // grants, digests or other policy material may reach the record.
+        for name in ["capability_policy", "data_flow_policy"] {
+            assert_eq!(document["policy"][name]["status"], "absent", "{name}");
+            assert_eq!(document["policy"][name]["version"], Value::Null, "{name}");
+            assert_eq!(document["policy"][name]["sha256"], Value::Null, "{name}");
+        }
+        // The policy context names presence plus one-way digests, never
+        // contents: no paths, grants, origins or other policy material may
+        // reach the record.
         let policy = document["policy"].as_object().unwrap();
         assert_eq!(policy.len(), 3, "{policy:?}");
-        for (_, value) in policy {
-            assert!(value.is_string(), "{policy:?}");
+        assert!(policy["execution_mode"].is_string(), "{policy:?}");
+        for name in ["capability_policy", "data_flow_policy"] {
+            let identity = policy[name].as_object().unwrap();
+            assert_eq!(identity.len(), 3, "{identity:?}");
+            assert!(identity["status"].is_string(), "{identity:?}");
         }
         // The only decisions are the record's own persistence checks; the
         // baseline above is what states that no confinement applied.
@@ -1808,17 +2114,27 @@ mod policy_audit_tests {
             );
         }
 
-        let text = show_run(directory.path(), false).unwrap();
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
         assert!(
             text.contains("no confinement: no policy was active"),
             "{text}"
         );
+        assert!(!text.contains("warning"), "{text}");
 
         let report: Value =
-            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
         assert_eq!(report["policy"]["execution_mode"], "trusted");
         assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["audit_error"], Value::Null);
         assert_eq!(report["audit_head"], document["audit_head"]);
+        assert_eq!(report["audit_mac"], document["audit_mac"]);
+        assert!(
+            report["audit_mac"]
+                .as_str()
+                .is_some_and(|seal| seal.len() == 64),
+            "{report}"
+        );
     }
 
     #[test]
@@ -1831,6 +2147,7 @@ mod policy_audit_tests {
             plan: "plan",
             inputs: json!({}),
             registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
         })
         .unwrap();
         security::record_policy_decision(
@@ -1875,13 +2192,14 @@ mod policy_audit_tests {
             "{document}"
         );
 
-        let text = show_run(directory.path(), false).unwrap();
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
         assert!(text.contains("1 denied"), "{text}");
         assert!(text.contains("audit.denied"), "{text}");
         assert!(text.contains("capability_not_granted"), "{text}");
 
         let report: Value =
-            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
         assert!(report["decisions"]
             .as_array()
             .unwrap()
@@ -1889,8 +2207,9 @@ mod policy_audit_tests {
             .any(|decision| {
                 decision["subject"] == "audit.denied" && decision["outcome"] == "denied"
             }));
-        // The persisted audit verifies: links, order and count all check.
+        // The persisted audit verifies: links, order, count and seal all check.
         assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["audit_error"], Value::Null);
     }
 
     #[test]
@@ -1903,6 +2222,7 @@ mod policy_audit_tests {
             plan: "plan",
             inputs: json!({}),
             registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
         })
         .unwrap();
         for _ in 0..MAX_AUDIT_DECISIONS + 10 {
@@ -1941,13 +2261,14 @@ mod policy_audit_tests {
         let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
         assert!(bytes.len() < MAX_RUN_BYTES, "{}", bytes.len());
 
-        let text = show_run(directory.path(), false).unwrap();
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
         assert!(text.contains("most recent"), "{text}");
 
         // A genuinely truncated audit still verifies: the total accounts for
-        // the dropped prefix.
+        // the dropped prefix, and the seal covers the truncated accounting.
         let report: Value =
-            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
         assert_eq!(report["audit_verified"], true);
         assert_eq!(report["decision_count"], total);
     }
@@ -1963,6 +2284,7 @@ mod policy_audit_tests {
             plan: "plan",
             inputs: json!({}),
             registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
         })
         .unwrap();
         security::record_policy_decision(
@@ -2003,7 +2325,8 @@ mod policy_audit_tests {
         // Scrubbing happens before chaining, so the audit over the scrubbed
         // identifiers still verifies.
         let report: Value =
-            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
         assert_eq!(report["audit_verified"], true);
     }
 
@@ -2049,11 +2372,16 @@ mod policy_audit_tests {
         )
         .unwrap();
 
-        let text = show_run(directory.path(), false).unwrap();
+        // Without any key the legacy audit is still readable; the seal path is
+        // irrelevant because there is no chain to seal.
+        let text = show_run_with_key(directory.path(), false, SealKey::Unavailable).unwrap();
         assert!(text.contains("predates chaining"), "{text}");
 
         let report: Value =
-            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+            serde_json::from_str(
+                &show_run_with_key(directory.path(), true, SealKey::Unavailable).unwrap(),
+            )
+            .unwrap();
         assert_eq!(report["audit_verified"], false);
         assert_eq!(report["audit_head"], Value::Null);
         assert!(!report["decisions"].as_array().unwrap().is_empty());
@@ -2069,6 +2397,7 @@ mod policy_audit_tests {
             plan: "plan",
             inputs: json!({}),
             registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
         })
         .unwrap();
         for (subject, outcome, reason) in [
@@ -2112,17 +2441,51 @@ mod policy_audit_tests {
         .unwrap();
     }
 
+    /// Show a record after tampering: warn-open means both renderings succeed
+    /// and carry the failure label instead of hiding the audit.
+    fn warn_open_output(directory: &tempfile::TempDir) -> (String, Value) {
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        (text, report)
+    }
+
+    /// The warn-open contract every tamper shape must keep: the audit is still
+    /// shown, it is labeled untrusted in both renderings, and the tampered
+    /// content stays visible for review instead of being hidden.
+    fn assert_untrusted_shown(text: &str, report: &Value, fragment: &str) {
+        assert!(text.contains("warning"), "{text}");
+        assert!(text.contains("untrusted"), "{text}");
+        assert_eq!(report["audit_verified"], false);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains(fragment)),
+            "{report}"
+        );
+        assert!(
+            !report["decisions"].as_array().unwrap().is_empty(),
+            "a tampered audit must stay reviewable: {report}"
+        );
+    }
+
     #[test]
     fn edited_decision_breaks_its_chain_link() {
         let directory = tempfile::tempdir().unwrap();
         let mut document = audited_document(&directory);
-        document["decisions"][0]["outcome"] = json!("denied");
+        let flipped = if document["decisions"][0]["outcome"] == "approved" {
+            "denied"
+        } else {
+            "approved"
+        };
+        document["decisions"][0]["outcome"] = json!(flipped);
         rewrite_run_document(&directory, &document);
 
-        let error = show_run(directory.path(), false).unwrap_err();
-        assert!(error.to_string().contains("modified"), "{error:?}");
-        let error = show_run(directory.path(), true).unwrap_err();
-        assert!(error.to_string().contains("modified"), "{error:?}");
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "modified");
+        // The edit itself stays visible instead of being hidden.
+        assert_eq!(report["decisions"][0]["outcome"], flipped);
     }
 
     #[test]
@@ -2142,8 +2505,8 @@ mod policy_audit_tests {
         document["decision_count"] = json!(kept.len());
         rewrite_run_document(&directory, &document);
 
-        let error = show_run(directory.path(), false).unwrap_err();
-        assert!(error.to_string().contains("removed"), "{error:?}");
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "removed");
     }
 
     #[test]
@@ -2158,34 +2521,34 @@ mod policy_audit_tests {
         document["decisions_truncated"] = json!(false);
         rewrite_run_document(&directory, &document);
 
-        let error = show_run(directory.path(), false).unwrap_err();
-        assert!(error.to_string().contains("head"), "{error:?}");
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "head");
     }
 
     #[test]
-    fn rewritten_head_is_refused() {
+    fn rewritten_head_is_shown_as_untrusted() {
         let directory = tempfile::tempdir().unwrap();
         let mut document = audited_document(&directory);
         document["audit_head"] = json!("0".repeat(64));
         rewrite_run_document(&directory, &document);
 
-        let error = show_run(directory.path(), false).unwrap_err();
-        assert!(error.to_string().contains("head"), "{error:?}");
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "head");
     }
 
     #[test]
-    fn reordered_decisions_are_refused() {
+    fn reordered_decisions_are_shown_as_untrusted() {
         let directory = tempfile::tempdir().unwrap();
         let mut document = audited_document(&directory);
         document["decisions"].as_array_mut().unwrap().swap(0, 1);
         rewrite_run_document(&directory, &document);
 
-        let error = show_run(directory.path(), false).unwrap_err();
-        assert!(error.to_string().contains("reordered"), "{error:?}");
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "reordered");
     }
 
     #[test]
-    fn truncation_flag_that_disagrees_with_the_total_is_refused() {
+    fn truncation_flag_that_disagrees_with_the_total_is_shown_as_untrusted() {
         let directory = tempfile::tempdir().unwrap();
         let mut document = audited_document(&directory);
         // More decisions are kept than the flag admits: flip the flag while
@@ -2195,7 +2558,134 @@ mod policy_audit_tests {
         document["decisions_truncated"] = json!(false);
         rewrite_run_document(&directory, &document);
 
-        let error = show_run(directory.path(), false).unwrap_err();
-        assert!(error.to_string().contains("truncation flag"), "{error:?}");
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "truncation flag");
+    }
+
+    #[test]
+    fn record_without_a_key_is_shown_unsealed() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            audit_key: None,
+        })
+        .unwrap();
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let document = run_document(&directory);
+        assert_eq!(document["audit_mac"], Value::Null);
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        assert!(text.contains("warning"), "{text}");
+        assert!(text.contains("unsealed"), "{text}");
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["audit_verified"], false);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("no audit seal")),
+            "{report}"
+        );
+        assert!(
+            !report["decisions"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn sealed_record_without_a_key_is_shown_unsealed() {
+        let directory = tempfile::tempdir().unwrap();
+        audited_document(&directory);
+
+        let text = show_run_with_key(directory.path(), false, SealKey::Unavailable).unwrap();
+        assert!(text.contains("unsealed"), "{text}");
+        let report: Value = serde_json::from_str(
+            &show_run_with_key(directory.path(), true, SealKey::Unavailable).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["audit_verified"], false);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("key is unavailable")),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn seal_under_a_different_key_is_shown_as_untrusted() {
+        let directory = tempfile::tempdir().unwrap();
+        audited_document(&directory);
+        let other_key = [0x33; 32];
+
+        let text =
+            show_run_with_key(directory.path(), false, SealKey::Explicit(&other_key)).unwrap();
+        assert!(text.contains("untrusted"), "{text}");
+        let report: Value = serde_json::from_str(
+            &show_run_with_key(directory.path(), true, SealKey::Explicit(&other_key)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["audit_verified"], false);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("seal")),
+            "{report}"
+        );
+    }
+
+    /// A key holder can rewrite the audit and reseal it, and `show-run` cannot
+    /// tell. This test pins that limitation: the seal raises the bar to key
+    /// holders, it does not stop them. Whole-record tamper evidence belongs
+    /// to the record-integrity work (issue #414), not to this seal.
+    #[test]
+    fn key_holder_rewrite_and_reseal_verifies() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        // Flip an outcome the way a forger would, then redo exactly what the
+        // recorder does: relink the chain over the forged decisions and seal
+        // the forged head under the same key.
+        let flipped = if document["decisions"][0]["outcome"] == "approved" {
+            "denied"
+        } else {
+            "approved"
+        };
+        document["decisions"][0]["outcome"] = json!(flipped);
+        let total = document["decision_count"].as_u64().unwrap();
+        let truncated = document["decisions_truncated"].as_bool().unwrap();
+        let mut head = super::audit_genesis();
+        for decision in document["decisions"].as_array_mut().unwrap() {
+            head = super::audit_link(&head, decision);
+            decision["audit_hash"] = json!(head.clone());
+        }
+        document["audit_head"] = json!(head.clone());
+        document["audit_mac"] = json!(super::audit_seal_hex(
+            &TEST_AUDIT_KEY,
+            total,
+            truncated,
+            &head
+        ));
+        rewrite_run_document(&directory, &document);
+
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        assert!(!text.contains("warning"), "{text}");
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["decisions"][0]["outcome"], flipped);
     }
 }

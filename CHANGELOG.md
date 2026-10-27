@@ -17,12 +17,24 @@ original version labels.
 
 - The run-record policy audit is hash-chained and verified. Each kept decision
   links into the record's `audit_head`, and `execute show-run` re-verifies the
-  links, the sequence order and the truncation accounting before printing: an
+  links, the sequence order and the truncation accounting on every read: an
   edited, deleted or reordered decision, or a truncation flag that disagrees
-  with the total, fails instead of showing. Records from the first bounded
+  with the total, is shown labeled untrusted with an `audit_error` rather than
+  hidden. Records from the first bounded
   audit stay readable but are labeled unverified. The chain evidences naive
   edits and corruption, not a same-user forger who recomputes it;
   whole-record tamper evidence remains separate record-integrity work.
+
+- The run-record policy audit is sealed and warn-open. `execute run --record`
+  seals the chain head plus the truncation accounting with `audit_mac`, an
+  HMAC under the per-user key, and names each configured policy by version
+  and a one-way content digest (never policy contents). `execute show-run`
+  always presents the audit instead of hiding it on tamper: a failed chain or
+  seal check, or a record with no usable seal, is shown labeled unsealed or
+  untrusted, with an `audit_error` in JSON output. The seal raises the bar to
+  key holders -- a same-user editor with key access can still rewrite the
+  audit and reseal it, so whole-record tamper evidence remains separate
+  record-integrity work.
 
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known

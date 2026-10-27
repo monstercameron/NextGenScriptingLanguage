@@ -307,6 +307,18 @@ pub fn check_privileged_launch(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        // Without a policy the launch is allowed, and the audit says so
+        // explicitly instead of staying silent about the unchecked launch.
+        let shown = binary_names.first().copied().unwrap_or("host");
+        record_policy_decision(
+            registry,
+            shown,
+            "privilege.elevate",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
     if !policy.deny_privileged {
@@ -1773,12 +1785,32 @@ fn authorize_environment_override(
     let Some(policy) = configured.as_ref() else {
         // Without a policy, every other name is the author's choice (the Bash trust
         // model). The dynamic loader's variables change code that runs before the
-        // program starts, so a binding or a manifest cannot set them.
+        // program starts, so a binding or a manifest cannot set them. Both the
+        // denial and the allowance are audit entries, so the log states what
+        // happened instead of staying silent about it.
         if is_loader_variable(variable_name) {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::MissingGrant,
+            );
             bail!(
                 "{variable_name} is read by the dynamic loader before the program starts; a program cannot set it"
             );
         }
+        record_policy_decision(
+            registry,
+            applet_name,
+            "environment.set",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
     policy.validate()?;
@@ -1809,6 +1841,22 @@ fn authorize_environment_override(
         bail!(
             "capability policy denies setting an environment variable for applet {applet_name:?}"
         );
+    }
+}
+
+impl CapabilityPolicy {
+    /// Canonical content digest of the parsed policy: the SHA-256 of its
+    /// canonical JSON encoding. Run records store this digest so a reviewer
+    /// can tell which policy produced an allow/deny log. A digest is one-way:
+    /// it names the policy without recording any grant, path, or other
+    /// policy content.
+    pub fn canonical_digest(&self) -> String {
+        let encoded =
+            serde_json::to_vec(self).expect("a validated capability policy is serializable");
+        Sha256::digest(encoded)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 
@@ -1868,6 +1916,15 @@ pub fn authorize_environment_variable(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "environment.read",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
     policy.validate()?;
@@ -1909,6 +1966,15 @@ pub fn authorize_network_endpoint(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
     policy.validate()?;
@@ -2015,6 +2081,19 @@ pub fn authorize_host_path(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            "host",
+            if access == HostAccess::Write {
+                "filesystem.write"
+            } else {
+                "filesystem.read"
+            },
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
     policy.validate()?;
@@ -2080,6 +2159,19 @@ pub fn authorize_applet_host_path(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            if access == HostAccess::Write {
+                "filesystem.write"
+            } else {
+                "filesystem.read"
+            },
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
     policy.validate()?;
@@ -2271,6 +2363,17 @@ pub fn authorize_environment_inputs(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        // Without a policy every declared environment input is accepted, and
+        // the audit carries that baseline instead of implying a check ran.
+        record_policy_decision(
+            registry,
+            "<workflow>",
+            "environment.read",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
     policy.validate()?;

@@ -32,12 +32,16 @@ pub fn run_recorded(
     let source =
         fs::read(source_path).with_context(|| format!("reading {}", source_path.display()))?;
     let plan = runtime::explain_with_inputs(program, registry, &options.inputs)?;
+    // The seal needs the per-user key. A key that cannot be read or created is
+    // not a failed run: the record is written unsealed and `show-run` says so.
+    let audit_key = flow::agent::what_if_key::load_or_create().ok();
     let recorder = Arc::new(Recorder::start(RecordStart {
         directory,
         program_source: &source,
         plan: &plan,
         inputs: record::inputs_json_for(&options.inputs, &program.inputs),
         registry,
+        audit_key,
     })?);
     recorder.set_loop_budget(options.max_loop_iterations, options.loop_budget_scope)?;
     let guard = runtime::observe::install(recorder.clone())?;

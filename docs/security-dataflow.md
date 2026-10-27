@@ -144,15 +144,19 @@ denies unknown remote egress and persistence by default. Review applet manifests
 grants, persistence grants and cache-purity assertions as part of deployment.
 The policy decision history is bounded and records identifiers, action, origin,
 risk and outcome, not request payloads or secret values. `execute run
---record` persists that audit into the run record with the policy in force, so
-grants and denials stay reviewable after the run; `execute show-run` prints
-them. A run with no policy records that no confinement applied. Each kept
-decision carries a link in a hash chain headed by the record's `audit_head`,
-and `show-run` re-verifies the links, the sequence order and the truncation
-accounting before printing: an edited, deleted or reordered decision, or a
-truncation flag that disagrees with the total, is reported instead of shown.
-The chain is unanchored -- it lives in the same file it protects -- so it
-evidences edits made without recomputing it (mistakes, corruption, naive
-tampering), not a same-user editor who rewrites the audit and the head
-together. Whole-record tamper evidence is separate record-integrity work.
+--record` persists that audit into the run record with the policy in force (each
+configured policy named by version and a one-way content digest, never its
+contents), so grants and denials stay reviewable after the run;
+`execute show-run` prints them. A run with no policy records that no
+confinement applied. Each kept decision carries a link in a hash chain headed
+by the record's `audit_head`, and the head plus the truncation accounting
+carry a keyed seal (`audit_mac`, an HMAC under the per-user key).
+`show-run` is warn-open: it always presents the audit and labels anything
+short of a fully verified chain and seal as unsealed or untrusted (with an
+`audit_error` in JSON output), so a tampered record stays reviewable instead
+of hiding its own evidence. The chain evidences edits made without
+recomputing it; the seal raises the bar to key holders. Neither stops a
+same-user editor who can read the per-user key: rewriting the audit, the head
+and the seal together still verifies. Whole-record tamper evidence is separate
+record-integrity work.
 

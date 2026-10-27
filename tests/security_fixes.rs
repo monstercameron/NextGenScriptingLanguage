@@ -194,6 +194,16 @@ mod use_folder_handle {
     //! child's working directory is then the opened directory, not a path looked up again.
     use super::*;
     use std::os::unix::fs::symlink;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    fn shown(output: &Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
 
     #[test]
     fn a_child_after_use_folder_runs_in_the_opened_directory() {
@@ -219,6 +229,79 @@ mod use_folder_handle {
             let expected = fs::canonicalize(root.path().join("work/sub")).unwrap();
             assert_eq!(shown, expected.display().to_string(), "{folder}");
         }
+    }
+
+    #[test]
+    fn a_child_after_use_folder_keeps_the_open_directory_after_rename() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        fs::write(
+            root.path().join("main.program"),
+            concat!(
+                "use folder \"work\"\n",
+                "run \"sh\" with arguments [\"-c\", \"mv ../work ../moved && mkdir ../work\"]\n",
+                "run pwd\n",
+            ),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .args(["run", "main.program", "--manifest-dir"])
+            .arg(manifests())
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        let text = shown(&output);
+        assert!(output.status.success(), "{text}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim_end(),
+            fs::canonicalize(root.path().join("moved"))
+                .unwrap()
+                .display()
+                .to_string(),
+            "the child followed the replacement pathname instead of its opened directory"
+        );
+    }
+
+    #[test]
+    fn a_low_standard_descriptor_does_not_replace_the_directory_handle() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        fs::create_dir(&work).unwrap();
+        fs::write(
+            root.path().join("main.program"),
+            "use folder \"work\"\nrun pwd\n",
+        )
+        .unwrap();
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+        command
+            .args(["run", "main.program", "--manifest-dir"])
+            .arg(manifests())
+            .current_dir(root.path())
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // Start the interpreter with stdin closed so opening its folder handle can receive fd
+        // 0. The handle must be duplicated above the standard streams before spawn file actions
+        // wire the child's stdin/stdout/stderr.
+        // SAFETY: close only changes this freshly spawned test child before exec; fd 0 is not
+        // subsequently used by this test harness process.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::close(libc::STDIN_FILENO) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        let text = shown(&output);
+        assert!(output.status.success(), "{text}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim_end(),
+            fs::canonicalize(work).unwrap().display().to_string(),
+            "stdio file actions overwrote the opened directory descriptor"
+        );
     }
 }
 

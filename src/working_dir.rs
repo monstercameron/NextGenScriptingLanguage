@@ -1,8 +1,9 @@
 //! The working directory of a run. A `UseFolder` step opens the directory once and keeps
 //! that handle. The path the directory was authorized under is taken from the handle, and
-//! launched children enter the directory through the handle (`fchdir` before `exec`), so a
-//! link swapped in after the check cannot move them. On Unix the handle is the authority;
-//! on other platforms the directory is a path, as before.
+//! launched children enter the directory through the handle. On Linux, the spawn action changes
+//! into the descriptor path, so a link swapped in after the check cannot move them and `Command`
+//! can keep its `posix_spawn` fast path. Other Unix platforms use `fchdir` before `exec`; on
+//! non-Unix platforms the directory is a path, as before.
 //!
 //! The type dereferences to `Path`, so code that only reads the directory is unchanged.
 
@@ -45,9 +46,17 @@ impl WorkingDirectory {
                 .read(true)
                 .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
                 .open(path)?;
+            use std::os::fd::AsRawFd;
+            let handle = if file.as_raw_fd() < 3 {
+                crate::platform::unix_ffi::duplicate_cloexec(file.as_raw_fd(), 3)?
+            } else {
+                file.into()
+            };
+            // Keep the handle out of stdin/stdout/stderr, which spawn file actions may replace
+            // before resolving the descriptor path used for the working directory.
             Ok(Self {
                 path: path.to_path_buf(),
-                handle: Some(file.into()),
+                handle: Some(handle),
             })
         }
         #[cfg(not(unix))]
@@ -103,17 +112,31 @@ impl WorkingDirectory {
         &self.path
     }
 
-    /// Make a launched child start in this directory. With a handle, the child enters the
-    /// directory through the handle before `exec`; without one, the path is used.
+    /// Make a launched child start in this directory. On Linux, the descriptor path is resolved
+    /// by the spawn's chdir file action while the descriptor is still open. This keeps directory
+    /// identity tied to the handle without installing a `pre_exec` closure. Other Unix platforms
+    /// use `fchdir` before `exec`; directories without a handle use a path.
     pub fn apply(&self, command: &mut Command) {
         #[cfg(unix)]
         {
             if let Some(handle) = &self.handle {
                 use std::os::fd::AsRawFd;
-                use std::os::unix::process::CommandExt;
                 let fd = handle.as_raw_fd();
+                #[cfg(target_os = "linux")]
+                {
+                    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+                    // The spawn chdir action runs before close-on-exec descriptors are closed.
+                    // Thus this path names the held directory itself, even if its original
+                    // pathname is replaced after authorization. Fall back below on systems
+                    // where the descriptor filesystem is unavailable.
+                    if descriptor_path.exists() {
+                        command.current_dir(descriptor_path);
+                        return;
+                    }
+                }
+                use std::os::unix::process::CommandExt;
                 // SAFETY: fchdir is async-signal-safe and is the only call in the hook. The
-                // descriptor is owned by `self`, which outlives the spawn it is used for.
+                // descriptor is owned by `self`, which outlives the spawn.
                 unsafe {
                     command.pre_exec(move || {
                         if libc::fchdir(fd) == -1 {

@@ -4,14 +4,29 @@
     {
       "name": "unblock and list both succeed",
       "fakes": {
-        "rfkill": {"body": "if [ \"$1\" = unblock ]; then exit \"${UNBLOCK_STATUS:-0}\"; fi\nprintf 'hci0: Soft blocked: no\\n'\nexit \"${LIST_STATUS:-0}\""}
+        "rfkill": {
+          "body": "if [ \"$1\" = unblock ]; then exit \"${UNBLOCK_STATUS:-0}\"; fi\nprintf 'hci0: Soft blocked: no\\n'\nexit \"${LIST_STATUS:-0}\""
+        }
       }
     },
     {
       "name": "unblock fails, list status is the exit",
-      "env": {"UNBLOCK_STATUS": "1", "LIST_STATUS": "2"},
+      "env": {
+        "UNBLOCK_STATUS": "1",
+        "LIST_STATUS": "2"
+      },
       "fakes": {
-        "rfkill": {"body": "if [ \"$1\" = unblock ]; then exit \"${UNBLOCK_STATUS:-0}\"; fi\nprintf 'hci0: Soft blocked: yes\\n'\nexit \"${LIST_STATUS:-0}\""}
+        "rfkill": {
+          "body": "if [ \"$1\" = unblock ]; then exit \"${UNBLOCK_STATUS:-0}\"; fi\nprintf 'hci0: Soft blocked: yes\\n'\nexit \"${LIST_STATUS:-0}\""
+        }
+      }
+    },
+    {
+      "name": "unblock and list preserve both command outputs",
+      "fakes": {
+        "rfkill": {
+          "body": "if [ \"$1\" = unblock ]; then printf \"unblock output\\n\"; exit 0; fi\nprintf \"list output\\n\"\nexit 0"
+        }
       }
     }
   ]

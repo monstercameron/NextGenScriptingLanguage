@@ -3,6 +3,9 @@
 # the status of its last command, the rfkill list.
 execute 1
 run "printf" with arguments ["Unblocking bluetooth...\n\n"]
-run "rfkill" with arguments ["unblock", "bluetooth"] and keep status as unblocked
+run "rfkill" with arguments ["unblock", "bluetooth"] as unblock_output and keep status as unblocked
+run "printf" with arguments ["%s", unblock_output]
 run "rfkill" with arguments ["list", "bluetooth"] and keep status as listed
+then capture bytes as list_output
+use bytes list_output
 exit with status listed

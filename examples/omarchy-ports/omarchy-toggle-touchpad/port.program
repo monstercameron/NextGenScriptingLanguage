@@ -6,4 +6,6 @@ accept arguments as list of text from arguments
 accept requested as text from argument 1 with default ""
 run text.default_if_empty with text requested and default "toggle" as mode
 run "omarchy-toggle-input-device" with arguments ["touchpad", mode] and keep status as device_status
+then capture bytes as device_output
+use bytes device_output
 exit with status device_status

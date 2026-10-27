@@ -109,7 +109,11 @@ pub(super) fn validate_arguments(
             input.validate_value(value)?;
         } else if matches!(
             input.kind,
-            InputType::TextList | InputType::IntegerList | InputType::JsonList
+            InputType::TextList
+                | InputType::IntegerList
+                | InputType::UnsignedIntegerList
+                | InputType::UsizeList
+                | InputType::JsonList
         ) {
             let Value::List(items) = value else {
                 bail!("program input {:?} expects {}", input.name, input.kind);
@@ -119,6 +123,20 @@ pub(super) fn validate_arguments(
                     Value::String(text)
                         if input.kind == InputType::TextList && !text.contains('\0') => {}
                     Value::Integer(_) if input.kind == InputType::IntegerList => {}
+                    Value::Integer(value)
+                        if input.kind == InputType::UnsignedIntegerList && *value >= 0 => {}
+                    Value::Integer(value)
+                        if input.kind == InputType::UsizeList
+                            && *value >= 0
+                            && *value as u64 <= usize::MAX as u64 => {}
+                    Value::Number(value)
+                        if input.kind == InputType::UnsignedIntegerList
+                            && value.as_u64().is_some() => {}
+                    Value::Number(value)
+                        if input.kind == InputType::UsizeList
+                            && value
+                                .as_u64()
+                                .is_some_and(|value| value <= usize::MAX as u64) => {}
                     Value::Null
                     | Value::Bool(_)
                     | Value::Integer(_)
@@ -136,6 +154,15 @@ pub(super) fn validate_arguments(
                                 matches!(
                                     flow.types.get(name),
                                     Some(InputType::Integer | InputType::Never)
+                                )
+                            }
+                            InputType::UnsignedIntegerList => {
+                                flow.types.get(name) == Some(&InputType::UnsignedInteger)
+                            }
+                            InputType::UsizeList => {
+                                matches!(
+                                    flow.types.get(name),
+                                    Some(InputType::Integer | InputType::Usize)
                                 )
                             }
                             InputType::JsonList => flow

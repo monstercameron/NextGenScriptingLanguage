@@ -20,6 +20,25 @@
       "type": "integer"
     }
   },
+  "parameter_alternatives": [
+    {
+      "message": "step must be a nonzero integer",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "step"
+          }
+        ],
+        [
+          {
+            "test": "nonzero_integer",
+            "parameter": "step"
+          }
+        ]
+      ]
+    }
+  ],
   "arguments": [
     {
       "literal": "list.range"

@@ -11,13 +11,26 @@
       "type": "string"
     },
     "width": {
-      "type": "integer",
+      "type": "unsigned_integer",
       "required": true
     },
     "ellipsis": {
       "type": "string"
     }
   },
+  "parameter_alternatives": [
+    {
+      "message": "width must be a nonnegative integer",
+      "any_of": [
+        [
+          {
+            "test": "nonnegative_integer",
+            "parameter": "width"
+          }
+        ]
+      ]
+    }
+  ],
   "arguments": [
     {
       "literal": "text.truncate"
@@ -51,7 +64,7 @@
         "width": {
           "delivery": "single",
           "schema": {
-            "type": "integer"
+            "type": "usize"
           }
         },
         "ellipsis": {

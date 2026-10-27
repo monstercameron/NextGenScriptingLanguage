@@ -80,6 +80,15 @@ enum ParameterPredicate {
     Nonempty {
         parameter: String,
     },
+    PositiveInteger {
+        parameter: String,
+    },
+    NonnegativeInteger {
+        parameter: String,
+    },
+    NonzeroInteger {
+        parameter: String,
+    },
     NegativeInteger {
         parameter: String,
     },
@@ -120,6 +129,9 @@ impl ParameterPredicate {
             Self::Present { parameter }
             | Self::Absent { parameter }
             | Self::Nonempty { parameter }
+            | Self::PositiveInteger { parameter }
+            | Self::NonnegativeInteger { parameter }
+            | Self::NonzeroInteger { parameter }
             | Self::NegativeInteger { parameter }
             | Self::Boolean { parameter, .. }
             | Self::StringNotEquals { parameter, .. }
@@ -135,6 +147,15 @@ impl ParameterPredicate {
             Self::Absent { .. } => serde_json::json!({"not": {"required": [parameter]}}),
             Self::Nonempty { .. } => {
                 serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "string", "minLength": 1}}})
+            }
+            Self::PositiveInteger { .. } => {
+                serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "integer", "exclusiveMinimum": 0}}})
+            }
+            Self::NonnegativeInteger { .. } => {
+                serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "integer", "minimum": 0}}})
+            }
+            Self::NonzeroInteger { .. } => {
+                serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "integer", "not": {"const": 0}}}})
             }
             Self::NegativeInteger { .. } => {
                 serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "integer", "exclusiveMaximum": 0}}})
@@ -184,9 +205,26 @@ impl ParameterPredicate {
             Self::Nonempty { .. } => {
                 Some(matches!(value, Some(Value::String(text)) if !text.is_empty()))
             }
-            Self::NegativeInteger { .. } => {
-                Some(matches!(value, Some(Value::Integer(number)) if *number < 0))
-            }
+            Self::PositiveInteger { .. } => Some(
+                value
+                    .and_then(exact_integer_value)
+                    .is_some_and(|number| number > 0),
+            ),
+            Self::NonnegativeInteger { .. } => Some(
+                value
+                    .and_then(exact_integer_value)
+                    .is_some_and(|number| number >= 0),
+            ),
+            Self::NonzeroInteger { .. } => Some(
+                value
+                    .and_then(exact_integer_value)
+                    .is_some_and(|number| number != 0),
+            ),
+            Self::NegativeInteger { .. } => Some(
+                value
+                    .and_then(exact_integer_value)
+                    .is_some_and(|number| number < 0),
+            ),
             Self::Boolean {
                 value: expected, ..
             } => Some(matches!(value, Some(Value::Bool(actual)) if actual == expected)),
@@ -256,6 +294,23 @@ impl ParameterPredicate {
             }
         }
     }
+}
+
+/// Preserve exact integer values across the signed and unsigned JSON ranges.
+/// Fractional JSON numbers deliberately remain unmatched.
+fn exact_integer_value(value: &Value) -> Option<i128> {
+    match value {
+        Value::Integer(value) => Some(i128::from(*value)),
+        Value::Number(value) => value
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| value.as_u64().map(i128::from)),
+        _ => None,
+    }
+}
+
+fn is_exact_integer_number(value: &serde_json::Number) -> bool {
+    value.as_i64().is_some() || value.as_u64().is_some()
 }
 /// A cacheable manifest declares an effect that can change external state.
 #[derive(Debug)]
@@ -411,6 +466,11 @@ impl ParameterSchema {
                 "minimum":i64::MIN,
                 "maximum":i64::MAX
             }),
+            ParameterType::UnsignedInteger => serde_json::json!({
+                "type":"integer",
+                "minimum":0,
+                "maximum":usize::MAX as u64
+            }),
             ParameterType::Boolean => serde_json::json!({"type":"boolean"}),
             ParameterType::Record => {
                 let properties = self
@@ -486,6 +546,7 @@ impl ParameterSchema {
             }
             ParameterType::Path
             | ParameterType::Integer
+            | ParameterType::UnsignedInteger
             | ParameterType::Boolean
             | ParameterType::Json => {
                 if self.items.is_some()
@@ -546,6 +607,10 @@ impl ParameterSchema {
                     ParameterType::Json => true,
                     ParameterType::String | ParameterType::Path => kind == InputType::Text,
                     ParameterType::Integer => kind == InputType::Integer,
+                    ParameterType::UnsignedInteger => matches!(
+                        kind,
+                        InputType::Integer | InputType::UnsignedInteger | InputType::Usize
+                    ),
                     ParameterType::Boolean => kind == InputType::Boolean,
                     ParameterType::Record => kind == InputType::Json,
                     ParameterType::List => {
@@ -556,10 +621,19 @@ impl ParameterSchema {
                                     matches!(item.kind, ParameterType::String | ParameterType::Path)
                                 }))
                             || (kind == InputType::IntegerList
-                                && self
-                                    .items
-                                    .as_deref()
-                                    .is_some_and(|item| item.kind == ParameterType::Integer))
+                                && self.items.as_deref().is_some_and(|item| {
+                                    matches!(
+                                        item.kind,
+                                        ParameterType::Integer | ParameterType::UnsignedInteger
+                                    )
+                                }))
+                            || (matches!(
+                                kind,
+                                InputType::UnsignedIntegerList | InputType::UsizeList
+                            ) && self
+                                .items
+                                .as_deref()
+                                .is_some_and(|item| item.kind == ParameterType::UnsignedInteger))
                     }
                     ParameterType::Scalar => false,
                 };
@@ -596,6 +670,12 @@ impl ParameterSchema {
                 if !text.is_empty() && !text.contains('\0') => {}
             (ParameterType::Integer, Value::Integer(_))
             | (ParameterType::Boolean, Value::Bool(_)) => {}
+            (ParameterType::UnsignedInteger, Value::Integer(value))
+                if *value >= 0 && *value as u64 <= usize::MAX as u64 => {}
+            (ParameterType::UnsignedInteger, Value::Number(value))
+                if value
+                    .as_u64()
+                    .is_some_and(|value| value <= usize::MAX as u64) => {}
             (ParameterType::Record, Value::Record(fields)) => {
                 for name in &self.required {
                     if !fields.contains_key(name) {
@@ -693,6 +773,8 @@ enum ParameterType {
     String,
     Path,
     Integer,
+    #[serde(rename = "unsigned_integer")]
+    UnsignedInteger,
     Boolean,
     List,
     Json,
@@ -2486,6 +2568,9 @@ fn parameter_schema(
         ParameterType::Integer => serde_json::json!({
             "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX
         }),
+        ParameterType::UnsignedInteger => serde_json::json!({
+            "type": "integer", "minimum": 0, "maximum": usize::MAX as u64
+        }),
         ParameterType::Boolean => serde_json::json!({"type": "boolean"}),
         ParameterType::List => serde_json::json!({"type": "array"}),
         ParameterType::Json => serde_json::json!({}),
@@ -2557,6 +2642,10 @@ fn parameter_accepts_reference(
         (expected, actual),
         (ParameterType::String | ParameterType::Path, InputType::Text)
             | (ParameterType::Integer, InputType::Integer)
+            | (
+                ParameterType::UnsignedInteger,
+                InputType::Integer | InputType::UnsignedInteger | InputType::Usize
+            )
             | (ParameterType::Boolean, InputType::Boolean)
             | (
                 ParameterType::Scalar,
@@ -2582,8 +2671,19 @@ fn parameter_accepts_reference(
             && actual == InputType::IntegerList
             && matches!(
                 item_type,
-                Some(ParameterType::Integer | ParameterType::Scalar)
+                Some(
+                    ParameterType::Integer | ParameterType::UnsignedInteger | ParameterType::Scalar
+                )
             ))
+        || (expected == ParameterType::List
+            && actual == InputType::UnsignedIntegerList
+            && item_type == Some(ParameterType::UnsignedInteger))
+        || (expected == ParameterType::List
+            && actual == InputType::IntegerList
+            && item_type == Some(ParameterType::UnsignedInteger))
+        || (expected == ParameterType::List
+            && actual == InputType::UsizeList
+            && item_type == Some(ParameterType::UnsignedInteger))
         || (expected == ParameterType::List
             && actual == InputType::JsonList
             && item_type == Some(ParameterType::Json))
@@ -2614,6 +2714,10 @@ fn list_item_accepts_reference(item_type: Option<ParameterType>, actual: InputTy
             Some(ParameterType::String | ParameterType::Path),
             InputType::Text
         ) | (Some(ParameterType::Integer), InputType::Integer)
+            | (
+                Some(ParameterType::UnsignedInteger),
+                InputType::Integer | InputType::UnsignedInteger | InputType::Usize
+            )
             | (Some(ParameterType::Boolean), InputType::Boolean)
             | (
                 Some(ParameterType::Scalar),
@@ -2652,7 +2756,9 @@ fn validate_value(
                     | Value::Null
             )
             | (ParameterType::Record, Value::Record(_))
-    );
+    ) || matches!((spec.kind, value), (ParameterType::Integer, Value::Number(number)) if number.as_i64().is_some())
+        || matches!((spec.kind, value), (ParameterType::UnsignedInteger, Value::Integer(number)) if *number >= 0 && *number as u64 <= usize::MAX as u64)
+        || matches!((spec.kind, value), (ParameterType::UnsignedInteger, Value::Number(number)) if number.as_u64().is_some_and(|number| number <= usize::MAX as u64));
     if !valid {
         bail!(
             "parameter {name:?} expects {}, got {}",
@@ -2743,6 +2849,7 @@ fn validate_value(
                         ParameterType::String
                             | ParameterType::Path
                             | ParameterType::Integer
+                            | ParameterType::UnsignedInteger
                             | ParameterType::Boolean
                             | ParameterType::Json
                             | ParameterType::Scalar
@@ -2957,7 +3064,14 @@ fn validate_parameter_field(
     }
     let valid = match field.kind {
         ParameterType::String | ParameterType::Path => matches!(value, Value::String(_)),
-        ParameterType::Integer => matches!(value, Value::Integer(_)),
+        ParameterType::Integer => {
+            matches!(value, Value::Integer(_))
+                || matches!(value, Value::Number(number) if number.as_i64().is_some())
+        }
+        ParameterType::UnsignedInteger => {
+            matches!(value, Value::Integer(number) if *number >= 0 && *number as u64 <= usize::MAX as u64)
+                || matches!(value, Value::Number(number) if number.as_u64().is_some_and(|number| number <= usize::MAX as u64))
+        }
         ParameterType::Boolean => matches!(value, Value::Bool(_)),
         ParameterType::Json => matches!(
             value,
@@ -3039,13 +3153,16 @@ fn is_scalar_type(value: &Value, expected: ParameterType) -> bool {
                 ParameterType::Scalar,
                 Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_)
             )
-    )
+    ) || matches!((expected, value), (ParameterType::Integer, Value::Number(number)) if number.as_i64().is_some())
+        || matches!((expected, value), (ParameterType::UnsignedInteger, Value::Integer(number)) if *number >= 0 && *number as u64 <= usize::MAX as u64)
+        || matches!((expected, value), (ParameterType::UnsignedInteger, Value::Number(number)) if number.as_u64().is_some_and(|number| number <= usize::MAX as u64))
 }
 
 fn value_kind(value: &Value) -> &'static str {
     match value {
         Value::String(_) => "string",
         Value::Integer(_) => "integer",
+        Value::Number(number) if is_exact_integer_number(number) => "integer",
         Value::Bool(_) => "boolean",
         Value::List(_) => "list",
         Value::Reference(_) => "reference",
@@ -3214,6 +3331,7 @@ fn value_to_cow(value: &Value) -> Result<Cow<'_, str>> {
     match value {
         Value::String(value) => Ok(Cow::Borrowed(value)),
         Value::Integer(value) => Ok(Cow::Owned(value.to_string())),
+        Value::Number(value) if is_exact_integer_number(value) => Ok(Cow::Owned(value.to_string())),
         Value::Bool(value) => Ok(Cow::Borrowed(if *value { "true" } else { "false" })),
         Value::List(_) => bail!("cannot use a list as one argument"),
         Value::Reference(_) => bail!("unresolved reference cannot become an argument"),
@@ -3227,6 +3345,7 @@ fn value_to_string(value: &Value) -> Result<String> {
     match value {
         Value::String(s) => Ok(s.clone()),
         Value::Integer(n) => Ok(n.to_string()),
+        Value::Number(n) if is_exact_integer_number(n) => Ok(n.to_string()),
         Value::Bool(b) => Ok(b.to_string()),
         Value::List(_) => bail!("cannot use a list as one argument"),
         Value::Reference(_) => bail!("unresolved reference cannot become an argument"),
@@ -3881,6 +4000,16 @@ fn validate_parameter_alternatives(
                     {
                         bail!("nonempty predicate requires a string or path parameter")
                     }
+                    ParameterPredicate::PositiveInteger { .. }
+                    | ParameterPredicate::NonnegativeInteger { .. }
+                    | ParameterPredicate::NonzeroInteger { .. }
+                        if !matches!(
+                            spec.kind,
+                            ParameterType::Integer | ParameterType::UnsignedInteger
+                        ) =>
+                    {
+                        bail!("integer-domain predicate requires an integer parameter")
+                    }
                     ParameterPredicate::NegativeInteger { .. }
                         if spec.kind != ParameterType::Integer =>
                     {
@@ -3896,8 +4025,12 @@ fn validate_parameter_alternatives(
                     }
                     ParameterPredicate::NumberRange {
                         minimum, maximum, ..
-                    } if !matches!(spec.kind, ParameterType::Integer | ParameterType::Json)
-                        || minimum > maximum
+                    } if !matches!(
+                        spec.kind,
+                        ParameterType::Integer
+                            | ParameterType::UnsignedInteger
+                            | ParameterType::Json
+                    ) || minimum > maximum
                         || *minimum < -9_007_199_254_740_992
                         || *maximum > 9_007_199_254_740_992 =>
                     {
@@ -4205,7 +4338,22 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
         OutputType::Bytes => false,
         OutputType::Text | OutputType::Path => kind == InputType::Text,
         OutputType::Integer => kind == InputType::Integer,
-        OutputType::Number => matches!(kind, InputType::Integer | InputType::Json),
+        OutputType::UnsignedInteger => {
+            matches!(kind, InputType::UnsignedInteger | InputType::Usize)
+        }
+        OutputType::Usize => {
+            // References are checked against the resolved value below. Keep
+            // signed and full-u64 inputs statically admissible here so that
+            // in-range values can flow to a platform-sized parameter.
+            matches!(
+                kind,
+                InputType::Integer | InputType::UnsignedInteger | InputType::Usize
+            )
+        }
+        OutputType::Number => matches!(
+            kind,
+            InputType::Integer | InputType::UnsignedInteger | InputType::Usize | InputType::Json
+        ),
         OutputType::Boolean => kind == InputType::Boolean,
         OutputType::Json => {
             kind != InputType::Bytes
@@ -4223,10 +4371,17 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
                         matches!(item.kind, OutputType::Text | OutputType::Path)
                     }))
                 || (kind == InputType::IntegerList
-                    && schema
-                        .items
-                        .as_deref()
-                        .is_some_and(|item| item.kind == OutputType::Integer))
+                    && schema.items.as_deref().is_some_and(|item| {
+                        matches!(item.kind, OutputType::Integer | OutputType::Usize)
+                    }))
+                || (kind == InputType::UnsignedIntegerList
+                    && schema.items.as_deref().is_some_and(|item| {
+                        matches!(item.kind, OutputType::UnsignedInteger | OutputType::Usize)
+                    }))
+                || (kind == InputType::UsizeList
+                    && schema.items.as_deref().is_some_and(|item| {
+                        matches!(item.kind, OutputType::UnsignedInteger | OutputType::Usize)
+                    }))
                 || (kind == InputType::JsonList
                     && schema
                         .items
@@ -4404,6 +4559,7 @@ fn parameter_input_kind(spec: &ParameterSpec) -> Result<InputType> {
     Ok(match spec.kind {
         ParameterType::String | ParameterType::Path => InputType::Text,
         ParameterType::Integer => InputType::Integer,
+        ParameterType::UnsignedInteger => InputType::Usize,
         ParameterType::Boolean => InputType::Boolean,
         ParameterType::Json | ParameterType::Record => InputType::Json,
         ParameterType::List
@@ -4416,6 +4572,9 @@ fn parameter_input_kind(spec: &ParameterSpec) -> Result<InputType> {
         }
         ParameterType::List if spec.item_type == Some(ParameterType::Integer) => {
             InputType::IntegerList
+        }
+        ParameterType::List if spec.item_type == Some(ParameterType::UnsignedInteger) => {
+            InputType::UsizeList
         }
         ParameterType::List if spec.item_type == Some(ParameterType::Json) => InputType::JsonList,
         ParameterType::List => {
@@ -4438,6 +4597,7 @@ fn parameter_field_value_schema(
         ParameterType::String => OutputType::Text,
         ParameterType::Path => OutputType::Path,
         ParameterType::Integer => OutputType::Integer,
+        ParameterType::UnsignedInteger => OutputType::Usize,
         ParameterType::Boolean => OutputType::Boolean,
         ParameterType::Json => OutputType::Json,
         ParameterType::Record => OutputType::Record,
@@ -4540,6 +4700,8 @@ fn output_type_name(kind: OutputType) -> &'static str {
         OutputType::Text => "text",
         OutputType::Path => "path",
         OutputType::Integer => "integer",
+        OutputType::UnsignedInteger => "unsigned integer",
+        OutputType::Usize => "usize",
         OutputType::Number => "number",
         OutputType::Boolean => "boolean",
         OutputType::Json => "json",
@@ -4677,6 +4839,7 @@ impl std::fmt::Display for ParameterType {
             Self::String => "string",
             Self::Path => "path",
             Self::Integer => "integer",
+            Self::UnsignedInteger => "unsigned integer",
             Self::Boolean => "boolean",
             Self::List => "list",
             Self::Json => "json",
@@ -4842,13 +5005,95 @@ mod tests {
     }
 
     #[test]
+    fn integer_parameter_references_keep_signed_and_unsigned_domains_distinct() {
+        assert!(parameter_accepts_reference(
+            ParameterType::Integer,
+            None,
+            InputType::Integer
+        ));
+        assert!(!parameter_accepts_reference(
+            ParameterType::Integer,
+            None,
+            InputType::UnsignedInteger
+        ));
+        assert!(parameter_accepts_reference(
+            ParameterType::UnsignedInteger,
+            None,
+            InputType::UnsignedInteger
+        ));
+        assert!(parameter_accepts_reference(
+            ParameterType::UnsignedInteger,
+            None,
+            InputType::Integer
+        ));
+        assert!(parameter_accepts_reference(
+            ParameterType::List,
+            Some(ParameterType::UnsignedInteger),
+            InputType::IntegerList
+        ));
+        assert!(!parameter_accepts_reference(
+            ParameterType::List,
+            Some(ParameterType::Integer),
+            InputType::UnsignedIntegerList
+        ));
+        assert!(parameter_accepts_reference(
+            ParameterType::List,
+            Some(ParameterType::UnsignedInteger),
+            InputType::UnsignedIntegerList
+        ));
+    }
+
+    #[test]
+    fn unsigned_integer_parameter_schema_keeps_its_full_platform_domain() {
+        let schema = parameter_field_value_schema(
+            ParameterType::UnsignedInteger,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(schema.kind, OutputType::Usize);
+        assert!(schema_accepts_reference(&schema, InputType::Integer));
+        assert!(schema_accepts_reference(
+            &schema,
+            InputType::UnsignedInteger
+        ));
+        let unsigned_schema = leaf_value_schema(OutputType::UnsignedInteger);
+        assert!(schema_accepts_reference(&unsigned_schema, InputType::Usize));
+        let unsigned_list_schema = ValueSchema {
+            kind: OutputType::List,
+            items: Some(Box::new(unsigned_schema)),
+            ..schema.clone()
+        };
+        assert!(schema_accepts_reference(
+            &unsigned_list_schema,
+            InputType::UsizeList
+        ));
+        assert!(schema_accepts_reference(
+            &unsigned_list_schema,
+            InputType::UnsignedIntegerList
+        ));
+        assert!(schema
+            .validate_value(&Value::Number(serde_json::Number::from(usize::MAX as u64)))
+            .is_ok());
+        assert_eq!(
+            parameter_schema(ParameterType::UnsignedInteger, None)["maximum"],
+            usize::MAX as u64
+        );
+    }
+
+    #[test]
     fn json_list_item_references_accept_json_values_but_reject_bytes() {
         for kind in [
             InputType::Text,
             InputType::Integer,
+            InputType::UnsignedInteger,
             InputType::Boolean,
             InputType::TextList,
             InputType::IntegerList,
+            InputType::UnsignedIntegerList,
             InputType::JsonList,
             InputType::Json,
             InputType::Never,

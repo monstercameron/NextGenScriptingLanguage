@@ -798,6 +798,8 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
         }
         Some("string") => OutputType::Text,
         Some("integer") => OutputType::Integer,
+        Some("unsigned_integer") => OutputType::UnsignedInteger,
+        Some("usize") => OutputType::Usize,
         Some("number") => OutputType::Number,
         Some("boolean") => OutputType::Boolean,
         Some("array") => OutputType::List,

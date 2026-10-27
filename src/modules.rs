@@ -1941,6 +1941,14 @@ fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
     if input == InputType::Never {
         return true;
     }
+    port_schema_accepts_input_with_usize_max(schema, input, usize::MAX as u64)
+}
+
+fn port_schema_accepts_input_with_usize_max(
+    schema: &ValueSchema,
+    input: InputType,
+    usize_max: u64,
+) -> bool {
     if schema.nullable {
         return input == InputType::Json && schema.kind != OutputType::Bytes;
     }
@@ -1948,6 +1956,13 @@ fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
         InputType::Never => true,
         InputType::Text => matches!(schema.kind, OutputType::Text | OutputType::Path),
         InputType::Integer => schema.kind == OutputType::Integer,
+        InputType::UnsignedInteger => {
+            schema.kind == OutputType::UnsignedInteger || schema.kind == OutputType::Usize
+        }
+        InputType::Usize => {
+            schema.kind == OutputType::Usize
+                || (schema.kind == OutputType::UnsignedInteger && usize_max == u64::MAX)
+        }
         InputType::Boolean => schema.kind == OutputType::Boolean,
         // Byte captures are never program inputs.
         InputType::Bytes => false,
@@ -1963,6 +1978,21 @@ fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
                     .items
                     .as_deref()
                     .is_some_and(|item| !item.nullable && item.kind == OutputType::Integer)
+        }
+        InputType::UnsignedIntegerList => {
+            schema.kind == OutputType::List
+                && schema.items.as_deref().is_some_and(|item| {
+                    !item.nullable
+                        && matches!(item.kind, OutputType::UnsignedInteger | OutputType::Usize)
+                })
+        }
+        InputType::UsizeList => {
+            schema.kind == OutputType::List
+                && schema.items.as_deref().is_some_and(|item| {
+                    !item.nullable
+                        && (item.kind == OutputType::Usize
+                            || (item.kind == OutputType::UnsignedInteger && usize_max == u64::MAX))
+                })
         }
         InputType::JsonList => {
             schema.kind == OutputType::List
@@ -2998,6 +3028,118 @@ mod tests {
         assert!(port_schema_accepts_input(
             &path_list_schema,
             InputType::TextList
+        ));
+
+        let signed = ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            kind: OutputType::Integer,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            single_line: false,
+            minimum: None,
+            pattern: None,
+        };
+        let unsigned = ValueSchema {
+            kind: OutputType::UnsignedInteger,
+            ..signed.clone()
+        };
+        let usize_schema = ValueSchema {
+            kind: OutputType::Usize,
+            ..signed.clone()
+        };
+        let unsigned_list = ValueSchema {
+            kind: OutputType::List,
+            items: Some(Box::new(unsigned.clone())),
+            ..signed.clone()
+        };
+        let usize_list = ValueSchema {
+            kind: OutputType::List,
+            items: Some(Box::new(usize_schema.clone())),
+            ..signed.clone()
+        };
+        assert!(!port_schema_accepts_input(
+            &signed,
+            InputType::UnsignedInteger
+        ));
+        assert!(!port_schema_accepts_input(&unsigned, InputType::Integer));
+        assert!(port_schema_accepts_input(
+            &unsigned,
+            InputType::UnsignedInteger
+        ));
+        assert!(!port_schema_accepts_input(
+            &usize_schema,
+            InputType::Integer
+        ));
+        assert!(port_schema_accepts_input(&usize_schema, InputType::Usize));
+        assert!(port_schema_accepts_input(
+            &usize_schema,
+            InputType::UnsignedInteger
+        ));
+        assert_eq!(
+            port_schema_accepts_input(&unsigned, InputType::Usize),
+            usize::MAX as u128 == u64::MAX as u128
+        );
+        assert_eq!(
+            port_schema_accepts_input(&unsigned_list, InputType::UsizeList),
+            usize::MAX as u128 == u64::MAX as u128
+        );
+        assert!(port_schema_accepts_input(&usize_list, InputType::UsizeList));
+        assert!(port_schema_accepts_input(
+            &usize_list,
+            InputType::UnsignedIntegerList
+        ));
+        assert_eq!(
+            port_schema_accepts_input(&unsigned_list, InputType::UsizeList),
+            usize::MAX as u128 == u64::MAX as u128
+        );
+
+        let narrow_usize_max = u32::MAX as u64;
+        assert!(port_schema_accepts_input_with_usize_max(
+            &usize_schema,
+            InputType::UnsignedInteger,
+            narrow_usize_max
+        ));
+        assert!(!port_schema_accepts_input_with_usize_max(
+            &unsigned,
+            InputType::Usize,
+            narrow_usize_max
+        ));
+        assert!(port_schema_accepts_input_with_usize_max(
+            &usize_schema,
+            InputType::UnsignedInteger,
+            u64::MAX
+        ));
+        assert!(port_schema_accepts_input_with_usize_max(
+            &unsigned,
+            InputType::Usize,
+            u64::MAX
+        ));
+        assert!(port_schema_accepts_input_with_usize_max(
+            &usize_list,
+            InputType::UnsignedIntegerList,
+            narrow_usize_max
+        ));
+        assert!(!port_schema_accepts_input_with_usize_max(
+            &unsigned_list,
+            InputType::UsizeList,
+            narrow_usize_max
+        ));
+        assert!(port_schema_accepts_input_with_usize_max(
+            &usize_list,
+            InputType::UnsignedIntegerList,
+            u64::MAX
+        ));
+        assert!(port_schema_accepts_input_with_usize_max(
+            &unsigned_list,
+            InputType::UsizeList,
+            u64::MAX
         ));
     }
 }

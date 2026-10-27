@@ -75,15 +75,24 @@ must all match. For example:
 ```
 
 Predicates are `present`, `absent`, `nonempty` (string or path),
-`negative_integer`, `boolean` (with a `value`), and `number_range` (with
-inclusive `minimum` and `maximum` integer bounds). Numeric bounds must fit
-within ±2^53 so integer-to-binary64 conversion is exact. A manifest is refused
+`negative_integer`, `positive_integer`, `nonnegative_integer`,
+`nonzero_integer`, `boolean` (with a `value`), and `number_range` (with
+inclusive `minimum` and `maximum` integer bounds). The integer-domain
+predicates match exact signed or unsigned JSON integers without converting
+through floating point. `number_range` bounds must fit within ±2^53 so
+integer-to-binary64 conversion is exact. A manifest is refused
 if a rule names an undeclared parameter, has the wrong parameter type, or has
 empty or oversized branches. Checking rejects a call only when every branch is
 known to fail; values supplied by references are checked after resolution before
 execution. Inspection exposes the rules and their JSON Schema equivalent.
 Helper invocations bypass manifests, so applet implementations must continue
 to validate their own inputs.
+
+Applet parameter types `integer` and `unsigned_integer` accept exact signed
+64-bit and nonnegative platform-sized integer values respectively. Workflow
+`accept ... as integer` inputs remain signed 64-bit values; references to them
+can supply an unsigned parameter only when their resolved value fits its
+declared domain.
 
 ## A manifest with typed output
 
@@ -168,6 +177,8 @@ errors during catalog validation.
 | `text` | UTF-8 text, either raw bytes or a JSON string. Empty text is valid. |
 | `path` | A contract-only semantic string. Raw form must be UTF-8; JSON form must be a JSON string. It must be nonempty and contain no NUL. A path parameter accepts a string literal or text result reference and emits exactly one argv item. Path output uses the existing text binding type. A leading `~/` (or `~` alone) in a path parameter's value expands to the home directory before the applet sees it, for command applets and in-process `fs.*` applets alike; `~user` is not expanded. Argv text that is not a path parameter, and every string parameter, stay literal. |
 | `integer` | JSON signed 64-bit integer. |
+| `unsigned_integer` | Nonnegative JSON unsigned 64-bit integer. This domain stays distinct from `integer` and `usize` when checking typed port compatibility. |
+| `usize` | Nonnegative JSON integer in the current platform's `usize` domain. This is the port type for parameters declared `unsigned_integer`; compatibility checks account for 32-bit and 64-bit bounds. |
 | `number` | Any finite JSON number, including integers and fractional values. |
 | `boolean` | JSON boolean. |
 | `json` | Any complete JSON value. |
@@ -175,8 +186,8 @@ errors during catalog validation.
 | `list` | JSON array checked item by item against its recursive `items` schema. Lists cannot contain raw-byte values; a top-level list output uses JSON encoding. |
 
 An output schema requires an explicit `encoding`. Text and path accept `raw` or
-`json`; integer, number, boolean, json, record and list require `json`; bytes
-require `raw`.
+`json`; integer, unsigned_integer, usize, number, boolean, json, record and
+list require `json`; bytes require `raw`.
 `trim_final_lf: true` is permitted only for raw text or path, and removes one
 final LF only. It does not trim spaces, remove CR, or normalize line endings.
 There is no nominal Path value in the `.program` AST: path semantics are checked

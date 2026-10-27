@@ -1884,6 +1884,8 @@ fn placeholder_value(schema: &ValueSchema) -> Result<Value> {
         ),
         OutputType::Path => Value::String("__graph_preflight__".into()),
         OutputType::Integer => Value::Integer(0),
+        OutputType::UnsignedInteger => Value::Number(0u64.into()),
+        OutputType::Usize => Value::Number(0u64.into()),
         OutputType::Number => Value::Integer(0),
         OutputType::Boolean => Value::Bool(false),
         OutputType::Json => Value::Null,

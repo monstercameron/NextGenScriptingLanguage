@@ -13,10 +13,23 @@
       "required": true
     },
     "size": {
-      "type": "integer",
+      "type": "unsigned_integer",
       "required": true
     }
   },
+  "parameter_alternatives": [
+    {
+      "message": "size must be a positive integer",
+      "any_of": [
+        [
+          {
+            "test": "positive_integer",
+            "parameter": "size"
+          }
+        ]
+      ]
+    }
+  ],
   "arguments": [
     {
       "literal": "list.chunk"
@@ -56,7 +69,7 @@
         "size": {
           "delivery": "single",
           "schema": {
-            "type": "integer"
+            "type": "usize"
           }
         }
       },

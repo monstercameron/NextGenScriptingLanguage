@@ -67,6 +67,8 @@ pub(super) fn element_type(
             Some(InputType::Never) => Ok(InputType::Never),
             Some(InputType::TextList) => Ok(InputType::Text),
             Some(InputType::IntegerList) => Ok(InputType::Integer),
+            Some(InputType::UnsignedIntegerList) => Ok(InputType::UnsignedInteger),
+            Some(InputType::UsizeList) => Ok(InputType::Usize),
             Some(InputType::JsonList) => Ok(InputType::Json),
             Some(InputType::Json) => Ok(InputType::Json),
             Some(kind) => bail!("for each requires a list or JSON array, {name:?} is {kind}"),
@@ -83,6 +85,26 @@ pub(super) fn element_type(
         }
         Value::List(items) if items.is_empty() => Ok(InputType::Never),
         Value::List(items) if items.iter().all(is_text_item) => Ok(InputType::Text),
+        Value::List(items)
+            if items.iter().all(|item| match item {
+                Value::Number(number) => number
+                    .as_u64()
+                    .is_some_and(|value| value <= usize::MAX as u64),
+                Value::Reference(name) => types.get(name) == Some(&InputType::Usize),
+                _ => false,
+            }) =>
+        {
+            Ok(InputType::Usize)
+        }
+        Value::List(items)
+            if items.iter().all(|item| match item {
+                Value::Number(number) => number.as_u64().is_some(),
+                Value::Reference(name) => types.get(name) == Some(&InputType::UnsignedInteger),
+                _ => false,
+            }) =>
+        {
+            Ok(InputType::UnsignedInteger)
+        }
         Value::List(items)
             if items.iter().all(|item| match item {
                 Value::Integer(_) => true,

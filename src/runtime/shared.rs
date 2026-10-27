@@ -29,6 +29,8 @@ fn polymorphic_output_kind(
         Value::Reference(name) => match types.get(name).copied()? {
             crate::ast::InputType::TextList => crate::ast::InputType::Text,
             crate::ast::InputType::IntegerList => crate::ast::InputType::Integer,
+            crate::ast::InputType::UnsignedIntegerList => crate::ast::InputType::UnsignedInteger,
+            crate::ast::InputType::UsizeList => crate::ast::InputType::Usize,
             _ => crate::ast::InputType::Json,
         },
         Value::List(items) => {
@@ -36,6 +38,19 @@ fn polymorphic_output_kind(
                 Value::String(text) if text.contains('\0') => Some(crate::ast::InputType::Json),
                 Value::String(_) => Some(crate::ast::InputType::Text),
                 Value::Integer(_) => Some(crate::ast::InputType::Integer),
+                Value::Number(number) if number.as_i64().is_some() => {
+                    Some(crate::ast::InputType::Integer)
+                }
+                Value::Number(number)
+                    if number
+                        .as_u64()
+                        .is_some_and(|value| value <= usize::MAX as u64) =>
+                {
+                    Some(crate::ast::InputType::Usize)
+                }
+                Value::Number(number) if number.as_u64().is_some() => {
+                    Some(crate::ast::InputType::UnsignedInteger)
+                }
                 Value::Bool(_) => Some(crate::ast::InputType::Boolean),
                 Value::Reference(name) => Some(
                     types
@@ -59,6 +74,8 @@ fn polymorphic_output_kind(
         crate::contracts::OutputType::List => match item_kind {
             crate::ast::InputType::Text => crate::ast::InputType::TextList,
             crate::ast::InputType::Integer => crate::ast::InputType::IntegerList,
+            crate::ast::InputType::UnsignedInteger => crate::ast::InputType::UnsignedIntegerList,
+            crate::ast::InputType::Usize => crate::ast::InputType::UsizeList,
             _ => crate::ast::InputType::JsonList,
         },
         crate::contracts::OutputType::Json => item_kind,

@@ -340,8 +340,8 @@ pub(super) fn shape(
             let width = args
                 .get("width")
                 .and_then(Value::as_u64)
-                .ok_or_else(|| invalid("args.width must be a nonnegative integer"))?
-                as usize;
+                .and_then(|width| usize::try_from(width).ok())
+                .ok_or_else(|| invalid("args.width must be a nonnegative integer in range"))?;
             let ellipsis = optional_string(args, "ellipsis", "…")?;
             let chars = text.chars().collect::<Vec<_>>();
             if chars.len() <= width {
@@ -412,8 +412,8 @@ pub(super) fn shape(
             let width = args
                 .get("width")
                 .and_then(Value::as_u64)
-                .ok_or_else(|| invalid("args.width must be a nonnegative integer"))?
-                as usize;
+                .and_then(|width| usize::try_from(width).ok())
+                .ok_or_else(|| invalid("args.width must be a nonnegative integer in range"))?;
             let side = optional_string(args, "side", "right")?;
             let fill = optional_string(args, "fill", " ")?;
             if fill.is_empty() {
@@ -471,8 +471,8 @@ pub(super) fn shape(
             let count = args
                 .get("count")
                 .and_then(Value::as_u64)
-                .ok_or_else(|| invalid("args.count must be a nonnegative integer"))?
-                as usize;
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(|| invalid("args.count must be a nonnegative integer in range"))?;
             if text
                 .len()
                 .checked_mul(count)

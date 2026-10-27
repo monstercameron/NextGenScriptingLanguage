@@ -133,9 +133,13 @@ fn type_label(kind: InputType) -> &'static str {
     match kind {
         InputType::Text => "text",
         InputType::Integer => "integer",
+        InputType::UnsignedInteger => "unsigned integer",
+        InputType::Usize => "usize",
         InputType::Boolean => "boolean",
         InputType::TextList => "list of text",
         InputType::IntegerList => "list of integer",
+        InputType::UnsignedIntegerList => "list of unsigned integer",
+        InputType::UsizeList => "list of usize",
         InputType::JsonList => "list of json",
         InputType::Json => "json",
         InputType::Never => "uninhabited empty-loop item",

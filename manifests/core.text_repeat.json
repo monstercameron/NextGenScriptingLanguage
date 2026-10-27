@@ -11,10 +11,23 @@
       "type": "string"
     },
     "count": {
-      "type": "integer",
+      "type": "unsigned_integer",
       "required": true
     }
   },
+  "parameter_alternatives": [
+    {
+      "message": "count must be a nonnegative integer",
+      "any_of": [
+        [
+          {
+            "test": "nonnegative_integer",
+            "parameter": "count"
+          }
+        ]
+      ]
+    }
+  ],
   "arguments": [
     {
       "literal": "text.repeat"
@@ -48,7 +61,7 @@
         "count": {
           "delivery": "single",
           "schema": {
-            "type": "integer"
+            "type": "usize"
           }
         }
       },

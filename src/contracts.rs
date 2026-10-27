@@ -596,6 +596,12 @@ pub enum OutputType {
     Text,
     Path,
     Integer,
+    /// A nonnegative JSON integer in the full u64 domain.
+    #[serde(rename = "unsigned_integer")]
+    UnsignedInteger,
+    /// A nonnegative integer in the platform's `usize` domain.
+    #[serde(rename = "usize")]
+    Usize,
     /// Any finite JSON numeric value, including integers and fractions.
     Number,
     Boolean,
@@ -826,9 +832,15 @@ impl ValueSchema {
 
 fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
     let kinds_assignable = source.kind == target.kind
+        || (source.kind == OutputType::UnsignedInteger
+            && target.kind == OutputType::Usize
+            && usize::MAX as u128 >= u64::MAX as u128)
         || matches!(
             (source.kind, target.kind),
-            (OutputType::Integer, OutputType::Number | OutputType::Json)
+            (
+                OutputType::Integer | OutputType::UnsignedInteger | OutputType::Usize,
+                OutputType::Number | OutputType::Json
+            ) | (OutputType::Usize, OutputType::UnsignedInteger)
                 | (OutputType::Number, OutputType::Json)
                 | (
                     OutputType::Text
@@ -852,6 +864,10 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
             OutputType::Integer => {
                 let lower_bound = effective_integer_minimum(source.minimum.as_ref());
                 compare_integer_to_number(lower_bound, target_minimum)
+                    .is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
+            }
+            OutputType::UnsignedInteger | OutputType::Usize => {
+                compare_integer_to_number(0, target_minimum)
                     .is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
             }
             OutputType::Number => source.minimum.as_ref().is_some_and(|source_minimum| {
@@ -1065,6 +1081,33 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
             schema.minimum.as_ref(),
             NumericValue::Integer(i128::from(*value)),
         ),
+        (OutputType::Integer, Value::Number(value)) if value.as_i64().is_some() => {
+            validate_numeric_minimum(schema.minimum.as_ref(), NumericValue::Number(value))
+        }
+        (OutputType::UnsignedInteger, Value::Integer(value)) if *value >= 0 => {
+            validate_numeric_minimum(
+                schema.minimum.as_ref(),
+                NumericValue::Integer(i128::from(*value)),
+            )
+        }
+        (OutputType::UnsignedInteger, Value::Number(value)) if value.as_u64().is_some() => {
+            validate_numeric_minimum(schema.minimum.as_ref(), NumericValue::Number(value))
+        }
+        (OutputType::Usize, Value::Integer(value))
+            if *value >= 0 && *value as u64 <= usize::MAX as u64 =>
+        {
+            validate_numeric_minimum(
+                schema.minimum.as_ref(),
+                NumericValue::Integer(i128::from(*value)),
+            )
+        }
+        (OutputType::Usize, Value::Number(value))
+            if value
+                .as_u64()
+                .is_some_and(|value| value <= usize::MAX as u64) =>
+        {
+            validate_numeric_minimum(schema.minimum.as_ref(), NumericValue::Number(value))
+        }
         (OutputType::Number, Value::Number(value)) => {
             validate_numeric_minimum(schema.minimum.as_ref(), NumericValue::Number(value))
         }
@@ -1278,6 +1321,8 @@ pub(crate) fn validate_stdin_port(port: &AppletPort) -> Result<()> {
         }
         (
             OutputType::Integer
+            | OutputType::UnsignedInteger
+            | OutputType::Usize
             | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
@@ -1290,6 +1335,8 @@ pub(crate) fn validate_stdin_port(port: &AppletPort) -> Result<()> {
             | OutputType::Text
             | OutputType::Path
             | OutputType::Integer
+            | OutputType::UnsignedInteger
+            | OutputType::Usize
             | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
@@ -1301,6 +1348,8 @@ pub(crate) fn validate_stdin_port(port: &AppletPort) -> Result<()> {
         }
         (
             OutputType::Integer
+            | OutputType::UnsignedInteger
+            | OutputType::Usize
             | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
@@ -1425,6 +1474,8 @@ impl OutputSchema {
             | (OutputType::Text | OutputType::Path, OutputEncoding::Raw | OutputEncoding::Json)
             | (
                 OutputType::Integer
+                | OutputType::UnsignedInteger
+                | OutputType::Usize
                 | OutputType::Number
                 | OutputType::Boolean
                 | OutputType::Json
@@ -1437,6 +1488,8 @@ impl OutputSchema {
             }
             (
                 OutputType::Integer
+                | OutputType::UnsignedInteger
+                | OutputType::Usize
                 | OutputType::Number
                 | OutputType::Boolean
                 | OutputType::Json
@@ -1461,12 +1514,16 @@ impl OutputSchema {
             OutputType::Bytes => None,
             OutputType::Text | OutputType::Path => Some(InputType::Text),
             OutputType::Integer => Some(InputType::Integer),
+            OutputType::UnsignedInteger => Some(InputType::UnsignedInteger),
+            OutputType::Usize => Some(InputType::Usize),
             OutputType::Number => Some(InputType::Json),
             OutputType::Boolean => Some(InputType::Boolean),
             OutputType::Json | OutputType::Record => Some(InputType::Json),
             OutputType::List => Some(match self.items.as_deref().map(|item| item.kind) {
                 Some(OutputType::Text | OutputType::Path) => InputType::TextList,
                 Some(OutputType::Integer) => InputType::IntegerList,
+                Some(OutputType::UnsignedInteger) => InputType::UnsignedIntegerList,
+                Some(OutputType::Usize) => InputType::UsizeList,
                 Some(OutputType::Json) => InputType::JsonList,
                 _ => InputType::Json,
             }),
@@ -1495,6 +1552,8 @@ impl OutputSchema {
                 }
             },
             OutputType::Integer
+            | OutputType::UnsignedInteger
+            | OutputType::Usize
             | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
@@ -1522,6 +1581,8 @@ impl OutputSchema {
                 self.decode_string_value(value)
             }
             OutputType::Integer
+            | OutputType::UnsignedInteger
+            | OutputType::Usize
             | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
@@ -1821,6 +1882,12 @@ fn schema_json(
         OutputType::Integer => serde_json::json!({
             "type":"integer", "minimum":i64::MIN, "maximum":i64::MAX
         }),
+        OutputType::UnsignedInteger => serde_json::json!({
+            "type":"integer", "minimum":0, "maximum":u64::MAX
+        }),
+        OutputType::Usize => serde_json::json!({
+            "type":"integer", "minimum":0, "maximum":usize::MAX as u64
+        }),
         OutputType::Number => serde_json::json!({"type":"number"}),
         OutputType::Boolean => serde_json::json!({"type":"boolean"}),
         OutputType::Json if scalar_only => serde_json::json!({
@@ -1989,6 +2056,39 @@ fn validate_json_value(
             if number.as_i64().is_none() {
                 bail!(
                     "expected JSON signed 64-bit integer, got {}",
+                    json_kind(value)
+                );
+            }
+            validate_numeric_minimum(minimum, NumericValue::Number(number))?;
+        }
+        OutputType::UnsignedInteger => {
+            let number = value.as_number().ok_or_else(|| {
+                anyhow!(
+                    "expected JSON nonnegative 64-bit integer, got {}",
+                    json_kind(value)
+                )
+            })?;
+            if number.as_u64().is_none() {
+                bail!(
+                    "expected JSON nonnegative 64-bit integer, got {}",
+                    json_kind(value)
+                );
+            }
+            validate_numeric_minimum(minimum, NumericValue::Number(number))?;
+        }
+        OutputType::Usize => {
+            let number = value.as_number().ok_or_else(|| {
+                anyhow!(
+                    "expected JSON nonnegative platform-sized integer, got {}",
+                    json_kind(value)
+                )
+            })?;
+            if !number
+                .as_u64()
+                .is_some_and(|value| value <= usize::MAX as u64)
+            {
+                bail!(
+                    "expected JSON nonnegative platform-sized integer, got {}",
                     json_kind(value)
                 );
             }
@@ -2857,6 +2957,29 @@ mod typed_json_decode_tests {
     }
 
     #[test]
+    fn usize_schema_tracks_the_platform_domain_directionally() {
+        let schema = |kind| serde_json::from_value::<ValueSchema>(json!({ "type": kind })).unwrap();
+        let unsigned = schema("unsigned_integer");
+        let usize_schema = schema("usize");
+        let signed = schema("integer");
+
+        assert!(usize_schema.is_assignable_to(&unsigned));
+        assert_eq!(
+            unsigned.is_assignable_to(&usize_schema),
+            usize::MAX as u128 >= u64::MAX as u128
+        );
+        assert!(!signed.is_assignable_to(&usize_schema));
+        assert!(usize_schema
+            .validate_value(&Value::Number(usize::MAX.into()))
+            .is_ok());
+        if (usize::MAX as u128) < u64::MAX as u128 {
+            assert!(usize_schema
+                .validate_value(&Value::Number((usize::MAX as u64 + 1).into()))
+                .is_err());
+        }
+    }
+
+    #[test]
     fn predecoded_json_keeps_schema_errors_and_result_envelope_semantics() {
         let invalid_cases = [
             (
@@ -3161,11 +3284,23 @@ mod numeric_minimum_tests {
     #[test]
     fn numeric_minimum_assignability_uses_effective_integer_domain_bounds() {
         let unrestricted_integer = schema(OutputType::Integer, None);
+        let unsigned = schema(OutputType::UnsignedInteger, None);
+        let usize_schema = schema(OutputType::Usize, None);
         let minimum_i64 = schema(
             OutputType::Integer,
             Some(serde_json::Number::from(i64::MIN)),
         );
         assert!(unrestricted_integer.is_assignable_to(&minimum_i64));
+
+        let positive_number = schema(OutputType::Number, Some(serde_json::Number::from(1)));
+        let zero_number = schema(OutputType::Number, Some(serde_json::Number::from(0)));
+        let negative_number = schema(OutputType::Number, Some(serde_json::Number::from(-1)));
+        assert!(!unsigned.is_assignable_to(&positive_number));
+        assert!(!usize_schema.is_assignable_to(&positive_number));
+        assert!(unsigned.is_assignable_to(&zero_number));
+        assert!(usize_schema.is_assignable_to(&zero_number));
+        assert!(unsigned.is_assignable_to(&negative_number));
+        assert!(usize_schema.is_assignable_to(&negative_number));
 
         let fractional_integer_minimum = schema(
             OutputType::Integer,

@@ -351,6 +351,8 @@ pub(super) fn validate_condition(
                     InputType::Text
                     | InputType::TextList
                     | InputType::IntegerList
+                    | InputType::UnsignedIntegerList
+                    | InputType::UsizeList
                     | InputType::JsonList
                     | InputType::Json
                     | InputType::Never,

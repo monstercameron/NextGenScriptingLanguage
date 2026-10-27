@@ -640,9 +640,18 @@ pub struct ReusableProgram {
 pub enum InputType {
     Text,
     Integer,
+    /// A nonnegative integer in the full u64 domain, produced by applets.
+    /// Script-declared integers remain signed `Integer` values.
+    UnsignedInteger,
+    /// A nonnegative integer in the current platform's `usize` domain.
+    Usize,
     Boolean,
     TextList,
     IntegerList,
+    /// A list of nonnegative u64 integers produced by applets.
+    UnsignedIntegerList,
+    /// A list of platform-sized nonnegative integers.
+    UsizeList,
     JsonList,
     Json,
     /// Uninhabited item type for a statically empty list literal in a loop.

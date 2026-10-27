@@ -16,13 +16,26 @@
       "type": "string"
     },
     "n": {
-      "type": "integer",
+      "type": "unsigned_integer",
       "required": true
     },
     "collect": {
       "type": "boolean"
     }
   },
+  "parameter_alternatives": [
+    {
+      "message": "n must be a nonnegative integer",
+      "any_of": [
+        [
+          {
+            "test": "nonnegative_integer",
+            "parameter": "n"
+          }
+        ]
+      ]
+    }
+  ],
   "arguments": [
     {
       "literal": "list.top"
@@ -71,7 +84,7 @@
         },
         "n": {
           "schema": {
-            "type": "integer"
+            "type": "usize"
           },
           "delivery": "single"
         },

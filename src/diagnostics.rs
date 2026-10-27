@@ -3064,11 +3064,14 @@ fn collect_program_diagnostics(
             crate::ast::InputType::Never => None,
             crate::ast::InputType::Text => Some(OutputType::Text),
             crate::ast::InputType::Integer => Some(OutputType::Integer),
+            crate::ast::InputType::UnsignedInteger => Some(OutputType::UnsignedInteger),
+            crate::ast::InputType::Usize => Some(OutputType::Usize),
             crate::ast::InputType::Boolean => Some(OutputType::Boolean),
             crate::ast::InputType::TextList => Some(OutputType::List),
-            crate::ast::InputType::IntegerList | crate::ast::InputType::JsonList => {
-                Some(OutputType::List)
-            }
+            crate::ast::InputType::IntegerList
+            | crate::ast::InputType::UnsignedIntegerList
+            | crate::ast::InputType::UsizeList
+            | crate::ast::InputType::JsonList => Some(OutputType::List),
             crate::ast::InputType::Json => Some(OutputType::Json),
             crate::ast::InputType::Bytes => Some(OutputType::Bytes),
         };
@@ -3082,6 +3085,8 @@ fn collect_program_diagnostics(
             crate::ast::InputType::Never => Some(OutputType::Json),
             crate::ast::InputType::TextList => Some(OutputType::Text),
             crate::ast::InputType::IntegerList => Some(OutputType::Integer),
+            crate::ast::InputType::UnsignedIntegerList => Some(OutputType::UnsignedInteger),
+            crate::ast::InputType::UsizeList => Some(OutputType::Usize),
             crate::ast::InputType::JsonList | crate::ast::InputType::Json => Some(OutputType::Json),
             _ => None,
         };
@@ -3547,9 +3552,13 @@ fn missing_program_input_edit(
             None => "\"\"".to_owned(),
         },
         crate::ast::InputType::Integer => "0".to_owned(),
+        crate::ast::InputType::UnsignedInteger => "0".to_owned(),
+        crate::ast::InputType::Usize => "0".to_owned(),
         crate::ast::InputType::Boolean => "false".to_owned(),
         crate::ast::InputType::TextList
         | crate::ast::InputType::IntegerList
+        | crate::ast::InputType::UnsignedIntegerList
+        | crate::ast::InputType::UsizeList
         | crate::ast::InputType::JsonList => "[]".to_owned(),
         crate::ast::InputType::Json => "null".to_owned(),
         crate::ast::InputType::Bytes => return None,
@@ -3901,6 +3910,8 @@ fn known_value_type(
         Value::String(text) if text.contains('\0') => Some(OutputType::Json),
         Value::String(_) => Some(OutputType::Text),
         Value::Integer(_) => Some(OutputType::Integer),
+        Value::Number(number) if number.as_i64().is_some() => Some(OutputType::Integer),
+        Value::Number(number) if number.as_u64().is_some() => Some(OutputType::UnsignedInteger),
         Value::Number(_) => Some(OutputType::Number),
         Value::Bool(_) => Some(OutputType::Boolean),
         Value::List(_) => Some(OutputType::List),
@@ -3943,7 +3954,10 @@ fn known_list_item_type(
 /// Other homogeneous JSON arrays remain conservatively JSON.
 fn runtime_list_item_type(kind: OutputType) -> OutputType {
     match kind {
-        OutputType::Text | OutputType::Integer => kind,
+        OutputType::Text
+        | OutputType::Integer
+        | OutputType::UnsignedInteger
+        | OutputType::Usize => kind,
         _ => OutputType::Json,
     }
 }
@@ -3968,10 +3982,14 @@ fn known_for_each_item_type(
         Value::String(text) if !text.contains('\0') => OutputType::Text,
         Value::String(_) => OutputType::Json,
         Value::Integer(_) => OutputType::Integer,
+        Value::Number(number) if number.as_i64().is_some() => OutputType::Integer,
+        Value::Number(number) if number.as_u64().is_some() => OutputType::UnsignedInteger,
         Value::Bool(_) => OutputType::Boolean,
         Value::Reference(name) => match known_types.get(name).copied() {
             Some(OutputType::Text) => OutputType::Text,
             Some(OutputType::Integer) => OutputType::Integer,
+            Some(OutputType::UnsignedInteger) => OutputType::UnsignedInteger,
+            Some(OutputType::Usize) => OutputType::Usize,
             Some(OutputType::Boolean) => OutputType::Boolean,
             None => OutputType::Text,
             _ => OutputType::Json,
@@ -4191,9 +4209,13 @@ fn output_type_for_input(kind: crate::ast::InputType) -> OutputType {
         crate::ast::InputType::Never => OutputType::Json,
         crate::ast::InputType::Text => OutputType::Text,
         crate::ast::InputType::Integer => OutputType::Integer,
+        crate::ast::InputType::UnsignedInteger => OutputType::UnsignedInteger,
+        crate::ast::InputType::Usize => OutputType::Usize,
         crate::ast::InputType::Boolean => OutputType::Boolean,
         crate::ast::InputType::TextList
         | crate::ast::InputType::IntegerList
+        | crate::ast::InputType::UnsignedIntegerList
+        | crate::ast::InputType::UsizeList
         | crate::ast::InputType::JsonList => OutputType::List,
         crate::ast::InputType::Json => OutputType::Json,
         crate::ast::InputType::Bytes => OutputType::Bytes,
@@ -4259,7 +4281,13 @@ fn compatible_value_types(left: OutputType, right: OutputType) -> bool {
     left == right
         || matches!(
             (left, right),
-            (OutputType::Integer, OutputType::Number) | (OutputType::Number, OutputType::Integer)
+            (
+                OutputType::Integer | OutputType::UnsignedInteger | OutputType::Usize,
+                OutputType::Number,
+            ) | (
+                OutputType::Number,
+                OutputType::Integer | OutputType::UnsignedInteger | OutputType::Usize,
+            )
         )
 }
 
@@ -4725,7 +4753,18 @@ fn value_matches_schema(value: &Value, schema: &JsonValue) -> bool {
     let kind = schema.get("type").and_then(JsonValue::as_str).unwrap_or("");
     let matches_kind = match (kind, value) {
         ("string", Value::String(_)) => true,
-        ("integer", Value::Integer(_)) => true,
+        ("integer", _) => value_integer(value).is_some_and(|number| {
+            let bound = |name| {
+                schema.get(name).and_then(|value| {
+                    value
+                        .as_i64()
+                        .map(i128::from)
+                        .or_else(|| value.as_u64().map(i128::from))
+                })
+            };
+            bound("minimum").is_none_or(|minimum| number >= minimum)
+                && bound("maximum").is_none_or(|maximum| number <= maximum)
+        }),
         ("number", Value::Integer(_) | Value::Number(_)) => true,
         ("boolean", Value::Bool(_)) => true,
         ("array", Value::List(values)) => schema.get("items").is_none_or(|item_schema| {
@@ -4771,6 +4810,8 @@ fn manifest_output_type(manifest: &Manifest) -> Option<OutputType> {
         "text" => Some(OutputType::Text),
         "path" => Some(OutputType::Path),
         "integer" => Some(OutputType::Integer),
+        "unsigned_integer" => Some(OutputType::UnsignedInteger),
+        "usize" => Some(OutputType::Usize),
         "number" => Some(OutputType::Number),
         "boolean" => Some(OutputType::Boolean),
         "json" => Some(OutputType::Json),
@@ -4792,7 +4833,13 @@ fn output_type_matches_parameter(kind: OutputType, schema: &JsonValue) -> bool {
     match kind {
         OutputType::Bytes => accepts("bytes"),
         OutputType::Text | OutputType::Path => accepts("string"),
-        OutputType::Integer => accepts("integer") || accepts("number"),
+        OutputType::Integer if accepts("integer") => {
+            integer_domain_fits(kind, schema)
+                || signed_integer_reference_may_fit_nonnegative_schema(schema)
+        }
+        OutputType::UnsignedInteger if accepts("integer") => integer_domain_fits(kind, schema),
+        OutputType::Usize if accepts("integer") => integer_domain_fits(kind, schema),
+        OutputType::Integer | OutputType::UnsignedInteger | OutputType::Usize => accepts("number"),
         OutputType::Number => accepts("number"),
         OutputType::Boolean => accepts("boolean"),
         OutputType::Record => accepts("object"),
@@ -4801,16 +4848,68 @@ fn output_type_matches_parameter(kind: OutputType, schema: &JsonValue) -> bool {
     }
 }
 
+fn integer_domain_fits(kind: OutputType, schema: &JsonValue) -> bool {
+    let bound = |name: &str, fallback: i128| {
+        schema
+            .get(name)
+            .and_then(|value| {
+                value
+                    .as_i64()
+                    .map(i128::from)
+                    .or_else(|| value.as_u64().map(i128::from))
+            })
+            .unwrap_or(fallback)
+    };
+    let (minimum, maximum) = match kind {
+        OutputType::Integer => (i64::MIN as i128, i64::MAX as i128),
+        OutputType::UnsignedInteger => (0, u64::MAX as i128),
+        OutputType::Usize => (0, usize::MAX as i128),
+        _ => return false,
+    };
+    bound("minimum", i64::MIN as i128) <= minimum && bound("maximum", u64::MAX as i128) >= maximum
+}
+
+fn signed_integer_reference_may_fit_nonnegative_schema(schema: &JsonValue) -> bool {
+    let bound = |name: &str, fallback: i128| {
+        schema
+            .get(name)
+            .and_then(|value| {
+                value
+                    .as_i64()
+                    .map(i128::from)
+                    .or_else(|| value.as_u64().map(i128::from))
+            })
+            .unwrap_or(fallback)
+    };
+    let minimum = bound("minimum", i64::MIN as i128);
+    let maximum = bound("maximum", u64::MAX as i128);
+    minimum >= 0 && maximum >= minimum
+}
+
 fn value_type(value: &Value) -> &'static str {
     match value {
         Value::String(_) => "text",
         Value::Integer(_) => "integer",
+        Value::Number(number) if number.as_i64().is_some() || number.as_u64().is_some() => {
+            "integer"
+        }
         Value::Bool(_) => "boolean",
         Value::List(_) => "list",
         Value::Record(_) => "record",
         Value::Null => "null",
         Value::Number(_) => "number",
         Value::Reference(_) => "reference",
+    }
+}
+
+fn value_integer(value: &Value) -> Option<i128> {
+    match value {
+        Value::Integer(number) => Some(i128::from(*number)),
+        Value::Number(number) => number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from)),
+        _ => None,
     }
 }
 
@@ -5068,6 +5167,8 @@ fn output_type_name(kind: OutputType) -> &'static str {
         OutputType::Text => "text",
         OutputType::Path => "path",
         OutputType::Integer => "integer",
+        OutputType::UnsignedInteger => "unsigned integer",
+        OutputType::Usize => "usize",
         OutputType::Number => "number",
         OutputType::Boolean => "boolean",
         OutputType::Json => "json",
@@ -5230,6 +5331,34 @@ mod tests {
     use crate::contracts::{OutputType, ValueSchema};
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn inferred_integer_domains_must_fit_parameter_bounds() {
+        let signed = json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX});
+        let unsigned = json!({"type":"integer","minimum":0,"maximum":u64::MAX});
+        let usize_schema = json!({"type":"integer","minimum":0,"maximum":usize::MAX as u64});
+        assert!(output_type_matches_parameter(OutputType::Integer, &signed));
+        assert!(!output_type_matches_parameter(
+            OutputType::UnsignedInteger,
+            &signed
+        ));
+        assert!(output_type_matches_parameter(
+            OutputType::Integer,
+            &unsigned
+        ));
+        assert!(output_type_matches_parameter(
+            OutputType::UnsignedInteger,
+            &unsigned
+        ));
+        assert!(output_type_matches_parameter(
+            OutputType::Integer,
+            &usize_schema
+        ));
+        assert_eq!(
+            output_type_matches_parameter(OutputType::UnsignedInteger, &usize_schema),
+            usize::MAX as u128 >= u64::MAX as u128
+        );
+    }
 
     #[cfg(windows)]
     #[test]

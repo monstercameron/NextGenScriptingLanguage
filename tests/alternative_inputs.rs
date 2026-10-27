@@ -89,6 +89,145 @@ fn impossible_alternatives_fail_static_check() {
 }
 
 #[test]
+fn integer_domain_constraints_preserve_exact_unsigned_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid_sources = [
+        "run list.chunk with items [1,2] and size 0\n",
+        "run list.range with start 0 and stop 2 and step 0\n",
+        "run list.range with start 18446744073709551615 and stop 2\n",
+        "run list.range with start 0 and stop 2 and step 18446744073709551615\n",
+        "run list.top with items [1,2] and n -1\n",
+        "run text.pad with text \"x\" and width -1\n",
+        "run text.truncate with text \"abc\" and width -1\n",
+        "run text.repeat with text \"x\" and count -1\n",
+    ];
+    for source in invalid_sources {
+        for command in ["check", "run"] {
+            let output = invoke(dir.path(), source, command, &[]);
+            assert!(
+                !output.status.success(),
+                "{command} accepted invalid integer domain: {source}"
+            );
+        }
+    }
+    for (source, should_pass) in [
+        ("run text.pad with text \"x\" and width 16777216\n", true),
+        (
+            "run text.pad with text \"x\" and width 9007199254740993\n",
+            false,
+        ),
+    ] {
+        let output = invoke(dir.path(), source, "check", &[]);
+        assert_eq!(
+            output.status.success(),
+            should_pass,
+            "unexpected text.pad bound result for {source}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let signed_reference = "accept n as integer\nrun list.chunk with items [1,2] and size n\n";
+    let checked = invoke(dir.path(), signed_reference, "check", &[]);
+    assert!(
+        checked.status.success(),
+        "in-range signed workflow references should be deferred to runtime: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let valid_signed_reference = invoke(dir.path(), signed_reference, "run", &["--input", "n=1"]);
+    assert!(
+        valid_signed_reference.status.success(),
+        "positive signed workflow reference was rejected: {}",
+        String::from_utf8_lossy(&valid_signed_reference.stderr)
+    );
+    let invalid_signed_reference =
+        invoke(dir.path(), signed_reference, "run", &["--input", "n=-1"]);
+    assert!(
+        !invalid_signed_reference.status.success(),
+        "negative signed workflow reference entered an unsigned parameter"
+    );
+
+    for (source, supplied) in [
+        (
+            "accept n as integer\nrun list.chunk with items [1,2] and size n\n",
+            "n=0",
+        ),
+        (
+            "accept n as integer\nrun list.range with start 0 and stop 2 and step n\n",
+            "n=0",
+        ),
+        (
+            "accept n as integer\nrun list.top with items [1,2] and n n\n",
+            "n=-1",
+        ),
+        (
+            "accept n as integer\nrun text.pad with text \"x\" and width n\n",
+            "n=-1",
+        ),
+        (
+            "accept n as integer\nrun text.truncate with text \"abc\" and width n\n",
+            "n=-1",
+        ),
+        (
+            "accept n as integer\nrun text.repeat with text \"x\" and count n\n",
+            "n=-1",
+        ),
+    ] {
+        let output = invoke(dir.path(), source, "run", &["--input", supplied]);
+        assert!(
+            !output.status.success(),
+            "runtime accepted dynamic integer outside the manifest domain: {source}"
+        );
+    }
+
+    let above_binary64 = "9007199254740993";
+    let mut valid_sources = vec![format!(
+        "run list.range with start 2 and stop 0 and step -{above_binary64}\n"
+    )];
+    if usize::MAX as u128 >= above_binary64.parse::<u128>().unwrap() {
+        valid_sources.extend([
+            format!("run list.chunk with items [1,2] and size {above_binary64}\n"),
+            format!("run list.top with items [1,2] and n {above_binary64}\n"),
+            format!("run text.truncate with text \"abc\" and width {above_binary64}\n"),
+            format!("run text.repeat with text \"\" and count {above_binary64}\n"),
+        ]);
+    }
+    let max_usize = usize::MAX.to_string();
+    valid_sources.extend([
+        format!("run list.chunk with items [1,2] and size {max_usize}\n"),
+        format!("run list.top with items [1,2] and n {max_usize}\n"),
+        format!("run text.truncate with text \"abc\" and width {max_usize}\n"),
+        format!("run text.repeat with text \"\" and count {max_usize}\n"),
+    ]);
+    if usize::MAX as u128 >= u64::MAX as u128 {
+        valid_sources.extend([
+            "run list.chunk with items [1,2] and size 18446744073709551615\n".to_owned(),
+            "run list.top with items [1,2] and n 18446744073709551615\n".to_owned(),
+            "run text.truncate with text \"abc\" and width 18446744073709551615\n".to_owned(),
+            "run text.repeat with text \"\" and count 18446744073709551615\n".to_owned(),
+        ]);
+    }
+    for source in valid_sources {
+        for command in ["check", "run"] {
+            let output = invoke(dir.path(), &source, command, &[]);
+            assert!(
+                output.status.success(),
+                "{command} rejected exact large integer: {source}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+    if (usize::MAX as u128) < u64::MAX as u128 {
+        let too_large_for_usize = (usize::MAX as u128 + 1).to_string();
+        let source = format!("run list.chunk with items [1,2] and size {too_large_for_usize}\n");
+        let checked = invoke(dir.path(), &source, "check", &[]);
+        assert!(
+            !checked.status.success(),
+            "static validation accepted a value outside usize on this target"
+        );
+    }
+}
+
+#[test]
 fn unknown_values_are_deferred_to_execution() {
     let dir = tempfile::tempdir().unwrap();
     let source =

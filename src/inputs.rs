@@ -8,9 +8,13 @@ impl std::fmt::Display for InputType {
         f.write_str(match self {
             Self::Text => "text",
             Self::Integer => "integer",
+            Self::UnsignedInteger => "unsigned integer",
+            Self::Usize => "usize",
             Self::Boolean => "boolean",
             Self::TextList => "list of text",
             Self::IntegerList => "list of integer",
+            Self::UnsignedIntegerList => "list of unsigned integer",
+            Self::UsizeList => "list of usize",
             Self::JsonList => "list of json",
             Self::Json => "json",
             Self::Never => "uninhabited empty-list item",
@@ -36,12 +40,28 @@ impl InputDeclaration {
         let valid = match (self.kind, value) {
             (InputType::Text, Value::String(s)) => !s.contains('\0'),
             (InputType::Integer, Value::Integer(_)) | (InputType::Boolean, Value::Bool(_)) => true,
+            (InputType::UnsignedInteger, Value::Integer(value)) => *value >= 0,
+            (InputType::UnsignedInteger, Value::Number(value)) => value.as_u64().is_some(),
+            (InputType::Usize, Value::Integer(value)) => {
+                *value >= 0 && *value as u64 <= usize::MAX as u64
+            }
+            (InputType::Usize, Value::Number(value)) => value
+                .as_u64()
+                .is_some_and(|value| value <= usize::MAX as u64),
             (InputType::TextList, Value::List(items)) => items
                 .iter()
                 .all(|v| matches!(v, Value::String(s) if !s.contains('\0'))),
             (InputType::IntegerList, Value::List(items)) => {
                 items.iter().all(|v| matches!(v, Value::Integer(_)))
             }
+            (InputType::UnsignedIntegerList, Value::List(items)) => items.iter().all(|item| {
+                matches!(item, Value::Integer(value) if *value >= 0)
+                    || matches!(item, Value::Number(value) if value.as_u64().is_some())
+            }),
+            (InputType::UsizeList, Value::List(items)) => items.iter().all(|item| {
+                matches!(item, Value::Integer(value) if *value >= 0 && *value as u64 <= usize::MAX as u64)
+                    || matches!(item, Value::Number(value) if value.as_u64().is_some_and(|value| value <= usize::MAX as u64))
+            }),
             (InputType::JsonList, Value::List(items)) => {
                 items.iter().all(crate::structured::literal)
             }
@@ -66,7 +86,13 @@ impl InputDeclaration {
                         self.name
                     )
                 }
-                (InputType::IntegerList | InputType::JsonList, Value::List(_)) => bail!(
+                (
+                    InputType::IntegerList
+                    | InputType::UnsignedIntegerList
+                    | InputType::UsizeList
+                    | InputType::JsonList,
+                    Value::List(_),
+                ) => bail!(
                     "line {}: input {:?} contains an item of the wrong type",
                     self.line,
                     self.name
@@ -121,6 +147,21 @@ impl InputDeclaration {
                 text.parse()
                     .with_context(|| format!("input {:?} requires an integer", self.name))?,
             ),
+            InputType::UnsignedInteger => Value::Number(
+                text.parse::<u64>()
+                    .with_context(|| {
+                        format!("input {:?} requires a nonnegative integer", self.name)
+                    })?
+                    .into(),
+            ),
+            InputType::Usize => Value::Number(
+                (usize::try_from(
+                    text.parse::<u64>()
+                        .with_context(|| format!("input {:?} requires an integer", self.name))?,
+                )
+                .context("input does not fit in usize")? as u64)
+                    .into(),
+            ),
             InputType::Boolean => match text {
                 "true" => Value::Bool(true),
                 "false" => Value::Bool(false),
@@ -140,7 +181,10 @@ impl InputDeclaration {
                 })?;
                 Value::List(items.into_iter().map(Value::String).collect())
             }
-            InputType::IntegerList | InputType::JsonList => {
+            InputType::IntegerList
+            | InputType::UnsignedIntegerList
+            | InputType::UsizeList
+            | InputType::JsonList => {
                 let value = crate::structured::parse(text.as_bytes())
                     .with_context(|| format!("input {:?} requires a JSON list", self.name))?;
                 let Value::List(_) = value else {
@@ -163,6 +207,14 @@ impl InputDeclaration {
             (InputType::Integer, serde_json::Value::Number(n)) if n.as_i64().is_some() => {
                 Value::Integer(n.as_i64().unwrap())
             }
+            (InputType::UnsignedInteger, serde_json::Value::Number(n)) if n.as_u64().is_some() => {
+                Value::Number(n.clone())
+            }
+            (InputType::Usize, serde_json::Value::Number(n))
+                if n.as_u64().is_some_and(|value| value <= usize::MAX as u64) =>
+            {
+                Value::Number(n.clone())
+            }
             (InputType::Boolean, serde_json::Value::Bool(b)) => Value::Bool(*b),
             (InputType::TextList, serde_json::Value::Array(items))
                 if items.iter().all(serde_json::Value::is_string) =>
@@ -183,6 +235,19 @@ impl InputDeclaration {
                         .map(|item| Value::Integer(item.as_i64().unwrap()))
                         .collect(),
                 )
+            }
+            (InputType::UnsignedIntegerList, serde_json::Value::Array(items))
+                if items.iter().all(|item| item.as_u64().is_some()) =>
+            {
+                Value::List(items.iter().cloned().map(Value::Number).collect())
+            }
+            (InputType::UsizeList, serde_json::Value::Array(items))
+                if items.iter().all(|item| {
+                    item.as_u64()
+                        .is_some_and(|value| value <= usize::MAX as u64)
+                }) =>
+            {
+                Value::List(items.iter().cloned().map(Value::Number).collect())
             }
             (InputType::JsonList, serde_json::Value::Array(items)) => Value::List(
                 items
@@ -505,7 +570,13 @@ fn validate_flag_spelling<'a>(
             bail!("line {}: flag {name:?} must be a boolean input", input.line)
         }
         Some(InputSource::Option { .. })
-            if !matches!(input.kind, InputType::Text | InputType::Integer) =>
+            if !matches!(
+                input.kind,
+                InputType::Text
+                    | InputType::Integer
+                    | InputType::UnsignedInteger
+                    | InputType::Usize
+            ) =>
         {
             bail!(
                 "line {}: option {name:?} must be a text or integer input",

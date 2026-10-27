@@ -11,7 +11,7 @@
       "type": "string"
     },
     "width": {
-      "type": "integer",
+      "type": "unsigned_integer",
       "required": true
     },
     "side": {
@@ -28,18 +28,20 @@
       "type": "boolean"
     }
   },
-  "arguments": [
-    {
-      "literal": "text.pad"
-    },
-    {
-      "literal": "--args"
-    },
-    {
-      "json_arguments": true
-    }
-  ],
   "parameter_alternatives": [
+    {
+      "message": "width must be a nonnegative integer within the text output limit",
+      "any_of": [
+        [
+          {
+            "test": "number_range",
+            "parameter": "width",
+            "minimum": 0,
+            "maximum": 16777216
+          }
+        ]
+      ]
+    },
     {
       "message": "text.pad fill must be nonempty when supplied",
       "any_of": [
@@ -56,6 +58,17 @@
           }
         ]
       ]
+    }
+  ],
+  "arguments": [
+    {
+      "literal": "text.pad"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
     }
   ],
   "contract": {
@@ -80,7 +93,7 @@
         "width": {
           "delivery": "single",
           "schema": {
-            "type": "integer"
+            "type": "usize"
           }
         },
         "side": {

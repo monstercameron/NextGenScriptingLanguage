@@ -224,13 +224,36 @@ fn json_loop_item_types_match_runtime() {
         );
 
         let argv_source =
-            format!("for each x in {items}\n  run \"printf\" with arguments [\"%s\", x]\n");
+            format!("for each x in {items}\n  run \"printf\" with arguments [\"ITER:%s\", x]\n");
         let argv_check = execute(root.path(), &argv_source, &["check"]);
-        assert!(
-            !argv_check.status.success(),
-            "check accepted JSON loop items from {items} at the native argv boundary"
-        );
+        if items == "[]" {
+            assert!(
+                argv_check.status.success(),
+                "an empty loop has no JSON item to pass to native argv: {}",
+                String::from_utf8_lossy(&argv_check.stderr)
+            );
+            let argv_run = execute(root.path(), &argv_source, &["run"]);
+            assert!(
+                argv_run.status.success(),
+                "empty native-argv loop failed: {}",
+                String::from_utf8_lossy(&argv_run.stderr)
+            );
+            assert!(argv_run.stdout.is_empty());
+        } else {
+            assert!(
+                !argv_check.status.success(),
+                "check accepted JSON loop items from {items} at the native argv boundary"
+            );
+        }
     }
+
+    let dynamic_json = "accept items as json with default [1]\nfor each x in items\n  run \"printf\" with arguments [\"%s\", x]\n";
+    let root = tempfile::tempdir().unwrap();
+    let check = execute(root.path(), dynamic_json, &["check"]);
+    assert!(
+        !check.status.success(),
+        "check accepted dynamically typed JSON loop items at the native argv boundary"
+    );
 }
 
 #[test]

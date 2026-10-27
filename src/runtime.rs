@@ -76,6 +76,17 @@ pub mod worker_backend;
 pub(crate) use checkpoint::graph::{open_graph_checkpoint, PersistenceAuthorizer};
 pub use checkpoint::{read_repair_state, CheckpointOptions, RepairState};
 pub use resume::run_checkpointed;
+
+/// Mark descriptors inherited by this process close-on-exec before starting runtime work.
+///
+/// Call this once at executable startup, before creating threads. Child process launches then
+/// inherit the usual standard streams only, without a per-spawn fork hook.
+#[cfg(unix)]
+pub fn mark_inherited_descriptors_close_on_exec() -> Result<()> {
+    crate::platform::unix_ffi::mark_inherited_descriptors_close_on_exec()
+        .context("marking inherited descriptors close-on-exec")
+}
+
 #[cfg(feature = "graph")]
 pub(crate) use streaming::run_stream_with_context_and_process_observer;
 pub use streaming::{

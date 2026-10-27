@@ -182,6 +182,10 @@ fn register_cancellation_signal(
 }
 
 fn main() {
+    #[cfg(unix)]
+    if let Err(error) = runtime::mark_inherited_descriptors_close_on_exec() {
+        std::process::exit(report_error(&error));
+    }
     if let Err(error) = execute() {
         std::process::exit(report_error(&error));
     }

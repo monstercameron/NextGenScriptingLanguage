@@ -1,5 +1,8 @@
 use std::process::Command;
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     let program = directory.path().join("workflow.program");
@@ -64,11 +67,7 @@ fn explain_with_policy_reports_untrusted_and_never_probes_or_launches() {
         r#"{"version":1,"applets":{"fixture.native":{"capabilities":["process.exec"]}}}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    private_answers::make_private(&policy);
     // Keep the policy outside the manifest directory's JSON scan.
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
@@ -147,11 +146,7 @@ fn what_if_fingerprint_changes_when_execution_mode_changes() {
         r#"{"version":1,"applets":{"fixture.native":{"capabilities":["process.exec"]}}}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    private_answers::make_private(&policy);
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
     std::fs::rename(

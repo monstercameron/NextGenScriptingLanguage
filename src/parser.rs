@@ -1512,10 +1512,20 @@ pub(crate) fn tokenize<'source>(line: &'source str) -> Result<Vec<Token<'source>
 }
 
 fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) -> Result<()> {
+    tokenize_with_ranges_into(line, tokens, None)
+}
+
+fn tokenize_with_ranges_into<'source>(
+    line: &'source str,
+    tokens: &mut Vec<Token<'source>>,
+    mut ranges: Option<&mut Vec<Range<usize>>>,
+) -> Result<()> {
     let bytes = line.as_bytes();
     let mut i = 0;
     let mut object_depth = 0usize;
     while i < bytes.len() {
+        let token_start = i;
+        let token_count = tokens.len();
         match bytes[i] {
             b' ' | b'\t' | b'\r' => i += 1,
             b'[' => {
@@ -1592,6 +1602,11 @@ fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) 
                     i += 1;
                 }
                 tokens.push(Token::Word(&line[start..i]));
+            }
+        }
+        if tokens.len() != token_count {
+            if let Some(ranges) = ranges.as_mut() {
+                ranges.push(token_start..i);
             }
         }
     }
@@ -2252,7 +2267,20 @@ fn is_result_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
         && word_is(tokens.get(cursor + 2), "result")
 }
 
+#[derive(Default)]
+struct InvocationLayout {
+    parameters: BTreeMap<String, Range<usize>>,
+    retry_insert_token: usize,
+}
+
 fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
+    parse_invocation_with_layout(tokens, None)
+}
+
+fn parse_invocation_with_layout(
+    tokens: &[Token<'_>],
+    mut layout: Option<&mut InvocationLayout>,
+) -> Result<StepKind> {
     let (mut cursor, connection) = if word_is(tokens.first(), "run") {
         (1, Connection::Start)
     } else if word_is(tokens.first(), "then") {
@@ -2328,8 +2356,12 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
         loop {
             let name = parse_identifier(tokens.get(cursor), "parameter name")?;
             cursor += 1;
+            let value_start = cursor;
             let value = parse_value(tokens, &mut cursor)
                 .with_context(|| format!("missing or invalid value for parameter `{name}`"))?;
+            if let Some(layout) = layout.as_deref_mut() {
+                layout.parameters.insert(name.clone(), value_start..cursor);
+            }
             match parameters.entry(name) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(value);
@@ -2399,6 +2431,9 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
     if discard_stderr && cache {
         bail!("`and discard stderr` cannot be combined with `and cache`");
     }
+    if let Some(layout) = layout {
+        layout.retry_insert_token = cursor;
+    }
     let retry = if is_retry_suffix(tokens, cursor) {
         cursor += 2;
         Some(parse_retry_suffix(tokens, &mut cursor)?)
@@ -2428,6 +2463,102 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             retry,
         },
         connection,
+    })
+}
+
+/// Parser-derived byte spans for a single invocation, used by structured edits.
+#[cfg(all(feature = "records", not(target_arch = "wasm32")))]
+pub(crate) struct RepairInvocationLayout {
+    pub(crate) parameters: BTreeMap<String, Range<usize>>,
+    pub(crate) retry_insert: usize,
+    pub(crate) has_retry: bool,
+}
+
+#[cfg(all(feature = "records", not(target_arch = "wasm32")))]
+pub(crate) fn repair_invocation_layout(source: &str) -> Result<RepairInvocationLayout> {
+    let mut tokens = Vec::new();
+    let mut ranges = Vec::new();
+    tokenize_with_ranges_into(source, &mut tokens, Some(&mut ranges))?;
+    if statement_label(&tokens, 1)?.is_some() {
+        tokens.remove(0);
+        ranges.remove(0);
+    }
+    // Use the same top-level grammar and suffix validation as execution.
+    let steps = parse_simple_statement(&tokens).map_err(|error| {
+        let message = format!("{error:#}");
+        if message.contains("duplicate parameter `") {
+            anyhow!("repair.ambiguous: {message}")
+        } else {
+            error
+        }
+    })?;
+    let program_call = matches!(steps.last(), Some(StepKind::CallProgram { .. }));
+    if !program_call && !matches!(steps.last(), Some(StepKind::Invoke { .. })) {
+        bail!("structured edits require an invocation");
+    }
+    let program_file = program_call
+        && word_is(tokens.get(2), "file")
+        && matches!(tokens.get(3), Some(Token::String(_)));
+    let handoff_prefix = if word_is(tokens.first(), "hand")
+        && word_is(tokens.get(1), "over")
+        && word_is(tokens.get(2), "to")
+    {
+        3
+    } else if word_is(tokens.first(), "launch") && word_is(tokens.get(1), "detached") {
+        2
+    } else {
+        0
+    };
+    let detached_output = handoff_prefix == 2
+        && tokens.len() >= 4
+        && word_is(tokens.get(tokens.len() - 4), "and")
+        && word_is(tokens.get(tokens.len() - 3), "output")
+        && word_is(tokens.get(tokens.len() - 2), "to")
+        && matches!(tokens.last(), Some(Token::String(_)));
+    let interactive = word_is(tokens.last(), "interactively");
+    let mut kept = Vec::new();
+    let mut indices = Vec::new();
+    if handoff_prefix != 0 {
+        kept.push(Token::Word("run"));
+        indices.push(0);
+    }
+    let mut index = handoff_prefix;
+    while index < tokens.len() {
+        if detached_output && index == tokens.len() - 4 {
+            break;
+        }
+        if (program_file && index == 3) || (interactive && index + 1 == tokens.len()) {
+            index += 1;
+        } else if let Some((_, span)) = environment_suffix(&tokens, index)? {
+            index += span;
+        } else if let Some((_, span)) = redirect_suffix(&tokens, index) {
+            index += span;
+        } else {
+            kept.push(tokens[index].clone());
+            indices.push(index);
+            index += 1;
+        }
+    }
+    let mut layout = InvocationLayout::default();
+    let StepKind::Invoke { call, .. } = parse_invocation_with_layout(&kept, Some(&mut layout))?
+    else {
+        bail!("structured edits require an invocation");
+    };
+    let mut parameters = BTreeMap::new();
+    for (name, token_span) in layout.parameters {
+        let first = indices[token_span.start];
+        let last = indices[token_span.end - 1];
+        parameters.insert(name, ranges[first].start..ranges[last].end);
+    }
+    let insert = if layout.retry_insert_token == 0 {
+        bail!("no invocation suffix position");
+    } else {
+        ranges[indices[layout.retry_insert_token - 1]].end
+    };
+    Ok(RepairInvocationLayout {
+        parameters,
+        retry_insert: insert,
+        has_retry: call.retry.is_some(),
     })
 }
 

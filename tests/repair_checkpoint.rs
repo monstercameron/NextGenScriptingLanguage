@@ -136,6 +136,78 @@ fn documented_repair_example_requires_explicit_retry_and_recovers() {
 }
 
 #[test]
+fn set_parameter_targets_the_named_parameter_even_when_a_binding_shares_its_name() {
+    let work = tempfile::tempdir().unwrap();
+    let source = "accept old as text with default \"a\"\naccept text as text with default \"b\"\nrun \"printf\" with arguments [\"start\\n\"]\nrun \"false\"\nrun text.replace with text old and old text and new \"z\" as r\n";
+    let program = work.path().join("workflow.program");
+    let checkpoint = work.path().join("ckpt");
+    fs::write(&program, source).unwrap();
+    let failed = execute(
+        work.path(),
+        &[
+            "run",
+            "workflow.program",
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert!(!failed.status.success(), "{}", text(&failed.stderr));
+    let op = "set-parameter 5 old \"q\"";
+    let dry = repair(work.path(), &checkpoint, op, &["--dry-run"]);
+    assert!(dry.status.success(), "{}", text(&dry.stderr));
+    assert!(text(&dry.stdout).contains("with text old and old \"q\" and new \"z\""));
+    assert_eq!(fs::read_to_string(&program).unwrap(), source);
+    let applied = repair(work.path(), &checkpoint, op, &[]);
+    assert!(applied.status.success(), "{}", text(&applied.stderr));
+    assert!(fs::read_to_string(&program)
+        .unwrap()
+        .contains("with text old and old \"q\" and new \"z\""));
+}
+
+#[test]
+fn added_retry_runs_with_the_global_command_timeout() {
+    let work = tempfile::tempdir().unwrap();
+    let checkpoint = work.path().join("ckpt");
+    fs::write(work.path().join("timeout.program"), "run \"false\"\n").unwrap();
+    let failed = execute(
+        work.path(),
+        &[
+            "run",
+            "timeout.program",
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+            "--command-timeout-ms",
+            "5000",
+        ],
+    );
+    assert!(!failed.status.success());
+    let replaced = repair(
+        work.path(),
+        &checkpoint,
+        "replace-command 1 run \"true\"",
+        &[],
+    );
+    assert!(replaced.status.success(), "{}", text(&replaced.stderr));
+    let retried = repair(work.path(), &checkpoint, "add-retry 1 2", &[]);
+    assert!(retried.status.success(), "{}", text(&retried.stderr));
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "timeout.program",
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+            "--retry-uncertain",
+            "--command-timeout-ms",
+            "5000",
+        ],
+    );
+    assert!(resumed.status.success(), "{}", text(&resumed.stderr));
+}
+
+#[test]
 fn a_repaired_suffix_resumes_and_the_journal_is_never_modified() {
     let work = tempfile::tempdir().unwrap();
     let (program, checkpoint) = failed_checkpoint(work.path());

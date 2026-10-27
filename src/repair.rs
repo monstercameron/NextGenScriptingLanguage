@@ -36,8 +36,7 @@ pub enum Operation {
     InsertBefore { line: usize, statement: String },
     /// Remove one single-line statement.
     Remove { line: usize },
-    /// Ask for a retry around a statement. The grammar has no retry statement, so
-    /// this operation is parsed and refused with that reason.
+    /// Add a retry policy to a compatible invocation.
     AddRetry { line: usize, count: u32 },
 }
 
@@ -186,47 +185,48 @@ pub fn apply_at(
     let index = line - 1;
     match operation {
         Operation::AddRetry { count, .. } => {
-            let current = lines
-                .get(index)
-                .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
-                .clone();
-            let (body, ending) = line_body_and_ending(&current);
-            let comment = parser::strip_comment(body).len();
-            let (code, suffix) = body.split_at(comment);
-            let has_retry = parser::tokenize(code).ok().is_some_and(|tokens| {
-                tokens.windows(4).any(|window| {
-                    matches!(
-                        window,
-                        [
-                            parser::Token::Word("and"),
-                            parser::Token::Word("retry"),
-                            parser::Token::Word("up"),
-                            parser::Token::Word("to")
-                        ]
-                    )
-                })
-            });
-            if has_retry {
+            let statement = repair_statement(source, line)?;
+            let layout = parser::repair_invocation_layout(&statement.text)
+                .with_context(|| format!("line {line}"))?;
+            if layout.has_retry {
                 bail!("line {line} already has a retry policy");
             }
-            lines[index] = format!(
-                "{} and retry up to {count} times{}{}",
-                code.trim_end(),
-                suffix,
-                ending
-            );
+            let mut edited = source.to_owned();
+            if let Some(raw) = statement
+                .raw_token_spans
+                .iter()
+                .find(|span| span.end == layout.retry_insert)
+            {
+                // A raw closing delimiter must occupy its own line, so express the
+                // identical value as a quoted literal before inserting the suffix.
+                let start = statement.original_start(raw.start)?;
+                let end = statement.original_end(raw.end)?;
+                edited.replace_range(
+                    start..end,
+                    &format!(
+                        "{} and retry up to {count} times",
+                        &statement.text[raw.clone()]
+                    ),
+                );
+            } else {
+                let offset = statement.original_end(layout.retry_insert)?;
+                edited.insert_str(offset, &format!(" and retry up to {count} times"));
+            }
+            lines = edited.split_inclusive('\n').map(str::to_owned).collect();
         }
         Operation::SetParameter { name, value, .. } => {
-            let current = lines
-                .get(index)
-                .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
-                .clone();
-            let (body, ending) = line_body_and_ending(&current);
-            lines[index] = format!(
-                "{}{}",
-                set_parameter_value(body, name, value).with_context(|| format!("line {line}"))?,
-                ending
-            );
+            let statement = repair_statement(source, line)?;
+            let layout = parser::repair_invocation_layout(&statement.text)
+                .with_context(|| format!("line {line}"))?;
+            let span = layout
+                .parameters
+                .get(name)
+                .ok_or_else(|| anyhow!("line {line}: no parameter {name:?} on this statement"))?;
+            let start = statement.original_start(span.start)?;
+            let end = statement.original_end(span.end)?;
+            let mut edited = source.to_owned();
+            edited.replace_range(start..end, value);
+            lines = edited.split_inclusive('\n').map(str::to_owned).collect();
         }
         Operation::ReplaceCommand { statement, .. } => {
             let current = lines
@@ -297,59 +297,115 @@ fn line_body_and_ending(line: &str) -> (&str, &str) {
     }
 }
 
-/// Replace the value token after `name` on one statement line. Only code before a
-/// comment is considered, and quoted strings and bracketed lists count as one token.
-fn set_parameter_value(line: &str, name: &str, value: &str) -> Result<String> {
-    let code_end = parser::strip_comment(line).len();
-    let spans = word_spans(&line[..code_end]);
-    let position = spans
-        .windows(2)
-        .position(|pair| &line[pair[0].0..pair[0].1] == name)
-        .ok_or_else(|| anyhow!("no parameter {name:?} on this statement"))?;
-    let (start, end) = spans[position + 1];
-    let mut text = String::with_capacity(line.len() + value.len());
-    text.push_str(&line[..start]);
-    text.push_str(value);
-    text.push_str(&line[end..]);
-    Ok(text)
+/// The parser joins continued lines; retain a byte map back to the original source
+/// so grammar-derived value spans can be edited without guessing at word positions.
+struct RepairStatement {
+    text: String,
+    offsets: Vec<usize>,
+    raw_token_spans: Vec<std::ops::Range<usize>>,
 }
 
-/// Byte spans of the words in a statement. Quoted strings (with `\` escapes) and
-/// bracketed lists are single words.
-fn word_spans(code: &str) -> Vec<(usize, usize)> {
-    let bytes = code.as_bytes();
-    let mut spans = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index].is_ascii_whitespace() {
-            index += 1;
+impl RepairStatement {
+    fn original_start(&self, offset: usize) -> Result<usize> {
+        self.offsets
+            .get(offset)
+            .copied()
+            .context("invalid statement start span")
+    }
+    fn original_end(&self, offset: usize) -> Result<usize> {
+        self.offsets
+            .get(offset.checked_sub(1).context("empty statement span")?)
+            .map(|offset| offset + 1)
+            .context("invalid statement end span")
+    }
+}
+
+fn repair_statement(source: &str, line: usize) -> Result<RepairStatement> {
+    let statements = parser::logical_lines(source)?;
+    let index = statements
+        .iter()
+        .position(|statement| statement.number == line)
+        .ok_or_else(|| anyhow!("line {line} is not the start of a statement"))?;
+    let statement = &statements[index];
+    let end_line = statements
+        .get(index + 1)
+        .map_or(usize::MAX, |next| next.number);
+    let mut text = String::new();
+    let mut offsets = Vec::new();
+    let mut raw_token_spans = Vec::new();
+    let mut physical = Vec::new();
+    let mut base = 0;
+    for raw in source.split_inclusive('\n') {
+        let (body, _) = line_body_and_ending(raw);
+        physical.push((body, base));
+        base += raw.len();
+    }
+    let mut index = line - 1;
+    while index < physical.len() && index + 1 < end_line {
+        let number = index + 1;
+        let (body, base) = physical[index];
+        index += 1;
+        let code = parser::strip_comment(body);
+        let code = if number == 1 {
+            code.strip_prefix('\u{feff}').unwrap_or(code)
+        } else {
+            code
+        };
+        let piece = if number == line {
+            code.trim_start_matches(' ')
+        } else {
+            code.trim()
+        };
+        if piece.is_empty() {
             continue;
         }
-        let start = index;
-        let mut depth = 0usize;
-        let mut quoted = false;
-        while index < bytes.len() {
-            let byte = bytes[index];
-            if quoted {
-                match byte {
-                    b'\\' => index += 1,
-                    b'"' => quoted = false,
-                    _ => {}
-                }
-            } else {
-                match byte {
-                    b'"' => quoted = true,
-                    b'[' => depth += 1,
-                    b']' => depth = depth.saturating_sub(1),
-                    byte if byte.is_ascii_whitespace() && depth == 0 => break,
-                    _ => {}
-                }
-            }
-            index += 1;
+        let piece_start = piece.as_ptr() as usize - body.as_ptr() as usize;
+        if number != line {
+            text.push(' ');
+            offsets.push(base + piece_start);
         }
-        spans.push((start, index.min(bytes.len())));
+        let trimmed = piece.trim_end();
+        if trimmed.ends_with(" \"\"\"") {
+            let prefix = &trimmed[..trimmed.len() - 3];
+            text.push_str(prefix);
+            offsets.extend((0..prefix.len()).map(|offset| base + piece_start + offset));
+            let opener = base + piece_start + prefix.len();
+            let mut raw_lines = Vec::new();
+            let closer = loop {
+                let (raw, raw_base) = *physical
+                    .get(index)
+                    .context("raw block has no closing delimiter")?;
+                index += 1;
+                if raw.trim() == "\"\"\"" {
+                    let closing_start = raw.trim().as_ptr() as usize - raw.as_ptr() as usize;
+                    break raw_base + closing_start + 2;
+                }
+                raw_lines.push(raw);
+            };
+            let quoted = serde_json::to_string(&raw_lines.join("\n"))?;
+            let raw_start = text.len();
+            text.push_str(&quoted);
+            for byte in 0..quoted.len() {
+                offsets.push(if byte + 1 == quoted.len() {
+                    closer
+                } else {
+                    opener
+                });
+            }
+            raw_token_spans.push(raw_start..text.len());
+        } else {
+            text.push_str(piece);
+            offsets.extend((0..piece.len()).map(|offset| base + piece_start + offset));
+        }
     }
-    spans
+    if text != statement.text {
+        bail!("line {line}: structured edits cannot map this statement to source spans");
+    }
+    Ok(RepairStatement {
+        text,
+        offsets,
+        raw_token_spans,
+    })
 }
 
 /// A line diff: removed lines with `-`, added lines with `+`, each with its line
@@ -600,6 +656,467 @@ mod tests {
             plan.after,
             "run fixture.count with count 2 # note count 9\n"
         );
+    }
+
+    #[test]
+    fn set_parameter_targets_the_parameter_not_an_earlier_value() {
+        let registry =
+            Registry::from_sources(&[
+                include_str!("../manifests/core.text_replace.json").to_owned()
+            ])
+            .unwrap();
+        let source = "accept old as text with default \"a\"\naccept text as text with default \"b\"\nrun \"printf\" with arguments [\"start\\n\"]\nrun \"false\"\nrun text.replace with text old and old text and new \"z\" as r\n";
+        let plan = apply(
+            source,
+            &Operation::parse("set-parameter 5 old \"q\"").unwrap(),
+            5,
+            &registry,
+        )
+        .unwrap();
+        assert!(plan
+            .after
+            .contains("with text old and old \"q\" and new \"z\" as r"));
+        assert!(plan
+            .after
+            .starts_with(&source[..source.find("run text.replace").unwrap()]));
+    }
+
+    #[test]
+    fn duplicate_parameter_is_rejected_as_ambiguous() {
+        let source = "run fixture.count with count 1 and count 2\n";
+        let error = apply(
+            source,
+            &Operation::parse("set-parameter 1 count 3").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("repair.ambiguous"));
+    }
+
+    #[test]
+    fn set_parameter_handles_names_in_strings_and_multiline_values() {
+        let source = "run \"printf\" with arguments [\n  \"arguments\", # retained until replaced\n  \"old\"\n] # trailing comment\n";
+        let plan = apply(
+            source,
+            &Operation::parse("set-parameter 1 arguments [\"new\"]").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            "run \"printf\" with arguments [\"new\"] # trailing comment\n"
+        );
+        let labelled = "tag: run fixture.count with count 1 and message \"count is text\" # note\n";
+        let plan = apply(
+            labelled,
+            &Operation::parse("set-parameter 1 count 2").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            "tag: run fixture.count with count 2 and message \"count is text\" # note\n"
+        );
+    }
+
+    #[test]
+    fn edits_around_raw_blocks_preserve_or_replace_the_whole_value() {
+        let source = "run fixture.count with count 1 and message \"\"\"\nraw # text\n\"\"\"\n";
+        let count = apply(
+            source,
+            &Operation::parse("set-parameter 1 count 2").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            count.after,
+            "run fixture.count with count 2 and message \"\"\"\nraw # text\n\"\"\"\n"
+        );
+        let message = apply(
+            source,
+            &Operation::parse("set-parameter 1 message \"new\"").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            message.after,
+            "run fixture.count with count 1 and message \"new\"\n"
+        );
+        let retry = apply(
+            source,
+            &Operation::parse("add-retry 1 2").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            retry.after,
+            "run fixture.count with count 1 and message \"raw # text\" and retry up to 2 times\n"
+        );
+    }
+
+    #[test]
+    fn retry_rewrites_multiline_raw_block_without_changing_its_value() {
+        let value = "first \"quoted\"\n雪 and \\slashes";
+        let source =
+            format!("run fixture.count with count 1 and message \"\"\"\n{value}\n\"\"\"\n");
+        let plan = apply(
+            &source,
+            &Operation::parse("add-retry 1 2").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        let quoted = serde_json::to_string(value).unwrap();
+        assert_eq!(
+            plan.after,
+            format!(
+                "run fixture.count with count 1 and message {quoted} and retry up to 2 times\n"
+            )
+        );
+    }
+
+    #[test]
+    fn add_retry_uses_invocation_suffix_location() {
+        for (source, expected) in [
+            ("run \"printf\" with arguments [\"x\"] as result # comment\n", "run \"printf\" with arguments [\"x\"] as result and retry up to 2 times # comment\n"),
+            ("run \"printf\" with arguments [\"x\"] and discard stderr\n", "run \"printf\" with arguments [\"x\"] and discard stderr and retry up to 2 times\n"),
+            ("run \"printf\" with arguments [\"x\"] and environment {\"A\": \"b\"}\n", "run \"printf\" with arguments [\"x\"] and retry up to 2 times and environment {\"A\": \"b\"}\n"),
+            ("run \"printf\" with arguments [\"x\"] and stderr to \"err\"\n", "run \"printf\" with arguments [\"x\"] and retry up to 2 times and stderr to \"err\"\n"),
+        ] {
+            let plan = apply(source, &Operation::parse("add-retry 1 2").unwrap(), 1, &Registry::default()).unwrap();
+            assert_eq!(plan.after, expected);
+        }
+        for invalid in [
+            "run \"printf\" and cache\n",
+            "run \"printf\" and keep status as s\n",
+            "run \"printf\" and retry up to 1 times\n",
+        ] {
+            assert!(
+                apply(
+                    invalid,
+                    &Operation::parse("add-retry 1 2").unwrap(),
+                    1,
+                    &Registry::default()
+                )
+                .is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn parser_spans_cover_program_interactive_and_handoff_calls() {
+        for source in [
+            "run program file \"lib.program\" with value \"old\"",
+            "run \"printf\" with arguments [\"old\"] interactively",
+            "hand over to \"printf\" with arguments [\"old\"]",
+            "launch detached \"printf\" with arguments [\"old\"] and output to \"out\"",
+        ] {
+            let layout = parser::repair_invocation_layout(source)
+                .unwrap_or_else(|error| panic!("{source}: {error:#}"));
+            let name = if source.starts_with("run program") {
+                "value"
+            } else {
+                "arguments"
+            };
+            let value = &source[layout.parameters[name].clone()];
+            assert!(value.contains("old"), "{source}: {value}");
+        }
+    }
+
+    #[test]
+    fn repairs_preserve_initial_bom() {
+        let source = "\u{feff}run fixture.count with count 1\n";
+        let plan = apply(
+            source,
+            &Operation::parse("set-parameter 1 count 2").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(plan.after, "\u{feff}run fixture.count with count 2\n");
+    }
+
+    #[test]
+    fn add_retry_preserves_each_compatible_external_suffix() {
+        for suffix in [
+            "and stdin from \"in\"",
+            "and stderr to \"err\"",
+            "and stderr appended to \"err\"",
+            "and stderr merged",
+            "and stdout to stderr",
+            "and environment {\"A\": \"v\"}",
+            "and without environment [\"A\"]",
+            "and environment {\"A\": \"v\"} and without environment [\"B\"] and stderr to \"err\"",
+        ] {
+            let source = format!("run \"printf\" with arguments [\"x\"] {suffix}\n");
+            let plan = apply(
+                &source,
+                &Operation::parse("add-retry 1 2").unwrap(),
+                1,
+                &Registry::default(),
+            )
+            .unwrap_or_else(|error| panic!("{source}: {error:#}"));
+            assert_eq!(
+                plan.after,
+                format!("run \"printf\" with arguments [\"x\"] and retry up to 2 times {suffix}\n")
+            );
+        }
+        for suffix in [
+            "and cache",
+            "and keep status as status",
+            "and keep result as result",
+            "interactively",
+        ] {
+            let source = format!("run \"printf\" with arguments [\"x\"] {suffix}\n");
+            assert!(
+                apply(
+                    &source,
+                    &Operation::parse("add-retry 1 2").unwrap(),
+                    1,
+                    &Registry::default()
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_insertion_checks_compatible_suffix_combinations() {
+        let mut checked = 0;
+        for binding in ["", " as value"] {
+            for discard in ["", " and discard stderr"] {
+                for environment in [
+                    "",
+                    " and environment {\"A\": \"v\"}",
+                    " and without environment [\"B\"]",
+                    " and environment {\"A\": \"v\"} and without environment [\"B\"]",
+                    " and without environment [\"B\"] and environment {\"A\": \"v\"}",
+                ] {
+                    for input in ["", " and stdin from \"in\""] {
+                        for output in [
+                            "",
+                            " and stderr to \"err\"",
+                            " and stderr appended to \"err\"",
+                            " and stderr merged",
+                            " and stdout to stderr",
+                        ] {
+                            for order in [
+                                [0, 1, 2],
+                                [0, 2, 1],
+                                [1, 0, 2],
+                                [1, 2, 0],
+                                [2, 0, 1],
+                                [2, 1, 0],
+                            ] {
+                                for external_position in 0..3 {
+                                    let parts = [environment, input, output];
+                                    let external =
+                                        order.iter().map(|index| parts[*index]).collect::<String>();
+                                    let mut source =
+                                        String::from("run \"printf\" with arguments [\"x\"]");
+                                    for (index, part) in [binding, discard].iter().enumerate() {
+                                        if index == external_position {
+                                            source.push_str(&external);
+                                        }
+                                        source.push_str(part);
+                                    }
+                                    if external_position == 2 {
+                                        source.push_str(&external);
+                                    }
+                                    if parser::validate_statement(
+                                        &parser::tokenize(&source).unwrap(),
+                                    )
+                                    .is_err()
+                                    {
+                                        continue;
+                                    }
+                                    let layout = parser::repair_invocation_layout(&source).unwrap();
+                                    let mut edited = source.clone();
+                                    edited.insert_str(
+                                        layout.retry_insert,
+                                        " and retry up to 2 times",
+                                    );
+                                    parser::validate_statement(&parser::tokenize(&edited).unwrap())
+                                        .unwrap_or_else(|error| {
+                                            panic!("{source} -> {edited}: {error:#}")
+                                        });
+                                    let original = parser::parse(&source).unwrap();
+                                    let mut repaired = parser::parse(&edited).unwrap();
+                                    let mut found = false;
+                                    for step in &mut repaired.steps {
+                                        if let crate::ast::StepKind::Invoke { call, .. } =
+                                            &mut step.kind
+                                        {
+                                            assert_eq!(call.retry.take().unwrap().retries, 2);
+                                            found = true;
+                                        }
+                                    }
+                                    assert!(found, "{edited}");
+                                    assert_eq!(
+                                        original.steps, repaired.steps,
+                                        "{source} -> {edited}"
+                                    );
+                                    checked += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("retry suffix combinations checked: {checked}");
+        assert!(checked >= 200, "only {checked} combinations were exercised");
+    }
+
+    #[test]
+    fn retry_rejects_existing_retry_options() {
+        for suffix in [
+            "and retry up to 1 times",
+            "and retry up to 2 times even if uncertain",
+            "and retry up to 2 times with backoff 1 second",
+            "and retry up to 2 times even if uncertain with backoff 1 second doubling",
+        ] {
+            let source = format!("run \"printf\" with arguments [] {suffix}\n");
+            let error = apply(
+                &source,
+                &Operation::parse("add-retry 1 2").unwrap(),
+                1,
+                &Registry::default(),
+            )
+            .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("already has a retry policy"),
+                "{source}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_insertion_handles_interleaved_suffixes_and_named_applets() {
+        let source = "run \"printf\" with arguments [\"x\"] and environment {\"A\": \"v\"} as value and stdin from \"in\" and without environment [\"B\"] and stderr to \"err\"\n";
+        let plan = apply(
+            source,
+            &Operation::parse("add-retry 1 2").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            source.replace(
+                "as value and stdin",
+                "as value and retry up to 2 times and stdin"
+            )
+        );
+        let named = "run fixture.count with count 1 as value and environment {\"A\": \"v\"}\n";
+        let plan = apply(
+            named,
+            &Operation::parse("add-retry 1 2").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            named.replace(
+                "as value and environment",
+                "as value and retry up to 2 times and environment"
+            )
+        );
+    }
+
+    #[test]
+    fn retry_words_in_literals_or_comments_are_not_a_retry_policy() {
+        let source = "run \"printf\" with arguments [\"and retry up to 3 times\"] # and retry up to 4 times\n";
+        let plan = apply(
+            source,
+            &Operation::parse("add-retry 1 2").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.after, "run \"printf\" with arguments [\"and retry up to 3 times\"] and retry up to 2 times # and retry up to 4 times\n");
+    }
+
+    #[test]
+    fn retry_insertion_preserves_multiline_comments_and_suffixes() {
+        let source = "label: run \"printf\" with arguments [\r\n  \"x\", # comment inside list\r\n  \"y\"\r\n] and environment {\"A\": \"v\"} # final comment\r\n";
+        let plan = apply(
+            source,
+            &Operation::parse("add-retry 1 2").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            source.replace(
+                "] and environment",
+                "] and retry up to 2 times and environment"
+            )
+        );
+    }
+
+    #[test]
+    fn retry_rejects_incompatible_suffixes_and_timeout_is_not_a_statement_suffix() {
+        let mut exercised = [0; 4];
+        for binding in ["", " as value"] {
+            for discard in ["", " and discard stderr"] {
+                for (suffix_index, suffix) in [
+                    "and cache",
+                    "and keep status as code",
+                    "and keep result as result",
+                    "and keep status as code and keep result as result",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let source =
+                        format!("run \"printf\" with arguments []{binding}{discard} {suffix}");
+                    if parser::validate_statement(&parser::tokenize(&source).unwrap()).is_err() {
+                        continue;
+                    }
+                    exercised[suffix_index] += 1;
+                    let layout = parser::repair_invocation_layout(&source).unwrap();
+                    let mut edited = source.clone();
+                    edited.insert_str(layout.retry_insert, " and retry up to 2 times");
+                    assert!(
+                        parser::validate_statement(&parser::tokenize(&edited).unwrap()).is_err(),
+                        "incompatible suffix accepted: {edited}"
+                    );
+                }
+            }
+        }
+        assert!(exercised.iter().all(|count| *count > 0), "{exercised:?}");
+        for source in [
+            "then \"printf\" with arguments []",
+            "pipe to \"printf\" with arguments []",
+            "run \"printf\" with arguments [] interactively",
+            "hand over to \"printf\" with arguments []",
+            "launch detached \"printf\" with arguments [] and output to \"out\"",
+            "run program file \"lib.program\" with name \"x\"",
+        ] {
+            parser::validate_statement(&parser::tokenize(source).unwrap()).unwrap();
+            let layout = parser::repair_invocation_layout(source).unwrap();
+            let mut edited = source.to_owned();
+            edited.insert_str(layout.retry_insert, " and retry up to 2 times");
+            assert!(
+                parser::validate_statement(&parser::tokenize(&edited).unwrap()).is_err(),
+                "{edited}"
+            );
+        }
+        assert!(parser::validate_statement(
+            &parser::tokenize("run \"printf\" and timeout 1 second").unwrap()
+        )
+        .is_err());
     }
 
     #[test]

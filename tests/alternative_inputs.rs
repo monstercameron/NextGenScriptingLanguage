@@ -683,7 +683,10 @@ fn number_min_max_require_nonempty_numeric_lists_but_defer_json_values() {
         assert_eq!(
             manifest.contract()["parameters_schema"]["properties"]["values"],
             serde_json::json!({
-                "type":"array", "items":{"type":"number"}, "minItems":1
+                "type":"array",
+                "items":{"type":"number"},
+                "minItems":1,
+                "description":"Nonempty list of finite numeric values to compare."
             })
         );
         for values in ["{}", "[]", "[1, \"x\"]"] {

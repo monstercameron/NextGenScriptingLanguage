@@ -2260,6 +2260,9 @@ fn complete_invocation(
         token_cursor += 1;
     }
     let direct = token_cursor < tokens.len() && tokens[token_cursor].quoted;
+    // `parse_interactive_run` rejects `run program` (including `run program
+    // file`), so those calls never offer `interactively`.
+    let is_program_call = head == InvocationHead::Run && words.get(head_len) == Some(&"program");
     // The operation runs to the first `with`, `as`, or `and`. Quoted direct
     // executables are absent from `words`, so the scan stays in bare-word
     // space and `direct` only changes how names and schemas resolve.
@@ -2298,7 +2301,7 @@ fn complete_invocation(
     // `as <name>` defines a new binding: a complete one may still take suffixes.
     if rest.contains(&"as") {
         if ends_with_space && rest.len() >= 2 {
-            push_suffix_forms_filtered(items, rest, direct, head, indent);
+            push_suffix_forms_filtered(items, rest, direct, head, indent, is_program_call);
         }
         return;
     }
@@ -2309,7 +2312,7 @@ fn complete_invocation(
     let Some(keyword_at) = last_keyword else {
         // Complete invocation with no dangling keyword: suffixes.
         if ends_with_space {
-            push_suffix_forms_filtered(items, rest, direct, head, indent);
+            push_suffix_forms_filtered(items, rest, direct, head, indent, is_program_call);
         }
         return;
     };
@@ -2326,7 +2329,7 @@ fn complete_invocation(
         })
     {
         if ends_with_space || tail.len() <= 3 {
-            push_suffix_forms_filtered(items, rest, direct, head, indent);
+            push_suffix_forms_filtered(items, rest, direct, head, indent, is_program_call);
         }
         return;
     }
@@ -2336,7 +2339,7 @@ fn complete_invocation(
     if keyword == "and" && tail.is_empty() {
         // `... and ` may start another parameter or a suffix.
         push_parameter_names(items, source, registry, &operation, direct);
-        push_suffix_forms_filtered(items, rest, direct, head, indent);
+        push_suffix_forms_filtered(items, rest, direct, head, indent, is_program_call);
         return;
     }
     if tail.is_empty() {
@@ -2372,7 +2375,7 @@ fn complete_invocation(
     }
     // A complete `with <name> <value>` pair: suffixes may follow.
     if ends_with_space {
-        push_suffix_forms_filtered(items, rest, direct, head, indent);
+        push_suffix_forms_filtered(items, rest, direct, head, indent, is_program_call);
     }
 }
 
@@ -2573,13 +2576,15 @@ fn push_suffix_form(items: &mut Vec<JsonValue>, form: &crate::parser::SuffixComp
 /// `as`, `and retry` is withheld beside `and cache`/`and keep status`/`and
 /// keep result` (and vice versa), `and output to` is launch-only, and
 /// `interactively` is for a top-level `run` with no redirection, stdin,
-/// environment or retry suffix (see `parse_interactive_run`).
+/// environment or retry suffix (see `parse_interactive_run`). `run program`
+/// calls are never interactive.
 fn push_suffix_forms_filtered(
     items: &mut Vec<JsonValue>,
     rest: &[&str],
     direct: bool,
     head: InvocationHead,
     indent: usize,
+    is_program_call: bool,
 ) {
     if head == InvocationHead::Hand {
         // `hand over to` takes no suffixes at all.
@@ -2587,8 +2592,9 @@ fn push_suffix_forms_filtered(
     }
     let allow_output = head == InvocationHead::Launch;
     // `parse_interactive_run` only accepts a leading `run` (never a bare
-    // phrase, `then`, `pipe to`, handover or detached launch) at top level.
-    let allow_interactive = head == InvocationHead::Run && indent == 0;
+    // phrase, `then`, `pipe to`, handover or detached launch) at top level,
+    // and rejects `run program` outright.
+    let allow_interactive = head == InvocationHead::Run && indent == 0 && !is_program_call;
     // Bare words only: quoted bindings cannot collide with these families.
     let adjacent = |first: &str, second: &str| {
         rest.windows(2)
@@ -2935,7 +2941,7 @@ fn push_value_items(
         items.push(json!({
             "label": input.name,
             "kind": 6,
-            "detail": format!("Input · {}", input.kind),
+            "detail": format!("Input · {} · line {}", input.kind, input.line),
             "insertText": input.name,
             "insertTextFormat": 1
         }));
@@ -5968,6 +5974,30 @@ mod tests {
             assert!(
                 !items.iter().any(|item| item["label"] == "interactively"),
                 "suffix combination must not offer `interactively` for `{source}`, got {items:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_interactively_withheld_for_run_program() {
+        let registry = fixture_registry();
+        let manifests = registry.manifests().unwrap();
+        // `parse_interactive_run` rejects `run program` outright, so neither
+        // the `with`-pair nor the `as`-binding suffix path may suggest it.
+        for source in [
+            "run program emit with foo bar ",
+            "run program emit as out ",
+        ] {
+            let character = source.chars().count() as u64;
+            let result = complete_source(source, 0, character, &registry, &manifests);
+            let items = result["items"].as_array().unwrap();
+            assert!(
+                !items.is_empty(),
+                "run program must still offer suffixes for `{source}`, got {items:?}"
+            );
+            assert!(
+                !items.iter().any(|item| item["label"] == "interactively"),
+                "run program must not offer `interactively` for `{source}`, got {items:?}"
             );
         }
     }

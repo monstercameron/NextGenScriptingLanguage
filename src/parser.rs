@@ -3781,6 +3781,20 @@ mod tests {
     }
 
     #[test]
+    fn run_program_calls_reject_interactively() {
+        for source in [
+            "run program emit interactively\n",
+            "define a program named emit\n  run pwd\nrun program emit interactively\n",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("`interactively`"),
+                "unexpected error for {source:?}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
     fn named_app_parameters_and_operations_keep_discard_words_as_literals() {
         let program = parse("run renderer with text label and discard \"stderr\"\n").unwrap();
         let StepKind::Invoke { call, .. } = &program.steps[0].kind else {

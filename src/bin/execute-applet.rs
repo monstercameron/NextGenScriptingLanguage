@@ -1,4 +1,4 @@
-use flow::applets::{AppletError, AppletErrorKind, execute};
+use flow::applets::{execute, AppletError, AppletErrorKind};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::io::{self, BufRead, Read, Write};

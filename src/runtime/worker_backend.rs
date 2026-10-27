@@ -9,7 +9,7 @@
 
 #[cfg(any(unix, windows))]
 use anyhow::Context;
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 #[cfg(any(unix, windows))]
 use serde::{Deserialize, Serialize};
 #[cfg(any(unix, windows))]
@@ -33,11 +33,11 @@ use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsHandle;
 use std::path::PathBuf;
-#[cfg(any(unix, windows))]
-use std::sync::Condvar;
 use std::sync::atomic::AtomicBool;
 #[cfg(any(unix, windows))]
 use std::sync::atomic::Ordering;
+#[cfg(any(unix, windows))]
+use std::sync::Condvar;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

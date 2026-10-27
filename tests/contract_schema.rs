@@ -3,7 +3,7 @@ use flow::{
     contracts::{AppletOutput, OutcomeKind, OutputType, ValueSchema},
     manifest::Registry,
 };
-use serde_json::{Value as JsonValue, json};
+use serde_json::{json, Value as JsonValue};
 use std::collections::BTreeMap;
 
 fn load(source: JsonValue) -> flow::manifest::Manifest {
@@ -100,16 +100,12 @@ fn json_outputs_validate_types_records_and_duplicate_keys() {
         ])))
     );
     assert!(manifest.decode_output(br#"{"count":"4"}"#, 0).is_err());
-    assert!(
-        manifest
-            .decode_output(br#"{"count":4,"extra":true}"#, 0)
-            .is_err()
-    );
-    assert!(
-        manifest
-            .decode_output(br#"{"count":1,"count":2}"#, 0)
-            .is_err()
-    );
+    assert!(manifest
+        .decode_output(br#"{"count":4,"extra":true}"#, 0)
+        .is_err());
+    assert!(manifest
+        .decode_output(br#"{"count":1,"count":2}"#, 0)
+        .is_err());
     assert_eq!(manifest.output_kind(), Some(flow::ast::InputType::Json));
 }
 
@@ -127,10 +123,9 @@ fn open_records_validate_dynamic_values_and_keep_closed_records_closed() {
         ("another.key".into(), Value::Bool(true)),
     ]));
     assert!(open.validate_value(&dynamic).is_ok());
-    assert!(
-        open.validate_value(&Value::Record(BTreeMap::new()))
-            .is_err()
-    );
+    assert!(open
+        .validate_value(&Value::Record(BTreeMap::new()))
+        .is_err());
     assert!(open.validate_value(&Value::List(Vec::new())).is_err());
     assert_eq!(open.json_schema()["additionalProperties"], json!({}));
     assert_eq!(open.json_schema()["minProperties"], 1);
@@ -139,14 +134,12 @@ fn open_records_validate_dynamic_values_and_keep_closed_records_closed() {
         "type":"record","fields":{"known":{"type":"integer"}}
     }))
     .unwrap();
-    assert!(
-        closed
-            .validate_value(&Value::Record(BTreeMap::from([(
-                "arbitrary".into(),
-                Value::Integer(1)
-            )])))
-            .is_err()
-    );
+    assert!(closed
+        .validate_value(&Value::Record(BTreeMap::from([(
+            "arbitrary".into(),
+            Value::Integer(1)
+        )])))
+        .is_err());
 }
 
 #[test]
@@ -162,58 +155,46 @@ fn open_record_value_constraints_validate_scalars_and_nonempty_text() {
         Value::Number(serde_json::Number::from_f64(2.5).unwrap()),
         Value::Bool(false),
     ] {
-        assert!(
-            scalar_values
-                .validate_value(&Value::Record(BTreeMap::from([("key".into(), value)])))
-                .is_ok()
-        );
+        assert!(scalar_values
+            .validate_value(&Value::Record(BTreeMap::from([("key".into(), value)])))
+            .is_ok());
     }
-    assert!(
-        scalar_values
-            .validate_value(&Value::Record(BTreeMap::from([(
-                "key".into(),
-                Value::Null
-            )])))
-            .is_err()
-    );
+    assert!(scalar_values
+        .validate_value(&Value::Record(BTreeMap::from([(
+            "key".into(),
+            Value::Null
+        )])))
+        .is_err());
 
     let descriptions: ValueSchema = serde_json::from_value(json!({
         "type":"record","fields":{},"min_properties":2,"max_properties":128,
         "additionalProperties":{"type":"text","nonempty":true}
     }))
     .unwrap();
-    assert!(
-        descriptions
-            .validate_value(&Value::Record(BTreeMap::from([
-                ("yes".into(), Value::String(" description ".into())),
-                ("no".into(), Value::String("\t ".into()))
-            ])))
-            .is_err()
-    );
-    assert!(
-        descriptions
-            .validate_value(&Value::Record(BTreeMap::from([
-                ("yes".into(), Value::String("description".into())),
-                ("no".into(), Value::String("other".into()))
-            ])))
-            .is_ok()
-    );
-    assert!(
-        descriptions
-            .validate_value(&Value::Record(BTreeMap::from([
-                ("yes".into(), Value::String("\u{0085}".into())),
-                ("no".into(), Value::String("other".into()))
-            ])))
-            .is_err()
-    );
-    assert!(
-        descriptions
-            .validate_value(&Value::Record(BTreeMap::from([
-                ("yes".into(), Value::String("\u{FEFF}".into())),
-                ("no".into(), Value::String("other".into()))
-            ])))
-            .is_ok()
-    );
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String(" description ".into())),
+            ("no".into(), Value::String("\t ".into()))
+        ])))
+        .is_err());
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String("description".into())),
+            ("no".into(), Value::String("other".into()))
+        ])))
+        .is_ok());
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String("\u{0085}".into())),
+            ("no".into(), Value::String("other".into()))
+        ])))
+        .is_err());
+    assert!(descriptions
+        .validate_value(&Value::Record(BTreeMap::from([
+            ("yes".into(), Value::String("\u{FEFF}".into())),
+            ("no".into(), Value::String("other".into()))
+        ])))
+        .is_ok());
 }
 
 #[test]
@@ -281,19 +262,15 @@ fn manifest_check_accepts_dynamic_scalar_maps_and_rejects_wrong_roots() {
         ("flag".into(), Value::Bool(true)),
     ]));
     assert!(manifest.validate(&invocation(valid)).is_ok());
-    assert!(
-        manifest
-            .validate(&invocation(Value::List(Vec::new())))
-            .is_err()
-    );
-    assert!(
-        manifest
-            .validate(&invocation(Value::Record(BTreeMap::from([(
-                "null".into(),
-                Value::Null
-            )]))))
-            .is_err()
-    );
+    assert!(manifest
+        .validate(&invocation(Value::List(Vec::new())))
+        .is_err());
+    assert!(manifest
+        .validate(&invocation(Value::Record(BTreeMap::from([(
+            "null".into(),
+            Value::Null
+        )]))))
+        .is_err());
 }
 
 #[test]
@@ -316,11 +293,9 @@ fn recursive_list_outputs_use_typed_items_and_reject_nested_bytes() {
             ("ok".into(), Value::Bool(true)),
         ]))]))
     );
-    assert!(
-        manifest
-            .decode_output(br#"[{"path":"","ok":true}]"#, 0)
-            .is_err()
-    );
+    assert!(manifest
+        .decode_output(br#"[{"path":"","ok":true}]"#, 0)
+        .is_err());
     assert_eq!(manifest.output_kind(), Some(flow::ast::InputType::Json));
     assert_eq!(manifest.contract()["io"]["output_schema"]["type"], "array");
 
@@ -476,8 +451,8 @@ fn outcomes_are_named_and_closed_when_declared() {
     );
     assert_eq!(absence["status"], Value::Integer(4));
     assert_eq!(
-        envelope.contract()["execution"]["result_envelope_schema"]["properties"]["effect_certainty"]
-            ["type"],
+        envelope.contract()["execution"]["result_envelope_schema"]["properties"]
+            ["effect_certainty"]["type"],
         "string"
     );
 }
@@ -499,55 +474,49 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
         flow::contracts::EffectCertainty::NotStarted
     );
     assert_eq!(outcome.effect_certainty.as_str(), "not_started");
-    assert!(
-        manifest
-            .validate(&Invocation {
-                operation: "typed".into(),
-                direct: false,
-                discard_stderr: false,
-                parameters: BTreeMap::new(),
-                binding: Some("raw".into()),
-                cache: false,
-                sensitive_binding: false,
-                status_binding: None,
-                result_binding: None,
-                retry: None,
-            })
-            .is_err()
-    );
-    assert!(
-        manifest
-            .validate(&Invocation {
-                operation: "typed".into(),
-                direct: false,
-                discard_stderr: false,
-                parameters: BTreeMap::new(),
-                binding: None,
-                cache: false,
-                sensitive_binding: false,
-                status_binding: None,
-                result_binding: None,
-                retry: None,
-            })
-            .is_ok()
-    );
+    assert!(manifest
+        .validate(&Invocation {
+            operation: "typed".into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::new(),
+            binding: Some("raw".into()),
+            cache: false,
+            sensitive_binding: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        })
+        .is_err());
+    assert!(manifest
+        .validate(&Invocation {
+            operation: "typed".into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::new(),
+            binding: None,
+            cache: false,
+            sensitive_binding: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        })
+        .is_ok());
     let implicit_bytes = load(base(json!({"version":1})));
-    assert!(
-        implicit_bytes
-            .validate(&Invocation {
-                operation: "typed".into(),
-                direct: false,
-                discard_stderr: false,
-                parameters: BTreeMap::new(),
-                binding: Some("raw".into()),
-                cache: false,
-                sensitive_binding: false,
-                status_binding: None,
-                result_binding: None,
-                retry: None,
-            })
-            .is_err()
-    );
+    assert!(implicit_bytes
+        .validate(&Invocation {
+            operation: "typed".into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::new(),
+            binding: Some("raw".into()),
+            cache: false,
+            sensitive_binding: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        })
+        .is_err());
 
     let serialized = serde_json::to_value(manifest.execution_contract().unwrap()).unwrap();
     assert_eq!(serialized["outcomes"][1]["effect_certainty"], "not_started");
@@ -556,11 +525,9 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
         "outcomes":[{"status":0,"name":"success","kind":"success"}]
     })));
     let omitted_serialized = serde_json::to_value(omitted.execution_contract().unwrap()).unwrap();
-    assert!(
-        omitted_serialized["outcomes"][0]
-            .get("effect_certainty")
-            .is_none()
-    );
+    assert!(omitted_serialized["outcomes"][0]
+        .get("effect_certainty")
+        .is_none());
 }
 
 #[test]
@@ -776,14 +743,12 @@ fn applet_environment_is_validated_and_redacted_from_debug_and_discovery() {
         json!({"set":{"TOKEN":format!("bad{}value", '\0')}}),
         json!({"set":{"TOKEN":"one"},"unset":["TOKEN"]}),
     ] {
-        assert!(
-            Registry::from_sources(&[base(json!({
-                "version":1,
-                "environment":environment
-            }))
-            .to_string()])
-            .is_err()
-        );
+        assert!(Registry::from_sources(&[base(json!({
+            "version":1,
+            "environment":environment
+        }))
+        .to_string()])
+        .is_err());
     }
 }
 
@@ -879,24 +844,18 @@ fn number_ports_refine_json_parameters_before_invocation_and_dispatch() {
         result_binding: None,
         retry: None,
     };
-    assert!(
-        manifest
-            .validate(&invocation(
-                Value::Integer(2),
-                Value::Number("2.5".parse().unwrap())
-            ))
-            .is_ok()
-    );
-    assert!(
-        manifest
-            .validate(&invocation(Value::String("2".into()), Value::Integer(1)))
-            .is_err()
-    );
-    assert!(
-        manifest
-            .validate(&invocation(Value::Bool(false), Value::Integer(1)))
-            .is_err()
-    );
+    assert!(manifest
+        .validate(&invocation(
+            Value::Integer(2),
+            Value::Number("2.5".parse().unwrap())
+        ))
+        .is_ok());
+    assert!(manifest
+        .validate(&invocation(Value::String("2".into()), Value::Integer(1)))
+        .is_err());
+    assert!(manifest
+        .validate(&invocation(Value::Bool(false), Value::Integer(1)))
+        .is_err());
 
     let resolved_bad = BTreeMap::from([
         ("left".into(), Value::Null),
@@ -939,16 +898,12 @@ fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
         pattern: None,
     };
     assert!(nullable.validate_value(&Value::Null).is_ok());
-    assert!(
-        nullable
-            .validate_value(&Value::String("red".into()))
-            .is_ok()
-    );
-    assert!(
-        nullable
-            .validate_value(&Value::String("green".into()))
-            .is_err()
-    );
+    assert!(nullable
+        .validate_value(&Value::String("red".into()))
+        .is_ok());
+    assert!(nullable
+        .validate_value(&Value::String("green".into()))
+        .is_err());
     let json_schema = nullable.json_schema();
     assert_eq!(json_schema["anyOf"][0]["enum"], json!(["red", "blue"]));
     assert_eq!(json_schema["anyOf"][1]["type"], "null");
@@ -980,26 +935,18 @@ fn single_line_text_schemas_reject_cr_and_lf_but_allow_empty_text() {
         ..single_line.clone()
     };
 
-    assert!(
-        single_line
-            .validate_value(&Value::String(String::new()))
-            .is_ok()
-    );
-    assert!(
-        single_line
-            .validate_value(&Value::String("plain text".into()))
-            .is_ok()
-    );
-    assert!(
-        single_line
-            .validate_value(&Value::String("a\nb".into()))
-            .is_err()
-    );
-    assert!(
-        single_line
-            .validate_value(&Value::String("a\rb".into()))
-            .is_err()
-    );
+    assert!(single_line
+        .validate_value(&Value::String(String::new()))
+        .is_ok());
+    assert!(single_line
+        .validate_value(&Value::String("plain text".into()))
+        .is_ok());
+    assert!(single_line
+        .validate_value(&Value::String("a\nb".into()))
+        .is_err());
+    assert!(single_line
+        .validate_value(&Value::String("a\rb".into()))
+        .is_err());
     assert!(single_line.is_assignable_to(&unrestricted));
     assert!(!unrestricted.is_assignable_to(&single_line));
     assert_eq!(single_line.json_schema()["pattern"], json!("^[^\\r\\n]*$"));
@@ -1036,21 +983,15 @@ fn manifest_single_line_ports_check_literals_but_defer_references() {
         retry: None,
     };
 
-    assert!(
-        manifest
-            .validate(&invocation(Value::String("left\nright".into())))
-            .is_err()
-    );
-    assert!(
-        manifest
-            .validate(&invocation(Value::String(String::new())))
-            .is_ok()
-    );
-    assert!(
-        manifest
-            .validate(&invocation(Value::Reference("runtime_line".into())))
-            .is_ok()
-    );
+    assert!(manifest
+        .validate(&invocation(Value::String("left\nright".into())))
+        .is_err());
+    assert!(manifest
+        .validate(&invocation(Value::String(String::new())))
+        .is_ok());
+    assert!(manifest
+        .validate(&invocation(Value::Reference("runtime_line".into())))
+        .is_ok());
 }
 
 #[test]
@@ -1078,20 +1019,16 @@ fn numeric_list_schemas_enforce_minimum_length_without_rejecting_floats() {
     }))
     .unwrap();
     assert_eq!(schema.json_schema()["minItems"], 1);
-    assert!(
-        schema
-            .validate_value(&Value::List(vec![
-                Value::Integer(1),
-                Value::Number("2.5".parse().unwrap())
-            ]))
-            .is_ok()
-    );
+    assert!(schema
+        .validate_value(&Value::List(vec![
+            Value::Integer(1),
+            Value::Number("2.5".parse().unwrap())
+        ]))
+        .is_ok());
     assert!(schema.validate_value(&Value::List(Vec::new())).is_err());
-    assert!(
-        schema
-            .validate_value(&Value::List(vec![Value::String("bad".into())]))
-            .is_err()
-    );
+    assert!(schema
+        .validate_value(&Value::List(vec![Value::String("bad".into())]))
+        .is_err());
 
     let unconstrained: ValueSchema = serde_json::from_value(json!({
         "type":"list", "items":{"type":"number"}

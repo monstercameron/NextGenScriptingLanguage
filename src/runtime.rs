@@ -4,7 +4,7 @@ use crate::ast::{
 };
 use crate::contracts::{AppletBackend, Lifecycle, OutcomeKind};
 use crate::manifest::{AppletOutput, Builtin, Manifest, Registry};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -45,8 +45,8 @@ mod step_loop;
 #[cfg(unix)]
 use spawn::execute_group_with_sink;
 use spawn::{
-    GroupOutput, GroupRequest, captured_stage_stderr, collect_native_stages, execute_group,
-    redact_command_failure,
+    captured_stage_stderr, collect_native_stages, execute_group, redact_command_failure,
+    GroupOutput, GroupRequest,
 };
 // Used by the Windows process path (windows_process.rs) through this module.
 #[cfg(windows)]
@@ -54,8 +54,8 @@ use spawn::{
     check_native_abort, native_output_limit_failure, native_spawn_failure, resolved_call_stdio,
 };
 use step_loop::{
-    FiniteRun, FiniteStart, FiniteStateSource, run_finite, run_finite_inner,
-    run_finite_inner_with_state_source, run_finite_state,
+    run_finite, run_finite_inner, run_finite_inner_with_state_source, run_finite_state, FiniteRun,
+    FiniteStart, FiniteStateSource,
 };
 pub(crate) mod statement_hook;
 mod temp;
@@ -63,8 +63,8 @@ mod terminal;
 use crate::working_dir::enter_directory;
 use observe::execute_call_group;
 use redirect::{
-    ForceStderrCapture, PendingRedirect, StreamScope, append_to_open_file, open_output_file,
-    open_redirect_target, verify_opened_identity,
+    append_to_open_file, open_output_file, open_redirect_target, verify_opened_identity,
+    ForceStderrCapture, PendingRedirect, StreamScope,
 };
 mod program_backend;
 pub(crate) mod resume;
@@ -73,8 +73,8 @@ mod streaming;
 pub mod tasks;
 pub mod worker_backend;
 #[cfg(feature = "graph")]
-pub(crate) use checkpoint::graph::{PersistenceAuthorizer, open_graph_checkpoint};
-pub use checkpoint::{CheckpointOptions, RepairState, read_repair_state};
+pub(crate) use checkpoint::graph::{open_graph_checkpoint, PersistenceAuthorizer};
+pub use checkpoint::{read_repair_state, CheckpointOptions, RepairState};
 pub use resume::run_checkpointed;
 
 /// Mark descriptors inherited by this process close-on-exec before starting runtime work.
@@ -90,20 +90,20 @@ pub fn mark_inherited_descriptors_close_on_exec() -> Result<()> {
 #[cfg(feature = "graph")]
 pub(crate) use streaming::run_stream_with_context_and_process_observer;
 pub use streaming::{
-    StreamExecutionContext, StreamResult, run_stream, run_stream_with_cancellation,
-    run_stream_with_context,
+    run_stream, run_stream_with_cancellation, run_stream_with_context, StreamExecutionContext,
+    StreamResult,
 };
 #[cfg_attr(windows, path = "runtime/windows_stdio.rs")]
 mod stdio;
 #[cfg(feature = "live")]
 pub(crate) use service::next_interval;
-pub use service::{
-    CalendarDedupPolicy, MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
-    run_service, run_service_checkpointed, run_service_checkpointed_with_schedule_options,
-    run_service_with_cancellation, run_service_with_schedule_options,
-};
 #[cfg(feature = "graph")]
-pub(crate) use service::{ProgramServiceContext, run_program_module_service};
+pub(crate) use service::{run_program_module_service, ProgramServiceContext};
+pub use service::{
+    run_service, run_service_checkpointed, run_service_checkpointed_with_schedule_options,
+    run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
+    MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
+};
 pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
 
 pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
@@ -1329,9 +1329,9 @@ pub fn bundled_model_applet() -> Result<PathBuf> {
     } else {
         "execute-model"
     });
-    let metadata = fs::metadata(&helper).with_context(
-        || "bundled execute-model helper missing; build both binaries with cargo build --release",
-    )?;
+    let metadata = fs::metadata(&helper).with_context(|| {
+        "bundled execute-model helper missing; build both binaries with cargo build --release"
+    })?;
     if !metadata.is_file() || !crate::platform::executable(&metadata) {
         bail!("bundled execute-model helper is not an executable file");
     }
@@ -4962,13 +4962,11 @@ mod opt_manifest_binary_path_tests {
             split.as_os_str().as_encoded_bytes(),
             non_utf8.as_os_str().as_encoded_bytes()
         );
-        assert!(
-            double_slash
-                .as_os_str()
-                .as_bytes()
-                .windows(2)
-                .any(|pair| pair == b"//")
-        );
+        assert!(double_slash
+            .as_os_str()
+            .as_bytes()
+            .windows(2)
+            .any(|pair| pair == b"//"));
     }
 
     #[test]
@@ -5128,7 +5126,7 @@ mod input_writer_drop_tests {
     use std::io::{PipeWriter, Write};
     use std::os::fd::AsRawFd;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
+    use std::sync::{mpsc, Arc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -5703,12 +5701,10 @@ mod atomic_write_target_tests {
 
         assert!(format!("{error:#}").contains("symbolic link"));
         assert_eq!(fs::read(&target).unwrap(), b"old");
-        assert!(
-            fs::symlink_metadata(&link)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }
 
@@ -6103,7 +6099,7 @@ mod lane_v2_path_tests {
     #[cfg(unix)]
     #[test]
     fn lane_v2_path_cache_preserves_symlink_alias_and_permission_changes() {
-        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::os::unix::fs::{symlink, PermissionsExt};
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("target");
         fs::write(&target, b"fixture").unwrap();

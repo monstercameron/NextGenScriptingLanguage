@@ -42,8 +42,8 @@ use flow::{parser, runtime};
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -638,11 +638,10 @@ fn serialized_reuse_rechecks_worker_history_before_sending_a_request() {
         thread::sleep(Duration::from_millis(5));
     }
     assert!(effects.exists(), "secret request reached the worker");
-    assert!(
-        pool.sensitivity_history_for_launch(&worker_launch)
-            .unwrap()
-            .contains(&flow::contracts::Sensitivity::Secret)
-    );
+    assert!(pool
+        .sensitivity_history_for_launch(&worker_launch)
+        .unwrap()
+        .contains(&flow::contracts::Sensitivity::Secret));
 
     let mut public = request(&[], b"public");
     public.sensitivity = security::SensitivitySet::from_label(flow::contracts::Sensitivity::Public);
@@ -689,11 +688,9 @@ fn output_and_stderr_limits_are_enforced() {
     let error = pool
         .invoke(launch(&directory, "large_output"), output_request)
         .expect_err("oversized output must be rejected");
-    assert!(
-        error
-            .to_string()
-            .contains("exceeding the maximum of 8 bytes")
-    );
+    assert!(error
+        .to_string()
+        .contains("exceeding the maximum of 8 bytes"));
     assert!(!worker_error(&error).uncertain_effect);
     assert_eq!(worker_error(&error).completed_status, Some(0));
     assert_eq!(
@@ -730,11 +727,9 @@ fn output_and_stderr_limits_are_enforced() {
         .invoke(stderr_launch.clone(), request(&[], &[]))
         .expect_err("oversized diagnostic must be rejected");
     assert!(error.to_string().contains("stderr was 128 bytes"));
-    assert!(
-        error
-            .to_string()
-            .contains("request completed with status 0")
-    );
+    assert!(error
+        .to_string()
+        .contains("request completed with status 0"));
     assert!(!worker_error(&error).uncertain_effect);
     assert_eq!(worker_error(&error).completed_status, Some(0));
     assert_eq!(

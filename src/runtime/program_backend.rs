@@ -6,11 +6,11 @@
 //! runtime session.
 
 use super::{
-    CallSite, FiniteRun, GroupOutput, Input, LaunchEnv, Program, RunOptions, configured_inputs,
-    run_finite_inner,
+    configured_inputs, run_finite_inner, CallSite, FiniteRun, GroupOutput, Input, LaunchEnv,
+    Program, RunOptions,
 };
 use crate::modules::LoadedProgramSource;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
 
 /// Execute one prevalidated module export as a private child scope.

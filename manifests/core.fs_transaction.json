@@ -13,6 +13,8 @@
       "required": true,
       "schema": {
         "type": "list",
+        "min_items": 1,
+        "max_items": 32,
         "items": {
           "type": "json",
           "one_of": [

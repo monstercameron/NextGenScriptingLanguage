@@ -293,6 +293,10 @@ struct ParameterSchema {
     kind: ParameterType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     items: Option<Box<ParameterSchema>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_items: Option<usize>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     fields: BTreeMap<String, ParameterSchema>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -328,7 +332,14 @@ impl ParameterSchema {
                 serde_json::json!({"type":"object","properties":properties,"required":self.required,"additionalProperties":!self.one_of.is_empty()})
             }
             ParameterType::List => {
-                serde_json::json!({"type":"array","items":self.items.as_deref().expect("list schema validated").json_schema()})
+                let mut schema = serde_json::json!({"type":"array","items":self.items.as_deref().expect("list schema validated").json_schema()});
+                if let Some(minimum) = self.min_items {
+                    schema["minItems"] = minimum.into();
+                }
+                if let Some(maximum) = self.max_items {
+                    schema["maxItems"] = maximum.into();
+                }
+                schema
             }
             ParameterType::Scalar => serde_json::json!({}),
         };
@@ -347,10 +358,17 @@ impl ParameterSchema {
                 if self.items.is_none() || !self.fields.is_empty() || !self.required.is_empty() {
                     bail!("{path}: list schemas require items and cannot declare fields");
                 }
+                if self
+                    .min_items
+                    .zip(self.max_items)
+                    .is_some_and(|(minimum, maximum)| minimum > maximum)
+                {
+                    bail!("{path}: min_items cannot exceed max_items");
+                }
             }
             ParameterType::Record => {
-                if self.items.is_some() {
-                    bail!("{path}: record schemas cannot declare items");
+                if self.items.is_some() || self.min_items.is_some() || self.max_items.is_some() {
+                    bail!("{path}: record schemas cannot declare list constraints");
                 }
                 let mut seen = BTreeSet::new();
                 for name in &self.required {
@@ -360,7 +378,12 @@ impl ParameterSchema {
                 }
             }
             ParameterType::String => {
-                if self.items.is_some() || !self.fields.is_empty() || !self.required.is_empty() {
+                if self.items.is_some()
+                    || self.min_items.is_some()
+                    || self.max_items.is_some()
+                    || !self.fields.is_empty()
+                    || !self.required.is_empty()
+                {
                     bail!("{path}: string schemas cannot declare items or fields");
                 }
                 if self.enum_values.as_ref().is_some_and(Vec::is_empty) {
@@ -377,6 +400,8 @@ impl ParameterSchema {
             | ParameterType::Boolean
             | ParameterType::Json => {
                 if self.items.is_some()
+                    || self.min_items.is_some()
+                    || self.max_items.is_some()
                     || !self.fields.is_empty()
                     || !self.required.is_empty()
                     || self.enum_values.is_some()
@@ -499,6 +524,15 @@ impl ParameterSchema {
                 }
             }
             (ParameterType::List, Value::List(items)) => {
+                if self.min_items.is_some_and(|minimum| items.len() < minimum) {
+                    bail!(
+                        "{path} requires at least {} item(s)",
+                        self.min_items.unwrap()
+                    );
+                }
+                if self.max_items.is_some_and(|maximum| items.len() > maximum) {
+                    bail!("{path} allows at most {} item(s)", self.max_items.unwrap());
+                }
                 let schema = self.items.as_deref().expect("list schema validated");
                 for (index, value) in items.iter().enumerate() {
                     schema.validate_value(
@@ -4363,6 +4397,10 @@ mod tests {
     fn fs_transaction_static_schema_checks_variant_records() {
         let manifest = parse_manifest(include_str!("../manifests/core.fs_transaction.json"))
             .expect("transaction manifest schema parses");
+        let projected =
+            manifest.contract()["parameters_schema"]["properties"]["operations"].clone();
+        assert_eq!(projected["minItems"], 1);
+        assert_eq!(projected["maxItems"], 32);
         let operations = |values: serde_json::Value| structured_json(values);
         let valid = operations(serde_json::json!([
             {"action":"write","path":"/tmp/item","expected_content_hash":"hash","content":"new"},
@@ -4376,8 +4414,21 @@ mod tests {
             manifest.validate(&invocation)
         };
         validate(valid).unwrap_or_else(|error| panic!("{error:#}"));
+        let too_many = serde_json::Value::Array(
+            (0..33)
+                .map(|index| {
+                    serde_json::json!({
+                        "action":"remove",
+                        "path":format!("/tmp/item-{index}"),
+                        "expected_content_hash":"hash"
+                    })
+                })
+                .collect(),
+        );
 
         for value in [
+            serde_json::json!([]),
+            too_many,
             serde_json::json!([1]),
             serde_json::json!([{"action":"write","path":"/tmp/item","expected_content_hash":"hash"}]),
             serde_json::json!([{"action":"remove","path":"/tmp/item","expected_content_hash":"hash","content":"x"}]),
@@ -4397,6 +4448,9 @@ mod tests {
     fn json_filter_static_schema_checks_predicate_variants_and_defers_references() {
         let manifest = parse_manifest(include_str!("../manifests/core.json_filter.json"))
             .expect("filter manifest schema parses");
+        let projected = manifest.contract()["parameters_schema"]["properties"]["where"].clone();
+        assert_eq!(projected["minItems"], serde_json::Value::Null);
+        assert_eq!(projected["maxItems"], 32);
         let predicates = |values: serde_json::Value| structured_json(values);
         let valid = predicates(serde_json::json!([
             {"exists":true},
@@ -4415,8 +4469,25 @@ mod tests {
         assert!(manifest
             .validate(&schema_invocation("json.filter", "where", deferred))
             .is_ok());
+        let dynamic_list = schema_invocation(
+            "json.filter",
+            "where",
+            Value::Reference("dynamic_predicates".into()),
+        );
+        assert!(manifest
+            .validate_with_types(
+                &dynamic_list,
+                &BTreeMap::from([("dynamic_predicates".into(), InputType::JsonList)]),
+            )
+            .is_ok());
+        let too_many = serde_json::Value::Array(
+            (0..33)
+                .map(|_| serde_json::json!({"exists":true}))
+                .collect(),
+        );
 
         for value in [
+            too_many,
             serde_json::json!([1]),
             serde_json::json!([{"type":"task"}]),
             serde_json::json!([{"exists":"yes"}]),

@@ -12,9 +12,10 @@ original version labels.
   non-object values during checking while retaining dynamic object keys.
 
 - JSON parameters can declare recursive list and closed-record schemas with
-  mutually exclusive `one_of` variants and finite string enums. The bundled
-  `fs.transaction` and `json.filter` manifests now statically check their
-  operation and predicate variants while deferring unresolved references.
+  mutually exclusive `one_of` variants, finite string enums, and list length
+  bounds. The bundled `fs.transaction` and `json.filter` manifests now statically
+  check their operation and predicate variants while deferring unresolved
+  references.
 
 - Program inputs now support `list of integer` and `list of json`; integer list
   values are statically typed when iterated and invalid items fail before execution.

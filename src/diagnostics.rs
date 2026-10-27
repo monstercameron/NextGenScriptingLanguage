@@ -452,6 +452,7 @@ pub fn analyze_source_at(
         registry,
         #[cfg(feature = "lsp")]
         None,
+        None,
     )
 }
 
@@ -462,7 +463,7 @@ pub(crate) fn analyze_source_scoped<'a>(
     registry: &'a Registry,
     scope: Option<&'a crate::program_files::SourceScope<'a>>,
 ) -> Vec<Diagnostic> {
-    analyze_source_impl(source, path, registry, scope)
+    analyze_source_impl(source, path, registry, scope, None)
 }
 
 fn analyze_source_impl(
@@ -470,6 +471,7 @@ fn analyze_source_impl(
     path: Option<&std::path::Path>,
     registry: &Registry,
     #[cfg(feature = "lsp")] scope: Option<&crate::program_files::SourceScope<'_>>,
+    snapshot: Option<&crate::program_files::SourceLoadSnapshot>,
 ) -> Vec<Diagnostic> {
     const MAX_DIAGNOSTICS: usize = 10_000;
     let mut diagnostics = Vec::new();
@@ -583,10 +585,41 @@ fn analyze_source_impl(
         registry,
         cwd: &cwd,
     };
+    let replay_only = snapshot.is_some_and(crate::program_files::SourceLoadSnapshot::is_replay_only)
+        || {
+            #[cfg(feature = "lsp")]
+            {
+                scope.is_some_and(|scope| scope.is_replay_only())
+            }
+            #[cfg(not(feature = "lsp"))]
+            {
+                false
+            }
+        };
+    let source_path = path.map(|path| {
+        if replay_only {
+            path.to_path_buf()
+        } else {
+            std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        }
+    });
+    let mut captured_snapshot = None;
     #[cfg(feature = "lsp")]
-    let parsed = crate::program_files::parse_at_scoped(source, path, Some(access), scope);
+    let parsed = if scope.is_some() {
+        crate::program_files::parse_at_scoped(source, path, Some(access), scope)
+    } else {
+        let (parsed, loaded) =
+            crate::program_files::parse_at_with_snapshot(source, path, Some(access), snapshot);
+        captured_snapshot = Some(loaded);
+        parsed
+    };
     #[cfg(not(feature = "lsp"))]
-    let parsed = crate::program_files::parse_at(source, path, Some(access));
+    let (parsed, loaded) =
+        crate::program_files::parse_at_with_snapshot(source, path, Some(access), snapshot);
+    #[cfg(not(feature = "lsp"))]
+    {
+        captured_snapshot = Some(loaded);
+    }
     match parsed {
         Ok(program) => {
             collect_lint_diagnostics(source, &program, &line_starts, &mut diagnostics);
@@ -625,6 +658,9 @@ fn analyze_source_impl(
             if let Some(parent_path) = path {
                 #[cfg(feature = "lsp")]
                 let replay_scope = scope.map(|scope| scope.replay());
+                let replay_snapshot = captured_snapshot
+                    .as_ref()
+                    .map(crate::program_files::SourceLoadSnapshot::replay);
                 let mut calls = Vec::new();
                 collect_file_calls(&program.steps, &mut calls);
                 for (name, definition) in &program.definitions {
@@ -645,13 +681,17 @@ fn analyze_source_impl(
                         continue;
                     };
                     #[cfg(feature = "lsp")]
-                    let child_source = if let Some(scope) = scope {
-                        scope.loaded_source(&child_path)
-                    } else {
-                        std::fs::read_to_string(&child_path).ok()
-                    };
+                    let child_source = scope
+                        .and_then(|scope| scope.loaded_source(&child_path))
+                        .or_else(|| {
+                            captured_snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.loaded_source(&child_path))
+                        });
                     #[cfg(not(feature = "lsp"))]
-                    let child_source = std::fs::read_to_string(&child_path).ok();
+                    let child_source = captured_snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.loaded_source(&child_path));
                     let Some(child_source) = child_source else { continue; };
                     let mut child = analyze_child_source(
                         &child_source,
@@ -659,8 +699,9 @@ fn analyze_source_impl(
                         registry,
                         #[cfg(feature = "lsp")]
                         replay_scope.as_ref(),
+                        replay_snapshot.as_ref(),
                     );
-                    let parent_path = diagnostic_source_path(parent_path);
+                    let parent_path = source_path.as_deref().unwrap_or(parent_path);
                     let mut callsite = line_starts.span(source, *line);
                     callsite.path = Some(parent_path.display().to_string());
                     callsite.path_bytes = Some(parent_path.as_os_str().as_encoded_bytes().to_vec());
@@ -678,6 +719,9 @@ fn analyze_source_impl(
             let message = format!("{error:#}");
             #[cfg(feature = "lsp")]
             let replay_scope = scope.map(|scope| scope.replay());
+            let replay_snapshot = captured_snapshot
+                .as_ref()
+                .map(crate::program_files::SourceLoadSnapshot::replay);
             if let Some(path_text) = message
                 .split_once("called program file ")
                 .and_then(|(_, tail)| {
@@ -689,9 +733,15 @@ fn analyze_source_impl(
                 #[cfg(feature = "lsp")]
                 let child_source = scope
                     .and_then(|scope| scope.loaded_source(&child_path))
-                    .or_else(|| scope.is_none().then(|| std::fs::read_to_string(&child_path).ok()).flatten());
+                    .or_else(|| {
+                        captured_snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.loaded_source(&child_path))
+                    });
                 #[cfg(not(feature = "lsp"))]
-                let child_source = std::fs::read_to_string(&child_path).ok();
+                let child_source = captured_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.loaded_source(&child_path));
                 if let (Some(parent_path), Some(child_source)) = (path, child_source) {
                     let mut child = analyze_child_source(
                         &child_source,
@@ -699,6 +749,7 @@ fn analyze_source_impl(
                         registry,
                         #[cfg(feature = "lsp")]
                         replay_scope.as_ref(),
+                        replay_snapshot.as_ref(),
                     );
                     let name = child_path
                         .file_name()
@@ -709,7 +760,7 @@ fn analyze_source_impl(
                         .position(|line| line.contains(name))
                         .map_or(1, |line| line + 1);
                     let mut callsite = line_starts.span(source, call_line);
-                    let parent_path = diagnostic_source_path(parent_path);
+                    let parent_path = source_path.as_deref().unwrap_or(parent_path);
                     callsite.path = Some(parent_path.display().to_string());
                     callsite.path_bytes = Some(parent_path.as_os_str().as_encoded_bytes().to_vec());
                     for diagnostic in &mut child {
@@ -747,8 +798,7 @@ fn analyze_source_impl(
             &right.message,
         ))
     });
-    if let Some(path) = path {
-        let path = diagnostic_source_path(path);
+    if let Some(path) = source_path.as_deref() {
         let display = path.display().to_string();
         let bytes = path.as_os_str().as_encoded_bytes().to_vec();
         for diagnostic in &mut diagnostics {
@@ -2646,6 +2696,7 @@ fn analyze_child_source(
     path: &std::path::Path,
     registry: &Registry,
     #[cfg(feature = "lsp")] scope: Option<&crate::program_files::SourceScope<'_>>,
+    snapshot: Option<&crate::program_files::SourceLoadSnapshot>,
 ) -> Vec<Diagnostic> {
     analyze_source_impl(
         source,
@@ -2653,11 +2704,8 @@ fn analyze_child_source(
         registry,
         #[cfg(feature = "lsp")]
         scope,
+        snapshot,
     )
-}
-
-fn diagnostic_source_path(path: &std::path::Path) -> std::path::PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {
@@ -5530,5 +5578,43 @@ mod tests {
             }),
             "{diagnostics:#?}"
         );
+    }
+
+    #[test]
+    fn diagnostic_replay_uses_captured_callee_source_after_file_removal() {
+        let root = tempfile::tempdir().unwrap();
+        let caller = root.path().join("caller.program");
+        let callee = root.path().join("callee.program");
+        let source = "run program file \"callee.program\"\n";
+        std::fs::write(&caller, source).unwrap();
+        std::fs::write(
+            &callee,
+            "accept theme as text\nrun \"printf\" with arguments [them]\n",
+        )
+        .unwrap();
+        let canonical_callee = std::fs::canonicalize(&callee).unwrap();
+        let registry = Registry::default();
+        let access = crate::program_files::Access {
+            registry: &registry,
+            cwd: root.path(),
+        };
+        let (parsed, snapshot) =
+            crate::program_files::parse_at_with_snapshot(source, Some(&caller), Some(access), None);
+        parsed.unwrap();
+        std::fs::remove_file(&callee).unwrap();
+
+        let diagnostics = analyze_source_impl(
+            source,
+            Some(&caller),
+            &registry,
+            #[cfg(feature = "lsp")]
+            None,
+            Some(&snapshot.replay()),
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "check.undefined_name"
+                && diagnostic.span.path.as_deref() == canonical_callee.to_str()
+                && diagnostic.span.line == 2
+        }), "{diagnostics:#?}");
     }
 }

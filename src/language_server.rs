@@ -85,6 +85,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
     let mut reader = BufReader::new(reader);
     let mut writer = writer;
     let mut documents = BTreeMap::<String, Document>::new();
+    let mut diagnostic_targets = BTreeMap::<String, BTreeSet<String>>::new();
     let mut workspace = Workspace::default();
     let mut watch_dynamic_registration = false;
     while let Some(message) = read_message(&mut reader)? {
@@ -190,6 +191,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                             &documents,
                             &workspace,
                             &registry,
+                            &mut diagnostic_targets,
                             Some(uri),
                         )?;
                     }
@@ -221,6 +223,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                                         &documents,
                                         &workspace,
                                         &registry,
+                                        &mut diagnostic_targets,
                                         Some(uri),
                                     )?;
                                 }
@@ -252,6 +255,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                         &documents,
                         &workspace,
                         &registry,
+                        &mut diagnostic_targets,
                         Some(uri),
                     )?;
                 }
@@ -259,7 +263,14 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             }
             "workspace/didChangeWorkspaceFolders" => {
                 workspace.apply_folder_changes(&params);
-                publish_affected_diagnostics(&mut writer, &documents, &workspace, &registry, None)?;
+                publish_affected_diagnostics(
+                    &mut writer,
+                    &documents,
+                    &workspace,
+                    &registry,
+                    &mut diagnostic_targets,
+                    None,
+                )?;
                 None
             }
             "textDocument/didSave" | "workspace/didChangeWatchedFiles" => {
@@ -271,6 +282,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                     &documents,
                     &workspace,
                     &registry,
+                    &mut diagnostic_targets,
                     changed,
                 )?;
                 None
@@ -598,10 +610,12 @@ fn publish_affected_diagnostics<W: Write>(
     documents: &BTreeMap<String, Document>,
     workspace: &Workspace,
     registry: &Registry,
+    diagnostic_targets: &mut BTreeMap<String, BTreeSet<String>>,
     changed_uri: Option<&str>,
 ) -> Result<()> {
     let open_documents = open_document_overlays(documents);
     let mut outgoing = BTreeMap::<String, Vec<Diagnostic>>::new();
+    let mut sources = BTreeSet::<String>::new();
     for (uri, document) in documents {
         // Any file call, including a transitive one, contains these literal words.
         // This is a conservative filter; comments can cause harmless extra checks.
@@ -610,9 +624,38 @@ fn publish_affected_diagnostics<W: Write>(
         {
             continue;
         }
+        sources.insert(uri.clone());
+    }
+    if let Some(changed_uri) = changed_uri {
+        if let Some(previous_targets) = diagnostic_targets.get(changed_uri) {
+            sources.extend(
+                previous_targets
+                    .iter()
+                    .filter(|uri| documents.contains_key(*uri))
+                    .cloned(),
+            );
+        }
+        if !documents.contains_key(changed_uri) {
+            diagnostic_targets.remove(changed_uri);
+        }
+    }
+    let prior_targets = sources
+        .iter()
+        .map(|uri| {
+            (
+                uri.clone(),
+                diagnostic_targets.get(uri).cloned().unwrap_or_default(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for uri in sources {
+        let Some(document) = documents.get(&uri) else {
+            continue;
+        };
         outgoing.entry(uri.clone()).or_default();
+        let mut current_targets = BTreeSet::new();
         for diagnostic in
-            diagnostics_with_overlays(uri, documents, workspace, registry, &open_documents)
+            diagnostics_with_overlays(&uri, documents, workspace, registry, &open_documents)
         {
             let diagnostic_path = diagnostic
                 .span
@@ -640,7 +683,18 @@ fn publish_affected_diagnostics<W: Write>(
                 }
                 uri.clone()
             };
+            if destination != uri {
+                current_targets.insert(destination.clone());
+            }
             outgoing.entry(destination).or_default().push(diagnostic);
+        }
+        diagnostic_targets.insert(uri.clone(), current_targets);
+    }
+    for targets in prior_targets.values() {
+        for uri in targets {
+            if documents.contains_key(uri) {
+                outgoing.entry(uri.clone()).or_default();
+            }
         }
     }
     for (uri, diagnostics) in outgoing {
@@ -693,7 +747,7 @@ fn uri_for_source_path<'a>(
             return false;
         };
         let candidate = fs::canonicalize(&document_path).unwrap_or(document_path);
-        candidate == path
+        candidate.as_path() == path
     })
 }
 
@@ -1836,7 +1890,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let caller = dir.path().join("caller.program");
         let callee = dir.path().join("callee.program");
-        let caller_text = "run program file \"callee.program\"\n";
+        let caller_text =
+            "run program file \"callee.program\"\nrun program file \"./callee.program\"\n";
         let disk_text = "accept theme as text\nrun \"printf\" with arguments [\"ok\"]\n";
         let overlay_text = "accept theme as text\nrun \"printf\" with arguments [them]\n";
         fs::write(&caller, caller_text).unwrap();
@@ -1941,13 +1996,16 @@ mod tests {
         assert_eq!(diagnostic["relatedInformation"][0]["location"]["range"]["start"]["line"], 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn replayed_file_diagnostics_use_the_original_loader_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let caller = root.join("caller.program");
         let callee = root.join("callee.program");
-        let caller_text = "run program file \"callee.program\"\n";
+        std::os::unix::fs::symlink(&callee, root.join("alias.program")).unwrap();
+        let caller_text =
+            "run program file \"callee.program\"\nrun program file \"alias.program\"\n";
         fs::write(&caller, caller_text).unwrap();
         fs::write(
             &callee,
@@ -1978,6 +2036,75 @@ mod tests {
                 && diagnostic.span.path.as_deref() == callee.to_str()
                 && diagnostic.span.line == 2
         }), "{diagnostics:#?}");
+    }
+
+    #[test]
+    fn routed_callee_diagnostics_refresh_when_the_caller_closes_or_error_is_fixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = dir.path().join("callee.program");
+        let caller_text = "run program file \"callee.program\"\n";
+        let broken = "accept theme as text\nrun \"printf\" with arguments [them]\n";
+        let fixed = "accept theme as text\nrun \"printf\" with arguments [\"ok\"]\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, fixed).unwrap();
+        let root_uri = url::Url::from_directory_path(dir.path()).unwrap().to_string();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({ "rootUri": root_uri, "capabilities": {} }),
+        ));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {"textDocument": {"uri": caller_uri, "version": 1, "text": caller_text}}
+        })));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {"textDocument": {"uri": callee_uri, "version": 1, "text": broken}}
+        })));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didClose",
+            "params": {"textDocument": {"uri": caller_uri}}
+        })));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": {"uri": callee_uri, "version": 2},
+                "contentChanges": [{"text": fixed}]
+            }
+        })));
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({"jsonrpc": "2.0", "method": "exit"})));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let callee_updates = messages
+            .iter()
+            .filter(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == callee_uri
+            })
+            .collect::<Vec<_>>();
+        assert!(callee_updates.iter().any(|message| {
+            message["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| {
+                    diagnostic["code"] == "check.undefined_name"
+                        && diagnostic.get("relatedInformation").is_none()
+                })
+        }), "{callee_updates:#?}");
+        assert!(callee_updates.last().unwrap()["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

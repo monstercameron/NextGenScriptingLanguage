@@ -33,6 +33,7 @@ fn polymorphic_output_kind(
         },
         Value::List(items) => {
             let item_type = |item: &Value| match item {
+                Value::String(text) if text.contains('\0') => Some(crate::ast::InputType::Json),
                 Value::String(_) => Some(crate::ast::InputType::Text),
                 Value::Integer(_) => Some(crate::ast::InputType::Integer),
                 Value::Bool(_) => Some(crate::ast::InputType::Boolean),
@@ -2591,8 +2592,10 @@ fn path_value(value: &Value, bindings: &BTreeMap<String, Value>, cwd: &Path) -> 
 
 #[cfg(test)]
 mod binding_type_tests {
-    use super::binding_value_type;
+    use super::{binding_value_type, polymorphic_output_kind};
     use crate::ast::{InputType, Value};
+    use crate::manifest::Registry;
+    use serde_json::json;
     use std::collections::BTreeMap;
 
     #[test]
@@ -2618,5 +2621,42 @@ mod binding_type_tests {
             .unwrap(),
             InputType::TextList
         );
+    }
+
+    #[test]
+    fn applet_list_outputs_keep_nul_items_json_typed_for_following_loops() {
+        let fixture = json!({
+            "name": "fixture.list",
+            "binary": "fixture-list",
+            "parameters": {"items": {"type": "json", "required": true}},
+            "arguments": [{"json_arguments": true}],
+            "contract": {
+                "version": 1,
+                "output": {
+                    "type": "list",
+                    "encoding": "json",
+                    "items": {"type": "json"},
+                    "same_as_parameter": "items"
+                }
+            }
+        });
+        let registry = Registry::from_sources(&[fixture.to_string()]).unwrap();
+        for (values, expected) in [
+            ("[\"\\u0000\"]", InputType::JsonList),
+            ("[\"plain\"]", InputType::TextList),
+        ] {
+            let program =
+                crate::parser::parse(&format!("run fixture.list with items {values} as bound\n"))
+                    .unwrap();
+            let crate::ast::StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+                panic!("expected the fixture list invocation");
+            };
+            let manifest = registry.resolve_call(call).unwrap();
+            assert_eq!(
+                polymorphic_output_kind(manifest, call, &BTreeMap::new()),
+                Some(expected),
+                "unexpected output type for list items {values}"
+            );
+        }
     }
 }

@@ -158,7 +158,7 @@ pub(super) fn parse_reusable_statement<'arena, 'source: 'arena>(
 
 /// Statement heads that cannot name a step: a label with one of these names would read
 /// like the statement it labels. This is also the source of truth for LSP
-/// statement-start completion (see [`statement_completion_forms`]).
+/// statement-start completion (see `statement_completion_forms`).
 pub(crate) const STATEMENT_KEYWORDS: &[&str] = &[
     "accept",
     "break",
@@ -204,6 +204,7 @@ pub(crate) const STATEMENT_KEYWORDS: &[&str] = &[
 /// One LSP statement-start form, generated from the grammar the parser
 /// accepts. `label` is shown and inserted; `snippet` is an LSP snippet
 /// (`insertTextFormat: 2`) expanding the form with tab stops.
+#[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StatementCompletionForm {
     pub label: &'static str,
@@ -217,6 +218,7 @@ pub(crate) struct StatementCompletionForm {
 /// parser so the tables cannot drift from the grammar: when a new statement
 /// head is accepted, `statement_completion_covers_every_keyword` fails until
 /// a form is added here too.
+#[cfg(feature = "lsp")]
 pub(crate) fn statement_completion_forms() -> &'static [StatementCompletionForm] {
     const FORMS: &[StatementCompletionForm] = &[
         StatementCompletionForm {
@@ -487,6 +489,7 @@ pub(crate) fn statement_completion_forms() -> &'static [StatementCompletionForm]
 
 /// One LSP suffix form accepted after an invocation: `label` is shown and
 /// inserted, `snippet` expands the suffix with tab stops.
+#[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SuffixCompletionForm {
     pub label: &'static str,
@@ -506,6 +509,7 @@ pub(crate) struct SuffixCompletionForm {
 /// result`, `and keep secret` without `as`, `and discard stderr` for
 /// non-direct commands). Redirection and environment suffixes accept any
 /// relative order and follow the core families.
+#[cfg(feature = "lsp")]
 pub(crate) fn invocation_suffix_forms() -> &'static [SuffixCompletionForm] {
     const FORMS: &[SuffixCompletionForm] = &[
         SuffixCompletionForm {
@@ -593,6 +597,7 @@ pub(crate) fn invocation_suffix_forms() -> &'static [SuffixCompletionForm] {
 }
 
 /// Value-comparison operators from `parse_condition`, for `if`/`otherwise if`/`while`.
+#[cfg(feature = "lsp")]
 pub(crate) fn condition_operator_forms() -> &'static [&'static str] {
     &[
         "is",
@@ -605,6 +610,7 @@ pub(crate) fn condition_operator_forms() -> &'static [&'static str] {
 }
 
 /// Value types accepted by `take` (see `parse_take_json`).
+#[cfg(feature = "lsp")]
 pub(crate) fn take_type_forms() -> &'static [&'static str] {
     &["text", "integer", "boolean", "json", "list of text"]
 }
@@ -3805,6 +3811,7 @@ mod tests {
         assert!(error.to_string().contains("reserved literal `null`"));
     }
 
+    #[cfg(feature = "lsp")]
     #[test]
     fn statement_completion_covers_every_keyword() {
         // `cd` names an applet operation completed after `run`, `interactively`

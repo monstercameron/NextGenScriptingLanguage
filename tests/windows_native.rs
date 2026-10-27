@@ -149,7 +149,9 @@ fn direct_byte_pipelines_and_inherited_stdin_preserve_binary_data() {
 fn typed_process_inputs_json_conditions_reuse_and_file_replace_share_the_runtime() {
     let folder = tempfile::tempdir().unwrap();
     let exe = quoted(&fixture());
-    let source=format!("accept message as text from environment \"EXECUTE_WINDOWS_TEXT\"\naccept count as integer from argument 1\ndefine a program named echo\n  accept text as text\n  run {exe} with arguments [\"write\", text]\nif count is 3\n  run program echo with text message\notherwise\n  run {exe} with arguments [\"write\", \"wrong\"]\nthen save to \"result.txt\"\n");
+    // This synthetic Unicode fixture is public test data; declare that explicitly so
+    // it can exercise environment-to-reusable-program-to-argv forwarding.
+    let source=format!("accept message as text from public environment \"EXECUTE_WINDOWS_TEXT\"\naccept count as integer from argument 1\ndefine a program named echo\n  accept text as text\n  run {exe} with arguments [\"write\", text]\nif count is 3\n  run program echo with text message\notherwise\n  run {exe} with arguments [\"write\", \"wrong\"]\nthen save to \"result.txt\"\n");
     let path = folder.path().join("typed.program");
     fs::write(&path, source).unwrap();
     fs::write(folder.path().join("result.txt"), b"old").unwrap();

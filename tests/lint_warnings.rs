@@ -99,6 +99,26 @@ fn references_in_a_different_reusable_program_do_not_count_as_uses() {
 }
 
 #[test]
+fn unused_binding_inside_a_nested_body_is_checked_in_that_body() {
+    let source = "accept ready as boolean\nif ready is true\n  run \"printf\" with arguments [\"x\"] as nested_result\n  run \"true\"\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.unused_binding"
+            && diagnostic.message.contains("nested_result")));
+}
+
+#[test]
+fn binding_used_after_a_conditional_is_not_reported_unused() {
+    let source = "accept ready as boolean\nif ready is true\n  run \"printf\" with arguments [\"x\"] as conditional_result\nthen \"printf\" with arguments [conditional_result]\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(!diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.unused_binding"
+            && diagnostic.message.contains("conditional_result")));
+}
+
+#[test]
 fn model_result_use_without_acceptance_and_missing_threshold_warn() {
     let source = "run jev.classify with question \"classify\" and labels [\"yes\", \"no\"] as classification\ntake text at \"/label\" from classification as label\nrun \"printf\" with arguments [label]\n";
     let diagnostics = analyze_source(source, &Registry::default());

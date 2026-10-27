@@ -1020,17 +1020,56 @@ fn collect_step_bindings(steps: &[Step], bindings: &mut Vec<(String, usize)>) {
     let mut index = 0;
     while index < steps.len() {
         let step = &steps[index];
-        // Be conservative around block-local scopes. Bindings inside these blocks
-        // are skipped until the scope-aware reference walk can distinguish shadowing.
+        // Treat each reusable program as its own scope, while preserving bindings
+        // across control-flow blocks just as the checker does.
         let nested_end = match &step.kind {
             StepKind::Loop { end, .. }
             | StepKind::If { end, .. }
             | StepKind::IfCommand { end, .. }
             | StepKind::Try { end, .. }
+            | StepKind::OnInterrupt { end }
             | StepKind::TempScope { end, .. } => Some(*end),
             _ => None,
         };
         if let Some(end) = nested_end.filter(|end| *end > 1 && index + *end <= steps.len()) {
+            match &step.kind {
+                StepKind::TempScope { binding, .. } => bindings.push((binding.clone(), step.line)),
+                StepKind::Loop {
+                    kind: crate::ast::LoopKind::ForEach { binding, .. },
+                    ..
+                } => bindings.push((binding.clone(), step.line)),
+                _ => {}
+            }
+            if let StepKind::If { otherwise, .. } | StepKind::IfCommand { otherwise, .. } =
+                &step.kind
+            {
+                let then_end = if *otherwise < end {
+                    index + *otherwise
+                } else {
+                    index + end - 1
+                };
+                if index + 1 < then_end {
+                    collect_step_bindings(&steps[index + 1..then_end], bindings);
+                }
+                if *otherwise < end {
+                    let else_start = index + *otherwise + 1;
+                    let else_end = index + end - 1;
+                    if else_start < else_end {
+                        collect_step_bindings(&steps[else_start..else_end], bindings);
+                    }
+                }
+            } else if matches!(
+                step.kind,
+                StepKind::Loop { .. }
+                    | StepKind::TempScope { .. }
+                    | StepKind::Try { .. }
+                    | StepKind::OnInterrupt { .. }
+            ) {
+                let body_end = index + end - 1;
+                if index + 1 < body_end {
+                    collect_step_bindings(&steps[index + 1..body_end], bindings);
+                }
+            }
             index += end;
             continue;
         }

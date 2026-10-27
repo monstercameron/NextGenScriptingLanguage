@@ -233,17 +233,47 @@ fn the_first_scope_sweeps_directories_whose_owner_is_gone() {
     let (dead_owner, live_owner) = owner_records();
     fs::write(dead.join("owner"), dead_owner).unwrap();
     fs::write(live.join("owner"), live_owner).unwrap();
-    // On Linux an owner PID that is not visible may live in another PID namespace that
-    // shares this temporary directory, so its scope is kept, as is an old pid-only record.
+    // On Linux, a missing PID or a different PID namespace cannot be proven stale, so
+    // those scopes are kept, as is an old pid-only record.
     #[cfg(target_os = "linux")]
-    let unseen = {
+    let kept = {
         let unseen = temp.path().join("execute-scope-unseen");
         fs::create_dir(&unseen).unwrap();
-        fs::write(unseen.join("owner"), "4000000000:1").unwrap();
+        let (boot_id, pid_namespace) = owner_environment();
+        fs::write(
+            unseen.join("owner"),
+            format!("{boot_id}:{pid_namespace}:4000000000:1"),
+        )
+        .unwrap();
+        let other_namespace = temp.path().join("execute-scope-other-namespace");
+        fs::create_dir(&other_namespace).unwrap();
+        let (_, live_owner) = owner_records();
+        let (_, _, pid, start) = parse_owner_record(&live_owner);
+        fs::write(
+            other_namespace.join("owner"),
+            format!("{boot_id}:{}:{pid}:{start}", pid_namespace + 1),
+        )
+        .unwrap();
+        let legacy_start = temp.path().join("execute-scope-legacy-start");
+        fs::create_dir(&legacy_start).unwrap();
+        fs::write(legacy_start.join("owner"), format!("{pid}:{}", start + 1)).unwrap();
+        let malformed_boot = temp.path().join("execute-scope-malformed-boot");
+        fs::create_dir(&malformed_boot).unwrap();
+        fs::write(
+            malformed_boot.join("owner"),
+            format!("broken:{pid_namespace}:{pid}:{}", start + 1),
+        )
+        .unwrap();
         let legacy = temp.path().join("execute-scope-legacy");
         fs::create_dir(&legacy).unwrap();
         fs::write(legacy.join("owner"), "4000000000").unwrap();
-        [unseen, legacy]
+        [
+            unseen,
+            other_namespace,
+            legacy_start,
+            malformed_boot,
+            legacy,
+        ]
     };
     let program = write_program(
         directory.path(),
@@ -259,14 +289,14 @@ fn the_first_scope_sweeps_directories_whose_owner_is_gone() {
     assert!(live.exists(), "a live owner's scope was swept");
     assert!(unrelated.exists(), "an unrelated directory was swept");
     #[cfg(target_os = "linux")]
-    for kept in unseen {
-        assert!(kept.exists(), "{} was swept", kept.display());
+    for scope in kept {
+        assert!(scope.exists(), "{} was swept", scope.display());
     }
 }
 
 /// Owner records for a stale scope and a live one, in the form this platform writes.
-/// Linux records `PID:START` (the start time from /proc), so a visible PID whose start
-/// time differs is a reused PID and its scope is stale.
+/// Linux records `BOOT_ID:PID_NAMESPACE:PID:START`, so PID and start-time comparison is
+/// only used when the owner and sweeper are in the same PID namespace.
 #[cfg(target_os = "linux")]
 fn owner_records() -> (String, String) {
     let pid = std::process::id();
@@ -280,7 +310,40 @@ fn owner_records() -> (String, String) {
         .unwrap()
         .parse()
         .unwrap();
-    (format!("{pid}:{}", start + 1), format!("{pid}:{start}"))
+    let (boot_id, pid_namespace) = owner_environment();
+    (
+        format!("{boot_id}:{pid_namespace}:{pid}:{}", start + 1),
+        format!("{boot_id}:{pid_namespace}:{pid}:{start}"),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn owner_environment() -> (String, u64) {
+    let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .unwrap()
+        .trim()
+        .to_owned();
+    let pid_namespace: u64 = fs::read_link("/proc/self/ns/pid")
+        .unwrap()
+        .to_string_lossy()
+        .strip_prefix("pid:[")
+        .unwrap()
+        .strip_suffix(']')
+        .unwrap()
+        .parse()
+        .unwrap();
+    (boot_id, pid_namespace)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_owner_record(owner: &str) -> (String, u64, u32, u64) {
+    let mut parts = owner.split(':');
+    (
+        parts.next().unwrap().to_owned(),
+        parts.next().unwrap().parse().unwrap(),
+        parts.next().unwrap().parse().unwrap(),
+        parts.next().unwrap().parse().unwrap(),
+    )
 }
 
 /// Elsewhere the record is the PID alone; a pid this large is not a live process on any

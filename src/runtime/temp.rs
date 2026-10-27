@@ -2,8 +2,8 @@
 //! the system temporary directory, and its path is removed when the scope ends. A run
 //! that ends for any reason drops the stack, which removes whatever is still open. A
 //! killed process cannot run that cleanup, so the first scope a process creates also
-//! removes scope directories whose owner process is gone. That sweep runs once per
-//! process, when the first scope is created, so startup pays nothing for it.
+//! removes scope directories it can prove are stale. That sweep runs once per process,
+//! when the first scope is created, so startup pays nothing for it.
 use crate::ast::TempKind;
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -110,13 +110,33 @@ fn write_owner(root: &Path) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let pid = std::process::id();
-        let start = process_start_time(pid).context("reading temporary scope owner identity")?;
-        write!(file, "{pid}:{start}").context("recording the temporary scope owner")
+        let owner = owner_record(
+            system_boot_id().as_deref(),
+            process_pid_namespace("self"),
+            pid,
+            process_start_time(pid),
+        );
+        write!(file, "{owner}").context("recording the temporary scope owner")
     }
     #[cfg(not(target_os = "linux"))]
     {
         write!(file, "{}", std::process::id()).context("recording the temporary scope owner")
     }
+}
+
+#[cfg(target_os = "linux")]
+fn owner_record(
+    boot_id: Option<&str>,
+    pid_namespace: Option<u64>,
+    pid: u32,
+    start: Option<u64>,
+) -> String {
+    format!(
+        "{}:{}:{pid}:{}",
+        boot_id.unwrap_or("unknown"),
+        pid_namespace.map_or_else(|| "unknown".to_owned(), |id| id.to_string()),
+        start.map_or_else(|| "unknown".to_owned(), |time| time.to_string()),
+    )
 }
 
 #[cfg(unix)]
@@ -172,15 +192,49 @@ fn sweep_stale(temp: &Path) {
 
 #[cfg(target_os = "linux")]
 fn scope_owner_alive(owner: &str) -> bool {
-    let Some((pid, start)) = owner.trim().split_once(':') else {
+    let mut parts = owner.trim().split(':');
+    let (Some(boot_id), Some(pid_namespace), Some(pid), Some(start), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
         // Older or malformed records cannot be proven stale, so retain them.
         return true;
     };
-    let (Ok(pid), Ok(start)) = (pid.parse::<u32>(), start.parse::<u64>()) else {
+    if !is_valid_boot_id(boot_id) {
+        return true;
+    }
+    let Some(current_boot_id) = system_boot_id() else {
+        // Without a reliable boot identity, favor retaining a scope over deleting
+        // one that may still belong to a process in another PID namespace.
         return true;
     };
+    if boot_id != current_boot_id {
+        return false;
+    }
+    let (Ok(pid_namespace), Ok(pid), Ok(start)) = (
+        pid_namespace.parse::<u64>(),
+        pid.parse::<u32>(),
+        start.parse::<u64>(),
+    ) else {
+        return true;
+    };
+    let Some(current_pid_namespace) = process_pid_namespace("self") else {
+        return true;
+    };
+    if pid_namespace != current_pid_namespace {
+        // PIDs are local to a namespace. The same numeric PID may refer to an
+        // unrelated live process here, so its start time cannot prove staleness.
+        return true;
+    }
+    if process_pid_namespace(&pid.to_string()) != Some(pid_namespace) {
+        // /proc may resolve this PID to a different namespace's process.
+        return true;
+    }
     match process_start_time(pid) {
-        // A missing PID can belong to another PID namespace sharing this temp directory.
+        // A missing PID can be alive in another PID namespace sharing this directory.
         // Keep its scope; only a visible, different process start proves PID reuse.
         None => true,
         Some(current_start) => current_start == start,
@@ -190,6 +244,37 @@ fn scope_owner_alive(owner: &str) -> bool {
 #[cfg(not(target_os = "linux"))]
 fn scope_owner_alive(owner: &str) -> bool {
     owner.trim().parse::<u32>().map_or(true, process_alive)
+}
+
+#[cfg(target_os = "linux")]
+fn process_pid_namespace(pid: &str) -> Option<u64> {
+    let namespace = fs::read_link(format!("/proc/{pid}/ns/pid")).ok()?;
+    let namespace = namespace
+        .to_str()?
+        .strip_prefix("pid:[")?
+        .strip_suffix(']')?;
+    namespace.parse().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn system_boot_id() -> Option<String> {
+    let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    let boot_id = boot_id.trim();
+    is_valid_boot_id(boot_id).then(|| boot_id.to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn is_valid_boot_id(boot_id: &str) -> bool {
+    // The kernel exposes a UUID. Reject malformed values so an unreadable or
+    // unexpected procfs cannot accidentally make an owner appear stale.
+    (boot_id.len() == 36
+        && boot_id
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            }))
 }
 
 #[cfg(target_os = "linux")]
@@ -297,36 +382,124 @@ mod tests {
         let dead = temp.path().join(format!("{SCOPE_PREFIX}dead"));
         let live = temp.path().join(format!("{SCOPE_PREFIX}live"));
         let unknown = temp.path().join(format!("{SCOPE_PREFIX}unknown"));
+        let other_namespace = temp.path().join(format!("{SCOPE_PREFIX}other-namespace"));
+        let old_boot = temp.path().join(format!("{SCOPE_PREFIX}old-boot"));
+        let malformed_boot = temp.path().join(format!("{SCOPE_PREFIX}malformed-boot"));
+        let legacy = temp.path().join(format!("{SCOPE_PREFIX}legacy"));
         let other = temp.path().join("unrelated");
-        for dir in [&dead, &live, &unknown, &other] {
+        for dir in [
+            &dead,
+            &live,
+            &unknown,
+            &other_namespace,
+            &old_boot,
+            &malformed_boot,
+            &legacy,
+            &other,
+        ] {
             fs::create_dir(dir).unwrap();
         }
         #[cfg(target_os = "linux")]
         {
+            let boot_id = system_boot_id().unwrap();
+            let pid_namespace = process_pid_namespace("self").unwrap();
             let start = process_start_time(std::process::id()).unwrap();
             fs::write(
                 dead.join(OWNER_FILE),
-                format!("{}:{}", std::process::id(), start.saturating_add(1)),
+                format!(
+                    "{boot_id}:{pid_namespace}:{}:{}",
+                    std::process::id(),
+                    start.saturating_add(1)
+                ),
             )
             .unwrap();
             fs::write(
                 live.join(OWNER_FILE),
-                format!("{}:{start}", std::process::id()),
+                format!("{boot_id}:{pid_namespace}:{}:{start}", std::process::id()),
             )
             .unwrap();
-            fs::write(unknown.join(OWNER_FILE), "4000000000:1").unwrap();
+            // A missing /proc entry is ambiguous: the owner may be hidden by a
+            // different PID namespace, so this scope must be retained.
+            fs::write(
+                unknown.join(OWNER_FILE),
+                format!("{boot_id}:{pid_namespace}:4000000000:1"),
+            )
+            .unwrap();
+            fs::write(
+                other_namespace.join(OWNER_FILE),
+                format!(
+                    "{boot_id}:{}:{}:{start}",
+                    pid_namespace.saturating_add(1),
+                    std::process::id()
+                ),
+            )
+            .unwrap();
+            fs::write(
+                old_boot.join(OWNER_FILE),
+                "00000000-0000-0000-0000-000000000000:1:1:1",
+            )
+            .unwrap();
+            fs::write(malformed_boot.join(OWNER_FILE), "broken:1:4000000000:1").unwrap();
+            // The previous Linux format omitted the boot and namespace IDs.
+            fs::write(legacy.join(OWNER_FILE), "4000000000:1").unwrap();
         }
         #[cfg(not(target_os = "linux"))]
         {
             // A pid this large is not a live process on any supported system.
             fs::write(dead.join(OWNER_FILE), "4000000000").unwrap();
             fs::write(live.join(OWNER_FILE), std::process::id().to_string()).unwrap();
+            fs::write(old_boot.join(OWNER_FILE), "4000000000").unwrap();
+            fs::write(other_namespace.join(OWNER_FILE), "4000000000").unwrap();
+            fs::write(malformed_boot.join(OWNER_FILE), "4000000000").unwrap();
+            fs::write(legacy.join(OWNER_FILE), "4000000000").unwrap();
         }
         sweep_stale(temp.path());
         assert!(!dead.exists());
         assert!(live.exists());
         #[cfg(target_os = "linux")]
         assert!(unknown.exists());
+        #[cfg(target_os = "linux")]
+        assert!(other_namespace.exists());
+        #[cfg(not(target_os = "linux"))]
+        assert!(!other_namespace.exists());
+        assert!(!old_boot.exists());
+        #[cfg(target_os = "linux")]
+        assert!(malformed_boot.exists());
+        #[cfg(not(target_os = "linux"))]
+        assert!(!malformed_boot.exists());
+        #[cfg(target_os = "linux")]
+        assert!(legacy.exists());
+        #[cfg(not(target_os = "linux"))]
+        assert!(!legacy.exists());
         assert!(other.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_owner_identity_components_are_retained() {
+        let boot_id = system_boot_id().unwrap();
+        let pid_namespace = process_pid_namespace("self").unwrap();
+        let pid = std::process::id();
+        let start = process_start_time(pid).unwrap();
+
+        let missing_boot_id = owner_record(None, Some(pid_namespace), pid, Some(start));
+        let missing_pid_namespace = owner_record(Some(&boot_id), None, pid, Some(start));
+        let missing_start_time = owner_record(Some(&boot_id), Some(pid_namespace), pid, None);
+
+        assert_eq!(
+            missing_boot_id,
+            format!("unknown:{pid_namespace}:{pid}:{start}")
+        );
+        assert_eq!(
+            missing_pid_namespace,
+            format!("{boot_id}:unknown:{pid}:{start}")
+        );
+        assert_eq!(
+            missing_start_time,
+            format!("{boot_id}:{pid_namespace}:{pid}:unknown")
+        );
+        assert!(scope_owner_alive(&missing_boot_id));
+        assert!(scope_owner_alive(&missing_pid_namespace));
+        assert!(scope_owner_alive(&missing_start_time));
     }
 }

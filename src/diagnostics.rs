@@ -6345,7 +6345,7 @@ mod tests {
 
         for pointer in ["", "/a", "/~0", "/~1", "/a~0b~1c"] {
             let source = format!(
-                "run json.keys with document {{\"a\":1}} and pointer {pointer:?} as result\n"
+                "run json.keys with document {{\"a\":{{}}}} and pointer {pointer:?} as result\n"
             );
             let diagnostics = analyze_source(&source, &registry);
             assert!(

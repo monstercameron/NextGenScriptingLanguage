@@ -151,6 +151,78 @@
           }
         ]
       ]
+    },
+    {
+      "message": "path is required when probe is file_exists",
+      "any_of": [
+        [
+          {
+            "test": "string_not_equals",
+            "parameter": "probe",
+            "value": "file_exists"
+          }
+        ],
+        [
+          {
+            "test": "present",
+            "parameter": "path"
+          }
+        ]
+      ]
+    },
+    {
+      "message": "path is required when probe is file_readable",
+      "any_of": [
+        [
+          {
+            "test": "string_not_equals",
+            "parameter": "probe",
+            "value": "file_readable"
+          }
+        ],
+        [
+          {
+            "test": "present",
+            "parameter": "path"
+          }
+        ]
+      ]
+    },
+    {
+      "message": "host is required when probe is tcp_port_open",
+      "any_of": [
+        [
+          {
+            "test": "string_not_equals",
+            "parameter": "probe",
+            "value": "tcp_port_open"
+          }
+        ],
+        [
+          {
+            "test": "present",
+            "parameter": "host"
+          }
+        ]
+      ]
+    },
+    {
+      "message": "port is required when probe is tcp_port_open",
+      "any_of": [
+        [
+          {
+            "test": "string_not_equals",
+            "parameter": "probe",
+            "value": "tcp_port_open"
+          }
+        ],
+        [
+          {
+            "test": "present",
+            "parameter": "port"
+          }
+        ]
+      ]
     }
   ]
 }

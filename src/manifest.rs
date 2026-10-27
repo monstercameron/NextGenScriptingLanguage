@@ -84,6 +84,10 @@ enum ParameterPredicate {
         parameter: String,
         value: bool,
     },
+    StringNotEquals {
+        parameter: String,
+        value: String,
+    },
     NumberRange {
         parameter: String,
         minimum: i64,
@@ -99,6 +103,7 @@ impl ParameterPredicate {
             | Self::Nonempty { parameter }
             | Self::NegativeInteger { parameter }
             | Self::Boolean { parameter, .. }
+            | Self::StringNotEquals { parameter, .. }
             | Self::NumberRange { parameter, .. } => parameter,
         }
     }
@@ -116,6 +121,9 @@ impl ParameterPredicate {
             }
             Self::Boolean { value, .. } => {
                 serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "boolean", "const": value}}})
+            }
+            Self::StringNotEquals { value, .. } => {
+                serde_json::json!({"properties": {(parameter): {"not": {"const": value}}}})
             }
             Self::NumberRange {
                 minimum, maximum, ..
@@ -141,6 +149,13 @@ impl ParameterPredicate {
             Self::Boolean {
                 value: expected, ..
             } => Some(matches!(value, Some(Value::Bool(actual)) if actual == expected)),
+            Self::StringNotEquals {
+                value: expected, ..
+            } => Some(match value {
+                None => true,
+                Some(Value::String(actual)) => actual != expected,
+                _ => false,
+            }),
             Self::NumberRange {
                 minimum, maximum, ..
             } => Some(match value {
@@ -3048,6 +3063,11 @@ fn validate_parameter_alternatives(
                     }
                     ParameterPredicate::Boolean { .. } if spec.kind != ParameterType::Boolean => {
                         bail!("boolean predicate requires a boolean parameter")
+                    }
+                    ParameterPredicate::StringNotEquals { .. }
+                        if !matches!(spec.kind, ParameterType::String | ParameterType::Path) =>
+                    {
+                        bail!("string_not_equals predicate requires a string or path parameter")
                     }
                     ParameterPredicate::NumberRange {
                         minimum, maximum, ..

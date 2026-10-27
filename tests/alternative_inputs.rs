@@ -269,6 +269,7 @@ fn malformed_alternative_rules_are_rejected_at_manifest_load() {
         json!([{"message":"choose","any_of":[[{"test":"present","parameter":"missing"}]]}]),
         json!([{"message":"choose","any_of":[[]]}]),
         json!([{"message":"choose","any_of":[[{"test":"boolean","parameter":"value","value":true}]]}]),
+        json!([{"message":"choose","any_of":[[{"test":"string_not_equals","parameter":"value","value":"special"}]]}]),
         json!([{"message":"choose","any_of":[[{"test":"number_range","parameter":"value","minimum":2,"maximum":1}]]}]),
         json!([{"message":"choose","any_of":[[{"test":"number_range","parameter":"value","minimum":0,"maximum":9007199254740993_u64}]]}]),
     ] {
@@ -363,6 +364,66 @@ fn custom_manifest_alternatives_are_checked_again_after_resolution() {
             "text".into(),
             Value::String("ok".into())
         )]))
+        .is_ok());
+}
+
+#[test]
+fn conditional_string_requirements_defer_references_and_project_to_schema() {
+    use flow::ast::{Invocation, Value};
+    use flow::manifest::Registry;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let source = json!({
+        "name":"conditional.fixture", "binary":"fixture",
+        "parameters":{
+            "policy":{"type":"string","required":true},
+            "value":{"type":"integer"}
+        },
+        "parameter_alternatives":[{
+            "message":"value is required for the special policy",
+            "any_of":[
+                [{"test":"string_not_equals","parameter":"policy","value":"special"}],
+                [{"test":"present","parameter":"value"}]
+            ]
+        }],
+        "arguments":[{"json_arguments":true}]
+    })
+    .to_string();
+    let registry = Registry::from_sources(&[source]).unwrap();
+    let manifest = registry.resolve("conditional.fixture").unwrap();
+    let contract = manifest.contract();
+    assert_eq!(
+        contract["parameters_schema"]["allOf"][0]["anyOf"][0]["allOf"][0]["properties"]["policy"]
+            ["not"]["const"],
+        "special"
+    );
+
+    let invocation = |policy, value| Invocation {
+        operation: "conditional.fixture".into(),
+        direct: false,
+        discard_stderr: false,
+        parameters: BTreeMap::from_iter(std::iter::once(("policy".into(), policy)).chain(value)),
+        binding: None,
+        cache: false,
+        status_binding: None,
+        result_binding: None,
+        retry: None,
+    };
+    assert!(manifest
+        .validate(&invocation(Value::String("ordinary".into()), None))
+        .is_ok());
+    assert!(manifest
+        .validate(&invocation(Value::String("special".into()), None))
+        .is_err());
+    assert!(manifest
+        .validate(&invocation(Value::Reference("dynamic_policy".into()), None))
+        .is_ok());
+    assert!(manifest
+        .validate(&invocation(
+            Value::String("special".into()),
+            Some(("value".into(), Value::Integer(1)))
+        ))
         .is_ok());
 }
 

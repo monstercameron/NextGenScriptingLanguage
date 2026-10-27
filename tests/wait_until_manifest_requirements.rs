@@ -81,7 +81,7 @@ fn required_probe_and_timeout_are_checked_for_disk_and_bundled_manifests() {
 }
 
 #[test]
-fn valid_probe_checks_and_runs_and_conditional_inputs_stay_runtime_validated() {
+fn valid_probe_checks_and_runs() {
     let root = tempfile::tempdir().unwrap();
     let valid = "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms 0\n";
     for disk_manifests in [false, true] {
@@ -97,34 +97,88 @@ fn valid_probe_checks_and_runs_and_conditional_inputs_stay_runtime_validated() {
                 assert_eq!(result["ready"], true);
             }
         }
+    }
+}
 
-        // Probe-specific values remain conditional: the manifest cannot require
-        // path/host/port globally, so runtime still validates each selected probe.
-        for (source, missing) in [
+#[test]
+fn literal_probe_requires_its_specific_inputs_and_dynamic_probes_are_deferred() {
+    let root = tempfile::tempdir().unwrap();
+    let missing_inputs = [
+        (
+            "run wait.until with probe \"file_exists\" and timeout_ms 0\n",
+            "path is required when probe is file_exists",
+        ),
+        (
+            "run wait.until with probe \"file_readable\" and timeout_ms 0\n",
+            "path is required when probe is file_readable",
+        ),
+        (
+            "run wait.until with probe \"tcp_port_open\" and timeout_ms 0\n",
+            "host is required when probe is tcp_port_open",
+        ),
+        (
+            "run wait.until with probe \"tcp_port_open\" and host \"127.0.0.1\" and timeout_ms 0\n",
+            "port is required when probe is tcp_port_open",
+        ),
+        (
+            "run wait.until with probe \"tcp_port_open\" and port 0 and timeout_ms 0\n",
+            "host is required when probe is tcp_port_open",
+        ),
+    ];
+
+    for disk_manifests in [false, true] {
+        for (source, message) in missing_inputs {
+            for command in ["check", "run"] {
+                let output = execute(root.path(), command, source, disk_manifests);
+                let diagnostic = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    !output.status.success() && diagnostic.contains(message),
+                    "{command} did not reject missing conditional input; disk_manifests={disk_manifests}: {diagnostic}"
+                );
+            }
+        }
+
+        let dynamic_probe =
+            "accept probe as text\nrun wait.until with probe probe and timeout_ms 0\n";
+        let checked = execute(root.path(), "check", dynamic_probe, disk_manifests);
+        assert!(
+            checked.status.success(),
+            "check rejected a dynamic probe; disk_manifests={disk_manifests}: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        for (probe, message) in [
+            ("file_exists", "path is required when probe is file_exists"),
             (
-                "run wait.until with probe \"file_exists\" and timeout_ms 0\n",
-                "path",
+                "file_readable",
+                "path is required when probe is file_readable",
             ),
             (
-                "run wait.until with probe \"tcp_port_open\" and timeout_ms 0\n",
-                "host",
-            ),
-            (
-                "run wait.until with probe \"tcp_port_open\" and host \"127.0.0.1\" and timeout_ms 0\n",
-                "port",
+                "tcp_port_open",
+                "host is required when probe is tcp_port_open",
             ),
         ] {
-            let checked = execute(root.path(), "check", source, disk_manifests);
-            assert!(
-                checked.status.success(),
-                "check rejected conditional {missing}; disk_manifests={disk_manifests}: {}",
-                String::from_utf8_lossy(&checked.stderr)
+            let output = execute_with_input(
+                root.path(),
+                dynamic_probe,
+                &format!("probe={probe}"),
+                disk_manifests,
             );
-            let ran = execute(root.path(), "run", source, disk_manifests);
-            let diagnostic = String::from_utf8_lossy(&ran.stderr);
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
             assert!(
-                !ran.status.success() && diagnostic.contains(missing),
-                "run did not validate conditional {missing}; disk_manifests={disk_manifests}: {diagnostic}"
+                !output.status.success() && diagnostic.contains(message),
+                "runtime missed conditional requirement for dynamic {probe}; disk_manifests={disk_manifests}: {diagnostic}"
+            );
+        }
+
+        for source in [
+            "run wait.until with probe \"file_exists\" and path \".\" and host \"ignored\" and timeout_ms 0\n",
+            "run wait.until with probe \"tcp_port_open\" and host \"127.0.0.1\" and port 0 and timeout_ms 0\n",
+        ] {
+            let output = execute(root.path(), "run", source, disk_manifests);
+            assert!(
+                output.status.success(),
+                "valid conditional input set failed; disk_manifests={disk_manifests}: {}",
+                String::from_utf8_lossy(&output.stderr)
             );
         }
     }

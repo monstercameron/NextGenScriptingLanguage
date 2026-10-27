@@ -19,8 +19,10 @@ original version labels.
   Follow-up hardening: queued events are now delivered before a worker failure
   surfaces instead of a clean EOF, each streamed line is bounded by a per-event
   limit derived from the message byte limit, graph runs refuse `--record` and
-  `--answers` instead of ignoring them, and the daemon declines explicit event
-  streams so the client streams them directly.
+  `--answers` instead of ignoring them, and the daemon declines event streams
+  (explicit `--events jsonl` and unflagged persistent graphs alike) so the
+  client streams them directly. A closed reader that lands after a worker
+  failure reports the failure instead of a quiet pipe close.
 
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known

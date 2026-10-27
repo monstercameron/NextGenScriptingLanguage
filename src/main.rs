@@ -342,6 +342,13 @@ fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunCon
         context.decline("graph event streams run on the client");
         return 0;
     }
+    if implicit_graph_stream(arguments, context.registry()) {
+        // Same as above for a persistent graph without an explicit flag: the
+        // default for persistent nodes is `--events jsonl`, so the daemon
+        // would inherit an indefinite stream. Declining runs it on the client.
+        context.decline("graph event streams run on the client");
+        return 0;
+    }
     match execute_forwarded(arguments.to_vec(), context.registry()) {
         Ok(()) => 0,
         Err(error) => report_error(&error),
@@ -351,8 +358,6 @@ fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunCon
 /// Whether a run streams graph events: an explicit `--events jsonl` before the
 /// `--` separator. Only the separate-argument form exists (see
 /// `take_option_value`), and anything after `--` is program data, not a flag.
-/// An unflagged persistent graph also streams, but that needs a registry to
-/// detect, so the daemon still serves it; this gate covers the explicit case.
 fn streams_graph_events(arguments: &[String]) -> bool {
     let separator = arguments
         .iter()
@@ -361,6 +366,71 @@ fn streams_graph_events(arguments: &[String]) -> bool {
     arguments[..separator]
         .windows(2)
         .any(|pair| pair[0] == "--events" && pair[1] == "jsonl")
+}
+
+/// Whether a run without an explicit `--events` flag will still stream: a
+/// `run` of a persistent graph with no `--checkpoint` defaults to `--events
+/// jsonl`. This needs a registry to detect, so it runs in the daemon child
+/// with the preloaded registry. Anything unparseable returns false so the
+/// normal path still reports the real diagnostic; a custom-manifest persistent
+/// graph the preloaded registry cannot parse still streams through the
+/// daemon child's direct stdio, which is correct but holds the daemon.
+fn implicit_graph_stream(arguments: &[String], registry: &Registry) -> bool {
+    let separator = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    if arguments[..separator]
+        .windows(2)
+        .any(|pair| pair[0] == "--events")
+    {
+        // An explicit mode always decides: `jsonl` was declined above and
+        // `document` keeps the closing document.
+        return false;
+    }
+    let Ok(Some(args)) = parse_args(arguments) else {
+        return false;
+    };
+    if args.command != "run" || args.checkpoint_dir.is_some() {
+        // Only plain `run` without `--checkpoint` can take the streaming path;
+        // `resume` and checkpointed runs keep (or refuse) the document path.
+        return false;
+    }
+    let Ok(source) = fs::read_to_string(&args.file) else {
+        return false;
+    };
+    #[cfg(feature = "graph")]
+    {
+        if !flow::graph::is_graph(&source) {
+            return false;
+        }
+        flow::graph::parse(&source, registry)
+            .map(|plan| plan.has_persistent_nodes())
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "graph"))]
+    {
+        let _ = (source, registry);
+        false
+    }
+}
+
+/// Decide the error when a streamed event line cannot be written, usually
+/// because a closed reader (`| head -n 3`) ended the stream. A worker failure
+/// that predated the close wins so a failing graph is never reported as a
+/// clean pipe close; otherwise the write error itself is reported, and a
+/// closed stdout exits quietly through the SIGPIPE convention (141).
+/// `cancel_and_join` only reports failures that predated our cancel, so
+/// cancellation fallout cannot mask the reader's close here.
+#[cfg(feature = "graph")]
+fn stream_write_error(
+    session: &mut flow::graph::GraphSession,
+    error: std::io::Error,
+) -> anyhow::Error {
+    if let Err(join_error) = session.cancel_and_join() {
+        return join_error;
+    }
+    error.into()
 }
 
 /// Whether a run may take the terminal: `interactively`, `hand over`, or a prompt input
@@ -1244,13 +1314,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                             // itself so a closed stdout exits quietly through
                             // the SIGPIPE convention (141), like every other
                             // pipe writer, instead of succeeding.
-                            // `cancel_and_join` only reports failures that
-                            // predated our cancel, so cancellation fallout
-                            // cannot mask the reader's close here.
-                            if let Err(join_error) = session.cancel_and_join() {
-                                return Err(join_error);
-                            }
-                            return Err(error.into());
+                            return Err(stream_write_error(session, error));
                         }
                     }
                     session.cancel_and_join()?;
@@ -3556,4 +3620,233 @@ mod startup_path_tests {
         assert!(diagnostic.message.contains("[REDACTED]"));
         assert!(!diagnostic.message.contains("PIPE-SECRET-CANARY"));
     }
+}
+
+#[cfg(feature = "graph")]
+#[cfg(test)]
+mod graph_stream_tests {
+    use super::{implicit_graph_stream, report_error, stream_write_error};
+    use flow::contracts::{OutputType, ValueSchema};
+    use flow::graph::{
+        GraphContext, GraphExecutor, GraphNode, GraphNodeKind, GraphPlan, GraphRunOptions,
+        GraphSession, NodeIo, PortSchema,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    const TIMER_GRAPH: &str = "graph ticks\nevery 10 milliseconds as ticker\nend graph\n";
+    const FINITE_GRAPH: &str =
+        "graph legacy\n  run text.concat with parts [\"hello\"] as message\nend graph\n";
+
+    fn int_schema() -> ValueSchema {
+        ValueSchema {
+            min_items: None,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            kind: OutputType::Integer,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            single_line: false,
+            minimum: None,
+            pattern: None,
+        }
+    }
+
+    fn event_node(id: &str) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            kind: GraphNodeKind::Renderer {
+                backend: "mock".into(),
+            },
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            events: BTreeMap::from([("tick".into(), PortSchema::events(int_schema()))]),
+            line: None,
+        }
+    }
+
+    fn plan_with(node: GraphNode) -> GraphPlan {
+        let mut plan = GraphPlan::new("stream-test");
+        plan.add_node(node).expect("mock node is admitted");
+        plan
+    }
+
+    struct FailFastExecutor;
+
+    impl GraphExecutor for FailFastExecutor {
+        fn execute(&self, _: &GraphNode, _: &mut NodeIo, _: &GraphContext) -> anyhow::Result<()> {
+            anyhow::bail!("stream-test worker failure marker")
+        }
+    }
+
+    struct WaitForCancelExecutor;
+
+    impl GraphExecutor for WaitForCancelExecutor {
+        fn execute(&self, _: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> anyhow::Result<()> {
+            while !io.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(())
+        }
+    }
+
+    fn broken_pipe() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed reader marker")
+    }
+
+    #[test]
+    fn closed_reader_reports_a_predating_worker_failure() {
+        let mut session = GraphSession::start(
+            plan_with(event_node("source")),
+            Arc::new(FailFastExecutor),
+            GraphRunOptions::default(),
+        )
+        .expect("failing session starts");
+        // The worker fails at startup, before any event line is written; a
+        // closed reader that lands afterwards must surface the failure, not a
+        // quiet pipe close.
+        let error = stream_write_error(&mut session, broken_pipe());
+        assert!(
+            error.to_string().contains("stream-test worker failure marker"),
+            "unexpected write-error decision: {error:#}"
+        );
+        assert_ne!(
+            report_error(&error),
+            141,
+            "a predating failure must not exit through the pipe-close convention"
+        );
+    }
+
+    #[test]
+    fn closed_reader_without_worker_failure_exits_141_quietly() {
+        let mut session = GraphSession::start(
+            plan_with(event_node("source")),
+            Arc::new(WaitForCancelExecutor),
+            GraphRunOptions::default(),
+        )
+        .expect("pausable session starts");
+        let error = stream_write_error(&mut session, broken_pipe());
+        assert!(
+            error.to_string().contains("closed reader marker"),
+            "unexpected write-error decision: {error:#}"
+        );
+        assert_eq!(
+            report_error(&error),
+            141,
+            "a clean closed reader exits through the SIGPIPE convention"
+        );
+    }
+
+    fn empty_registry() -> flow::manifest::Registry {
+        flow::manifest::Registry::from_sources(&[]).expect("empty registry parses")
+    }
+
+    fn run_arguments(directory: &std::path::Path, extra: &[&str]) -> Vec<String> {
+        let mut arguments = vec![
+            "run".to_owned(),
+            directory.join("graph.program").to_string_lossy().into_owned(),
+        ];
+        arguments.extend(extra.iter().map(|item| item.to_string()));
+        arguments
+    }
+
+    #[test]
+    fn implicit_streaming_detects_an_unflagged_timer_graph() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        assert!(
+            implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "an unflagged persistent graph streams, so the daemon must decline it"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_ignores_modes_that_keep_the_document() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        let registry = empty_registry();
+        // An explicit mode always decides: `document` keeps the closing
+        // document and `jsonl` was declined before this gate runs.
+        assert!(!implicit_graph_stream(
+            &run_arguments(directory.path(), &["--events", "document"]),
+            &registry
+        ));
+        assert!(!implicit_graph_stream(
+            &run_arguments(directory.path(), &["--events", "jsonl"]),
+            &registry
+        ));
+        // Checkpointed runs never stream; a resume is never an implicit stream.
+        assert!(!implicit_graph_stream(
+            &run_arguments(directory.path(), &["--checkpoint", "journal"]),
+            &registry
+        ));
+        let mut resume = run_arguments(directory.path(), &["--checkpoint", "journal"]);
+        resume[0] = "resume".to_owned();
+        assert!(!implicit_graph_stream(&resume, &registry));
+    }
+
+    #[test]
+    fn implicit_streaming_ignores_finite_graphs_and_programs() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), "graph empty\nend graph\n")
+            .unwrap();
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "a graph without persistent nodes keeps the closing document"
+        );
+        std::fs::write(
+            directory.path().join("graph.program"),
+            "run printf with message \"hi\"\n",
+        )
+        .unwrap();
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "a finite program never takes the event-stream path"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_leaves_unreadable_or_unknown_sources_to_the_normal_path() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            !implicit_graph_stream(
+                &run_arguments(directory.path(), &[]),
+                &empty_registry()
+            ),
+            "a missing file still reports its own diagnostic"
+        );
+        // `text.concat` needs the real manifests; the empty registry cannot
+        // parse it, so detection stays conservative instead of guessing.
+        std::fs::write(directory.path().join("graph.program"), FINITE_GRAPH).unwrap();
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "an unparseable graph still reports its own diagnostic"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_detects_a_finite_graph_as_non_streaming() {
+        let registry = super::load_registry(None, None, flow::manifest::ManifestCheck::Lazy)
+            .expect("default manifests load");
+        registry.manifests().expect("default manifests parse");
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), FINITE_GRAPH).unwrap();
+        let plan =
+            flow::graph::parse(FINITE_GRAPH, &registry).expect("finite graph parses with manifests");
+        assert!(
+            !plan.has_persistent_nodes(),
+            "the applet graph must stay on the document path"
+        );
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &registry),
+            "a finite applet graph runs on the daemon"
+        );
+    }
+
 }

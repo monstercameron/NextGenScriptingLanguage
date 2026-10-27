@@ -4,12 +4,15 @@
 //! JSON line per terminal event instead of collecting a closing document,
 //! so a timer graph stays live with flat memory and a closed reader stops
 //! it. These tests pin the persistent classification, the streamed line
-//! shape (including its single-line rendering), the published schema, the
-//! bounded per-event serialization, the rule that streaming bypasses the
-//! collection cap, the rule that a tick is visible while its producer still
-//! runs and an early close reports cancellation instead of EOF, and the rule
-//! that queued events are delivered before a mid-stream or end-of-stream
-//! worker failure surfaces instead of a clean end of stream.
+//! shape (including its single-line rendering), full validation of emitted
+//! lines against the published schema, the bounded per-event serialization
+//! for bytes and escaped string/value payloads alike, the rule that
+//! streaming bypasses the collection cap (past the old 100,000-event
+//! failure point), the rule that a tick is visible within milliseconds
+//! while its producer still runs and an early close reports cancellation
+//! instead of EOF, and the rule that queued events are delivered before a
+//! mid-stream or end-of-stream worker failure surfaces instead of a clean
+//! end of stream.
 
 #![cfg(feature = "graph")]
 
@@ -25,6 +28,7 @@ use flow::manifest::Registry;
 use flow::security::SensitivitySet;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn timer_plan() -> GraphPlan {
     let registry = Registry::from_sources(&[]).expect("empty registry parses");
@@ -482,4 +486,299 @@ fn mid_stream_failure_delivers_queued_events_then_surfaces() {
         joined.to_string().contains(MID_STREAM_FAILURE_MARKER),
         "unexpected join error: {joined:#}"
     );
+}
+
+fn value_envelope(payload: Value) -> EventEnvelope {
+    EventEnvelope {
+        port: PortRef::new("ticker", "tick"),
+        input: None,
+        generation: 1,
+        revision: 1,
+        sequence: 1,
+        sensitivity: SensitivitySet::empty(),
+        remote: None,
+        payload: PortValue::Value(payload),
+    }
+}
+
+fn load_event_schema() -> serde_json::Value {
+    let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/schemas/graph-event.v1.schema.json");
+    let schema_text = std::fs::read_to_string(&schema_path).expect("schema file exists");
+    serde_json::from_str(&schema_text).expect("schema parses")
+}
+
+/// Validate one emitted line against the published schema, deriving every
+/// expectation from the schema file itself so the check tracks schema edits.
+/// Returns the reason when the line does not validate.
+fn validate_graph_event_line(
+    schema: &serde_json::Value,
+    line: &serde_json::Value,
+) -> Result<(), String> {
+    let object = line
+        .as_object()
+        .ok_or_else(|| "event line is not an object".to_owned())?;
+    let properties = schema
+        .get("properties")
+        .and_then(|properties| properties.as_object())
+        .ok_or_else(|| "schema has no properties".to_owned())?;
+    for key in object.keys() {
+        if !properties.contains_key(key) {
+            return Err(format!("event line carries undeclared field {key:?}"));
+        }
+    }
+    let required = schema
+        .get("required")
+        .and_then(|required| required.as_array())
+        .ok_or_else(|| "schema lists no required fields".to_owned())?;
+    for field in required {
+        let name = field.as_str().ok_or_else(|| "required entry is not a string".to_owned())?;
+        if !object.contains_key(name) {
+            return Err(format!("event line misses required field {name:?}"));
+        }
+    }
+    let constant = |field: &str| schema["properties"][field]["const"].clone();
+    if line["protocol"] != constant("protocol") {
+        return Err("event line names the wrong protocol".to_owned());
+    }
+    if !line["graph"].is_string() {
+        return Err("event graph is not a string".to_owned());
+    }
+    for field in ["generation", "revision", "sequence"] {
+        let minimum = schema["properties"][field]["minimum"]
+            .as_u64()
+            .ok_or_else(|| format!("schema sets no minimum for {field}"))?;
+        let value = line[field]
+            .as_u64()
+            .ok_or_else(|| format!("event {field} is not an integer"))?;
+        if value < minimum {
+            return Err(format!("event {field} {value} is below the schema minimum"));
+        }
+    }
+    let port = line["port"]
+        .as_object()
+        .ok_or_else(|| "event port is not an object".to_owned())?;
+    for field in ["node", "port"] {
+        if !port.get(field).is_some_and(|name| name.is_string()) {
+            return Err(format!("event port misses string field {field:?}"));
+        }
+    }
+    if port.len() != 2 {
+        return Err("event port carries undeclared fields".to_owned());
+    }
+    let allowed: Vec<&str> = schema["properties"]["sensitivity"]["items"]["enum"]
+        .as_array()
+        .ok_or_else(|| "schema lists no sensitivity labels".to_owned())?
+        .iter()
+        .filter_map(|label| label.as_str())
+        .collect();
+    let sensitivity = line["sensitivity"]
+        .as_array()
+        .ok_or_else(|| "event sensitivity is not an array".to_owned())?;
+    for label in sensitivity {
+        let name = label.as_str().ok_or_else(|| "sensitivity label is not a string".to_owned())?;
+        if !allowed.contains(&name) {
+            return Err(format!("sensitivity label {name:?} is outside the schema enum"));
+        }
+    }
+    fn matches_bytes(payload: &serde_json::Value) -> bool {
+        payload.as_object().is_some_and(|object| {
+            object.len() == 2
+                && object.get("kind").is_some_and(|kind| kind == "bytes")
+                && object.get("value").is_some_and(|value| {
+                    value.as_array().is_some_and(|items| {
+                        items
+                            .iter()
+                            .all(|item| item.as_u64().is_some_and(|byte| byte <= 255))
+                    })
+                })
+        })
+    }
+    fn matches_value(payload: &serde_json::Value) -> bool {
+        payload.as_object().is_some_and(|object| {
+            object.len() == 2
+                && object.get("kind").is_some_and(|kind| kind == "value")
+                && object.contains_key("value")
+        })
+    }
+    let variants = [&matches_bytes as &dyn Fn(&serde_json::Value) -> bool, &matches_value];
+    if variants.iter().filter(|match_one| match_one(&line["payload"])).count() != 1 {
+        return Err("event payload matches no schema variant exactly once".to_owned());
+    }
+    Ok(())
+}
+
+#[test]
+fn emitted_lines_validate_against_the_full_schema() {
+    let schema = load_event_schema();
+    // Every payload shape the stream can carry must validate: an integer
+    // value, a bytes payload, a string with characters JSON must escape, and
+    // a nested record mixing lists, strings, and nulls.
+    let nested = Value::Record(BTreeMap::from([
+        ("items".into(), Value::List(vec![Value::Integer(1), Value::Null])),
+        (
+            "note".into(),
+            Value::String("line\nfeed \"quoted\" \\ backslash".into()),
+        ),
+    ]));
+    let cases = [
+        sample_envelope(),
+        bytes_envelope(vec![0, 255]),
+        value_envelope(Value::String("é🦀\n\t\0\"\\".into())),
+        value_envelope(nested),
+    ];
+    for event in &cases {
+        let line = graph_event_line("ticks", 1, 1, event);
+        validate_graph_event_line(&schema, &line)
+            .expect("emitted line validates against the published schema");
+        let text = serde_json::to_string(&line).expect("event line serializes");
+        let reparsed: serde_json::Value =
+            serde_json::from_str(&text).expect("piped line parses back");
+        validate_graph_event_line(&schema, &reparsed)
+            .expect("the piped rendering validates too");
+        assert!(!text.contains('\n'), "one event is one JSON line");
+    }
+}
+
+#[test]
+fn schema_validation_rejects_misshapen_lines() {
+    let schema = load_event_schema();
+    let valid = graph_event_line("ticks", 1, 1, &sample_envelope());
+    // The validator is not vacuous: a missing field, an extra field, and a
+    // payload matching no variant must each fail with a reason.
+    let mut missing = valid.clone();
+    missing.as_object_mut().unwrap().remove("payload");
+    assert!(
+        validate_graph_event_line(&schema, &missing).is_err(),
+        "a line without its payload must not validate"
+    );
+    let mut extra = valid.clone();
+    extra.as_object_mut().unwrap().insert(
+        "tomorrow".to_owned(),
+        serde_json::Value::String("never".into()),
+    );
+    assert!(
+        validate_graph_event_line(&schema, &extra).is_err(),
+        "a line with an undeclared field must not validate"
+    );
+    let mut bad_payload = valid.clone();
+    bad_payload["payload"] = serde_json::json!({"kind": "bytes", "value": [256]});
+    assert!(
+        validate_graph_event_line(&schema, &bad_payload).is_err(),
+        "a byte outside 0..=255 must not validate"
+    );
+}
+
+#[test]
+fn large_string_and_nested_value_payloads_fit_the_derived_bound() {
+    // JSON escaping expands control characters to six bytes each
+    // (`\u0001`), so a string payload's serialized form can far exceed its
+    // raw length. The per-event bound derives from the admitted serialized
+    // size, not the raw length, so escaping can never overflow it.
+    let heavy = "A\u{1}é🦀\"\\\n\t\0".repeat(2000);
+    assert!(
+        heavy.len() < 64 * 1024,
+        "the raw string stays small while its escaping does not"
+    );
+    let string_event = value_envelope(Value::String(heavy));
+    let max_message_bytes = 128 * 1024;
+    let limit = stream_event_byte_limit(max_message_bytes);
+    let text = graph_event_line_json("ticks", 1, 1, &string_event, limit)
+        .expect("an admitted string payload fits its derived bound");
+    assert!(text.len() <= limit, "rendered line stays within its bound");
+    assert!(!text.contains('\n'), "escaped newlines stay on one line");
+    // A nested value mixes every JSON shape; it fits for the same reason.
+    let nested = Value::Record(BTreeMap::from([
+        (
+            "runs".into(),
+            Value::List((0..500).map(Value::Integer).collect()),
+        ),
+        (
+            "note".into(),
+            Value::String("tab\there \"quoted\" \\ end".repeat(50)),
+        ),
+    ]));
+    let nested_event = value_envelope(nested);
+    let text = graph_event_line_json("ticks", 1, 1, &nested_event, limit)
+        .expect("an admitted nested payload fits its derived bound");
+    assert!(text.len() <= limit, "rendered line stays within its bound");
+    assert!(!text.contains('\n'), "one event is one JSON line");
+    // And a payload that cannot fit is still refused before unbounded
+    // allocation, for value payloads just as for bytes payloads.
+    let error = graph_event_line_json("ticks", 1, 1, &string_event, 64)
+        .expect_err("a large string cannot fit a 64-byte line");
+    assert!(
+        error.to_string().contains("exceeds stream limit of 64 bytes"),
+        "unexpected bound error: {error:#}"
+    );
+}
+
+#[test]
+fn first_tick_arrives_with_millisecond_latency() {
+    // The producer never finishes on its own, so receiving here proves the
+    // tick was visible mid-run; the elapsed time pins the "milliseconds"
+    // acceptance behind a CI-safe bound (production ticks land in ~2 ms
+    // poll steps, and the issue asks for 50 ms).
+    let started = Instant::now();
+    let mut session = GraphSession::start(
+        terminal_plan("live-latency"),
+        Arc::new(EmitThenWaitExecutor),
+        GraphRunOptions::default(),
+    )
+    .expect("live session starts");
+    let first = session
+        .recv_output()
+        .expect("receive works")
+        .expect("tick arrives before the producer finishes");
+    let elapsed = started.elapsed();
+    assert_eq!(
+        first.payload,
+        PortValue::Value(Value::Integer(1)),
+        "the live tick carries its payload"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "tick took {elapsed:?}, expected millisecond-scale visibility"
+    );
+    session.cancel();
+    session
+        .cancel_and_join()
+        .expect("cancellation fallout is not a worker failure");
+}
+
+#[test]
+fn streaming_outlives_the_old_collection_cap() {
+    // The closing-document path fails past 100,000 collected events; the
+    // streaming path holds nothing and must flow past that point with a tiny
+    // collection cap configured. Each event is small, so this stays fast
+    // while proving the old limit no longer applies to a live stream.
+    let mut options = GraphRunOptions::default();
+    options.max_collected_events = 8;
+    let mut session = GraphSession::start(
+        terminal_plan("sustained"),
+        Arc::new(EmitManyExecutor { count: 100_001 }),
+        options,
+    )
+    .expect("streaming session starts");
+    let mut seen = 0;
+    loop {
+        match session
+            .recv_output()
+            .expect("streaming stays below no collection cap")
+        {
+            Some(event) => {
+                assert_eq!(
+                    event.payload,
+                    PortValue::Value(Value::Integer(seen as i64)),
+                    "streamed events arrive in emission order"
+                );
+                seen += 1;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(seen, 100_001, "every event streams past the old cap");
+    session
+        .cancel_and_join()
+        .expect("a clean finish joins quietly");
 }

@@ -14,8 +14,9 @@ and exits quietly through the SIGPIPE convention (141). Each streamed line is
 bounded by a per-event limit derived from the message byte limit, queued
 events are delivered before a worker failure surfaces instead of a clean EOF,
 graph runs refuse `--record` and `--answers`
-instead of ignoring them, and the daemon declines explicit event streams so
-the client streams them directly.
+instead of ignoring them, and the daemon declines event streams — explicit
+`--events jsonl` and unflagged persistent graphs alike — so the client
+streams them directly.
 The event schema is `docs/schemas/graph-event.v1.schema.json`.
 Graphs can declare the same typed top-level inputs
 as finite programs, then use those names in applet parameters. `--input` and

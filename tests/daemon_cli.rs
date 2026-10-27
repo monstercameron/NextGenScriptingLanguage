@@ -293,6 +293,61 @@ fn explicit_context_acceptance_forwards_a_run() {
 }
 
 #[test]
+fn implicit_persistent_graph_streams_on_the_client() {
+    // A persistent graph without an explicit `--events` flag still defaults
+    // to the indefinite JSONL stream, so the daemon must decline it just
+    // like an explicit `--events jsonl`: the stream holds the client's
+    // stdout open and a closed reader is its normal stop.
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let program = work.path().join("ticks.graph");
+    fs::write(
+        &program,
+        "graph ticks\nevery 10 milliseconds as ticker\nend graph\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(work.path())
+        .arg("run")
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .arg("--daemon")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().expect("stream stdout is piped");
+    let mut reader = BufReader::new(stdout);
+    for _ in 0..2 {
+        let mut line = String::new();
+        let count = reader
+            .read_line(&mut line)
+            .expect("implicit stream emits ticks");
+        assert!(count > 0, "implicit stream ended before two ticks");
+        let event: Value =
+            serde_json::from_str(&line).expect("one JSON line per terminal event");
+        assert_eq!(event["protocol"], "execute.graph-event/1");
+        assert_eq!(event["graph"], "ticks");
+    }
+    // The daemon declines the indefinite stream, so the client streams it
+    // directly; stopping here must not leave the run on the daemon.
+    drop(reader);
+    child.kill().expect("stream stops on request");
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("graph event streams run on the client"),
+        "implicit stream must fall back to the client: {:?}",
+        output
+    );
+}
+
+#[test]
 fn explicit_context_acceptance_preserves_untrusted_mode() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();

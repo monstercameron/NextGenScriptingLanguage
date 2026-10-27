@@ -1,8 +1,11 @@
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use flow::applets::execute_in_cwd;
+use flow::ast::{Invocation, Value};
+use flow::manifest::{ManifestCheck, Registry};
 use serde_json::json;
 
 const MESSAGE: &str = "lock_timeout_ms must be an integer from 0 through 300000";
@@ -156,4 +159,66 @@ fn omitted_timeout_uses_the_filesystem_runtime_default() {
     .unwrap();
     assert_eq!(removed["removed"], true);
     assert!(!dir.path().join("victim").exists());
+}
+
+#[test]
+fn default_bundled_registry_enforces_filesystem_and_transaction_timeout_bounds() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let registry = Registry::load_default(&manifest_dir, ManifestCheck::Lazy).unwrap();
+
+    for (operation, parameters) in [
+        (
+            "fs.unlink_checked",
+            BTreeMap::from([
+                ("path".to_owned(), Value::String("missing".into())),
+                ("expected_snapshot".to_owned(), Value::String("none".into())),
+            ]),
+        ),
+        (
+            "fs.transaction.recover",
+            BTreeMap::from([
+                ("journal".to_owned(), Value::String("missing".into())),
+                ("decision".to_owned(), Value::String("rollback".into())),
+            ]),
+        ),
+    ] {
+        let manifest = registry.resolve(operation).unwrap();
+        for timeout in [0, 300000] {
+            let mut values = parameters.clone();
+            values.insert("lock_timeout_ms".into(), Value::Integer(timeout));
+            let invocation = Invocation {
+                operation: operation.into(),
+                direct: false,
+                discard_stderr: false,
+                parameters: values,
+                binding: None,
+                cache: false,
+                status_binding: None,
+                result_binding: None,
+                retry: None,
+            };
+            manifest.validate(&invocation).unwrap_or_else(|error| {
+                panic!("bundled registry rejected {operation} timeout {timeout}: {error}")
+            });
+        }
+
+        let mut invalid_values = parameters;
+        invalid_values.insert("lock_timeout_ms".into(), Value::Integer(300001));
+        let invalid = Invocation {
+            operation: operation.into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: invalid_values,
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        };
+        let error = manifest.validate(&invalid).unwrap_err();
+        assert!(
+            error.to_string().contains(MESSAGE),
+            "bundled {operation} did not enforce timeout range: {error}"
+        );
+    }
 }

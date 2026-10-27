@@ -395,56 +395,113 @@ mod tests {
             .filter(|pid| *pid != 0)
     }
 
-    /// Fail-closed liveness probe: a failed `tasklist` invocation fails the
-    /// test instead of reading an empty listing as "gone". A PID counts as
-    /// running only when a CSV field equals it exactly, so a PID that is a
-    /// substring of another process's PID never matches.
+    /// Fail-closed liveness probe: the `tasklist` invocation itself must run,
+    /// otherwise the test fails instead of reading an empty listing as
+    /// "gone". A PID counts as running only when a CSV field equals it
+    /// exactly, so a PID that is a substring of another process's PID never
+    /// matches. A non-zero `tasklist` exit that still reports "no tasks"
+    /// (some SKUs/locales) counts as gone; any other failure retries twice
+    /// and then fails the test.
     #[cfg(windows)]
-    fn pid_is_running(pid: u32) -> bool {
-        let probe = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-            .output()
-            .expect("the tasklist liveness probe must run");
-        assert!(
-            probe.status.success(),
-            "the tasklist probe for PID {pid} failed: {}",
-            String::from_utf8_lossy(&probe.stderr)
-        );
+    fn probe_pid(pid: u32) -> Option<String> {
         let want = pid.to_string();
-        String::from_utf8_lossy(&probe.stdout).lines().any(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with("INFO:") {
-                return false;
+        for attempt in 0..3 {
+            let probe = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+                .output()
+                .expect("the tasklist liveness probe must run");
+            let stdout = String::from_utf8_lossy(&probe.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&probe.stderr).into_owned();
+            if probe.status.success() {
+                for line in stdout.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with("INFO:") {
+                        continue;
+                    }
+                    let fields: Vec<&str> = line
+                        .split(',')
+                        .map(|field| field.trim().trim_matches('"'))
+                        .collect();
+                    if fields.iter().any(|field| *field == want) {
+                        return fields.first().map(|image| image.to_string());
+                    }
+                }
+                return None;
             }
-            line.split(',')
-                .any(|field| field.trim().trim_matches('"') == want)
-        })
+            let combined = format!("{stdout}\n{stderr}");
+            if combined.contains("INFO:") || combined.to_uppercase().contains("NO TASKS") {
+                return None;
+            }
+            if attempt + 1 < 3 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+            panic!(
+                "the tasklist probe for PID {pid} failed: {}",
+                stderr.trim()
+            );
+        }
+        unreachable!("the tasklist probe retry loop must return or panic");
     }
 
-    /// Best-effort cleanup: ending an already-dead process reports failure,
-    /// which is fine when sweeping up after a probe that already says gone.
+    /// Our fixture sleepers are `powershell.exe`: the image corroboration
+    /// keeps a recycled PID from reading as "our process still running" and,
+    /// more importantly, keeps cleanup from killing it.
     #[cfg(windows)]
-    fn kill_pid(pid: u32) {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .output();
+    fn our_pid_is_running(pid: u32) -> bool {
+        probe_pid(pid).is_some_and(|image| image.eq_ignore_ascii_case("powershell.exe"))
+    }
+
+    /// Conditional cleanup: only `taskkill` a PID that still probes as one of
+    /// our `powershell.exe` sleepers. An already-gone PID (possibly recycled
+    /// to an unrelated process) is left alone.
+    #[cfg(windows)]
+    fn kill_pid_if_running(pid: u32) {
+        if our_pid_is_running(pid) {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F"])
+                .output();
+        }
+    }
+
+    /// Bounded gone-poll: descendant teardown after `job.terminate()` is
+    /// asynchronous, so an immediate gone-assert flakes. Polls until every
+    /// PID reads gone (or recycled away from our image) or the timeout
+    /// expires. Returns true when all are gone.
+    #[cfg(windows)]
+    fn wait_until_gone(pids: &[u32], timeout: std::time::Duration) -> bool {
+        let gone_by = std::time::Instant::now() + timeout;
+        loop {
+            if pids.iter().all(|pid| !our_pid_is_running(*pid)) {
+                return true;
+            }
+            if std::time::Instant::now() >= gone_by {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 
     /// The PowerShell fixture behind a mid-wait budget test: the handed-over
     /// child records its PID, starts a descendant sleeper in the same job,
-    /// records the descendant PID, and sleeps for a minute. Needs the system
-    /// environment, so these tests never `env_clear` the command.
+    /// records the descendant PID, and sleeps. Needs the system environment,
+    /// so these tests never `env_clear` the command.
     #[cfg(windows)]
     fn budget_fixture_script(parent: &Path, descendant: &Path) -> String {
+        budget_fixture_script_with_sleep(parent, descendant, 60)
+    }
+
+    #[cfg(windows)]
+    fn budget_fixture_script_with_sleep(parent: &Path, descendant: &Path, sleep_secs: u64) -> String {
         let powershell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
         let parent_forward = parent.to_str().unwrap().replace('\\', "/");
         let descendant_forward = descendant.to_str().unwrap().replace('\\', "/");
         format!(
             "$PID | Out-File -FilePath '{parent_forward}' -Encoding ascii; \
              $desc = Start-Process -FilePath '{powershell}' \
-             -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60' -PassThru; \
+             -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds {sleep_secs}' -PassThru; \
              $desc.Id | Out-File -FilePath '{descendant_forward}' -Encoding ascii; \
-             Start-Sleep -Seconds 60"
+             Start-Sleep -Seconds {sleep_secs}"
         )
     }
 
@@ -478,7 +535,7 @@ mod tests {
                         read_pid_file(&parent_pid_file),
                         read_pid_file(&descendant_pid_file),
                     ) {
-                        if pid_is_running(parent) && pid_is_running(descendant) {
+                        if our_pid_is_running(parent) && our_pid_is_running(descendant) {
                             ready.store(true, Ordering::Release);
                             break;
                         }
@@ -515,19 +572,21 @@ mod tests {
             crate::runtime::execution_result::ExecutionKind::Cancelled
         );
         // Returning from the wait proves the child handle was reaped
-        // (`child.wait` ran before returning); the probes prove the job kill
-        // left neither the child nor its descendant behind.
+        // (`child.wait` ran before returning); the bounded gone-poll proves
+        // the job kill left neither the child nor its descendant behind.
+        // Descendant teardown is asynchronous, so an immediate assert would
+        // flake on a still-dying process.
         let parent =
             read_pid_file(&parent_pid_file).expect("the child must have published its PID");
         let descendant = read_pid_file(&descendant_pid_file)
             .expect("the descendant must have published its PID");
-        for pid in [parent, descendant] {
-            assert!(
-                !pid_is_running(pid),
-                "hand-over cancellation left PID {pid} running"
-            );
-            kill_pid(pid);
-        }
+        assert!(
+            wait_until_gone(&[parent, descendant], Duration::from_secs(10)),
+            "hand-over cancellation left PID {parent} or {descendant} running"
+        );
+        // Conditional sweep: a gone PID (possibly recycled) is left alone.
+        kill_pid_if_running(parent);
+        kill_pid_if_running(descendant);
     }
 
     #[cfg(windows)]
@@ -553,18 +612,47 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn hand_over_deadline_mid_wait_kills_child_and_descendant() {
-        use std::sync::{atomic::AtomicBool, Arc};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
         let temp = tempfile::tempdir().unwrap();
         let parent_pid_file = temp.path().join("handoff-deadline-parent.pid");
         let descendant_pid_file = temp.path().join("handoff-deadline-descendant.pid");
-        let script = budget_fixture_script(&parent_pid_file, &descendant_pid_file);
-        // The deadline fires 15 seconds into the minute-long sleep: late enough
-        // for the child and its descendant to start on a slow runner, early
-        // enough to prove the wait ended on the deadline rather than the sleep.
+        // A 30s deadline into a 120s sleep: the 30s startup window survives a
+        // slow/emulated ARM runner, while the deadline still fires long
+        // before the sleep would end, so an early return proves the deadline
+        // path rather than natural exit.
+        let script =
+            budget_fixture_script_with_sleep(&parent_pid_file, &descendant_pid_file, 120);
+        let ready = Arc::new(AtomicBool::new(false));
+        {
+            let ready = Arc::clone(&ready);
+            let parent_pid_file = parent_pid_file.clone();
+            let descendant_pid_file = descendant_pid_file.clone();
+            // Observer only: records whether both sleepers were demonstrably
+            // running before the deadline could fire, so a missing PID reads
+            // as a slow starter rather than a missed kill.
+            std::thread::spawn(move || {
+                let by = Instant::now() + Duration::from_secs(25);
+                while Instant::now() < by {
+                    if let (Some(parent), Some(descendant)) = (
+                        read_pid_file(&parent_pid_file),
+                        read_pid_file(&descendant_pid_file),
+                    ) {
+                        if our_pid_is_running(parent) && our_pid_is_running(descendant) {
+                            ready.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            });
+        }
         let signals = crate::runtime::Signals::with_cancellation_and_deadline(
             Arc::new(AtomicBool::new(false)),
             false,
-            Some(Instant::now() + Duration::from_secs(15)),
+            Some(Instant::now() + Duration::from_secs(30)),
         )
         .unwrap();
         let mut command =
@@ -577,23 +665,28 @@ mod tests {
             "an expired mid-wait deadline must report the timeout marker: {error:#}"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(50),
+            started.elapsed() < Duration::from_secs(60),
             "a hand-over past its deadline must return promptly"
         );
-        // Both PIDs were published before the deadline fired, so the gone-after
-        // probes prove the job kill ended the child and its descendant; the
-        // wait reaped the child handle before returning.
+        assert!(
+            ready.load(Ordering::Acquire),
+            "the handed-over child and its descendant never started before the deadline"
+        );
+        // Both PIDs were published before the deadline fired, so the bounded
+        // gone-poll proves the job kill ended the child and its descendant;
+        // the wait reaped the child handle before returning. Descendant
+        // teardown is asynchronous, so an immediate assert would flake.
         let parent = read_pid_file(&parent_pid_file)
             .expect("the handed-over child must have started before the deadline");
         let descendant = read_pid_file(&descendant_pid_file)
             .expect("the descendant must have started before the deadline");
-        for pid in [parent, descendant] {
-            assert!(
-                !pid_is_running(pid),
-                "hand-over deadline left PID {pid} running"
-            );
-            kill_pid(pid);
-        }
+        assert!(
+            wait_until_gone(&[parent, descendant], Duration::from_secs(10)),
+            "hand-over deadline left PID {parent} or {descendant} running"
+        );
+        // Conditional sweep: a gone PID (possibly recycled) is left alone.
+        kill_pid_if_running(parent);
+        kill_pid_if_running(descendant);
     }
 
     #[cfg(feature = "live")]

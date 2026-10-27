@@ -5403,7 +5403,7 @@ mod tests {
     #[test]
     fn json_list_parameters_reject_nested_bytes_without_a_port_schema() {
         let manifest = parse_manifest(
-            r#"{"name":"custom.list","binary":"tool","parameters":{"items":{"type":"list","items":"json","required":true}},"arguments":[]}"#,
+            r#"{"name":"custom.list","binary":"tool","parameters":{"items":{"type":"list","items":"json","required":true}},"arguments":[{"json_arguments":true}]}"#,
         )
         .unwrap();
         assert!(manifest.contract.is_none());

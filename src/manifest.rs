@@ -220,6 +220,12 @@ struct ParameterSpec {
     required: bool,
     #[serde(default)]
     min_items: Option<usize>,
+    /// Minimum Unicode scalar values in a string parameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_length: Option<usize>,
+    /// Require non-whitespace text for a string parameter.
+    #[serde(default, skip_serializing_if = "is_false")]
+    nonempty: bool,
     /// For string lists: the first item's first word must be one of these
     /// (compared ASCII case-insensitively). Empty means no restriction.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -245,6 +251,8 @@ impl From<RawParameter> for ParameterSpec {
             enum_values: raw.enum_values,
             required: raw.required,
             min_items: raw.min_items,
+            min_length: raw.min_length,
+            nonempty: raw.nonempty,
             allow_first_token: raw.allow_first_token,
             deny_first_token: raw.deny_first_token,
             forbid_option_items: raw.forbid_option_items,
@@ -603,6 +611,8 @@ impl Registry {
                     enum_values: None,
                     required: false,
                     min_items: None,
+                    min_length: None,
+                    nonempty: false,
                     allow_first_token: Vec::new(),
                     deny_first_token: Vec::new(),
                     forbid_option_items: false,
@@ -1411,6 +1421,13 @@ impl Manifest {
                 if let Some(items) = spec.item_type {
                     schema["items"] = parameter_schema(items, None);
                 }
+                if let Some(minimum) = spec.min_length {
+                    schema["minLength"] = minimum.into();
+                }
+                if spec.nonempty {
+                    schema["minLength"] = schema["minLength"].as_u64().unwrap_or(0).max(1).into();
+                    schema["not"] = serde_json::json!({"pattern": "^\\s*$"});
+                }
                 if let Some(minimum) = spec.min_items {
                     schema["minItems"] = minimum.into();
                 }
@@ -2095,6 +2112,15 @@ fn validate_value(
         if spec.kind == ParameterType::Path && string.is_empty() {
             bail!("path parameter {name:?} must be nonempty");
         }
+        if spec.nonempty && string.trim().is_empty() {
+            bail!("parameter {name:?} must be nonempty text");
+        }
+        if let Some(minimum) = spec.min_length {
+            let length = string.chars().count();
+            if length < minimum {
+                bail!("parameter {name:?} needs at least {minimum} character(s)");
+            }
+        }
         if let Some(values) = &spec.enum_values {
             if !values.iter().any(|allowed| allowed == string) {
                 bail!("parameter {name:?} must be one of {values:?}, got {string:?}");
@@ -2723,6 +2749,10 @@ struct RawParameter {
     #[serde(default)]
     min_items: Option<usize>,
     #[serde(default)]
+    min_length: Option<usize>,
+    #[serde(default)]
+    nonempty: bool,
+    #[serde(default)]
     allow_first_token: Vec<String>,
     #[serde(default)]
     deny_first_token: Vec<String>,
@@ -2925,6 +2955,9 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
             {
                 bail!("parameter {name:?}: enum values must be unique and contain no NUL bytes");
             }
+        }
+        if (spec.min_length.is_some() || spec.nonempty) && spec.kind != ParameterType::String {
+            bail!("parameter {name:?}: min_length and nonempty constraints apply only to string parameters");
         }
         let is_list = spec.kind == ParameterType::List;
         if is_list != spec.item_type.is_some() {
@@ -3770,6 +3803,76 @@ mod tests {
         ] {
             assert!(parse_manifest(source).is_err(), "accepted {source}");
         }
+    }
+
+    #[test]
+    fn string_lengths_count_unicode_scalar_values_and_validate_literals() {
+        let manifest = parse_manifest(
+            r#"{"name":"length.test","binary":"echo","parameters":{"text":{"type":"string","required":true,"min_length":2}},"arguments":[{"parameter":"text"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.contract()["parameters_schema"]["properties"]["text"]["minLength"],
+            2
+        );
+        assert!(manifest
+            .build_arguments(&BTreeMap::from([(
+                "text".into(),
+                Value::String("éa".into())
+            )]))
+            .is_ok());
+        let error = manifest
+            .build_arguments(&BTreeMap::from([(
+                "text".into(),
+                Value::String("é".into()),
+            )]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("at least 2 character"), "{error}");
+        assert!(parse_manifest(
+            r#"{"name":"length.test","binary":"echo","parameters":{"text":{"type":"integer","min_length":1}},"arguments":[]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn nonempty_string_constraints_defer_references_and_check_resolved_values() {
+        let manifest = parse_manifest(
+            r#"{"name":"nonempty.test","binary":"echo","parameters":{"text":{"type":"string","required":true,"nonempty":true}},"arguments":[{"parameter":"text"}]}"#,
+        )
+        .unwrap();
+        let projected = manifest.contract()["parameters_schema"]["properties"]["text"].clone();
+        assert_eq!(projected["minLength"], 1);
+        assert_eq!(projected["not"]["pattern"], "^\\s*$");
+
+        let invocation = Invocation {
+            operation: "nonempty.test".into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([("text".into(), Value::Reference("dynamic".into()))]),
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        };
+        assert!(manifest.validate(&invocation).is_ok());
+        for value in ["", " \t\n"] {
+            let error = manifest
+                .build_arguments(&BTreeMap::from([(
+                    "text".into(),
+                    Value::String(value.into()),
+                )]))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("must be nonempty text"), "{error}");
+        }
+        assert!(manifest
+            .build_arguments(&BTreeMap::from([(
+                "text".into(),
+                Value::String("é".into())
+            )]))
+            .is_ok());
     }
 
     #[test]
@@ -4848,6 +4951,8 @@ mod first_token_rule_tests {
             enum_values: None,
             required: true,
             min_items: None,
+            min_length: None,
+            nonempty: false,
             allow_first_token: Vec::new(),
             deny_first_token: vec!["exec".into(), "execr".into()],
             forbid_option_items: false,

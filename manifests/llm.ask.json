@@ -8,11 +8,15 @@
   "parameters": {
     "model": {
       "type": "string",
-      "required": true
+      "required": true,
+      "min_length": 1,
+      "nonempty": true
     },
     "instruction": {
       "type": "string",
-      "required": true
+      "required": true,
+      "min_length": 1,
+      "nonempty": true
     },
     "endpoint": {
       "type": "string"

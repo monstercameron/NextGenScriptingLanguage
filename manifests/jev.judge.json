@@ -8,10 +8,14 @@
   "parameters": {
     "question": {
       "type": "string",
-      "required": true
+      "required": true,
+      "min_length": 1,
+      "nonempty": true
     },
     "model": {
-      "type": "string"
+      "type": "string",
+      "min_length": 1,
+      "nonempty": true
     },
     "minimum": {
       "type": "integer"

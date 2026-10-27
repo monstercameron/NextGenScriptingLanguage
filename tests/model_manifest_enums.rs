@@ -131,3 +131,50 @@ fn static_and_runtime_validation_reject_unsupported_model_options_offline() {
         );
     }
 }
+
+#[test]
+fn static_check_rejects_empty_required_model_text_literals() {
+    let dir = tempfile::tempdir().unwrap();
+    for source in [
+        "run jev.judge with question \"\" as raw\n",
+        "run llm.ask with model \"\" and instruction \"x\" as raw\n",
+        "run llm.ask with model \"gpt-6-luna\" and instruction \"\" as raw\n",
+        "run jev.judge with question \"  \" as raw\n",
+        "run llm.ask with model \"gpt-6-luna\" and instruction \"\\t\" as raw\n",
+    ] {
+        let result = execute(dir.path(), "check", source);
+        assert!(!result.status.success(), "static check accepted {source:?}");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains("nonempty"),
+            "missing constraint diagnostic: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_model_text_is_deferred_but_rejected_before_the_model_helper() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "run printf with arguments [\"\"] as empty\nthen llm.ask with model \"gpt-6-luna\" and instruction empty as raw\n";
+    let check = execute(dir.path(), "check", source);
+    assert!(
+        check.status.success(),
+        "checker should defer a dynamic string value: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let run = execute(dir.path(), "run", source);
+    assert!(
+        !run.status.success(),
+        "runtime accepted an empty reference value"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("nonempty"),
+        "missing runtime constraint diagnostic: {stderr}"
+    );
+    assert!(
+        !stderr.contains("execute-model:"),
+        "invalid dynamic input reached the model helper: {stderr}"
+    );
+}

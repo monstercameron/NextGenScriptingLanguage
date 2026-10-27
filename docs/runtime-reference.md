@@ -593,6 +593,13 @@ use `--` where appropriate. `cat` accepts an ordered `files` list in addition to
 its optional single `path`; when both are supplied, `path` comes first. The explicit `builtin: "cd"` declaration is validated
 against its single path parameter; ordinary manifests always launch their binary.
 
+String parameters may declare `min_length` and `nonempty`. `min_length` counts
+Unicode scalar values (not UTF-8 bytes or grapheme clusters); `nonempty: true`
+also rejects strings whose Unicode whitespace-trimmed value is empty. Known
+literals are checked by `execute check`, and referenced values are checked after
+resolution before argv is built. The contract projection exposes these rules as
+JSON Schema `minLength` and a whitespace-only exclusion.
+
 A non-cacheable external manifest may set `"uncertain_on_failure": true` when a
 failed request may already have caused an external effect, including provider
 billing. Checkpoint resume then requires explicit `--retry-uncertain` after a

@@ -11,7 +11,9 @@
       "required": true
     },
     "model": {
-      "type": "string"
+      "type": "string",
+      "min_length": 1,
+      "nonempty": true
     },
     "max_bytes": {
       "type": "integer"

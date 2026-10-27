@@ -200,6 +200,10 @@ the helper's input and provider request/response; the runtime's
 `--max-output-bytes` separately limits captured pipeline output. OpenAI requests default to an output token cap of 512; set `max_tokens` to
 change it. Provider token limits and byte limits measure different things.
 
+Model names and required question or instruction text must contain non-whitespace
+text. The manifests reject empty and whitespace-only literals during `execute
+check`, and validate referenced strings after they resolve at runtime.
+
 Pass credentials through a private `env_file` parameter or the helper process
 environment. The environment file accepts `jev=...` for TypeSafe or
 `openai=...` for OpenAI; uppercase `JEV_API_KEY`, `TYPESAFE_API_KEY`, and

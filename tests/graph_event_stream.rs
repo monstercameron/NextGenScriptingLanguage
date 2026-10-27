@@ -5,8 +5,11 @@
 //! so a timer graph stays live with flat memory and a closed reader stops
 //! it. These tests pin the persistent classification, the streamed line
 //! shape (including its single-line rendering), the published schema, the
-//! bounded per-event serialization, and the rule that a worker failure at
-//! EOF surfaces instead of a clean end of stream.
+//! bounded per-event serialization, the rule that streaming bypasses the
+//! collection cap, the rule that a tick is visible while its producer still
+//! runs and an early close reports cancellation instead of EOF, and the rule
+//! that queued events are delivered before a mid-stream or end-of-stream
+//! worker failure surfaces instead of a clean end of stream.
 
 #![cfg(feature = "graph")]
 
@@ -182,6 +185,64 @@ fn failing_plan() -> GraphPlan {
     plan
 }
 
+fn terminal_plan(name: &str) -> GraphPlan {
+    let mut plan = GraphPlan::new(name);
+    plan.add_node(mock_node(
+        "source",
+        BTreeMap::from([("out".into(), PortSchema::records(int_schema()))]),
+    ))
+    .expect("mock node is admitted");
+    plan
+}
+
+/// Emits `count` terminal events and finishes cleanly. Used with a tiny
+/// `max_collected_events` to prove the streaming path never consults the
+/// collection cap that bounds the closing-document path.
+struct EmitManyExecutor {
+    count: usize,
+}
+
+impl GraphExecutor for EmitManyExecutor {
+    fn execute(&self, node: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> Result<()> {
+        assert_eq!(node.id, "source");
+        for index in 0..self.count {
+            io.emit("out", PortValue::Value(Value::Integer(index as i64)))?;
+        }
+        Ok(())
+    }
+}
+
+/// Emits one terminal event, then runs until cancelled. Receiving that event
+/// while the worker is still alive proves ticks are visible without waiting
+/// for the graph to finish.
+struct EmitThenWaitExecutor;
+
+impl GraphExecutor for EmitThenWaitExecutor {
+    fn execute(&self, node: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> Result<()> {
+        assert_eq!(node.id, "source");
+        io.emit("out", PortValue::Value(Value::Integer(1)))?;
+        while !io.is_cancelled() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(())
+    }
+}
+
+/// A worker failure that lands mid-stream, after events the consumer has not
+/// drained yet, must deliver those events first and then report the failure.
+const MID_STREAM_FAILURE_MARKER: &str = "mid-stream worker failure marker";
+
+struct BurstThenFailExecutor;
+
+impl GraphExecutor for BurstThenFailExecutor {
+    fn execute(&self, node: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> Result<()> {
+        assert_eq!(node.id, "source");
+        io.emit("out", PortValue::Value(Value::Integer(0)))?;
+        io.emit("out", PortValue::Value(Value::Integer(1)))?;
+        Err(anyhow!(MID_STREAM_FAILURE_MARKER))
+    }
+}
+
 #[test]
 fn late_worker_failure_after_last_event_surfaces_instead_of_eof() {
     let mut session = GraphSession::start(
@@ -315,4 +376,110 @@ fn streamed_payload_variants_match_the_schema_bytes_and_value_shapes() {
     let value_line = graph_event_line("ticks", 1, 1, &sample_envelope());
     assert_eq!(value_line["payload"]["kind"], "value");
     assert_eq!(value_line["payload"]["value"], 42);
+}
+
+#[test]
+fn streaming_is_not_bound_by_the_collection_cap() {
+    // The closing-document path refuses more than `max_collected_events`
+    // outputs; the streaming path must deliver them all without collecting.
+    let mut options = GraphRunOptions::default();
+    options.max_collected_events = 8;
+    let mut session = GraphSession::start(
+        terminal_plan("uncapped"),
+        Arc::new(EmitManyExecutor { count: 32 }),
+        options,
+    )
+    .expect("streaming session starts");
+    let mut seen = 0;
+    loop {
+        match session
+            .recv_output()
+            .expect("streaming stays below no collection cap")
+        {
+            Some(event) => {
+                assert_eq!(
+                    event.payload,
+                    PortValue::Value(Value::Integer(seen as i64)),
+                    "streamed events arrive in emission order"
+                );
+                seen += 1;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(seen, 32, "every emitted event streams, cap or no cap");
+    session
+        .cancel_and_join()
+        .expect("a clean finish joins quietly");
+}
+
+#[test]
+fn tick_is_visible_while_the_producer_is_still_running() {
+    let mut session = GraphSession::start(
+        terminal_plan("live"),
+        Arc::new(EmitThenWaitExecutor),
+        GraphRunOptions::default(),
+    )
+    .expect("live session starts");
+    // The producer never finishes on its own, so receiving here proves the
+    // event was visible mid-run rather than at shutdown.
+    let first = session
+        .recv_output()
+        .expect("receive works")
+        .expect("tick arrives before the producer finishes");
+    assert_eq!(
+        first.payload,
+        PortValue::Value(Value::Integer(1)),
+        "the live tick carries its payload"
+    );
+    // An early close then stops the graph: the next receive reports the
+    // cancellation instead of hanging or reporting EOF.
+    session.cancel();
+    let error = session
+        .recv_output()
+        .expect_err("a cancelled session must not report EOF");
+    assert!(
+        error.to_string().contains("cancelled"),
+        "unexpected cancel error: {error:#}"
+    );
+    session
+        .cancel_and_join()
+        .expect("cancellation fallout is not a worker failure");
+}
+
+#[test]
+fn mid_stream_failure_delivers_queued_events_then_surfaces() {
+    let mut session = GraphSession::start(
+        terminal_plan("burst"),
+        Arc::new(BurstThenFailExecutor),
+        GraphRunOptions::default(),
+    )
+    .expect("bursting session starts");
+    // The worker may already have failed by the time the first receive runs;
+    // either way the two queued events must arrive before the failure does.
+    for expected in [0i64, 1] {
+        let event = session
+            .recv_output()
+            .expect("receive works")
+            .expect("queued event arrives before the failure");
+        assert_eq!(
+            event.payload,
+            PortValue::Value(Value::Integer(expected)),
+            "queued events are not discarded by the failure"
+        );
+    }
+    let error = session
+        .recv_output()
+        .expect_err("the mid-stream failure must surface, not a clean EOF");
+    assert!(
+        error.to_string().contains(MID_STREAM_FAILURE_MARKER),
+        "unexpected stream error: {error:#}"
+    );
+    let joined = session
+        .cancel_and_join()
+        .expect_err("cancel_and_join must propagate the mid-stream failure");
+    assert!(
+        joined.to_string().contains(MID_STREAM_FAILURE_MARKER),
+        "unexpected join error: {joined:#}"
+    );
 }

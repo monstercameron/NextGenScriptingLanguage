@@ -1199,10 +1199,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     // line per terminal event as it arrives, flushing after
                     // every event. Nothing is collected, so a graph can run
                     // indefinitely with flat memory. A closed reader
-                    // (`| head -n 3`) cancels the session and exits
-                    // successfully; each line is bounded by the session's
-                    // per-event limit so one huge event cannot allocate
-                    // unbounded JSON.
+                    // (`| head -n 3`) cancels the session and exits quietly
+                    // through the SIGPIPE convention (141); each line is
+                    // bounded by the session's per-event limit so one huge
+                    // event cannot allocate unbounded JSON.
                     let (graph_name, mut session) =
                         flow::graph::start_session(graph, &registry, &options, cancelled)?;
                     let generation = session.context().generation;
@@ -1233,20 +1233,22 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                             }
                         };
                         text.push('\n');
-                        let written = (|| -> io::Result<()> {
+                        if let Err(error) = (|| -> io::Result<()> {
                             out.write_all(text.as_bytes())?;
                             out.flush()
-                        })();
-                        if let Err(error) = written {
-                            // A closed pipe reader is the normal way to stop
-                            // an indefinite stream: cancel promptly and report
-                            // success, like the codebase's other pipe writers.
+                        })() {
+                            // A closed reader (`| head -n 3`) is this stream's
+                            // normal stop: cancel promptly, then surface a
+                            // worker failure that predated the close when
+                            // there is one. Otherwise report the write error
+                            // itself so a closed stdout exits quietly through
+                            // the SIGPIPE convention (141), like every other
+                            // pipe writer, instead of succeeding.
                             // `cancel_and_join` only reports failures that
                             // predated our cancel, so cancellation fallout
                             // cannot mask the reader's close here.
-                            let _ = session.cancel_and_join();
-                            if error.kind() == io::ErrorKind::BrokenPipe {
-                                return Ok(());
+                            if let Err(join_error) = session.cancel_and_join() {
+                                return Err(join_error);
                             }
                             return Err(error.into());
                         }

@@ -1246,10 +1246,16 @@ impl GraphSession {
 
     /// Read one terminal output without allowing stale revisions into the
     /// current session. Returns `None` once every terminal has closed.
+    ///
+    /// Queued events are delivered before a recorded worker failure or
+    /// cancellation surfaces: a worker that emits and then fails must have
+    /// its events observed first, and a failure that lands while events are
+    /// still queued must not discard them. Once the queues are drained, the
+    /// failure or cancellation is reported; a clean EOF needs both drained
+    /// queues and a clean bill of health.
     pub fn recv_output(&mut self) -> Result<Option<EventEnvelope>> {
         loop {
             self.poll_finished_workers()?;
-            self.cancellation_check()?;
             for (_, queue) in &self.terminals {
                 if let Some(event) = queue.try_recv()? {
                     if event.generation == self.context.generation
@@ -1259,6 +1265,7 @@ impl GraphSession {
                     }
                 }
             }
+            self.cancellation_check()?;
             if self
                 .terminals
                 .iter()
@@ -1268,14 +1275,26 @@ impl GraphSession {
                 .all(|closed| *closed)
             {
                 // A worker may have failed after the poll above but before
-                // its queues closed (failure-at-EOF). Re-poll so a late
-                // failure surfaces as an error instead of a clean EOF; any
-                // failure after this point is reported by `cancel_and_join`.
+                // its queues closed (failure-at-EOF). Re-poll and drain once
+                // more so a late failure surfaces as an error instead of a
+                // clean EOF while an event that landed with it is still
+                // delivered; any failure after this point is reported by
+                // `cancel_and_join`.
                 self.poll_finished_workers()?;
+                for (_, queue) in &self.terminals {
+                    if let Some(event) = queue.try_recv()? {
+                        if event.generation == self.context.generation
+                            && event.revision == self.context.revision
+                        {
+                            return Ok(Some(event));
+                        }
+                    }
+                }
                 self.cancellation_check()?;
                 return Ok(None);
             }
             if self.terminals.is_empty() {
+                self.cancellation_check()?;
                 return Ok(None);
             }
             thread::sleep(Duration::from_millis(2));

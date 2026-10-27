@@ -2,7 +2,7 @@
 
 This report records the paired 1 MiB v1/v2 worker latency check on the exact
 `origin/main` source revision `743fcf98f1ccc1724623e994a93c3a01f3910dab`.
-The complete build and test output is in [`paired-release.log`](paired-release.log).
+The build and filtered benchmark output is in [`paired-release.log`](paired-release.log).
 
 ## Result
 

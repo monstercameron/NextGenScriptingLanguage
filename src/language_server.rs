@@ -3092,7 +3092,10 @@ fn guess_binding_kind(words: &[&str]) -> &'static str {
             return "list of text";
         }
         return match words.get(1).copied() {
-            Some(kind @ ("text" | "integer" | "boolean" | "json")) => kind,
+            Some("text") => "text",
+            Some("integer") => "integer",
+            Some("boolean") => "boolean",
+            Some("json") => "json",
             _ => "binding",
         };
     }

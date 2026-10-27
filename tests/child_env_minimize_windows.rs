@@ -35,14 +35,38 @@ fn command_line_allowlist_filters_a_native_windows_child() {
 }
 
 #[test]
-fn cmd_executes_crlf_multiline_command_argument() {
+fn cmd_crlf_argument_matches_native_command_baseline() {
     let directory = tempfile::tempdir().unwrap();
     let workflow = directory.path().join("multiline.program");
+    let command_text = "echo first\r\necho second";
     fs::write(
         &workflow,
-        "run \"cmd.exe\" with arguments [\"/d\", \"/c\", \"echo first\\r\\necho second\"]\n",
+        format!(
+            "run \"cmd.exe\" with arguments [\"/d\", \"/c\", {}]\n",
+            serde_json::to_string(command_text).unwrap()
+        ),
     )
     .unwrap();
+
+    // cmd.exe has its own /c command parsing, which is not the MSVC argv
+    // parser. Compare Execute's child with Rust's ordinary Windows Command
+    // encoder so the runtime preserves cmd.exe's actual multiline behavior.
+    let baseline = Command::new("cmd.exe")
+        .args(["/d", "/c", command_text])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        baseline.status.success(),
+        "direct cmd.exe baseline failed: {}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    let baseline_stdout = String::from_utf8_lossy(&baseline.stdout);
+    assert_eq!(
+        baseline_stdout.lines().next(),
+        Some("first"),
+        "direct cmd.exe baseline produced unexpected output: {baseline_stdout:?}"
+    );
 
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("run")
@@ -55,7 +79,6 @@ fn cmd_executes_crlf_multiline_command_argument() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<_> = stdout.lines().collect();
-    assert_eq!(lines, ["first", "second"]);
+    assert_eq!(output.status.code(), baseline.status.code());
+    assert_eq!(output.stdout, baseline.stdout);
 }

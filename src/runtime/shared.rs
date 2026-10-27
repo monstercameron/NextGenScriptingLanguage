@@ -502,12 +502,89 @@ fn validate_command_condition(
     }
     manifest.validate_with_types(call, &flow.types)
 }
+/// Render a value in the stable, source-like form used by text `explain`.
+/// References intentionally stay bare so unresolved bindings are easy to spot.
+fn describe_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => serde_json::to_string(text).expect("strings always serialize"),
+        Value::Integer(number) => number.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::List(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(describe_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Record(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(name, value)| format!(
+                    "{}: {}",
+                    describe_value(&Value::String(name.clone())),
+                    describe_value(value)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Null => "null".into(),
+        Value::Number(number) => number.to_string(),
+        Value::Reference(name) => name.clone(),
+    }
+}
+
+fn describe_resolved_value(value: &Value, known: &BTreeMap<String, Value>) -> String {
+    describe_value(&resolve(value, known).unwrap_or_else(|_| value.clone()))
+}
+
 /// A file path as `explain` shows it: resolved text, or the unresolved value.
 fn describe_path(value: &Value, known: &BTreeMap<String, Value>) -> String {
-    match resolve(value, known).unwrap_or_else(|_| value.clone()) {
-        Value::String(text) => text,
-        other => format!("{other:?}"),
+    describe_resolved_value(value, known)
+}
+
+fn describe_condition(condition: &crate::ast::Condition) -> String {
+    format!(
+        "{} {}{}{}",
+        describe_value(&condition.left),
+        if condition.negated { "not " } else { "" },
+        match condition.operator {
+            crate::ast::ConditionOperator::Equals => "is ",
+            crate::ast::ConditionOperator::Contains => "contains ",
+        },
+        describe_value(&condition.right)
+    )
+}
+
+fn describe_loop_kind(kind: &crate::ast::LoopKind) -> String {
+    use crate::ast::LoopKind;
+    match kind {
+        LoopKind::Repeat { count } => format!("repeat {}", describe_value(count)),
+        LoopKind::ForEach { binding, values } => {
+            format!("for each {binding} in {}", describe_value(values))
+        }
+        LoopKind::While { condition } => format!("while {}", describe_condition(condition)),
+        LoopKind::WhileCommand {
+            call,
+            expect_success,
+        } => format!(
+            "while run {:?} {}",
+            call.operation,
+            if *expect_success { "succeeds" } else { "fails" }
+        ),
     }
+}
+
+fn describe_parameters(parameters: &BTreeMap<String, Value>) -> String {
+    format!(
+        "{{{}}}",
+        parameters
+            .iter()
+            .map(|(name, value)| format!("{name}: {}", describe_value(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 /// Short, source-like rendering of an exit or fail operand for `explain`.
 fn describe_operand(value: &Value) -> String {
@@ -1840,8 +1917,7 @@ fn validate_range(
                     let known_value = resolve(source, &flow.known_values)
                         .ok()
                         .map(|source| {
-                            crate::structured::take(pointer, &source, *kind, step.line)
-                                .cloned()
+                            crate::structured::take(pointer, &source, *kind, step.line).cloned()
                         })
                         .transpose()?;
                     binding(
@@ -1885,8 +1961,7 @@ fn validate_range(
                                 .map(|source| (pointer, source))
                         })
                         .map(|(pointer, source)| {
-                            crate::structured::take(&pointer, &source, *kind, step.line)
-                                .cloned()
+                            crate::structured::take(&pointer, &source, *kind, step.line).cloned()
                         })
                         .transpose()?;
                     binding(
@@ -2459,16 +2534,14 @@ pub fn explain_with_inputs(
     let known = crate::inputs::without_secret_answers(&program.inputs, known);
     let mut rows = Vec::new();
     for input in &program.inputs {
+        let default = match (&input.default, crate::ast::is_sensitive(input)) {
+            (Some(_), true) => "default [redacted]".to_owned(),
+            (Some(value), false) => format!("default {}", describe_value(value)),
+            (None, _) => "required input".into(),
+        };
         rows.push(format!(
-            "line {}: accept {} as {}; {}",
-            input.line,
-            input.name,
-            input.kind,
-            input
-                .default
-                .as_ref()
-                .map(|v| format!("default {v:?}"))
-                .unwrap_or_else(|| "required input".into())
+            "line {}: accept {} as {}; {default}",
+            input.line, input.name, input.kind
         ));
     }
     if let Some(trigger) = &program.trigger {
@@ -2493,8 +2566,8 @@ pub fn explain_with_inputs(
                 let argv = match arguments_for_call(call, manifest, &known) {
                     Ok(args) => format!("{args:?}"),
                     Err(_) => format!(
-                        "parameters {:?} (resolve program inputs at runtime)",
-                        call.parameters
+                        "parameters {} (resolve program inputs at runtime)",
+                        describe_parameters(&call.parameters)
                     ),
                 };
                 format!(
@@ -2527,20 +2600,12 @@ pub fn explain_with_inputs(
                 loops::MAX_LOOP_ITERATIONS
             ),
             StepKind::Loop { kind, .. } => format!(
-                "loop {kind:?}; default per-loop {} entered-iteration limit",
+                "loop {}; default per-loop {} entered-iteration limit",
+                describe_loop_kind(kind),
                 loops::MAX_LOOP_ITERATIONS
             ),
             StepKind::EndLoop { .. } => "end iteration; remove body-local names".into(),
-            StepKind::If { condition, .. } => format!(
-                "if {:?} {}{}{:?}",
-                condition.left,
-                if condition.negated { "not " } else { "" },
-                match condition.operator {
-                    crate::ast::ConditionOperator::Equals => "is ",
-                    crate::ast::ConditionOperator::Contains => "contains ",
-                },
-                condition.right
-            ),
+            StepKind::If { condition, .. } => format!("if {}", describe_condition(condition)),
             StepKind::IfCommand {
                 call,
                 expect_success,
@@ -2556,8 +2621,9 @@ pub fn explain_with_inputs(
             }
             StepKind::EndIf => "end conditional".into(),
             StepKind::CallProgram { call, .. } => format!(
-                "call program {:?}; explicit inputs {:?}; local scope",
-                call.operation, call.parameters
+                "call program {:?}; explicit inputs {}; local scope",
+                call.operation,
+                describe_parameters(&call.parameters)
             ),
             StepKind::EndCall => "return program output; restore caller scope and cwd".into(),
             StepKind::BreakLoop => "break the innermost loop; restore its outer bindings".into(),
@@ -2591,15 +2657,20 @@ pub fn explain_with_inputs(
             StepKind::ReadCallInput { .. } => {
                 "read reusable program input; preserve byte transport".into()
             }
-            StepKind::UseFolder { path } => format!(
-                "use folder {:?}",
-                resolve(path, &known).unwrap_or_else(|_| path.clone())
-            ),
+            StepKind::UseFolder { path } => {
+                format!("use folder {}", describe_resolved_value(path, &known))
+            }
             StepKind::UseValue { source } => {
-                format!("use value {source:?} as pipeline input; launches no process")
+                format!(
+                    "use value {} as pipeline input; launches no process",
+                    describe_value(source)
+                )
             }
             StepKind::BindValue { source, binding } => {
-                format!("bind value {source:?} as {binding}; typed binding; launches no process; no program stdout")
+                format!(
+                    "bind value {} as {binding}; typed binding; launches no process; no program stdout",
+                    describe_value(source)
+                )
             }
             StepKind::CaptureBytes { binding } => {
                 format!("capture pipeline bytes unchanged as {binding}; pipeline continues")
@@ -2607,10 +2678,9 @@ pub fn explain_with_inputs(
             StepKind::UseBytes { binding } => {
                 format!("use byte binding {binding} as pipeline input; launches no process")
             }
-            StepKind::Read { path, .. } => format!(
-                "read {:?}",
-                resolve(path, &known).unwrap_or_else(|_| path.clone())
-            ),
+            StepKind::Read { path, .. } => {
+                format!("read {}", describe_resolved_value(path, &known))
+            }
             StepKind::ReadStdin { .. } => {
                 "read inherited stdin; native pipe input or bounded finite capture".into()
             }
@@ -2622,15 +2692,25 @@ pub fn explain_with_inputs(
                 source,
                 kind,
                 binding,
-            } => format!("take {kind} at {pointer:?} from {source:?} as {binding}"),
+            } => format!(
+                "take {kind} at {pointer:?} from {} as {binding}",
+                describe_value(source)
+            ),
             StepKind::TakeJsonDynamic {
                 pointer,
                 source,
                 kind,
                 binding,
-            } => format!("take {kind} at dynamic pointer {pointer:?} from {source:?} as {binding}"),
+            } => format!(
+                "take {kind} at dynamic pointer {} from {} as {binding}",
+                describe_value(pointer),
+                describe_value(source)
+            ),
             StepKind::EncodeJson { source } => {
-                format!("encode {source:?} as compact JSON; bounded finite output")
+                format!(
+                    "encode {} as compact JSON; bounded finite output",
+                    describe_value(source)
+                )
             }
             StepKind::TaskGroup {
                 limit,
@@ -2639,9 +2719,9 @@ pub fn explain_with_inputs(
                 each: Some(each),
                 ..
             } => format!(
-                "parallel for each {} in {:?} (limit {limit}): {} {:?} as {binding}",
+                "parallel for each {} in {} (limit {limit}): {} {:?} as {binding}",
                 each.binding,
-                each.values,
+                describe_value(&each.values),
                 if tasks[0].direct {
                     "run executable"
                 } else {
@@ -2682,10 +2762,12 @@ pub fn explain_with_inputs(
                     .unwrap_or_default()
             ),
             StepKind::CancelJob { name } => format!("cancel background job {name:?}"),
-            StepKind::Save { path, .. } => format!(
-                "save finite output to {:?}",
-                resolve(path, &known).unwrap_or_else(|_| path.clone())
-            ),
+            StepKind::Save { path, .. } => {
+                format!(
+                    "save finite output to {}",
+                    describe_resolved_value(path, &known)
+                )
+            }
             StepKind::Interactive => "interactive (terminal handoff)".into(),
             StepKind::TempScope { kind, binding, .. } => {
                 let kind = match kind {
@@ -2697,7 +2779,7 @@ pub fn explain_with_inputs(
             StepKind::EndTempScope { .. } => "end temporary scope".into(),
             StepKind::HandOver => "hand over to (replaces the script)".into(),
             StepKind::LaunchDetached { output } => match output {
-                Some(path) => format!("launch detached (output to {path:?})"),
+                Some(path) => format!("launch detached (output to {})", describe_value(path)),
                 None => "launch detached".into(),
             },
             StepKind::Environment { set, unset } => {
@@ -2725,10 +2807,10 @@ pub fn explain_with_inputs(
                     .map(|path| describe_path(path, &known));
                 match (target, destination) {
                     (crate::ast::RedirectTarget::StderrFile, Some(path)) => format!(
-                        "next command's stderr replaces file {path:?}; stdout is unchanged"
+                        "next command's stderr replaces file {path}; stdout is unchanged"
                     ),
                     (crate::ast::RedirectTarget::StderrAppend, Some(path)) => format!(
-                        "next command's stderr appends to file {path:?}; stdout is unchanged"
+                        "next command's stderr appends to file {path}; stdout is unchanged"
                     ),
                     (crate::ast::RedirectTarget::StderrMerged, _) => {
                         "next command's stderr follows its stdout in the pipeline value".into()
@@ -2741,8 +2823,8 @@ pub fn explain_with_inputs(
                 let argv = match arguments_for_call(call, manifest, &known) {
                     Ok(argv) => format!("{argv:?}"),
                     Err(_) => format!(
-                        "parameters {:?} (resolve named results at runtime)",
-                        call.parameters
+                        "parameters {} (resolve named results at runtime)",
+                        describe_parameters(&call.parameters)
                     ),
                 };
                 format!(

@@ -359,6 +359,101 @@ fn save_steps_count_as_writes_and_other_steps_have_no_effects() {
 }
 
 #[test]
+fn text_explain_renders_ast_values_without_debug_wrappers() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = explain(
+        directory.path(),
+        r#"accept name as text with default "w"
+use folder "work"
+read "in.txt" as data
+use value "hello"
+then save to "out.txt"
+then append to "log.txt"
+run "printf" with arguments [name, data]
+use value {"outer": ["line\nbreak", "quote\"slash\\"]} as nested
+if data is "a"
+  use value "x"
+repeat 2 times
+  use value "y"
+"#,
+        &[],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "default \"w\"",
+        "use folder \"work\"",
+        "read \"in.txt\"",
+        "use value \"hello\"",
+        "save finite output to \"out.txt\"",
+        "append finite output to \"log.txt\"",
+        "parameters {arguments: [name, data]} (resolve named results at runtime)",
+        "bind value {\"outer\": [\"line\\nbreak\", \"quote\\\"slash\\\\\"]} as nested",
+        "if data is \"a\"",
+        "loop repeat 2;",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+    for leaked in ["String(\"", "Reference(\"", "Repeat {", "Integer("] {
+        assert!(
+            !text.contains(leaked),
+            "debug AST rendering {leaked:?} in:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn text_explain_renders_dynamic_pointers_and_redirect_paths_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = explain(
+        directory.path(),
+        r#"accept pointer as text with default "/field"
+use value {"field": "value"} as data
+take text at pointer from data as selected
+run "printf" with arguments ["x"] and stderr to "err.txt"
+"#,
+        &[],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("dynamic pointer pointer from data"), "{text}");
+    assert!(
+        text.contains("stderr replaces file \"err.txt\"; stdout is unchanged"),
+        "{text}"
+    );
+    assert!(!text.contains("Reference(\"pointer\")"), "{text}");
+    assert!(!text.contains("file \\\"err.txt\\\""), "{text}");
+}
+
+#[test]
+fn text_explain_redacts_sensitive_input_defaults() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = explain(
+        directory.path(),
+        r#"accept token as text from secret prompt "Token?" with default "secret-default-canary-223"
+use value token
+"#,
+        &[],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("default [redacted]"), "{text}");
+    assert!(!text.contains("secret-default-canary-223"), "{text}");
+}
+
+#[test]
 fn text_explain_is_unchanged_without_the_flag() {
     let directory = tempfile::tempdir().unwrap();
     let output = explain(directory.path(), "run plain.helper\n", &[]);

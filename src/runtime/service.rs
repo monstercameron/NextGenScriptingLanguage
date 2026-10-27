@@ -558,6 +558,8 @@ fn run_service_internal(
     schedule_options: ScheduleOptions,
     emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<ServiceResult> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     schedule_options.validate()?;
     let service_started = Instant::now();
     let workflow_deadline = options

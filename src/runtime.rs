@@ -2294,6 +2294,8 @@ pub fn run_with_drain_timeout(
     options: &RunOptions,
     drain_timeout: Duration,
 ) -> Result<RunResult> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
     let signals = if has_interrupt_handler(program) {
         Signals::register_with_drain(deadline, drain_timeout)?
@@ -4287,6 +4289,8 @@ pub fn run_with_context(
     input: Vec<u8>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<RunResult> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     if program.trigger.is_some() {
         bail!("triggered programs require run_service");
     }

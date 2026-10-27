@@ -13,6 +13,8 @@ use anyhow::Context;
 use anyhow::{bail, Result};
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
+#[cfg(target_os = "linux")]
+use std::collections::HashSet;
 use std::ffi::OsStr;
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
@@ -28,6 +30,8 @@ use std::process::Command;
 use std::process::Stdio;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::{Child, ExitStatus};
+#[cfg(target_os = "linux")]
+use std::sync::{Mutex, OnceLock};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::{Duration, Instant};
 
@@ -63,24 +67,182 @@ fn unavailable(reason: impl Into<String>) -> anyhow::Error {
 /// Verify the selected OS facility and every configured path grant before any
 /// workflow applet or host file operation can have effects.
 pub(crate) fn preflight(grant: &AppletGrant, binary: &Path, cwd: &Path) -> Result<()> {
-    preflight_with_probe(grant, binary, cwd, || {
-        #[cfg(target_os = "macos")]
-        {
+    #[cfg(target_os = "macos")]
+    {
+        preflight_with_probe(grant, binary, cwd, || {
             probe_macos_sandbox()?;
             probe_macos_grant(grant, cwd)
-        }
-        #[cfg(target_os = "linux")]
-        {
-            probe_bwrap(&find_bwrap(cwd)?, grant, binary, cwd)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        {
-            let _ = cwd;
-            bail!("required applet sandbox is unsupported on this platform");
-        }
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let bwrap = find_bwrap(cwd)?;
+        validate_linux_paths(grant, binary, cwd)?;
+        cache_successful_probe(&bwrap, grant, binary, cwd, || {
+            probe_bwrap(&bwrap, grant, binary, cwd)
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (grant, binary, cwd);
+        bail!("required applet sandbox is unsupported on this platform");
+    }
+}
+
+#[cfg(target_os = "linux")]
+type ProbeKey = (PathBuf, String, PathBuf, PathBuf, String);
+
+#[cfg(target_os = "linux")]
+struct ProbeCacheState {
+    active_runs: usize,
+    successful: HashSet<ProbeKey>,
+}
+
+#[cfg(target_os = "linux")]
+static PROBE_CACHE: OnceLock<Mutex<ProbeCacheState>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn probe_cache() -> &'static Mutex<ProbeCacheState> {
+    PROBE_CACHE.get_or_init(|| {
+        Mutex::new(ProbeCacheState {
+            active_runs: 0,
+            successful: HashSet::new(),
+        })
     })
 }
 
+/// Successful probes are reused only while one runtime run is active. The
+/// shared cache lets worker threads participate; it clears at every run
+/// boundary and disables caching when concurrent runs make ownership unclear.
+#[cfg(target_os = "linux")]
+pub(crate) struct ProbeRunGuard;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn begin_probe_run() -> ProbeRunGuard {
+    let mut cache = probe_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.active_runs += 1;
+    cache.successful.clear();
+    ProbeRunGuard
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ProbeRunGuard {
+    fn drop(&mut self) {
+        let mut cache = probe_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.active_runs = cache.active_runs.saturating_sub(1);
+        cache.successful.clear();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cache_successful_probe(
+    bwrap: &Path,
+    grant: &AppletGrant,
+    binary: &Path,
+    cwd: &Path,
+    probe: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    // The applet-specific mount probe depends on all four inputs. Keep the
+    // validated path grant in the key so a successful probe is never reused
+    // for a different executable or working directory.
+    let grant =
+        serde_json::to_string(grant).context("serializing sandbox grant for probe cache")?;
+    let key = (
+        bwrap.to_path_buf(),
+        grant,
+        binary.to_path_buf(),
+        cwd.to_path_buf(),
+        execution_identity(bwrap),
+    );
+    let mut cache = probe_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.active_runs != 1 {
+        drop(cache);
+        return probe();
+    }
+    remember_successful_probe(&mut cache, key, probe)
+}
+
+#[cfg(target_os = "linux")]
+fn remember_successful_probe(
+    cache: &mut ProbeCacheState,
+    key: ProbeKey,
+    probe: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if cache.active_runs != 1 {
+        return probe();
+    }
+    if cache.successful.contains(&key) {
+        return Ok(());
+    }
+    probe()?;
+    cache.successful.insert(key);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn execution_identity(bwrap: &Path) -> String {
+    use std::os::unix::fs::MetadataExt;
+
+    // SAFETY: these process-identity queries take no pointers or other inputs.
+    let (uid, euid, gid, egid) = unsafe {
+        (
+            libc::getuid(),
+            libc::geteuid(),
+            libc::getgid(),
+            libc::getegid(),
+        )
+    };
+    let mut identity = format!("uid={uid} euid={euid} gid={gid} egid={egid}");
+    for namespace in ["user", "pid", "mnt", "net", "ipc", "uts"] {
+        let path = Path::new("/proc/self/ns").join(namespace);
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            use std::fmt::Write as _;
+            let _ = write!(
+                identity,
+                " {namespace}={}:{}",
+                metadata.dev(),
+                metadata.ino()
+            );
+        }
+    }
+    if let Ok(metadata) = std::fs::metadata(bwrap) {
+        use std::fmt::Write as _;
+        let _ = write!(
+            identity,
+            " bwrap={}:{}:{}:{}:{}:{}",
+            metadata.dev(),
+            metadata.ino(),
+            metadata.len(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+            metadata.mode()
+        );
+    }
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines().filter(|line| {
+            line.starts_with("Groups:")
+                || line.starts_with("CapEff:")
+                || line.starts_with("CapPrm:")
+                || line.starts_with("CapBnd:")
+                || line.starts_with("CapInh:")
+                || line.starts_with("CapAmb:")
+                || line.starts_with("NoNewPrivs:")
+                || line.starts_with("Seccomp:")
+        }) {
+            identity.push(' ');
+            identity.push_str(line);
+        }
+    }
+    identity
+}
+
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
 fn preflight_with_probe(
     grant: &AppletGrant,
     binary: &Path,
@@ -140,7 +302,7 @@ where
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn wait_bounded(mut child: Child, description: &str) -> Result<ExitStatus> {
     const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
     let deadline = Instant::now() + PROBE_TIMEOUT;
@@ -162,6 +324,88 @@ fn wait_bounded(mut child: Child, description: &str) -> Result<ExitStatus> {
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_bounded(mut child: Child, description: &str) -> Result<ExitStatus> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+    // SAFETY: `pid` is the live child ID returned by `Command::spawn`, and
+    // `pidfd_open` does not access caller-owned memory.
+    let pidfd = unsafe {
+        libc::syscall(libc::SYS_pidfd_open, child.id() as libc::pid_t, 0u32) as libc::c_int
+    };
+    if pidfd < 0 {
+        // Older kernels may lack pidfd_open. Keep the bounded fallback for
+        // those hosts; current Linux CI and supported distributions use the
+        // blocking pidfd path below.
+        return wait_bounded_fallback(&mut child, description);
+    }
+    // SAFETY: a nonnegative pidfd_open result is a newly owned file descriptor.
+    let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+        let mut descriptor = libc::pollfd {
+            fd: pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` points to one initialized pollfd that remains
+        // alive for the duration of the blocking call; its fd is owned above.
+        let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if result > 0 {
+            return child
+                .wait()
+                .with_context(|| format!("waiting for {description} probe"));
+        }
+        if result == 0 {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{description} timed out while probing sandbox availability");
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted && Instant::now() < deadline {
+            continue;
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error).with_context(|| format!("waiting for {description} probe"));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_bounded_fallback(child: &mut Child, description: &str) -> Result<ExitStatus> {
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let pid = child.id() as libc::pid_t;
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let status = child.wait();
+            let _ = sender.send(status);
+        });
+        match receiver.recv_timeout(PROBE_TIMEOUT) {
+            Ok(Ok(status)) => Ok(status),
+            Ok(Err(error)) => {
+                Err(error).with_context(|| format!("waiting for {description} probe"))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // SAFETY: `pid` came from the child, which remains unreaped
+                // until the scoped waiter finishes; the PID cannot be reused
+                // while that child is still waitable.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let _ = receiver.recv();
+                bail!("{description} timed out while probing sandbox availability");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("{description} probe waiter disconnected")
+            }
+        }
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -932,6 +1176,59 @@ mod tests {
         assert!(error
             .to_string()
             .contains("owned test sandbox facility is unavailable"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn successful_probe_cache_is_scoped_to_one_runtime_run() {
+        let key = (
+            PathBuf::from("/usr/bin/bwrap"),
+            "grant".to_owned(),
+            PathBuf::from("/usr/bin/true"),
+            PathBuf::from("/tmp/workflow"),
+            "identity".to_owned(),
+        );
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+
+        let mut first_run = ProbeCacheState {
+            active_runs: 1,
+            successful: HashSet::new(),
+        };
+        for _ in 0..2 {
+            remember_successful_probe(&mut first_run, key.clone(), || {
+                probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let mut second_run = ProbeCacheState {
+            active_runs: 1,
+            successful: HashSet::new(),
+        };
+        remember_successful_probe(&mut second_run, key.clone(), || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        let mut overlapping_runs = ProbeCacheState {
+            active_runs: 2,
+            successful: HashSet::new(),
+        };
+        remember_successful_probe(&mut overlapping_runs, key.clone(), || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        remember_successful_probe(&mut overlapping_runs, key, || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 4);
     }
 
     #[cfg(target_os = "linux")]

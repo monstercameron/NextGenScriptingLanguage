@@ -25,8 +25,7 @@ use std::io::Read;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::Ordering;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -83,6 +82,17 @@ struct WatchedChild {
     exited: AtomicBool,
     done: AtomicBool,
     watchdog_fired: AtomicBool,
+    /// Set once the platform reports no unwaited-for child (ECHILD): the run
+    /// is definitively gone, so further polls can never yield a status and
+    /// further signals could hit a recycled pid.
+    gone: AtomicBool,
+    /// Last raw_os_error from `try_wait` (0 when it never failed).
+    last_wait_errno: AtomicI32,
+    /// Last raw_os_error from `kill` (0 when it never failed).
+    last_kill_errno: AtomicI32,
+    /// Set if the guard mutex ever failed to lock; every wait/kill silently
+    /// degrades then, so failures must say so.
+    lock_failed: AtomicBool,
 }
 
 impl WatchedChild {
@@ -92,6 +102,10 @@ impl WatchedChild {
             exited: AtomicBool::new(false),
             done: AtomicBool::new(false),
             watchdog_fired: AtomicBool::new(false),
+            gone: AtomicBool::new(false),
+            last_wait_errno: AtomicI32::new(0),
+            last_kill_errno: AtomicI32::new(0),
+            lock_failed: AtomicBool::new(false),
         });
         let watchdog = Arc::clone(&watched);
         std::thread::spawn(move || {
@@ -107,12 +121,13 @@ impl WatchedChild {
 
     /// Nonblocking exit poll that records the exit under the same lock the
     /// watchdog kills under, so the two can never race on the pid. Only an
-    /// observed exit marks the child exited: a `try_wait` error (for example,
-    /// the platform reporting no unwaited-for child after an automatic reap)
-    /// must keep polling and must never stand down later kills, or one bad
-    /// poll turns into a permanent blind `None` with no signal ever sent.
+    /// observed exit marks the child exited. A transient `try_wait` error
+    /// (for example EINTR) keeps polling without standing down later kills,
+    /// but ECHILD means no unwaited-for child remains: the run is gone, so
+    /// later kills stand down instead of signalling a possibly recycled pid.
     fn poll_exit(&self) -> Option<ExitStatus> {
         let Ok(mut guard) = self.child.lock() else {
+            self.lock_failed.store(true, Ordering::SeqCst);
             return None;
         };
         match guard.try_wait() {
@@ -121,8 +136,30 @@ impl WatchedChild {
                 Some(status)
             }
             Ok(None) => None,
-            Err(_) => None,
+            Err(error) => {
+                let errno = error.raw_os_error().unwrap_or(-1);
+                self.last_wait_errno.store(errno, Ordering::SeqCst);
+                if errno == libc::ECHILD {
+                    self.gone.store(true, Ordering::SeqCst);
+                }
+                None
+            }
         }
+    }
+
+    fn gone(&self) -> bool {
+        self.gone.load(Ordering::SeqCst)
+    }
+
+    /// One-line summary of the wait/kill evidence for failure diagnostics.
+    fn wait_evidence(&self) -> String {
+        format!(
+            "wait_errno={} kill_errno={} gone={} lock_failed={}",
+            self.last_wait_errno.load(Ordering::SeqCst),
+            self.last_kill_errno.load(Ordering::SeqCst),
+            self.gone(),
+            self.lock_failed.load(Ordering::SeqCst),
+        )
     }
 
     fn pid(&self) -> Option<u32> {
@@ -138,12 +175,16 @@ impl WatchedChild {
     /// reserved and cannot have been recycled.
     fn kill(&self) {
         let Ok(mut guard) = self.child.lock() else {
+            self.lock_failed.store(true, Ordering::SeqCst);
             return;
         };
-        if self.exited.load(Ordering::SeqCst) {
+        if self.exited.load(Ordering::SeqCst) || self.gone.load(Ordering::SeqCst) {
             return;
         }
-        let _ = guard.kill();
+        if let Err(error) = guard.kill() {
+            self.last_kill_errno
+                .store(error.raw_os_error().unwrap_or(-1), Ordering::SeqCst);
+        }
     }
 
     /// Bounded reap for failure paths: SIGKILL, then poll, re-signalling on
@@ -156,6 +197,9 @@ impl WatchedChild {
             self.kill();
             if let Some(status) = self.poll_exit() {
                 return Some(status);
+            }
+            if self.gone.load(Ordering::SeqCst) {
+                return None;
             }
             if Instant::now() >= deadline {
                 return None;
@@ -206,6 +250,14 @@ fn wait_for_marker(
                 diagnose()
             );
         }
+        if watched.gone() {
+            let reaped = watched.reap_bounded(REAP_BUDGET);
+            panic!(
+                "the run is gone ({}) before reaching {what} (run exit after SIGKILL: {reaped:?}); output:\n{}",
+                watched.wait_evidence(),
+                diagnose()
+            );
+        }
         if Instant::now() >= deadline {
             let reaped = watched.reap_bounded(REAP_BUDGET);
             panic!(
@@ -225,11 +277,21 @@ fn interrupt(watched: &WatchedChild) {
     assert_eq!(result, 0);
 }
 
-fn wait_for_exit(watched: &WatchedChild, limit: Duration) -> Option<ExitStatus> {
+/// How a run's wait ended: a real status, or a definitively gone child whose
+/// status the platform will never report (ECHILD).
+enum RunEnd {
+    Exited(ExitStatus),
+    Gone,
+}
+
+fn wait_for_exit(watched: &WatchedChild, limit: Duration) -> Option<RunEnd> {
     let deadline = Instant::now() + limit;
     loop {
         if let Some(status) = watched.poll_exit() {
-            return Some(status);
+            return Some(RunEnd::Exited(status));
+        }
+        if watched.gone() {
+            return Some(RunEnd::Gone);
         }
         if Instant::now() >= deadline {
             return None;
@@ -241,11 +303,52 @@ fn wait_for_exit(watched: &WatchedChild, limit: Duration) -> Option<ExitStatus> 
 /// Fail-safe end for a run that does not exit on time: SIGKILL it, reap it
 /// with a bound, then panic with its output. This never blocks forever, so a
 /// wedged run fails the test instead of hanging the harness.
+/// Bounded identity/state snapshot of one pid for failure diagnostics: ppid,
+/// process group, session and state show whether the run is alive, zombie, or
+/// gone, and whether a kill could have missed it.
+fn process_snapshot(pid: u32) -> String {
+    let mut child = match Command::new("ps")
+        .args(["-o", "pid,ppid,pgid,sid,stat,command", "-p", &pid.to_string()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => return format!("ps unavailable: {error:#}"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut output = Vec::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_end(&mut output);
+                }
+                let text = String::from_utf8_lossy(&output).into_owned();
+                return format!("exit={status} {text}");
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return "ps timed out".to_owned();
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return format!("ps wait failed: {error:#}"),
+        }
+    }
+}
+
 fn abort_stuck(watched: &WatchedChild, diagnose: &dyn Fn() -> String, why: &str) -> ! {
+    let pid = watched.pid();
     let reaped = watched.reap_bounded(REAP_BUDGET);
     watched.finish();
+    let process = pid
+        .map(process_snapshot)
+        .unwrap_or_else(|| "no live handle".to_owned());
     panic!(
-        "{why} (run exit after SIGKILL: {reaped:?}); output:\n{}",
+        "{why} (run exit after SIGKILL: {reaped:?}; {}; process: {process}); output:\n{}",
+        watched.wait_evidence(),
         diagnose()
     );
 }
@@ -317,11 +420,18 @@ fn double_interrupt(
     wait_for_marker(&watched, entered, "its cleanup sleep", &diagnose);
     let second = Instant::now();
     interrupt(&watched);
-    let Some(status) = wait_for_exit(&watched, EXIT_BUDGET) else {
+    let Some(end) = wait_for_exit(&watched, EXIT_BUDGET) else {
         abort_stuck(
             &watched,
             &diagnose,
             "the second interrupt did not abort the cleanup sleep",
+        )
+    };
+    let RunEnd::Exited(status) = end else {
+        abort_stuck(
+            &watched,
+            &diagnose,
+            "the run is gone without reporting a status",
         )
     };
     let elapsed = second.elapsed();
@@ -406,8 +516,11 @@ fn single_interrupt_still_runs_on_exit_cleanup() {
     let diagnose = || drain_stderr(&watched);
     wait_for_marker(&watched, &started, "its main sleep", &diagnose);
     interrupt(&watched);
-    let Some(status) = wait_for_exit(&watched, EXIT_BUDGET) else {
+    let Some(end) = wait_for_exit(&watched, EXIT_BUDGET) else {
         abort_stuck(&watched, &diagnose, "a single interrupt never finished cleanup")
+    };
+    let RunEnd::Exited(status) = end else {
+        abort_stuck(&watched, &diagnose, "the run is gone without reporting a status")
     };
     let stderr = drain_stderr(&watched);
     watched.finish();
@@ -580,11 +693,18 @@ fn pty_double_ctrl_c_during_on_exit_exits_within_200ms() {
     wait_for_marker(&watched, &entered, "its cleanup sleep", &diagnose);
     let second = Instant::now();
     pty_interrupt(master.get());
-    let Some(status) = wait_for_exit(&watched, EXIT_BUDGET) else {
+    let Some(end) = wait_for_exit(&watched, EXIT_BUDGET) else {
         abort_stuck(
             &watched,
             &diagnose,
             "the second Ctrl-C did not abort the cleanup sleep",
+        )
+    };
+    let RunEnd::Exited(status) = end else {
+        abort_stuck(
+            &watched,
+            &diagnose,
+            "the run is gone without reporting a status",
         )
     };
     let elapsed = second.elapsed();
@@ -606,4 +726,60 @@ fn pty_double_ctrl_c_during_on_exit_exits_within_200ms() {
         !finished.exists(),
         "the cleanup ran past the second Ctrl-C, pty output:\n{output}"
     );
+}
+
+#[test]
+fn externally_reaped_child_surfaces_gone_without_burning_the_reap_budget() {
+    // A child the platform reports as already reaped (ECHILD on `try_wait`,
+    // as after an automatic reap) must surface as gone at once: polling it
+    // can never yield a status, and retrying SIGKILL against its pid for the
+    // whole reap budget risks signalling a recycled process.
+    let child = Command::new("sh")
+        .args(["-c", "exit 3"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id() as libc::pid_t;
+    let watched = WatchedChild::spawn(child);
+    // Reap the child behind the handle's back with a raw blocking waitpid,
+    // exactly like an automatic reap: std never saw the exit, so the handle's
+    // next `try_wait` reports ECHILD.
+    // SAFETY: pid is the live child this test spawned; the blocking wait
+    // reaps it once and no other thread waits on it.
+    let mut status = 0;
+    let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+    assert_eq!(reaped, pid, "reaping the probe child");
+    assert!(watched.poll_exit().is_none());
+    assert!(
+        watched.gone(),
+        "ECHILD must mark the child gone, {}",
+        watched.wait_evidence()
+    );
+    assert_eq!(
+        watched.last_wait_errno.load(Ordering::SeqCst),
+        libc::ECHILD,
+        "the wait evidence must name the real errno"
+    );
+    let reap_start = Instant::now();
+    assert!(watched.reap_bounded(REAP_BUDGET).is_none());
+    assert!(
+        reap_start.elapsed() < Duration::from_secs(2),
+        "a gone child must not burn the 5 s reap budget"
+    );
+    let wait_start = Instant::now();
+    assert!(matches!(
+        wait_for_exit(&watched, EXIT_BUDGET),
+        Some(RunEnd::Gone)
+    ));
+    assert!(
+        wait_start.elapsed() < Duration::from_secs(2),
+        "a gone child must not burn the 10 s exit budget"
+    );
+    assert_eq!(
+        watched.last_kill_errno.load(Ordering::SeqCst),
+        0,
+        "no signal may go out once the child is gone"
+    );
+    watched.finish();
 }

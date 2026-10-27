@@ -248,6 +248,14 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Warning,
     },
     CodeInfo {
+        code: "check_failed",
+        family: "validate",
+        meaning: "validation failed without a static diagnostic; the causes list explains why",
+        example: "a check failure that has no source-aware diagnostic yet",
+        typical_fix: "Follow the causes and report any reproducible source case without a specific code.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
         code: "lint.shell_expansion_literal",
         family: "lint",
         meaning: "shell-like expansion syntax in a literal argument is passed literally",
@@ -260,7 +268,7 @@ pub const CODES: &[CodeInfo] = &[
         family: "lint",
         meaning: "a quoted executable name contains shell metacharacters and is looked up as one filename",
         example: "run \"ls *.txt\"",
-        typical_fix: "Put the executable in the command name and the remaining words in arguments.",
+        typical_fix: "Put the executable in the command name and the remaining words in `arguments`.",
         severity: DiagnosticSeverity::Warning,
     },
     CodeInfo {
@@ -272,12 +280,52 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Warning,
     },
     CodeInfo {
-        code: "check_failed",
-        family: "validate",
-        meaning: "validation failed without a static diagnostic; the causes list explains why",
-        example: "a check failure that has no source-aware diagnostic yet",
-        typical_fix: "Follow the causes and report any reproducible source case without a specific code.",
-        severity: DiagnosticSeverity::Error,
+        code: "lint.unused_binding",
+        family: "lint",
+        meaning: "a result binding is not read in its lexical program body",
+        example: "run \"printf\" with arguments [\"x\"] as unused",
+        typical_fix: "Remove the binding or use its value later in the same program body.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "lint.unused_input",
+        family: "lint",
+        meaning: "a declared input is not read in its lexical program body",
+        example: "accept unused as text\nrun \"true\"",
+        typical_fix: "Remove the input declaration or reference the input in the program body.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "model.result_unchecked",
+        family: "lint",
+        meaning: "a model result is consumed without checking its acceptance gate",
+        example: "take text at \"/label\" from result as label",
+        typical_fix: "Check `/accepted` before using the model label, decision, or score.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "model.threshold_missing",
+        family: "lint",
+        meaning: "a classification or scoring call omits its minimum confidence threshold",
+        example: "run jev.classify with question \"route\" and labels [\"a\", \"b\"]",
+        typical_fix: "Set a positive `minimum` appropriate to the workflow.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "model.text_to_command",
+        family: "lint",
+        meaning: "model-generated text is passed to a shell command interpreter",
+        example: "run \"sh\" with arguments [\"-c\", generated_text]",
+        typical_fix: "Keep model output as data and pass it only to a fixed, reviewed command.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "lint.unreachable",
+        family: "lint",
+        meaning: "a statement follows an unconditional exit in the same body",
+        example: "exit with status 0\nrun \"true\"",
+        typical_fix: "Remove the unreachable statement or move it before the exit.",
+        severity: DiagnosticSeverity::Warning,
     },
 ];
 
@@ -525,6 +573,10 @@ pub fn analyze_source_at(
         }
     }
 
+    diagnostics.retain(|diagnostic| {
+        diagnostic.severity != DiagnosticSeverity::Warning
+            || !warning_suppressed(source, diagnostic.span.line, &diagnostic.code)
+    });
     diagnostics.sort_by(|left, right| {
         (left.span.start_byte, &left.code, &left.message).cmp(&(
             right.span.start_byte,
@@ -789,6 +841,38 @@ fn semantic_token_matches(token: &str, message: &str) -> bool {
         || token.bytes().all(|byte| byte.is_ascii_digit()) && message.contains(&token)
 }
 
+fn warning_suppressed(source: &str, line: usize, code: &str) -> bool {
+    let Some(line_text) = source.lines().nth(line.saturating_sub(1)) else {
+        return false;
+    };
+    let bytes = line_text.as_bytes();
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else if byte == b'"' {
+            quoted = true;
+        } else if byte == b'#' {
+            return line_text[index + 1..]
+                .trim()
+                .strip_prefix("execute-allow:")
+                .is_some_and(|codes| {
+                    codes
+                        .split_ascii_whitespace()
+                        .any(|allowed| allowed == code)
+                });
+        }
+    }
+    false
+}
+
 fn collect_lint_diagnostics(
     source: &str,
     program: &Program,
@@ -796,8 +880,30 @@ fn collect_lint_diagnostics(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     collect_step_lints(source, &program.steps, line_starts, diagnostics);
+    collect_model_lints(source, &program.steps, line_starts, diagnostics);
+    let listener_binding = match program.trigger.as_ref() {
+        Some(crate::ast::Trigger::Listen { binding, .. }) => Some(binding.as_str()),
+        _ => None,
+    };
+    collect_unused_names(
+        source,
+        &program.inputs,
+        &program.steps,
+        line_starts,
+        diagnostics,
+        listener_binding,
+    );
     for definition in program.definitions.values() {
         collect_step_lints(source, &definition.steps, line_starts, diagnostics);
+        collect_model_lints(source, &definition.steps, line_starts, diagnostics);
+        collect_unused_names(
+            source,
+            &definition.inputs,
+            &definition.steps,
+            line_starts,
+            diagnostics,
+            None,
+        );
     }
     let mut calls = Vec::new();
     collect_calls(&program.steps, &mut calls);
@@ -805,7 +911,12 @@ fn collect_lint_diagnostics(
         collect_calls(&definition.steps, &mut calls);
     }
     for (line, call) in calls {
-        if call.direct && call.operation.chars().any(|ch| matches!(ch, ' ' | '*' | '?' | '|' | ';')) {
+        if call.direct
+            && call
+                .operation
+                .chars()
+                .any(|ch| matches!(ch, ' ' | '*' | '?' | '|' | ';'))
+        {
             let span = line_words_from_start(source, line_starts.start(line))
                 .into_iter()
                 .find(|word| word.3 && word.0.trim_matches('"') == call.operation)
@@ -825,7 +936,10 @@ fn collect_lint_diagnostics(
                     let replacement = if arguments.is_empty() {
                         format!("\"{executable}\"")
                     } else {
-                        format!("\"{executable}\" with arguments {}", serde_json::to_string(&arguments).unwrap_or_default())
+                        format!(
+                            "\"{executable}\" with arguments {}",
+                            serde_json::to_string(&arguments).unwrap_or_default()
+                        )
                     };
                     diagnostic.fixes.push(SuggestedFix::replace(
                         "split executable name and arguments",
@@ -838,8 +952,12 @@ fn collect_lint_diagnostics(
         }
         if let Some(Value::List(arguments)) = call.parameters.get("arguments") {
             for (index, argument) in arguments.iter().enumerate() {
-                let Value::String(value) = argument else { continue };
-                if !has_shell_expansion(value) { continue; }
+                let Value::String(value) = argument else {
+                    continue;
+                };
+                if !has_shell_expansion(value) {
+                    continue;
+                }
                 let span = parameter_value_span_at(source, line, "arguments", line_starts)
                     .unwrap_or_else(|| line_starts.span(source, line));
                 diagnostics.push(Diagnostic {
@@ -854,9 +972,251 @@ fn collect_lint_diagnostics(
     }
 }
 
-fn collect_step_lints(source: &str, steps: &[Step], line_starts: &LineStarts, diagnostics: &mut Vec<Diagnostic>) {
+fn collect_unused_names(
+    source: &str,
+    inputs: &[crate::ast::InputDeclaration],
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+    implicit_listener_record: Option<&str>,
+) {
+    let mut reads = BTreeSet::new();
+    collect_step_reads(steps, &mut reads);
+    for input in inputs {
+        if implicit_listener_record != Some(input.name.as_str()) && !reads.contains(&input.name) {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "lint.unused_input".into(),
+                message: format!("input {:?} is declared but never read", input.name),
+                span: binding_span(source, line_starts, input.line, &input.name),
+                fixes: Vec::new(),
+            });
+        }
+    }
+    let mut bindings = Vec::<(String, usize)>::new();
+    collect_step_bindings(steps, &mut bindings);
+    for (name, line) in bindings {
+        if implicit_listener_record != Some(name.as_str()) && !reads.contains(&name) {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "lint.unused_binding".into(),
+                message: format!("binding {name:?} is never read"),
+                span: binding_span(source, line_starts, line, &name),
+                fixes: Vec::new(),
+            });
+        }
+    }
+}
+
+fn binding_span(source: &str, line_starts: &LineStarts, line: usize, name: &str) -> SourceSpan {
+    line_words_from_start(source, line_starts.start(line))
+        .into_iter()
+        .find(|word| !word.3 && word.0 == name)
+        .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
+        .unwrap_or_else(|| line_starts.span(source, line))
+}
+
+fn collect_step_bindings(steps: &[Step], bindings: &mut Vec<(String, usize)>) {
+    let mut index = 0;
+    while index < steps.len() {
+        let step = &steps[index];
+        // Be conservative around block-local scopes. Bindings inside these blocks
+        // are skipped until the scope-aware reference walk can distinguish shadowing.
+        let nested_end = match &step.kind {
+            StepKind::Loop { end, .. }
+            | StepKind::If { end, .. }
+            | StepKind::IfCommand { end, .. }
+            | StepKind::Try { end, .. }
+            | StepKind::TempScope { end, .. } => Some(*end),
+            _ => None,
+        };
+        if let Some(end) = nested_end.filter(|end| *end > 1 && index + *end <= steps.len()) {
+            index += end;
+            continue;
+        }
+        match &step.kind {
+            StepKind::Invoke { call, .. } | StepKind::CallProgram { call, .. } => {
+                add_call_binding_rows(call, step.line, bindings)
+            }
+            StepKind::TaskGroup {
+                binding,
+                tasks,
+                each,
+                ..
+            } => {
+                bindings.push((binding.clone(), step.line));
+                if let Some(each) = each {
+                    bindings.push((each.binding.clone(), step.line));
+                }
+                for call in tasks {
+                    add_call_binding_rows(call, step.line, bindings);
+                }
+            }
+            StepKind::SpawnJob { name, stages } => {
+                bindings.push((name.clone(), step.line));
+                for stage in stages {
+                    add_call_binding_rows(&stage.call, step.line, bindings);
+                }
+            }
+            StepKind::InspectJob { binding, .. }
+            | StepKind::Catch { binding, .. }
+            | StepKind::TempScope { binding, .. }
+            | StepKind::ParseJson { binding }
+            | StepKind::BindValue { binding, .. }
+            | StepKind::TakeJson { binding, .. }
+            | StepKind::TakeJsonDynamic { binding, .. }
+            | StepKind::CaptureBytes { binding } => bindings.push((binding.clone(), step.line)),
+            StepKind::Read { binding, .. }
+            | StepKind::ReadStdin { binding }
+            | StepKind::ReadCallInput { binding } => {
+                bindings.extend(binding.iter().cloned().map(|name| (name, step.line)));
+            }
+            StepKind::AwaitJob {
+                status_binding,
+                result_binding,
+                ..
+            } => {
+                bindings.extend(
+                    status_binding
+                        .iter()
+                        .chain(result_binding.iter())
+                        .cloned()
+                        .map(|name| (name, step.line)),
+                );
+            }
+            StepKind::Loop {
+                kind: crate::ast::LoopKind::ForEach { binding, .. },
+                ..
+            } => bindings.push((binding.clone(), step.line)),
+            _ => {}
+        }
+        index += 1;
+    }
+}
+
+fn add_call_binding_rows(call: &Invocation, line: usize, bindings: &mut Vec<(String, usize)>) {
+    bindings.extend(
+        call.binding
+            .iter()
+            .chain(call.status_binding.iter())
+            .chain(call.result_binding.iter())
+            .cloned()
+            .map(|name| (name, line)),
+    );
+}
+
+fn collect_step_reads(steps: &[Step], reads: &mut BTreeSet<String>) {
+    fn value(value: &Value, reads: &mut BTreeSet<String>) {
+        match value {
+            Value::Reference(name) => {
+                reads.insert(name.clone());
+            }
+            Value::List(items) => {
+                for item in items {
+                    value(item, reads);
+                }
+            }
+            Value::Record(items) => {
+                for item in items.values() {
+                    value(item, reads);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn call(call: &Invocation, reads: &mut BTreeSet<String>) {
+        for parameter in call.parameters.values() {
+            value(parameter, reads);
+        }
+    }
     for step in steps {
-        if let StepKind::Loop { kind: crate::ast::LoopKind::Repeat { count: Value::Integer(0) }, .. } = &step.kind {
+        match &step.kind {
+            StepKind::Invoke {
+                call: invocation, ..
+            }
+            | StepKind::CallProgram {
+                call: invocation, ..
+            } => call(invocation, reads),
+            StepKind::IfCommand {
+                call: invocation, ..
+            } => call(invocation, reads),
+            StepKind::TaskGroup { tasks, each, .. } => {
+                for invocation in tasks {
+                    call(invocation, reads);
+                }
+                if let Some(each) = each {
+                    value(&each.values, reads);
+                }
+            }
+            StepKind::SpawnJob { stages, .. } => {
+                for stage in stages {
+                    call(&stage.call, reads);
+                }
+            }
+            StepKind::InspectJob { name, .. }
+            | StepKind::AwaitJob { name, .. }
+            | StepKind::CancelJob { name } => {
+                reads.insert(name.clone());
+            }
+            StepKind::UseBytes { binding } => {
+                reads.insert(binding.clone());
+            }
+            _ => {}
+        }
+        let mut values: Vec<&Value> = Vec::new();
+        match &step.kind {
+            StepKind::If { condition, .. } => values.extend([&condition.left, &condition.right]),
+            StepKind::Loop { kind, .. } => match kind {
+                crate::ast::LoopKind::Repeat { count } => values.push(count),
+                crate::ast::LoopKind::ForEach { values: list, .. } => values.push(list),
+                crate::ast::LoopKind::While { condition } => {
+                    values.extend([&condition.left, &condition.right])
+                }
+                crate::ast::LoopKind::WhileCommand { .. } => {}
+            },
+            StepKind::Exit { status } => values.push(status),
+            StepKind::Fail { message, status } => {
+                values.push(message);
+                values.extend(status.iter());
+            }
+            StepKind::UseFolder { path } | StepKind::Read { path, .. } => values.push(path),
+            StepKind::UseValue { source }
+            | StepKind::BindValue { source, .. }
+            | StepKind::EncodeJson { source }
+            | StepKind::TakeJson { source, .. } => values.push(source),
+            StepKind::TakeJsonDynamic {
+                pointer, source, ..
+            } => values.extend([pointer, source]),
+            StepKind::Save { path, .. } | StepKind::Append { path } => values.push(path),
+            StepKind::Environment { set, .. } => values.extend(set.values()),
+            StepKind::LaunchDetached { output: Some(path) } => values.push(path),
+            StepKind::Redirect {
+                path: Some(path), ..
+            } => values.push(path),
+            _ => {}
+        }
+        for item in values {
+            value(item, reads);
+        }
+    }
+}
+
+fn collect_step_lints(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    collect_unreachable_lints(source, steps, line_starts, diagnostics);
+    for step in steps {
+        if let StepKind::Loop {
+            kind:
+                crate::ast::LoopKind::Repeat {
+                    count: Value::Integer(0),
+                },
+            ..
+        } = &step.kind
+        {
             diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Warning,
                 code: "lint.empty_loop".into(),
@@ -868,18 +1228,355 @@ fn collect_step_lints(source: &str, steps: &[Step], line_starts: &LineStarts, di
     }
 }
 
+fn collect_unreachable_lints(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut index = 0;
+    let mut exited = false;
+    while index < steps.len() {
+        let step = &steps[index];
+        let nested_end = match &step.kind {
+            StepKind::Loop { end, .. }
+            | StepKind::If { end, .. }
+            | StepKind::IfCommand { end, .. }
+            | StepKind::Try { end, .. }
+            | StepKind::TempScope { end, .. } => Some(*end),
+            _ => None,
+        };
+        if exited
+            && !matches!(
+                step.kind,
+                StepKind::EndLoop { .. }
+                    | StepKind::EndIf
+                    | StepKind::EndCall
+                    | StepKind::EndTry
+                    | StepKind::EndTempScope
+            )
+        {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "lint.unreachable".into(),
+                message:
+                    "this statement follows an unconditional `exit` or `fail` in the same body"
+                        .into(),
+                span: line_starts.span(source, step.line),
+                fixes: Vec::new(),
+            });
+        }
+        if matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. }) {
+            exited = true;
+        }
+        if let Some(end) = nested_end.filter(|end| *end > 1 && index + *end <= steps.len()) {
+            if let StepKind::If { otherwise, .. } = &step.kind {
+                let then_end = if *otherwise < end {
+                    index + *otherwise
+                } else {
+                    index + end - 1
+                };
+                if index + 1 < then_end {
+                    collect_unreachable_lints(
+                        source,
+                        &steps[index + 1..then_end],
+                        line_starts,
+                        diagnostics,
+                    );
+                }
+                if *otherwise < end {
+                    let else_start = index + *otherwise + 1;
+                    let else_end = index + end - 1;
+                    if else_start < else_end {
+                        collect_unreachable_lints(
+                            source,
+                            &steps[else_start..else_end],
+                            line_starts,
+                            diagnostics,
+                        );
+                    }
+                }
+            } else if matches!(
+                step.kind,
+                StepKind::Loop { .. } | StepKind::TempScope { .. }
+            ) {
+                let body_end = index + end - 1;
+                if index + 1 < body_end {
+                    collect_unreachable_lints(
+                        source,
+                        &steps[index + 1..body_end],
+                        line_starts,
+                        diagnostics,
+                    );
+                }
+            }
+            // Try/catch/finally transfer semantics are intentionally skipped here.
+            index += end;
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn collect_model_lints(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    fn value_contains_any(value: &Value, names: &BTreeSet<String>) -> bool {
+        match value {
+            Value::Reference(name) => names.contains(name),
+            Value::List(items) => items.iter().any(|item| value_contains_any(item, names)),
+            Value::Record(items) => items.values().any(|item| value_contains_any(item, names)),
+            _ => false,
+        }
+    }
+    let mut calls = Vec::new();
+    collect_calls(steps, &mut calls);
+    let reads = {
+        let mut reads = BTreeSet::new();
+        collect_step_reads(steps, &mut reads);
+        reads
+    };
+    for (line, call) in &calls {
+        if matches!(
+            call.operation.as_str(),
+            "jev.classify" | "jev.judge" | "jev.score"
+        ) && !call.parameters.contains_key("minimum")
+        {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "model.threshold_missing".into(),
+                message: format!(
+                    "{} omits `minimum`, so its default confidence threshold is zero",
+                    call.operation
+                ),
+                span: find_phrase_span_at(source, *line, &call.operation, line_starts)
+                    .unwrap_or_else(|| line_starts.span(source, *line)),
+                fixes: Vec::new(),
+            });
+        }
+    }
+
+    for (line, call) in calls.iter().filter(|(_, call)| {
+        matches!(
+            call.operation.as_str(),
+            "jev.classify" | "jev.judge" | "jev.score"
+        )
+    }) {
+        let Some(raw_name) = call.binding.as_ref() else {
+            continue;
+        };
+        let mut result_names = BTreeSet::from([raw_name.clone()]);
+        if let Some(parse_binding) = steps.iter().find_map(|step| {
+            (step.line > *line)
+                .then_some(&step.kind)
+                .and_then(|kind| match kind {
+                    StepKind::ParseJson { binding } => Some(binding.clone()),
+                    _ => None,
+                })
+        }) {
+            result_names.insert(parse_binding);
+        }
+        let mut accepted_bindings = BTreeMap::<String, usize>::new();
+        let mut inspected_result = false;
+        for step in steps {
+            if let StepKind::TakeJson {
+                pointer,
+                source: Value::Reference(source_name),
+                binding,
+                ..
+            } = &step.kind
+            {
+                if step.line <= *line || !result_names.contains(source_name) {
+                    continue;
+                }
+                if pointer == "/accepted" {
+                    accepted_bindings.insert(binding.clone(), step.line);
+                }
+                if matches!(pointer.as_str(), "/label" | "/decision" | "/score")
+                    && reads.contains(binding)
+                {
+                    inspected_result = true;
+                }
+            }
+        }
+        if !inspected_result {
+            continue;
+        }
+        let acceptance_checked = steps.iter().any(|step| matches!(&step.kind, StepKind::If { condition, .. }
+            if accepted_bindings.iter().any(|(accepted, accepted_line)| step.line > *accepted_line && (matches!(&condition.left, Value::Reference(name) if name == accepted) || matches!(&condition.right, Value::Reference(name) if name == accepted)))));
+        // A same-file helper may own the gate; without interprocedural analysis,
+        // suppress this advisory when the value is routed through a program call.
+        let mut forwarded_names = result_names.clone();
+        forwarded_names.extend(accepted_bindings.keys().cloned());
+        for step in steps {
+            if let StepKind::TakeJson {
+                pointer,
+                source: Value::Reference(source_name),
+                binding,
+                ..
+            } = &step.kind
+            {
+                if step.line > *line
+                    && result_names.contains(source_name)
+                    && matches!(pointer.as_str(), "/label" | "/decision" | "/score")
+                {
+                    forwarded_names.insert(binding.clone());
+                }
+            }
+        }
+        let delegated_to_helper = steps.iter().any(|step| match &step.kind {
+            StepKind::CallProgram { call, .. } => call
+                .parameters
+                .values()
+                .any(|value| value_contains_any(value, &forwarded_names)),
+            _ => false,
+        });
+        if !acceptance_checked && !delegated_to_helper {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "model.result_unchecked".into(),
+                message: format!(
+                    "model result {raw_name:?} is consumed without testing its `/accepted` field"
+                ),
+                span: line_starts.span(source, *line),
+                fixes: Vec::new(),
+            });
+        }
+    }
+
+    let mut generated_text = BTreeSet::<String>::new();
+    for (_, call) in &calls {
+        if call.operation == "llm.ask" {
+            generated_text.extend(call.binding.iter().cloned());
+            if let Some(raw) = call.binding.as_ref() {
+                let parsed = steps.iter().find_map(|step| {
+                    (step.line
+                        > calls
+                            .iter()
+                            .find(|(_, call)| call.binding.as_ref() == Some(raw))
+                            .map_or(0, |(line, _)| *line))
+                    .then_some(&step.kind)
+                    .and_then(|kind| match kind {
+                        StepKind::ParseJson { binding } => Some(binding.clone()),
+                        _ => None,
+                    })
+                });
+                if let Some(parsed) = parsed {
+                    generated_text.extend(steps.iter().filter_map(|step| match &step.kind {
+                        StepKind::TakeJson {
+                            pointer,
+                            source: Value::Reference(source),
+                            binding,
+                            ..
+                        } if source == &parsed && pointer == "/text" => Some(binding.clone()),
+                        _ => None,
+                    }));
+                }
+            }
+        } else if call.operation == "llm.extract" {
+            if let Some(raw) = call.binding.as_ref() {
+                let parse_line = calls
+                    .iter()
+                    .find(|(_, candidate)| candidate.binding.as_ref() == Some(raw))
+                    .map_or(0, |(line, _)| *line);
+                let parsed = steps.iter().find_map(|step| {
+                    (step.line > parse_line)
+                        .then_some(&step.kind)
+                        .and_then(|kind| match kind {
+                            StepKind::ParseJson { binding } => Some(binding.clone()),
+                            _ => None,
+                        })
+                });
+                if let Some(parsed) = parsed {
+                    generated_text.extend(steps.iter().filter_map(|step| match &step.kind {
+                        StepKind::TakeJson {
+                            pointer,
+                            source: Value::Reference(source_name),
+                            binding,
+                            ..
+                        } if source_name == &parsed
+                            && matches!(pointer.as_str(), "/value" | "/text") =>
+                        {
+                            Some(binding.clone())
+                        }
+                        _ => None,
+                    }));
+                }
+                for step in steps {
+                    if let StepKind::TakeJson {
+                        pointer,
+                        source: Value::Reference(source_name),
+                        binding,
+                        ..
+                    } = &step.kind
+                    {
+                        if source_name == raw && pointer == "/value" {
+                            generated_text.insert(binding.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if generated_text.is_empty() {
+        return;
+    }
+    for (line, call) in calls {
+        if !call.direct
+            || !matches!(
+                call.operation.as_str(),
+                "sh" | "bash" | "zsh" | "dash" | "execute"
+            )
+        {
+            continue;
+        }
+        let Some(Value::List(arguments)) = call.parameters.get("arguments") else {
+            continue;
+        };
+        let shell_command = arguments.windows(2).any(|pair| {
+            matches!(&pair[0], Value::String(flag) if flag == "-c")
+                && matches!(&pair[1], Value::Reference(name) if generated_text.contains(name))
+        });
+        if shell_command {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "model.text_to_command".into(),
+                message: "model-generated text is passed as a shell command; keep it as data and use fixed, reviewed commands".into(),
+                span: parameter_value_span_at(source, line, "arguments", line_starts).unwrap_or_else(|| line_starts.span(source, line)),
+                fixes: Vec::new(),
+            });
+        }
+    }
+}
+
 fn has_shell_expansion(value: &str) -> bool {
     let bytes = value.as_bytes();
-    if value.starts_with('~') && value.chars().skip(1).next().is_some_and(|ch| ch.is_alphanumeric() || ch == '/') {
+    if value.starts_with('~')
+        && value
+            .chars()
+            .skip(1)
+            .next()
+            .is_some_and(|ch| ch.is_alphanumeric() || ch == '/')
+    {
         return true;
     }
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'$' {
-            if bytes.get(index + 1).is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
-                || matches!(bytes.get(index + 1), Some(b'{') | Some(b'(')) { return true; }
+            if bytes
+                .get(index + 1)
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+                || matches!(bytes.get(index + 1), Some(b'{') | Some(b'('))
+            {
+                return true;
+            }
         }
-        if bytes[index] == b'`' { return true; }
+        if bytes[index] == b'`' {
+            return true;
+        }
         index += 1;
     }
     false

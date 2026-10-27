@@ -1477,34 +1477,6 @@ fn append_path_bytes(message: &mut Vec<u8>, path: &[u8]) {
     message.extend_from_slice(path);
 }
 
-#[cfg(test)]
-mod path_hmac_tests {
-    use super::*;
-
-    #[test]
-    fn effective_path_hmac_distinguishes_empty_unset_and_inherited_modes() {
-        let key = [0x5a; crate::agent::what_if_key::KEY_BYTES];
-        let empty = PathOverride::Set {
-            path: std::ffi::OsString::new(),
-            inferred_printf: false,
-            lookup_path: Some(std::ffi::OsString::new()),
-            has_sensitive_tail: false,
-        };
-        let unset = PathOverride::Unset;
-        assert_ne!(
-            effective_path_hmac(Some(&empty), None, &key),
-            effective_path_hmac(Some(&unset), None, &key),
-            "PATH empty and PATH unset are different child environments"
-        );
-
-        assert_ne!(
-            effective_path_hmac(None, Some(std::ffi::OsStr::new("unset")), &key),
-            effective_path_hmac(None, None, &key),
-            "an inherited PATH value cannot collide with an absent PATH"
-        );
-    }
-}
-
 /// Only a static PATH change or a narrowly inferred, non-sensitive PATH binding
 /// can be represented safely by an executable digest in a what-if review. Other
 /// sensitive values may change what the child loads even when its executable path
@@ -1707,4 +1679,32 @@ fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {
             "privileged_invocations": privileged_invocations
         }
     })
+}
+
+#[cfg(test)]
+mod path_hmac_tests {
+    use super::*;
+
+    #[test]
+    fn effective_path_hmac_distinguishes_empty_unset_and_inherited_modes() {
+        let key = [0x5a; crate::agent::what_if_key::KEY_BYTES];
+        let empty = PathOverride::Set {
+            path: std::ffi::OsString::new(),
+            inferred_printf: false,
+            lookup_path: Some(std::ffi::OsString::new()),
+            has_sensitive_tail: false,
+        };
+        let unset = PathOverride::Unset;
+        assert_ne!(
+            effective_path_hmac(Some(&empty), None, &key),
+            effective_path_hmac(Some(&unset), None, &key),
+            "PATH empty and PATH unset are different child environments"
+        );
+
+        assert_ne!(
+            effective_path_hmac(None, Some(std::ffi::OsStr::new("unset")), &key),
+            effective_path_hmac(None, None, &key),
+            "an inherited PATH value cannot collide with an absent PATH"
+        );
+    }
 }

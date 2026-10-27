@@ -502,7 +502,7 @@ fn resolve_environment_value(value: &Value, bindings: &BTreeMap<String, Value>) 
     Some(value.clone())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn node_fingerprint_with_digests(
     program: &Program,
     start: usize,

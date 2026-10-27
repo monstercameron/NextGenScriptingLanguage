@@ -339,3 +339,71 @@ fn round_integer_behavior_remains_exact() {
         "overflow"
     );
 }
+
+#[test]
+fn list_range_stops_at_integer_boundaries() {
+    let cases = [
+        (i64::MAX - 1, i64::MAX, 2, vec![i64::MAX - 1]),
+        (i64::MIN + 1, i64::MIN, -2, vec![i64::MIN + 1]),
+        (
+            i64::MIN,
+            i64::MAX,
+            i64::MAX,
+            vec![i64::MIN, -1, i64::MAX - 1],
+        ),
+        (i64::MAX, i64::MIN, i64::MIN, vec![i64::MAX, -1]),
+        (i64::MAX, i64::MIN, 1, vec![]),
+        (i64::MIN, i64::MAX, -1, vec![]),
+        (i64::MAX, i64::MAX, i64::MAX, vec![]),
+    ];
+    for (start, stop, step, expected) in cases {
+        assert_eq!(
+            run(
+                "list.range",
+                json!({"start": start, "stop": stop, "step": step})
+            )
+            .unwrap(),
+            json!(expected),
+            "start={start}, stop={stop}, step={step}"
+        );
+    }
+    assert_eq!(
+        run(
+            "list.range",
+            json!({"start": i64::MAX - 1, "stop": i64::MAX})
+        )
+        .unwrap(),
+        json!([i64::MAX - 1])
+    );
+    assert_eq!(
+        run(
+            "list.range",
+            json!({"start": i64::MIN + 1, "stop": i64::MIN})
+        )
+        .unwrap(),
+        json!([i64::MIN + 1])
+    );
+}
+
+#[test]
+fn list_range_retains_validation_and_item_limit() {
+    for args in [
+        json!({"start": 0, "stop": 1, "step": 0}),
+        json!({"start": "0", "stop": 1}),
+        json!({"start": 0, "stop": null}),
+        json!({"start": 0, "stop": 1, "step": 1.5}),
+        json!({"stop": 1}),
+    ] {
+        assert_eq!(run("list.range", args).unwrap_err().code, "invalid_request");
+    }
+    let full = run("list.range", json!({"start": 0, "stop": 100000})).unwrap();
+    assert_eq!(full.as_array().unwrap().len(), 100000);
+    for args in [
+        json!({"start": 0, "stop": 100001}),
+        json!({"start": 0, "stop": -100001}),
+    ] {
+        let error = run("list.range", args).unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("100000 item limit"), "{error:?}");
+    }
+}

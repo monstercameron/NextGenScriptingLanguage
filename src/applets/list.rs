@@ -70,9 +70,12 @@ pub(super) fn run(
                 }
                 checkpoint_work(context, values.len())?;
                 values.push(Value::from(current));
-                current = current
-                    .checked_add(step)
-                    .ok_or_else(|| invalid("list.range integer overflow"))?;
+                // A step beyond the integer domain is necessarily beyond the
+                // representable stop in the same direction, so the range is done.
+                match current.checked_add(step) {
+                    Some(next) => current = next,
+                    None => break,
+                }
             }
             Ok(Value::Array(values))
         }

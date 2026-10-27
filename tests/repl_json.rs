@@ -7,12 +7,7 @@ fn json_repl_returns_one_response_per_request_and_reports_block_spans() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
-    let manifest = serde_json::json!({
-        "name":"ok.helper", "binary":env!("CARGO_BIN_EXE_execute-model"),
-        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"--version"}],
-        "contract":{"version":1,"output":{"type":"text","encoding":"raw"}}
-    });
-    std::fs::write(manifests.join("ok.helper.json"), manifest.to_string()).unwrap();
+    write_test_helper_manifest(&manifests);
     std::fs::write(directory.path().join("notes.txt"), "from-read").unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--manifest-dir"])
@@ -65,13 +60,7 @@ fn json_repl_captures_each_fresh_streamed_command_without_leaking_to_process_std
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
-    write_version_manifest(&manifests);
-    let version = Command::new(env!("CARGO_BIN_EXE_execute-model"))
-        .arg("--version")
-        .output()
-        .unwrap();
-    assert!(version.status.success());
-    let version = String::from_utf8(version.stdout).unwrap();
+    let helper_output = write_test_helper_manifest(&manifests);
     let mut child = repl_child(directory.path(), &manifests, false);
     let mut input = child.stdin.take().unwrap();
     writeln!(input, "{{\"submit\":\"run ok.helper\"}}").unwrap();
@@ -87,8 +76,8 @@ fn json_repl_captures_each_fresh_streamed_command_without_leaking_to_process_std
     );
     let responses = parse_lines(&output.stdout);
     assert_eq!(responses.len(), 4);
-    assert_eq!(responses[0]["stdout"], version);
-    assert_eq!(responses[1]["stdout"], format!("{version}{version}"));
+    assert_eq!(responses[0]["stdout"], helper_output);
+    assert_eq!(responses[1]["stdout"], format!("{helper_output}{helper_output}"));
     assert_eq!(responses[2]["stdout"], "", "{responses:?}");
     assert_eq!(responses[3]["stdout"], "", "{responses:?}");
 }
@@ -491,7 +480,7 @@ fn five_step_session_repairs_rejection_saves_checks_and_matches_output() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
-    write_version_manifest(&manifests);
+    write_test_helper_manifest(&manifests);
     let saved = directory.path().join("saved.program");
     let mut child = repl_child(directory.path(), &manifests, false);
     let mut input = child.stdin.take().unwrap();
@@ -679,7 +668,7 @@ fn oversized_request_is_rejected_and_the_next_line_is_still_processed() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
-    write_version_manifest(&manifests);
+    write_test_helper_manifest(&manifests);
     let mut child = repl_child(directory.path(), &manifests, false);
     let mut input = child.stdin.take().unwrap();
     input.write_all(&vec![b' '; 1024 * 1024 + 1]).unwrap();
@@ -693,13 +682,29 @@ fn oversized_request_is_rejected_and_the_next_line_is_still_processed() {
     assert_eq!(responses[1]["source"], "");
 }
 
-fn write_version_manifest(manifests: &std::path::Path) {
+fn write_test_helper_manifest(manifests: &std::path::Path) -> String {
+    let (binary, arguments) = if cfg!(windows) {
+        ("cmd", vec!["/c".to_owned(), "echo repl-helper".to_owned()])
+    } else {
+        (
+            "/bin/sh",
+            vec!["-c".to_owned(), "printf '%s' repl-helper".to_owned()],
+        )
+    };
+    let output = Command::new(binary).args(&arguments).output().unwrap();
+    assert!(output.status.success());
+    let expected_output = String::from_utf8(output.stdout).unwrap();
+    let arguments = arguments
+        .iter()
+        .map(|argument| serde_json::json!({"literal": argument}))
+        .collect::<Vec<_>>();
     let manifest = serde_json::json!({
-        "name":"ok.helper", "binary":env!("CARGO_BIN_EXE_execute-model"),
-        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"--version"}],
+        "name":"ok.helper", "binary":binary,
+        "accepts_stdin":false, "parameters":{}, "arguments":arguments,
         "contract":{"version":1,"output":{"type":"text","encoding":"raw"}}
     });
     std::fs::write(manifests.join("ok.helper.json"), manifest.to_string()).unwrap();
+    expected_output
 }
 
 fn repl_child(

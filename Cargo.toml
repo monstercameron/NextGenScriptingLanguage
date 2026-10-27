@@ -239,7 +239,7 @@ required-features = ["model"]
 
 [[test]]
 name = "repl_json"
-required-features = ["model"]
+required-features = ["records"]
 
 [[test]]
 name = "model_control"

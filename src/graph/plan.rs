@@ -1486,13 +1486,13 @@ impl GraphPlan {
     }
 
     /// Whether an interrupted run of `node` may run again without a manual retry.
-    /// Like an ordinary invocation, its applet must be builtin or cacheable.
+    /// The applet must be builtin or cacheable with declared read-only effects.
     pub fn checkpoint_retry_safe(&self, node: &GraphNode, registry: &Registry) -> Result<bool> {
         let Some(call) = node.invocation() else {
             return Ok(false);
         };
         let manifest = registry.resolve_call(call)?;
-        Ok(manifest.builtin.is_some() || manifest.cacheable)
+        Ok(manifest.builtin.is_some() || manifest.cacheable_with_read_only_effects())
     }
 
     pub fn output_terminals(&self) -> Vec<PortRef> {

@@ -1317,7 +1317,7 @@ enum RetryPlan {
 /// Decide whether a failed declared-retry command runs again. Only outcomes the
 /// contract marks retryable, or a nonzero exit of a command without a contract, are
 /// retried. A failure whose effects may be uncertain needs `even if uncertain`,
-/// unless the outcome says nothing started or the command is builtin or cacheable.
+/// unless the outcome says nothing started or the applet is retry-safe.
 fn plan_retry(
     program: &Program,
     index: usize,

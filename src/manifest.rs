@@ -162,6 +162,27 @@ impl ParameterPredicate {
         }
     }
 }
+/// A cacheable manifest declares an effect that can change external state.
+#[derive(Debug)]
+pub struct CacheableEffectConflict {
+    pub effect: String,
+}
+
+impl CacheableEffectConflict {
+    pub const CODE: &'static str = "cacheable_effect_conflict";
+}
+
+impl std::fmt::Display for CacheableEffectConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: cacheable applet declares non-read effect {:?}",
+            Self::CODE,
+            self.effect
+        )
+    }
+}
+impl std::error::Error for CacheableEffectConflict {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1111,6 +1132,14 @@ impl Manifest {
 
     /// The backend selected by a versioned contract. Legacy applets remain
     /// native commands; runtime builtins are still exposed separately.
+    /// A cache declaration alone does not describe the applet's effects.
+    pub(crate) fn cacheable_with_read_only_effects(&self) -> bool {
+        self.cacheable
+            && self
+                .execution_contract()
+                .is_some_and(|contract| crate::contracts::effects_are_read_only(&contract.effects))
+    }
+
     pub fn execution_backend(&self) -> AppletBackend {
         self.contract
             .as_ref()
@@ -2838,6 +2867,18 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
     }
     validate_parameter_alternatives(&raw.parameter_alternatives, &parameters)?;
     if let Some(contract) = &raw.contract {
+        if raw.cacheable {
+            if let Some(effect) = contract
+                .effects
+                .iter()
+                .find(|effect| crate::contracts::effect_category(effect) != "reads")
+            {
+                return Err(CacheableEffectConflict {
+                    effect: effect.clone(),
+                }
+                .into());
+            }
+        }
         contract.validate()?;
         if contract.backend == AppletBackend::InProcess && raw.binary != "@execute-applet" {
             bail!("in_process backend requires binary \"@execute-applet\"");

@@ -655,13 +655,13 @@ impl Walker<'_> {
             ..Row::default()
         };
         // A declared retry is shown whether or not the command resolves. `idempotent`
-        // is the static part of the runtime's rule: builtins and cacheable applets.
+        // reflects the manifest-level retry-safety rule used for replay.
         row.retry = call.retry.map(|policy| {
             let idempotent = !call.direct
                 && self
                     .registry
                     .resolve_call(call)
-                    .is_ok_and(|manifest| manifest.builtin.is_some() || manifest.cacheable);
+                    .is_ok_and(crate::runtime::resume::applet_retry_safe);
             json!({
                 "attempts": u64::from(policy.retries) + 1,
                 "backoff_ms": policy.backoff_ms,

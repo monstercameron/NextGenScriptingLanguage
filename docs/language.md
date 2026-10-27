@@ -1116,16 +1116,18 @@ costs no flush per element. On resume, a retry-safe node runs again without the
 `--retry-uncertain` override. A stage is retry-safe when:
 
 - it is builtin, or
-- it is cacheable (deterministic and reusable), or
+- it is cacheable and has a versioned contract declaring only read effects (or no effects), or
 - it is an in-process applet and every effect it declares is a read (`fs.read*`,
   `clock.read`), or it declares no effects at all.
 
 Anything else is uncertain. That includes a write, lock, process, network, system, or
-undeclared effect, and every native or external command, whose effects the runtime
-cannot see. A manifest that sets `"uncertain_on_failure": true` is uncertain even when
-its effects are reads. Cacheable is an author contract: the result is deterministic and reusable, and
-retry safety relies on it. Declare `cacheable` only for applets whose re-run has no
-external effect.
+undeclared effect, and native or external commands without both a cacheable
+declaration and a read-only effect contract. The runtime cannot verify the real
+effects of a native command. A manifest that sets `"uncertain_on_failure": true` is uncertain even when
+its effects are reads. A cacheable manifest without an effect contract remains valid
+for caching but is uncertain for checkpoint replay. Cacheability and declared effects
+are author assertions, not proof of actual behavior. A cacheable manifest with a
+contract cannot declare a write, process, network, system, or unknown effect.
 
 A loop over a pure in-process applet such as `text.upper` therefore writes no begin
 records, while a loop over a native command writes one fsynced begin record per element

@@ -466,13 +466,16 @@ pub(crate) fn graph_node_fingerprint(
 }
 
 /// Whether re-running one applet call repeats no external side effect the checkpoint
-/// cannot see. Builtin and cacheable applets are deterministic and reusable. An
+/// cannot see. Builtins and cacheable applets with declared read-only effects are reusable. An
 /// in-process applet is retry-safe when every effect it declares is a read, or it
 /// declares none: a re-run of a read has no side effect. A write, process, network,
 /// system, or undeclared effect stays uncertain, and so does every native or external
 /// command, whose real effects are unknown.
-fn applet_retry_safe(manifest: &Manifest) -> bool {
-    if manifest.builtin.is_some() || manifest.cacheable {
+pub(crate) fn applet_retry_safe(manifest: &Manifest) -> bool {
+    if manifest.uncertain_on_failure {
+        return false;
+    }
+    if manifest.builtin.is_some() || manifest.cacheable_with_read_only_effects() {
         return true;
     }
     manifest.execution_backend() == AppletBackend::InProcess
@@ -1106,7 +1109,23 @@ mod retry_rule_tests {
             r#"{"name":"native.pure","binary":"tool","cacheable":true,"arguments":[]}"#,
         ])
         .unwrap();
-        assert!(applet_retry_safe(cacheable.resolve("native.pure").unwrap()));
+        assert!(!applet_retry_safe(
+            cacheable.resolve("native.pure").unwrap()
+        ));
+        let declared = Registry::from_sources(&[
+            r#"{"name":"native.declared","binary":"tool","cacheable":true,"arguments":[],"contract":{"version":1,"effects":[],"capabilities":[]}}"#,
+        ]).unwrap();
+        assert!(applet_retry_safe(
+            declared.resolve("native.declared").unwrap()
+        ));
+    }
+
+    #[test]
+    fn explicitly_uncertain_in_process_reads_are_not_retry_safe() {
+        let registry = Registry::from_sources(&[
+            r#"{"name":"read","binary":"@execute-applet","uncertain_on_failure":true,"arguments":[],"contract":{"version":1,"backend":"in_process","effects":[],"capabilities":[]}}"#,
+        ]).unwrap();
+        assert!(!applet_retry_safe(registry.resolve("read").unwrap()));
     }
 
     #[test]

@@ -256,8 +256,8 @@ pub(super) fn check_size_and_depth(
     measure_json(vec![(value, 0)], 0, context)
 }
 
-fn measure_json<'a>(
-    mut pending: Vec<(&'a Value, usize)>,
+fn measure_json(
+    mut pending: Vec<(&Value, usize)>,
     mut bytes: usize,
     context: &ExecutionContext<'_>,
 ) -> Result<usize, AppletError> {

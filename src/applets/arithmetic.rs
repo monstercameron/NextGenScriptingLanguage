@@ -23,6 +23,15 @@ fn precision(args: &Map<String, Value>, default: u64, maximum: u64) -> Result<us
     Ok(precision as usize)
 }
 
+fn rounding_digits(args: &Map<String, Value>) -> Result<i64, AppletError> {
+    match args.get("digits") {
+        None => Ok(0),
+        Some(value) => value
+            .as_i64()
+            .ok_or_else(|| invalid("args.digits must be a signed 64-bit integer")),
+    }
+}
+
 fn as_integer(value: &Number) -> Option<i128> {
     value
         .as_i64()
@@ -232,7 +241,7 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
                     .ok_or_else(|| failed("overflow", "absolute value overflowed"))?,
                 "number.sign" => integer.signum(),
                 "number.round" => {
-                    let digits = args.get("digits").and_then(Value::as_i64).unwrap_or(0);
+                    let digits = rounding_digits(args)?;
                     if !(-38..=38).contains(&digits) {
                         return Err(invalid(
                             "integer rounding digits must be between -38 and 38",
@@ -268,7 +277,7 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
             "number.ceil" => value.ceil(),
             "number.trunc" => value.trunc(),
             "number.round" => {
-                let digits = args.get("digits").and_then(Value::as_i64).unwrap_or(0);
+                let digits = rounding_digits(args)?;
                 if !(-308..=308).contains(&digits) {
                     return Err(invalid("args.digits must be between -308 and 308"));
                 }

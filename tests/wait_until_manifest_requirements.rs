@@ -28,6 +28,29 @@ fn execute_with_json(
     invocation.output().unwrap()
 }
 
+fn execute_with_input(
+    root: &Path,
+    source: &str,
+    input: &str,
+    disk_manifests: bool,
+) -> std::process::Output {
+    let program = root.join("wait.program");
+    fs::write(&program, source).unwrap();
+    let mut invocation = Command::new(env!("CARGO_BIN_EXE_execute"));
+    invocation
+        .arg("run")
+        .arg(&program)
+        .arg("--input")
+        .arg(input)
+        .current_dir(root);
+    if disk_manifests {
+        invocation
+            .arg("--manifest-dir")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/manifests"));
+    }
+    invocation.output().unwrap()
+}
+
 #[test]
 fn required_probe_and_timeout_are_checked_for_disk_and_bundled_manifests() {
     let cases = [
@@ -173,5 +196,119 @@ fn check_rejects_only_literal_non_loopback_ip_hosts_for_tcp_probe() {
             "check applied TCP constraint to another probe; disk_manifests={disk_manifests}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+#[test]
+fn timeout_and_interval_ranges_match_check_and_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    let valid_literals = [
+        "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms 0\n",
+        "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms 86400000 and interval_ms 1\n",
+        "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms 0 and interval_ms 10000\n",
+    ];
+    let invalid_literals = [
+        (
+            "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms -1\n",
+            "timeout_ms must be an integer from 0 through 86400000",
+        ),
+        (
+            "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms 86400001\n",
+            "timeout_ms must be an integer from 0 through 86400000",
+        ),
+        (
+            "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms 0 and interval_ms 0\n",
+            "interval_ms must be an integer from 1 through 10000",
+        ),
+        (
+            "run wait.until with probe \"file_exists\" and path \".\" and timeout_ms 0 and interval_ms 10001\n",
+            "interval_ms must be an integer from 1 through 10000",
+        ),
+    ];
+
+    for disk_manifests in [false, true] {
+        for source in valid_literals {
+            for command in ["check", "run"] {
+                let output = execute(root.path(), command, source, disk_manifests);
+                assert!(
+                    output.status.success(),
+                    "{command} rejected valid bound; disk_manifests={disk_manifests}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+
+        for (source, message) in invalid_literals {
+            for command in ["check", "run"] {
+                let output = execute(root.path(), command, source, disk_manifests);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    !output.status.success() && stderr.contains(message),
+                    "{command} did not reject out-of-range literal; disk_manifests={disk_manifests}: {stderr}"
+                );
+            }
+        }
+
+        for (parameter, valid_values, invalid_values, message) in [
+            (
+                "timeout_ms",
+                [0, 86400000],
+                [-1, 86400001],
+                "timeout_ms must be an integer from 0 through 86400000",
+            ),
+            (
+                "interval_ms",
+                [1, 10000],
+                [0, 10001],
+                "interval_ms must be an integer from 1 through 10000",
+            ),
+        ] {
+            let source = format!(
+                "accept bound as integer\nrun wait.until with probe \"file_exists\" and path \".\" and timeout_ms {}\n",
+                if parameter == "timeout_ms" { "bound" } else { "0" }
+            );
+            let source = if parameter == "interval_ms" {
+                source.replace(
+                    " and timeout_ms 0",
+                    " and timeout_ms 0 and interval_ms bound",
+                )
+            } else {
+                source
+            };
+            let checked = execute(root.path(), "check", &source, disk_manifests);
+            assert!(
+                checked.status.success(),
+                "check rejected dynamic {parameter}; disk_manifests={disk_manifests}: {}",
+                String::from_utf8_lossy(&checked.stderr)
+            );
+
+            for value in valid_values {
+                let output = execute_with_input(
+                    root.path(),
+                    &source,
+                    &format!("bound={value}"),
+                    disk_manifests,
+                );
+                assert!(
+                    output.status.success(),
+                    "run rejected dynamic {parameter}={value}; disk_manifests={disk_manifests}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+
+            for value in invalid_values {
+                let output = execute_with_input(
+                    root.path(),
+                    &source,
+                    &format!("bound={value}"),
+                    disk_manifests,
+                );
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    !output.status.success() && stderr.contains(message),
+                    "run accepted dynamic {parameter}={value}; disk_manifests={disk_manifests}: {stderr}"
+                );
+            }
+        }
     }
 }

@@ -118,5 +118,39 @@
   },
   "phrases": [
     "wait until"
+  ],
+  "parameter_alternatives": [
+    {
+      "message": "timeout_ms must be an integer from 0 through 86400000",
+      "any_of": [
+        [
+          {
+            "test": "number_range",
+            "parameter": "timeout_ms",
+            "minimum": 0,
+            "maximum": 86400000
+          }
+        ]
+      ]
+    },
+    {
+      "message": "interval_ms must be an integer from 1 through 10000",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "interval_ms"
+          }
+        ],
+        [
+          {
+            "test": "number_range",
+            "parameter": "interval_ms",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        ]
+      ]
+    }
   ]
 }

@@ -105,9 +105,11 @@ fn set_private_windows_test_acl(path: &Path) {
     while unsafe { *sid_text.add(sid_length) } != 0 {
         sid_length += 1;
     }
-    // SAFETY: the counted UTF-16 units are within the allocated string before its terminator.
-    let sid =
-        String::from_utf16(unsafe { std::slice::from_raw_parts(sid_text, sid_length) }).unwrap();
+    let sid_units = {
+        // SAFETY: the counted UTF-16 units are within the allocation before its terminator.
+        unsafe { std::slice::from_raw_parts(sid_text, sid_length) }
+    };
+    let sid = String::from_utf16(sid_units).unwrap();
     // SAFETY: sid_text was allocated by ConvertSidToStringSidW with LocalAlloc.
     unsafe { LocalFree(sid_text.cast()) };
 
@@ -131,9 +133,10 @@ fn set_private_windows_test_acl(path: &Path) {
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl = std::ptr::null_mut();
-    // SAFETY: descriptor is live; present, dacl, and defaulted are writable out-slots.
-    let status =
-        unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) };
+    let status = {
+        // SAFETY: descriptor is live; present, dacl, and defaulted are writable out-slots.
+        unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) }
+    };
     assert_ne!(status, 0);
     assert_ne!(present, 0);
     assert!(!dacl.is_null());

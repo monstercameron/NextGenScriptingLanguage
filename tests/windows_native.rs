@@ -48,7 +48,7 @@ fn find_msys_printf(candidates: impl IntoIterator<Item = PathBuf>) -> Option<Pat
 fn git_for_windows_printf() -> Option<PathBuf> {
     let candidates = ["ProgramFiles", "ProgramFiles(x86)"]
         .into_iter()
-        .filter_map(|key| std::env::var_os(key))
+        .filter_map(std::env::var_os)
         .map(|root| Path::new(&root).join("Git/usr/bin/printf.exe"))
         .chain(
             std::env::var_os("PATH")

@@ -8,6 +8,9 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 fn execute(args: &[&str], directory: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(args)
@@ -195,6 +198,7 @@ fn detached_output_follows_the_write_policy_before_the_child_starts() {
     let directory = tempdir().unwrap();
     let policy = directory.path().join("policy.json");
     fs::write(&policy, r#"{"version":1,"applets":{}}"#).unwrap();
+    private_answers::make_private(&policy);
     let execute_path = env!("CARGO_BIN_EXE_execute").replace('\\', "/");
     let program = write_program(
         directory.path(),

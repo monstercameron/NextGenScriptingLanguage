@@ -1,6 +1,7 @@
 use super::{invalid, required_string, AppletError, ExecutionContext};
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 use serde_json::{Map, Number, Value};
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn run(
@@ -25,7 +26,12 @@ pub(super) fn run(
                 epoch,
                 args.get("zone").and_then(Value::as_str).unwrap_or("utc"),
             )?;
-            Ok(Value::String(dt.format(format).to_string()))
+            // Chrono reports invalid or unsupported directives through fmt::Error.
+            // Display::to_string panics on that error; write into a String fallibly.
+            let mut output = String::new();
+            write!(&mut output, "{}", dt.format(format))
+                .map_err(|_| invalid("invalid or unsupported time format"))?;
+            Ok(Value::String(output))
         }
         "time.parse" => {
             let text = required_string(args, "text")?;

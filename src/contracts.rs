@@ -2320,7 +2320,7 @@ fn json_kind(value: &serde_json::Value) -> &'static str {
 /// silently keeps the last duplicate key, which could change a validated
 /// record after an applet's bytes cross the contract boundary.
 pub fn parse_json_strict(bytes: &[u8]) -> Result<serde_json::Value> {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     STRICT_JSON_PARSE_CALLS.with(|calls| calls.set(calls.get() + 1));
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value = StrictJsonValue::deserialize(&mut deserializer).context("parsing JSON")?;
@@ -2328,17 +2328,17 @@ pub fn parse_json_strict(bytes: &[u8]) -> Result<serde_json::Value> {
     Ok(value.into_json())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 thread_local! {
     static STRICT_JSON_PARSE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn reset_strict_json_parse_calls() {
     STRICT_JSON_PARSE_CALLS.with(|calls| calls.set(0));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn strict_json_parse_calls() -> usize {
     STRICT_JSON_PARSE_CALLS.with(std::cell::Cell::get)
 }

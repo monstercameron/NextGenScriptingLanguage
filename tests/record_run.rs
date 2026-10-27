@@ -871,7 +871,10 @@ fn a_real_denial_is_recorded_with_policy_identity_and_a_seal() {
     let document: Value =
         serde_json::from_slice(&fs::read(record.join("run.json")).unwrap()).unwrap();
     assert_eq!(document["policy"]["execution_mode"], "untrusted");
-    assert_eq!(document["policy"]["capability_policy"]["status"], "configured");
+    assert_eq!(
+        document["policy"]["capability_policy"]["status"],
+        "configured"
+    );
     assert_eq!(document["policy"]["capability_policy"]["version"], 1);
     assert_eq!(
         document["policy"]["capability_policy"]["sha256"]
@@ -989,7 +992,10 @@ fn a_real_record_without_a_policy_is_sealed_and_shows_its_baseline() {
     assert_eq!(report["audit_error"], Value::Null);
     let text = execute(work.path(), &["show-run", record.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&text.stdout).into_owned();
-    assert!(text.contains("no confinement: no policy was active"), "{text}");
+    assert!(
+        text.contains("no confinement: no policy was active"),
+        "{text}"
+    );
 }
 
 #[test]

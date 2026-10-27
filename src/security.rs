@@ -294,8 +294,7 @@ impl DataFlowPolicy {
     /// it names the policy without recording any origin, label, or other
     /// policy content.
     pub fn canonical_digest(&self) -> String {
-        let encoded =
-            serde_json::to_vec(self).expect("a parsed data-flow policy is serializable");
+        let encoded = serde_json::to_vec(self).expect("a parsed data-flow policy is serializable");
         Sha256::digest(encoded)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -1256,7 +1255,9 @@ pub fn policy_decision_total(registry: &Registry) -> u64 {
 /// built from this pair, never from separate `policy_decisions` and
 /// `policy_decision_total` reads with pushes in between.
 pub fn policy_decisions_with_total(registry: &Registry) -> (Vec<PolicyDecision>, u64) {
-    registry.host_state::<DecisionRecorder>().snapshot_with_total()
+    registry
+        .host_state::<DecisionRecorder>()
+        .snapshot_with_total()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

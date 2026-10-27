@@ -775,10 +775,7 @@ fn verify_audit_chain(decisions: &[Json], head: &str, total: u64) -> Result<(), 
     }
     let mut running = audit_genesis();
     for decision in decisions {
-        let sequence = decision
-            .get("sequence")
-            .and_then(Json::as_u64)
-            .unwrap_or(0);
+        let sequence = decision.get("sequence").and_then(Json::as_u64).unwrap_or(0);
         let Some(stored) = decision.get("audit_hash").and_then(Json::as_str) else {
             return Err(format!("policy audit decision #{sequence} has no chain link; the record may have been modified after the run"));
         };
@@ -1541,11 +1538,7 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
 /// [`show_run`] with an explicit seal key. Unit and integration tests pass
 /// [`SealKey::Explicit`] so the seal check does not depend on ambient user
 /// state; callers without a key pass [`SealKey::Unavailable`].
-pub fn show_run_with_key(
-    directory: &Path,
-    as_json: bool,
-    seal_key: SealKey<'_>,
-) -> Result<String> {
+pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>) -> Result<String> {
     let record = StoredRecord::open(directory)?;
     let failed = record
         .steps
@@ -1742,10 +1735,7 @@ fn policy_identity_text(identity: Option<&Json>) -> (&str, String) {
         .and_then(Json::as_u64)
         .map(|version| version.to_string())
         .unwrap_or_else(|| "?".to_owned());
-    let digest = identity
-        .get("sha256")
-        .and_then(Json::as_str)
-        .unwrap_or("?");
+    let digest = identity.get("sha256").and_then(Json::as_str).unwrap_or("?");
     (status, format!(" version={version} sha256={digest}"))
 }
 
@@ -2611,11 +2601,10 @@ mod policy_audit_tests {
         let text = show_run_with_key(directory.path(), false, SealKey::Unavailable).unwrap();
         assert!(text.contains("predates chaining"), "{text}");
 
-        let report: Value =
-            serde_json::from_str(
-                &show_run_with_key(directory.path(), true, SealKey::Unavailable).unwrap(),
-            )
-            .unwrap();
+        let report: Value = serde_json::from_str(
+            &show_run_with_key(directory.path(), true, SealKey::Unavailable).unwrap(),
+        )
+        .unwrap();
         assert_eq!(report["audit_verified"], false);
         assert_eq!(report["audit_head"], Value::Null);
         assert!(
@@ -2966,8 +2955,7 @@ mod policy_audit_tests {
         audited_document(&directory);
         let short = [0x51; 3];
 
-        let text =
-            show_run_with_key(directory.path(), false, SealKey::Explicit(&short)).unwrap();
+        let text = show_run_with_key(directory.path(), false, SealKey::Explicit(&short)).unwrap();
         assert!(text.contains("untrusted"), "{text}");
         assert!(!text.contains("unsealed"), "{text}");
 
@@ -3039,7 +3027,10 @@ mod policy_audit_tests {
         }
         let document: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(document["policy"]["execution_mode"], "untrusted");
-        assert_eq!(document["policy"]["capability_policy"]["status"], "configured");
+        assert_eq!(
+            document["policy"]["capability_policy"]["status"],
+            "configured"
+        );
 
         let report: Value =
             serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
@@ -3112,12 +3103,13 @@ mod policy_audit_tests {
         let total = document["decision_count"].as_u64().unwrap();
         let truncated = document["decisions_truncated"].as_bool().unwrap();
         let head = document["audit_head"].as_str().unwrap().to_owned();
-        document
-            .as_object_mut()
-            .unwrap()
-            .remove("record_id");
-        document["audit_mac"] =
-            json!(super::audit_seal_hex_v1(&TEST_AUDIT_KEY, total, truncated, &head));
+        document.as_object_mut().unwrap().remove("record_id");
+        document["audit_mac"] = json!(super::audit_seal_hex_v1(
+            &TEST_AUDIT_KEY,
+            total,
+            truncated,
+            &head
+        ));
         rewrite_run_document(&directory, &document);
 
         let (text, report) = warn_open_output(&directory);
@@ -3139,10 +3131,7 @@ mod policy_audit_tests {
     fn legacy_seal_mismatch_is_untrusted_without_record_identity() {
         let directory = tempfile::tempdir().unwrap();
         let mut document = audited_document(&directory);
-        document
-            .as_object_mut()
-            .unwrap()
-            .remove("record_id");
+        document.as_object_mut().unwrap().remove("record_id");
         document["audit_mac"] = json!("0".repeat(64));
         rewrite_run_document(&directory, &document);
 
@@ -3171,7 +3160,10 @@ mod policy_audit_tests {
         )
         .unwrap();
         assert_eq!(report["audit_verified"], false);
-        let error = report["audit_error"].as_str().unwrap_or_default().to_owned();
+        let error = report["audit_error"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
         assert!(error.contains("different key"), "{report}");
         assert!(error.contains("indistinguishable"), "{report}");
         assert!(!error.contains("retired v1"), "{report}");
@@ -3294,8 +3286,7 @@ mod policy_audit_tests {
         let denied = decisions
             .iter()
             .find(|decision| {
-                decision["subject"] == "audit.allowlist"
-                    && decision["action"] == "environment.read"
+                decision["subject"] == "audit.allowlist" && decision["action"] == "environment.read"
             })
             .expect("the malformed allowlist denial is in the persisted log");
         assert_eq!(denied["outcome"], "denied");
@@ -3309,11 +3300,15 @@ mod policy_audit_tests {
         assert_eq!(report["audit_verified"], true);
         assert_eq!(report["audit_error"], Value::Null);
         assert!(
-            report["decisions"].as_array().unwrap().iter().any(|decision| {
-                decision["subject"] == "audit.allowlist"
-                    && decision["outcome"] == "denied"
-                    && decision["reason"] == "capability_not_granted"
-            }),
+            report["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|decision| {
+                    decision["subject"] == "audit.allowlist"
+                        && decision["outcome"] == "denied"
+                        && decision["reason"] == "capability_not_granted"
+                }),
             "{report}"
         );
     }
@@ -3345,9 +3340,12 @@ mod policy_audit_tests {
             audit_key: Some(TEST_AUDIT_KEY),
         })
         .unwrap();
-        let error =
-            crate::capabilities::authorize_environment_variable(&registry, "audit.probe", "SOME_VAR")
-                .unwrap_err();
+        let error = crate::capabilities::authorize_environment_variable(
+            &registry,
+            "audit.probe",
+            "SOME_VAR",
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("host_environment"), "{error:?}");
         assert!(!error.to_string().contains("CANARY"), "{error:?}");
         recorder
@@ -3433,7 +3431,10 @@ mod policy_audit_tests {
         assert_eq!(document["decisions_truncated"], true);
         let first = decisions.first().unwrap()["sequence"].as_u64().unwrap();
         let last = decisions.last().unwrap()["sequence"].as_u64().unwrap();
-        assert_eq!(last, total, "the persisted tail must end at the lifetime total");
+        assert_eq!(
+            last, total,
+            "the persisted tail must end at the lifetime total"
+        );
         assert_eq!(
             first,
             total - MAX_AUDIT_DECISIONS as u64 + 1,

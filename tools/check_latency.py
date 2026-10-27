@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Time the startup floor, a one-line program, a ten-step program, and a hot loop.
 
-Each program runs through `execute run` with the shipped manifests, except
-`--version`, which measures the process floor alone. The script prints the median
-and 95th-percentile wall time of each over several runs, and on POSIX the peak
-resident set size of each child. The budget file may hold `<key>_median_ms` and
-`<key>_max_rss_kb` for the keys below; a null or missing budget reports the value
-without enforcing it. Python 3.9+, standard library only.
+Each program runs through `execute run` with the binary's default manifests,
+except `--version`, which measures the process floor alone. Passing
+`--manifest-dir` adds a second set of rows for that explicit directory. The script
+prints median and 95th-percentile wall time and, on Linux with GNU time, each
+child's peak resident set size. Python 3.9+, standard library only.
 """
 import argparse
+import functools
 import json
-import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -37,28 +37,58 @@ def percentile(values, fraction):
     return ordered[index]
 
 
-def run_once(command):
+@functools.lru_cache(maxsize=1)
+def gnu_time():
+    """Return GNU time when available; its child process reports per-run RSS."""
+    if sys.platform != "linux":
+        return None
+    candidate = shutil.which("/usr/bin/time") or shutil.which("time")
+    if not candidate:
+        return None
+    try:
+        version = subprocess.run(
+            [candidate, "--version"], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    return candidate if version.returncode == 0 and "GNU time" in version.stdout else None
+
+
+def run_once(command, rss_command=None):
     """Run one child and return (elapsed_ms, peak_rss_kb or None).
 
-    On POSIX, os.wait4 returns the child's own rusage, so the peak is per child
-    and not the largest of every child so far. On Windows there is no wait4, so
-    the peak is not reported.
+    Wall time uses direct subprocess execution, preserving the original timing
+    method. A second, untimed GNU time invocation measures per-child RSS without
+    inheriting Python's Linux high-water mark. Callers with side effects can pass
+    a fresh `rss_command` so both invocations use independent state.
     """
+    time_binary = gnu_time()
     with tempfile.TemporaryFile() as stderr:
         started = time.perf_counter()
-        if hasattr(os, "wait4"):
-            process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=stderr)
-            _, status, usage = os.wait4(process.pid, 0)
-            elapsed = (time.perf_counter() - started) * 1000.0
-            process.returncode = os.waitstatus_to_exitcode(status)
-            # ru_maxrss is bytes on macOS and kilobytes elsewhere.
-            rss = usage.ru_maxrss / 1024 if sys.platform == "darwin" else usage.ru_maxrss
-            returncode = process.returncode
-        else:
-            result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=stderr, check=False)
-            elapsed = (time.perf_counter() - started) * 1000.0
-            rss = None
-            returncode = result.returncode
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=stderr, check=False)
+        elapsed = (time.perf_counter() - started) * 1000.0
+        rss = None
+        if time_binary:
+            rss_path = None
+            try:
+                with tempfile.NamedTemporaryFile(prefix="execute-rss-", delete=False) as output:
+                    rss_path = output.name
+                measured = subprocess.run(
+                    [time_binary, "-f", "%M", "-o", rss_path, *(rss_command or command)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                if measured.returncode == 0:
+                    rss = float(
+                        Path(rss_path).read_text(encoding="utf-8").strip().splitlines()[-1]
+                    )
+            except (OSError, ValueError, IndexError):
+                rss = None
+            finally:
+                if rss_path:
+                    Path(rss_path).unlink(missing_ok=True)
+        returncode = result.returncode
         stderr.seek(0)
         message = stderr.read().decode("utf-8", "replace").strip()
     return elapsed, rss, returncode, message
@@ -79,11 +109,24 @@ def time_program(binary, arguments, runs, warmup, label):
     return samples, (max(rss_values) if rss_values else None)
 
 
+def budget_limit(budget, key, metric):
+    """Use a row-specific limit, or reuse the base limit for manifest-dir rows."""
+    limit = budget.get(f"{key}_{metric}")
+    if limit is None and key.endswith("_manifest_dir"):
+        limit = budget.get(f"{key.removesuffix('_manifest_dir')}_{metric}")
+    return limit
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("binary", type=Path)
     parser.add_argument("budget", type=Path)
-    parser.add_argument("--manifest-dir", type=Path, default=Path("manifests"))
+    parser.add_argument("--manifest-dir", type=Path, help="also select an explicit manifest directory")
+    parser.add_argument(
+        "--require-rss",
+        action="store_true",
+        help="fail unless Linux GNU time reports per-child RSS for every workload",
+    )
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=2)
     args = parser.parse_args(argv)
@@ -107,14 +150,13 @@ def main(argv=None):
             path.write_text(source, encoding="utf-8")
         plans = {"version": ["--version"]}
         for key, (path, _) in programs.items():
-            plans[key] = [
-                "run",
-                str(path),
-                "--manifest-dir",
-                str(args.manifest_dir),
-            ]
+            plans[key] = ["run", str(path)]
+            if args.manifest_dir:
+                plans[f"{key}_manifest_dir"] = [
+                    "run", str(path), "--manifest-dir", str(args.manifest_dir)
+                ]
         for key, arguments in plans.items():
-            runs = args.runs if key != "hot_loop" else max(3, args.runs // 4)
+            runs = max(3, args.runs // 4) if key.startswith("hot_loop") else args.runs
             samples, peak = time_program(args.binary, arguments, runs, args.warmup, key)
             results[key] = {
                 "median_ms": statistics.median(samples),
@@ -124,7 +166,25 @@ def main(argv=None):
             }
 
     failures = []
-    for key, label in LABELS:
+    if args.require_rss:
+        missing = [key for key, measured in results.items() if measured["max_rss_kb"] is None]
+        if missing:
+            failures.append(
+                "per-child RSS was not measured for: " + ", ".join(missing)
+                + " (GNU time is required on Linux)"
+            )
+        else:
+            version_rss = results["version"]["max_rss_kb"]
+            hot_loop_rss = results["hot_loop"]["max_rss_kb"]
+            relationship = "differs from" if version_rss != hot_loop_rss else "matches"
+            print(f"process-floor RSS {relationship} hot-loop RSS: {version_rss:.0f} vs {hot_loop_rss:.0f} KiB")
+    labels = dict(LABELS)
+    for key in results:
+        if key.endswith("_manifest_dir"):
+            base_key = key.removesuffix("_manifest_dir")
+            base_label = dict(LABELS)[base_key]
+            labels[key] = f"{base_label} (--manifest-dir)"
+    for key, label in labels.items():
         measured = results[key]
         print(
             f"{label}: median {measured['median_ms']:.1f} ms, "
@@ -134,7 +194,7 @@ def main(argv=None):
             print("  peak RSS: not measured on this platform")
         else:
             print(f"  peak RSS {measured['max_rss_kb']:.0f} KiB")
-        limit = budget.get(f"{key}_median_ms")
+        limit = budget_limit(budget, key, "median_ms")
         if limit is None:
             print(f"  no {key}_median_ms budget recorded; reported, not enforced")
         elif measured["median_ms"] > limit:
@@ -143,7 +203,7 @@ def main(argv=None):
             )
         else:
             print(f"  within budget: {measured['median_ms']:.1f} <= {limit} ms")
-        rss_limit = budget.get(f"{key}_max_rss_kb")
+        rss_limit = budget_limit(budget, key, "max_rss_kb")
         if measured["max_rss_kb"] is not None:
             if rss_limit is None:
                 print(f"  no {key}_max_rss_kb budget recorded; reported, not enforced")

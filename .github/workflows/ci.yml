@@ -103,6 +103,10 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: jq --version
+      - name: Prove latency gate rejects a 20% startup regression
+        run: python3 tests/test_latency_budget_regression.py
+      - name: Prove Linux latency gate reports independent child RSS
+        run: python3 tests/test_latency_budget_rss.py
       - name: Check Linux default release binary size
         run: |
           cargo build --locked --release --bin execute
@@ -111,9 +115,13 @@ jobs:
         run: python3 tools/port_compare.py --binary target/release/execute
       - name: Test paired latency comparison tool
         run: python3 tools/test_paired_latency.py
+      - name: Test existing latency budget limits
+        run: python3 -m unittest tests/test_latency_budget_limits.py -v
+      - name: Test benchmark manifest command selection
+        run: python3 -m unittest tests/test_bench_budget.py -v
       - name: Measure Linux latency budget
         id: linux_latency
-        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests
+        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests --require-rss
       - name: Compare failed latency budget with push parent on the same runner
         id: paired_latency
         if: failure() && steps.linux_latency.outcome == 'failure' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
@@ -172,7 +180,6 @@ jobs:
           git worktree add --detach "$baseline_src" 35483ce
           CARGO_TARGET_DIR="$baseline_target" cargo build --locked --release --manifest-path "$baseline_src/Cargo.toml" --bin execute
           python3 tools/bench_budget.py target/release/execute tools/linux-bench-budget.json \
-            --manifest-dir manifests \
             --baseline-binary "$baseline_target/release/execute"
       - name: Check Linux minimal build size and tests
         run: |

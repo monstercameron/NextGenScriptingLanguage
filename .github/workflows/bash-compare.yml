@@ -34,6 +34,8 @@ jobs:
       - run: sudo apt-get install -y --no-install-recommends time strace musl-tools
       - name: Check benchmark workload contracts
         run: python3 -m unittest tests/test_bash_compare.py -v
+      - name: Check stored Execute/Bash ratio regression gate
+        run: python3 -m unittest tests/test_bash_ratio_regression.py -v
       - name: Build
         env:
           VARIANT: ${{ matrix.variant }}

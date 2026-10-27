@@ -32,6 +32,13 @@ PARALLEL_EACH_LIMIT = 64
 FOR_EACH_ITEMS = 10000
 
 
+def execute_command(binary, program, manifests):
+    command = [str(binary), "run", str(program)]
+    if manifests:
+        command.extend(["--manifest-dir", str(manifests)])
+    return command
+
+
 def ten_step_pipeline():
     stages = ['run "printf" with arguments ["x"]'] + ['pipe to "cat"'] * 9
     return "\n".join(stages) + "\n", False
@@ -91,7 +98,7 @@ def measure(binary, manifests, source, checkpointed, runs, warmup, directory, na
     checkpoints = []
 
     def arguments():
-        base = [str(binary), "run", str(program), "--manifest-dir", str(manifests)]
+        base = execute_command(binary, program, manifests)
         if not checkpointed:
             return base
         fresh = Path(directory) / f"ck-{len(checkpoints)}"
@@ -99,10 +106,10 @@ def measure(binary, manifests, source, checkpointed, runs, warmup, directory, na
         return base + ["--checkpoint", str(fresh)]
 
     for _ in range(warmup):
-        run_once(arguments())
+        run_once(arguments(), rss_command=arguments())
     samples, rss_values = [], []
     for _ in range(runs):
-        elapsed, rss, returncode, message = run_once(arguments())
+        elapsed, rss, returncode, message = run_once(arguments(), rss_command=arguments())
         if returncode != 0:
             raise RuntimeError(f"exit {returncode}: {message[:200]}")
         samples.append(elapsed)
@@ -120,7 +127,7 @@ def peak_linux_threads(binary, manifests, source, directory, name, runs, warmup)
     """Sample a child process's live Linux thread count during this workload."""
     program = Path(directory) / f"{name}-threads.program"
     program.write_text(source, encoding="utf-8")
-    command = [str(binary), "run", str(program), "--manifest-dir", str(manifests)]
+    command = execute_command(binary, program, manifests)
     peak = 0
     for _ in range(warmup + runs):
         with tempfile.TemporaryFile() as stderr:
@@ -170,7 +177,7 @@ def measure_parallel_native_wake_rate(binary, manifests, directory):
     )
     program = Path(directory) / "parallel-native-idle.program"
     program.write_text(source, encoding="utf-8")
-    command = [str(binary), "run", str(program), "--manifest-dir", str(manifests)]
+    command = execute_command(binary, program, manifests)
     with tempfile.TemporaryFile() as stderr:
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=stderr)
         try:
@@ -217,7 +224,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("binary", type=Path)
     parser.add_argument("budget", type=Path)
-    parser.add_argument("--manifest-dir", type=Path, default=Path("manifests"))
+    parser.add_argument("--manifest-dir", type=Path, help="select an explicit manifest directory")
     parser.add_argument("--baseline-binary", type=Path)
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=1)

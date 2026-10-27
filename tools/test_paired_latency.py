@@ -30,6 +30,7 @@ class PairedLatencyTests(unittest.TestCase):
         )
         self.assertIn("BASE_SHA: ${{ github.event.before }}", workflow)
         self.assertIn('--manifest-dir "$GITHUB_WORKSPACE/manifests"', workflow)
+        self.assertIn("--require-rss", workflow)
         self.assertIn("continue-on-error: true", workflow)
         self.assertIn("id: paired_latency", workflow)
         self.assertIn("path: target/paired-latency.json", workflow)

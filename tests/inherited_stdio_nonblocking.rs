@@ -76,11 +76,21 @@ fn native_child_writes_megabyte_to_inherited_stderr_while_execute_streams() {
     let fixture = env!("CARGO_BIN_EXE_native-fixture").to_owned();
     let status_path = directory.path().join("stream-probe.status");
     let workflow = directory.path().join("inherited-stderr.program");
+    // The probe status path travels as `$1` (a separate argv element), never
+    // interpolated into the `sh -c` script: a quoted path inside the script
+    // string terminates the program string literal early
+    // (`... stream-probe 1048576 "/tmp/..."` closes the `"` opened before
+    // `exec`), so workflow line 1 fails with "expected `,` or `]` in list".
+    // Separate argv elements keep the program grammar and the shell quoting
+    // exact, including status paths containing spaces.
+    let script = format!("exec \"$0\" stream-probe {CHILD_BYTES} \"$1\"");
     fs::write(
         &workflow,
         format!(
-            "run \"sh\" with arguments [\"-c\", \"exec \\\"$0\\\" stream-probe {CHILD_BYTES} {probe_status:?}\", {fixture:?}]\nrun printf with message \"output-line\"\n",
-            probe_status = status_path.to_string_lossy(),
+            "run \"sh\" with arguments [\"-c\", {}, {}, {}]\nrun printf with message \"output-line\"\n",
+            serde_json::to_string(&script).unwrap(),
+            serde_json::to_string(&fixture).unwrap(),
+            serde_json::to_string(&status_path.to_string_lossy()).unwrap(),
         ),
     )
     .unwrap();

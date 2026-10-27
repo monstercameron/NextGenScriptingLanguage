@@ -233,6 +233,8 @@ pub(crate) fn run_stream_with_context_and_process_observer(
     process_observer: Option<super::ProcessObserver>,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<StreamResult> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let local_deadline = super::deadline_after(options.total_timeout, "total timeout")?;
     let deadline = match (context.deadline, local_deadline) {
         (Some(parent), Some(local)) => Some(parent.min(local)),

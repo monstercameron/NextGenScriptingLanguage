@@ -12,6 +12,8 @@ use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::{bail, Result};
 #[cfg(target_os = "linux")]
+use std::cell::RefCell;
+#[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::collections::HashSet;
@@ -30,8 +32,6 @@ use std::process::Command;
 use std::process::Stdio;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::{Child, ExitStatus};
-#[cfg(target_os = "linux")]
-use std::sync::{Mutex, OnceLock};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::{Duration, Instant};
 
@@ -93,48 +93,37 @@ pub(crate) fn preflight(grant: &AppletGrant, binary: &Path, cwd: &Path) -> Resul
 type ProbeKey = (PathBuf, String, PathBuf, PathBuf, String);
 
 #[cfg(target_os = "linux")]
-struct ProbeCacheState {
-    active_runs: usize,
-    successful: HashSet<ProbeKey>,
+type ProbeCache = HashSet<ProbeKey>;
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static ACTIVE_PROBE_CACHE: RefCell<Option<ProbeCache>> = const { RefCell::new(None) };
 }
 
+/// Successful probes are reused only in the thread that owns the runtime run.
+/// Worker threads without an explicit run context bypass the cache, preventing
+/// reuse across threads with different per-thread credentials or namespaces.
 #[cfg(target_os = "linux")]
-static PROBE_CACHE: OnceLock<Mutex<ProbeCacheState>> = OnceLock::new();
-
-#[cfg(target_os = "linux")]
-fn probe_cache() -> &'static Mutex<ProbeCacheState> {
-    PROBE_CACHE.get_or_init(|| {
-        Mutex::new(ProbeCacheState {
-            active_runs: 0,
-            successful: HashSet::new(),
-        })
-    })
-}
-
-/// Successful probes are reused only while one runtime run is active. The
-/// shared cache lets worker threads participate; it clears at every run
-/// boundary and disables caching when concurrent runs make ownership unclear.
-#[cfg(target_os = "linux")]
-pub(crate) struct ProbeRunGuard;
+pub(crate) struct ProbeRunGuard(Option<ProbeCache>);
 
 #[cfg(target_os = "linux")]
 pub(crate) fn begin_probe_run() -> ProbeRunGuard {
-    let mut cache = probe_cache()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    cache.active_runs += 1;
-    cache.successful.clear();
-    ProbeRunGuard
+    let previous = ACTIVE_PROBE_CACHE.with(|active| active.replace(Some(HashSet::new())));
+    ProbeRunGuard(previous)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn begin_probe_run_if_missing() -> Option<ProbeRunGuard> {
+    let active = ACTIVE_PROBE_CACHE.with(|active| active.borrow().is_some());
+    (!active).then(begin_probe_run)
 }
 
 #[cfg(target_os = "linux")]
 impl Drop for ProbeRunGuard {
     fn drop(&mut self) {
-        let mut cache = probe_cache()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.active_runs = cache.active_runs.saturating_sub(1);
-        cache.successful.clear();
+        ACTIVE_PROBE_CACHE.with(|active| {
+            active.replace(self.0.take());
+        });
     }
 }
 
@@ -146,72 +135,59 @@ fn cache_successful_probe(
     cwd: &Path,
     probe: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
+    if !ACTIVE_PROBE_CACHE.with(|active| active.borrow().is_some()) {
+        return probe();
+    }
     // The applet-specific mount probe depends on all four inputs. Keep the
     // validated path grant in the key so a successful probe is never reused
     // for a different executable or working directory.
     let grant =
         serde_json::to_string(grant).context("serializing sandbox grant for probe cache")?;
+    let Some(identity) = execution_identity(bwrap) else {
+        return probe();
+    };
     let key = (
         bwrap.to_path_buf(),
         grant,
         binary.to_path_buf(),
         cwd.to_path_buf(),
-        execution_identity(bwrap),
+        identity.clone(),
     );
-    let mut cache = probe_cache()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if cache.active_runs != 1 {
-        drop(cache);
-        return probe();
-    }
-    remember_successful_probe(&mut cache, key, probe)
+    ACTIVE_PROBE_CACHE.with(|active| {
+        let mut active = active.borrow_mut();
+        let cache = active
+            .as_mut()
+            .expect("cache presence was checked immediately before borrowing");
+        remember_successful_probe(cache, key, probe)
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn remember_successful_probe(
-    cache: &mut ProbeCacheState,
+    cache: &mut ProbeCache,
     key: ProbeKey,
     probe: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    if cache.active_runs != 1 {
-        return probe();
-    }
-    if cache.successful.contains(&key) {
+    if cache.contains(&key) {
         return Ok(());
     }
     probe()?;
-    cache.successful.insert(key);
+    cache.insert(key);
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn execution_identity(bwrap: &Path) -> String {
+fn execution_identity(bwrap: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
 
-    // SAFETY: these process-identity queries take no pointers or other inputs.
-    let (uid, euid, gid, egid) = unsafe {
-        (
-            libc::getuid(),
-            libc::geteuid(),
-            libc::getgid(),
-            libc::getegid(),
-        )
-    };
-    let mut identity = format!("uid={uid} euid={euid} gid={gid} egid={egid}");
+    let mut identity = String::new();
     for namespace in ["user", "pid", "mnt", "net", "ipc", "uts"] {
-        let path = Path::new("/proc/self/ns").join(namespace);
-        if let Ok(metadata) = std::fs::metadata(&path) {
-            use std::fmt::Write as _;
-            let _ = write!(
-                identity,
-                " {namespace}={}:{}",
-                metadata.dev(),
-                metadata.ino()
-            );
-        }
+        let path = Path::new("/proc/thread-self/ns").join(namespace);
+        let namespace_id = std::fs::read_link(path).ok()?;
+        identity.push_str(&format!(" {namespace}={}", namespace_id.display()));
     }
-    if let Ok(metadata) = std::fs::metadata(bwrap) {
+    {
+        let metadata = std::fs::metadata(bwrap).ok()?;
         use std::fmt::Write as _;
         let _ = write!(
             identity,
@@ -224,22 +200,25 @@ fn execution_identity(bwrap: &Path) -> String {
             metadata.mode()
         );
     }
-    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-        for line in status.lines().filter(|line| {
-            line.starts_with("Groups:")
-                || line.starts_with("CapEff:")
-                || line.starts_with("CapPrm:")
-                || line.starts_with("CapBnd:")
-                || line.starts_with("CapInh:")
-                || line.starts_with("CapAmb:")
-                || line.starts_with("NoNewPrivs:")
-                || line.starts_with("Seccomp:")
-        }) {
-            identity.push(' ');
-            identity.push_str(line);
-        }
+    let status = std::fs::read_to_string("/proc/thread-self/status").ok()?;
+    let mut identity_fields = 0;
+    for line in status.lines().filter(|line| {
+        line.starts_with("Uid:")
+            || line.starts_with("Gid:")
+            || line.starts_with("Groups:")
+            || line.starts_with("CapEff:")
+            || line.starts_with("CapPrm:")
+            || line.starts_with("CapBnd:")
+            || line.starts_with("CapInh:")
+            || line.starts_with("CapAmb:")
+            || line.starts_with("NoNewPrivs:")
+            || line.starts_with("Seccomp:")
+    }) {
+        identity.push(' ');
+        identity.push_str(line);
+        identity_fields += 1;
     }
-    identity
+    (identity_fields == 10).then_some(identity)
 }
 
 #[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
@@ -1181,54 +1160,117 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn successful_probe_cache_is_scoped_to_one_runtime_run() {
-        let key = (
-            PathBuf::from("/usr/bin/bwrap"),
-            "grant".to_owned(),
-            PathBuf::from("/usr/bin/true"),
-            PathBuf::from("/tmp/workflow"),
-            "identity".to_owned(),
-        );
+        let root = tempfile::tempdir().unwrap();
+        let grant = grant_for(root.path());
+        let bwrap = PathBuf::from("/usr/bin/true");
+        let binary = PathBuf::from("/usr/bin/true");
+        let cwd = root.path().to_path_buf();
         let probes = std::sync::atomic::AtomicUsize::new(0);
 
-        let mut first_run = ProbeCacheState {
-            active_runs: 1,
-            successful: HashSet::new(),
-        };
+        let first_run = begin_probe_run();
         for _ in 0..2 {
-            remember_successful_probe(&mut first_run, key.clone(), || {
+            cache_successful_probe(&bwrap, &grant, &binary, &cwd, || {
                 probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
             })
             .unwrap();
         }
         assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        drop(first_run);
 
-        let mut second_run = ProbeCacheState {
-            active_runs: 1,
-            successful: HashSet::new(),
-        };
-        remember_successful_probe(&mut second_run, key.clone(), || {
+        let second_run = begin_probe_run();
+        cache_successful_probe(&bwrap, &grant, &binary, &cwd, || {
             probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         })
         .unwrap();
         assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 2);
+        drop(second_run);
 
-        let mut overlapping_runs = ProbeCacheState {
-            active_runs: 2,
-            successful: HashSet::new(),
-        };
-        remember_successful_probe(&mut overlapping_runs, key.clone(), || {
+        let outer = begin_probe_run();
+        cache_successful_probe(&bwrap, &grant, &binary, &cwd, || {
             probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         })
         .unwrap();
-        remember_successful_probe(&mut overlapping_runs, key, || {
+        let nested = begin_probe_run();
+        cache_successful_probe(&bwrap, &grant, &binary, &cwd, || {
             probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         })
         .unwrap();
+        drop(nested);
+        cache_successful_probe(&bwrap, &grant, &binary, &cwd, || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        drop(outer);
         assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unowned_worker_thread_does_not_reuse_another_threads_probe() {
+        let root = tempfile::tempdir().unwrap();
+        let grant = grant_for(root.path());
+        let bwrap = PathBuf::from("/usr/bin/true");
+        let binary = PathBuf::from("/usr/bin/true");
+        let cwd = root.path().to_path_buf();
+        let probes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let _run = begin_probe_run();
+        let worker_probes = std::sync::Arc::clone(&probes);
+
+        cache_successful_probe(&bwrap, &grant, &binary, &cwd, || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        let worker_bwrap = bwrap.clone();
+        let worker_binary = binary.clone();
+        let worker_cwd = cwd.clone();
+        let worker_grant = grant.clone();
+        std::thread::spawn(move || {
+            cache_successful_probe(
+                &worker_bwrap,
+                &worker_grant,
+                &worker_binary,
+                &worker_cwd,
+                || {
+                    worker_probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        })
+        .join()
+        .unwrap();
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        let worker_probes = std::sync::Arc::clone(&probes);
+        let worker_bwrap = bwrap.clone();
+        let worker_binary = binary.clone();
+        let worker_cwd = cwd.clone();
+        let worker_grant = grant.clone();
+        std::thread::spawn(move || {
+            let _run = begin_probe_run_if_missing().expect("worker owns an independent run cache");
+            for _ in 0..2 {
+                cache_successful_probe(
+                    &worker_bwrap,
+                    &worker_grant,
+                    &worker_binary,
+                    &worker_cwd,
+                    || {
+                        worker_probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
     #[cfg(target_os = "linux")]

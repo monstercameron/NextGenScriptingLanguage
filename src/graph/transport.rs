@@ -1201,6 +1201,8 @@ impl GraphSession {
             let cancel_on_error = Arc::clone(&cancelled);
             let worker_error_on_error = Arc::clone(&worker_error);
             let handle = scope.spawn(move |token| {
+                #[cfg(target_os = "linux")]
+                let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
                 io.token = token;
                 let _close = CloseQueues(queues);
                 let result = executor.execute(&node_owned, &mut io, &context);
@@ -3065,6 +3067,8 @@ fn run_plan(
     cancelled: Arc<AtomicBool>,
     checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
 ) -> Result<GraphRunResult> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = options
         .total_timeout
         .map(|timeout| {

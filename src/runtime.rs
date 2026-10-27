@@ -3959,6 +3959,8 @@ pub(crate) fn invoke_applet_with_context(
     cancelled: Arc<AtomicBool>,
     context: AppletInvocationContext,
 ) -> Result<AppletInvocationResult> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run_if_missing();
     invoke_call_with_context(
         AppletInvocation {
             registry,

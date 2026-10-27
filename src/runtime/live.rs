@@ -78,6 +78,8 @@ pub(crate) fn execute_node_with_session(
     last_job_uses: BTreeMap<String, usize>,
     final_node: bool,
 ) -> Result<(RunResult, NodeState)> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run_if_missing();
     let signals = Signals::with_cancellation_and_deadline(
         cancelled,
         true,
@@ -177,6 +179,8 @@ pub(crate) fn producer(
     max_record: usize,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<usize> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run_if_missing();
     let signals = Signals::with_cancellation_and_deadline(
         cancelled,
         true,
@@ -213,6 +217,8 @@ pub(crate) fn stream(
     max_record: usize,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<usize> {
+    #[cfg(target_os = "linux")]
+    let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run_if_missing();
     let signals = Signals::with_cancellation_and_deadline(
         cancelled,
         true,

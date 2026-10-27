@@ -158,6 +158,13 @@ directories of programs. See [machine-readable checks](docs/language.md#machine-
 faithful `sh` form and refuses the rest by name and line; see
 [compile to POSIX sh](docs/language.md#compile-to-posix-sh).
 
+Native applet processes and the bundled model helper inherit the host environment by default. Set
+`EXECUTE_CHILD_ENV_ALLOW=PATH,HOME,LANG,TERM` to pass only those named variables;
+an empty value passes none. The allowlist also applies to daemon-forwarded runs
+and intersects with capability-policy grants. You can also use `--env-allow PATH,HOME` on a
+single invocation or `--clear-env` to pass none; these flags work with `run`, `run-parts`,
+service generation, and `model`. See the [environment reference](docs/runtime-reference.md#warm-daemon---daemon).
+
 ## A warm daemon for repeated runs
 
 `execute daemon serve` provides per-user status and management on Unix. Run forwarding is

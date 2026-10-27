@@ -36,6 +36,9 @@ class FeatureMatrixTests(unittest.TestCase):
         self.assertIn("cargo test --locked --no-default-features --features test-fixtures --lib --tests", self.workflow)
         self.assertIn("cargo test --locked --features test-fixtures --lib --tests", self.workflow)
 
+    def test_model_only_helper_build_and_environment_are_checked(self) -> None:
+        self.assertIn("cargo test --locked --no-default-features --features model --test model_env_minimize", self.workflow)
+
     def test_standalone_model_feature_is_tested_without_remote(self) -> None:
         self.assertIn("cargo test --locked --no-default-features --features model --lib --tests", self.workflow)
 
@@ -49,6 +52,7 @@ class FeatureMatrixTests(unittest.TestCase):
             and "--test windows_native" in line
         )
         self.assertIn("--test prompt_inputs", command)
+        self.assertIn("--test child_env_minimize_windows", command)
 
     def test_fixture_is_test_only_and_built_for_ci(self) -> None:
         manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")

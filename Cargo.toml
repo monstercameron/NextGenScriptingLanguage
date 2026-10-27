@@ -238,6 +238,18 @@ name = "models"
 required-features = ["model"]
 
 [[test]]
+name = "model_env_minimize"
+required-features = ["model"]
+
+[[test]]
+name = "child_env_minimize"
+required-features = ["tooling"]
+
+[[test]]
+name = "child_env_minimize_windows"
+required-features = ["tooling"]
+
+[[test]]
 name = "repl_json"
 required-features = ["records"]
 

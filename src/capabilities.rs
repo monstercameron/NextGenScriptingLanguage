@@ -1363,6 +1363,7 @@ where
     // carries no environment changes, so std passes `environ` through instead of copying
     // and rebuilding the whole environment for every child.
     let inherits_environment = configured.as_ref().is_none()
+        && child_environment_allowlist()?.is_none()
         && !command_overlay_active()
         && registry
             .resolve(applet_name)
@@ -1549,13 +1550,10 @@ pub fn effective_environment(
     let manifest = match registry.resolve(applet_name) {
         Ok(manifest) => Some(manifest),
         Err(error) if configured.as_ref().is_none() => {
-            // Legacy direct quoted commands use a synthetic manifest name
-            // which is not registered. With no strict policy, preserve their
-            // historical ambient environment and apply no manifest overlay.
+            // Direct quoted commands have no registered manifest, but still use
+            // the same ambient environment restrictions as named applets.
             let _ = error;
-            let mut environment = std::env::vars_os().collect::<Vec<_>>();
-            environment.sort_by(|left, right| left.0.cmp(&right.0));
-            return Ok(environment);
+            None
         }
         Err(error) => {
             return Err(error)
@@ -1566,9 +1564,14 @@ pub fn effective_environment(
         validate_environment_backend(manifest)?;
     }
 
+    let allowlist = child_environment_allowlist()?;
     let mut environment = std::env::vars_os()
         .filter(|(name, _)| {
             environment_name_allowed(configured.as_ref().as_ref(), applet_name, name)
+                && allowlist.as_ref().is_none_or(|list| {
+                    list.iter()
+                        .any(|allowed| same_environment_name(name, allowed))
+                })
         })
         .collect::<Vec<_>>();
     if let Some(policy) = configured.as_ref() {
@@ -1590,6 +1593,60 @@ pub fn effective_environment(
     }
     environment.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(environment)
+}
+
+/// Optional ambient child-environment allowlist, selected by the host. An empty
+/// value clears the ambient environment. A malformed value fails closed.
+fn child_environment_allowlist() -> Result<Option<Vec<String>>> {
+    let Some(value) = std::env::var_os("EXECUTE_CHILD_ENV_ALLOW") else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .ok_or_else(|| anyhow!("EXECUTE_CHILD_ENV_ALLOW must be UTF-8"))?;
+    parse_child_environment_allowlist(value).map(Some)
+}
+
+/// Parse and validate the host's comma-separated native child environment allowlist.
+/// The empty string means clear the environment; command-line callers use
+/// `--clear-env` for that case.
+pub fn parse_child_environment_allowlist(value: &str) -> Result<Vec<String>> {
+    if value.len() > 8192 {
+        bail!("EXECUTE_CHILD_ENV_ALLOW exceeds the 8192-byte limit");
+    }
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for name in value.split(',') {
+        let mut bytes = name.bytes();
+        let valid = bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+            && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        if !valid || is_loader_variable(name) {
+            bail!("EXECUTE_CHILD_ENV_ALLOW contains an invalid or loader-sensitive name");
+        }
+        if names.len() == 256 {
+            bail!("EXECUTE_CHILD_ENV_ALLOW exceeds the 256-name limit");
+        }
+        names.push(name.to_owned());
+    }
+    Ok(names)
+}
+
+/// Apply the host's optional ambient allowlist to a directly launched helper.
+/// Unlike applet launches, these helpers have no per-applet policy or overlays.
+pub fn apply_host_child_environment(command: &mut Command) -> Result<()> {
+    if let Some(allowlist) = child_environment_allowlist()? {
+        let environment = std::env::vars_os().filter(|(name, _)| {
+            allowlist
+                .iter()
+                .any(|allowed| same_environment_name(name, allowed))
+        });
+        command.env_clear().envs(environment);
+    }
+    Ok(())
 }
 
 fn environment_name_allowed(
@@ -1640,6 +1697,14 @@ fn authorize_environment_override(
     applet_name: &str,
     variable_name: &str,
 ) -> Result<()> {
+    if let Some(allowlist) = child_environment_allowlist()? {
+        if !allowlist
+            .iter()
+            .any(|name| same_environment_name(OsStr::new(name), variable_name))
+        {
+            bail!("environment override {variable_name:?} is not in EXECUTE_CHILD_ENV_ALLOW");
+        }
+    }
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
         // Without a policy, every other name is the author's choice (the Bash trust

@@ -293,11 +293,68 @@ fn program_takes_terminal(arguments: &[String]) -> bool {
 
 fn execute() -> Result<()> {
     let raw_arguments = env::args_os().skip(1).collect::<Vec<_>>();
-    let arguments = parse_os_arguments(raw_arguments)?;
+    let arguments = apply_child_environment_options(parse_os_arguments(raw_arguments)?)?;
     if let Some(status) = daemon_forward(&arguments) {
         std::process::exit(status);
     }
     execute_arguments(arguments)
+}
+
+/// Consume host-level child-environment options before dispatch. Keeping this
+/// outside the workflow parser makes the same flags available to `run-parts`,
+/// service generation, daemon forwarding, and the `model` helper subcommand.
+fn apply_child_environment_options(arguments: Vec<String>) -> Result<Vec<String>> {
+    let boundary = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    let mut filtered = Vec::with_capacity(arguments.len());
+    let mut allow_names = Vec::new();
+    let mut saw_clear = false;
+    let mut saw_allow = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        if index >= boundary {
+            filtered.extend(arguments[index..].iter().cloned());
+            break;
+        }
+        match arguments[index].as_str() {
+            "--clear-env" => {
+                if saw_clear || saw_allow {
+                    bail!("--clear-env may be specified only once and cannot be combined with --env-allow");
+                }
+                saw_clear = true;
+            }
+            "--env-allow" => {
+                if saw_clear {
+                    bail!("--clear-env and --env-allow cannot be combined");
+                }
+                saw_allow = true;
+                index += 1;
+                let value = arguments
+                    .get(index)
+                    .context("--env-allow requires NAME[,NAME...]")?;
+                if value.is_empty() {
+                    bail!("--env-allow requires at least one name; use --clear-env to pass none");
+                }
+                allow_names.extend(flow::capabilities::parse_child_environment_allowlist(
+                    value,
+                )?);
+            }
+            _ => filtered.push(arguments[index].clone()),
+        }
+        index += 1;
+    }
+    if saw_clear {
+        env::set_var("EXECUTE_CHILD_ENV_ALLOW", "");
+    } else if saw_allow {
+        allow_names.sort();
+        allow_names.dedup();
+        let encoded = allow_names.join(",");
+        flow::capabilities::parse_child_environment_allowlist(&encoded)?;
+        env::set_var("EXECUTE_CHILD_ENV_ALLOW", encoded);
+    }
+    Ok(filtered)
 }
 
 fn parse_os_arguments(raw_arguments: Vec<std::ffi::OsString>) -> Result<Vec<String>> {
@@ -469,6 +526,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             {
                 let helper = runtime::bundled_model_applet()?;
                 let mut command = std::process::Command::new(helper);
+                flow::capabilities::apply_host_child_environment(&mut command)?;
                 command.args(&arguments[1..]);
                 return Err(std::os::unix::process::CommandExt::exec(&mut command))
                     .context("starting the bundled model applet");
@@ -2379,7 +2437,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
 
 #[cfg(feature = "tooling")]
 fn service_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ... | --answers FILE] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. --answers requires a private JSON file and forwards only its path. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
+    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--clear-env | --env-allow NAME[,NAME...]] [--input NAME=VALUE ... | --answers FILE] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. --answers requires a private JSON file and forwards only its path. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
@@ -2525,6 +2583,13 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     }
     let capability_policy_path = capability_policy.clone();
     let data_flow_policy_path = data_flow_policy.clone();
+    let child_environment_allowlist = env::var_os("EXECUTE_CHILD_ENV_ALLOW")
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| anyhow!("EXECUTE_CHILD_ENV_ALLOW must be UTF-8"))
+        })
+        .transpose()?;
     let format = flow::service_deployment::ServiceFormat::parse(
         positional[0]
             .to_str()
@@ -2575,6 +2640,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         manifest_directory: manifest_dir.as_deref(),
         capability_policy: capability_policy_path.as_deref(),
         data_flow_policy: data_flow_policy_path.as_deref(),
+        child_environment_allowlist: child_environment_allowlist.as_deref(),
         answers_file: answers_file.as_deref(),
         label: label.as_deref(),
         inputs: &supplied_inputs,
@@ -2732,7 +2798,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

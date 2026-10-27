@@ -583,6 +583,7 @@ fn execute_group_with_sink(
 pub fn model_cli(arguments: &[String]) -> Result<i32> {
     let signals = Signals::register_with_deadline(None)?;
     let mut command = std::process::Command::new(bundled_model_applet()?);
+    crate::capabilities::apply_host_child_environment(&mut command)?;
     command
         .args(arguments)
         .stdin(Stdio::inherit())

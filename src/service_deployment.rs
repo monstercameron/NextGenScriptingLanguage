@@ -40,6 +40,8 @@ pub struct WorkflowServiceRequest<'a> {
     pub manifest_directory: Option<&'a Path>,
     pub capability_policy: Option<&'a Path>,
     pub data_flow_policy: Option<&'a Path>,
+    /// Optional host child environment allowlist; an empty string clears it.
+    pub child_environment_allowlist: Option<&'a str>,
     /// Private JSON answers file forwarded to `run` by path.
     pub answers_file: Option<&'a Path>,
     pub label: Option<&'a str>,
@@ -193,6 +195,15 @@ fn render_for_workflow_with_launchd_home_and_catalog(
             "--data-flow-policy".into(),
             utf8_path(&path, "data-flow policy")?,
         ]);
+    }
+    if let Some(value) = request.child_environment_allowlist {
+        let names = crate::capabilities::parse_child_environment_allowlist(value)?;
+        if names.is_empty() {
+            argv.push("--clear-env".into());
+        } else {
+            argv.push("--env-allow".into());
+            argv.push(names.join(","));
+        }
     }
     if let Some(path) = answers_file {
         argv.extend(["--answers".into(), utf8_path(&path, "answers file")?]);
@@ -744,7 +755,7 @@ mod tests {
         let executable = std::env::current_exe().unwrap();
         let inputs = BTreeMap::new();
         let arguments = vec!["semi;colon".to_owned(), "two words".to_owned()];
-        let rendered = render_for_workflow(&WorkflowServiceRequest {
+        let mut request = WorkflowServiceRequest {
             format: ServiceFormat::Systemd,
             workflow_path: &workflow,
             executable: &executable,
@@ -752,17 +763,23 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            child_environment_allowlist: Some("PATH,LANG"),
             answers_file: None,
             label: Some("com.example.daily-task"),
             inputs: &inputs,
             program_arguments: &arguments,
             persistent: false,
-        })
-        .unwrap();
+        };
+        let rendered = render_for_workflow(&request).unwrap();
         assert!(rendered.contains("KillMode=control-group"));
         assert!(rendered.contains("Restart=on-failure"));
         assert!(rendered.contains("\"two words\""));
         assert!(rendered.contains("Generated for review"));
+        assert!(rendered.contains("\"--env-allow\" \"PATH,LANG\""));
+
+        request.child_environment_allowlist = Some("");
+        let cleared = render_for_workflow(&request).unwrap();
+        assert!(cleared.contains("\"--clear-env\""));
     }
 
     #[test]
@@ -787,6 +804,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            child_environment_allowlist: None,
             answers_file: None,
             label: Some("com.example.catalog-service"),
             inputs: &inputs,
@@ -823,6 +841,7 @@ mod tests {
                 manifest_directory: None,
                 capability_policy: None,
                 data_flow_policy: None,
+                child_environment_allowlist: None,
                 answers_file: None,
                 label: Some("com.example.scheduled"),
                 inputs: &inputs,
@@ -866,6 +885,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            child_environment_allowlist: None,
             answers_file: None,
             label: None,
             inputs: &inputs,
@@ -1010,6 +1030,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            child_environment_allowlist: None,
             answers_file: None,
             label: Some("com.example.nightly"),
             inputs: &inputs,
@@ -1059,6 +1080,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            child_environment_allowlist: None,
             answers_file: None,
             label: Some("com.example.interval"),
             inputs: &inputs,

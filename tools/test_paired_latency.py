@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Focused tests for interleaved latency comparison behavior."""
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -23,6 +24,36 @@ class PairedLatencyTests(unittest.TestCase):
         self.assertIn("continue-on-error: true", workflow)
         self.assertIn("id: paired_latency", workflow)
         self.assertIn("path: target/paired-latency.json", workflow)
+
+    def test_historical_anchor_workflow_is_manual_and_does_not_change_budgets(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (
+            root / ".github/workflows/latency-anchor-diagnostic.yml"
+        ).read_text(encoding="utf-8")
+        budgets = json.loads(
+            (root / "tools/linux-latency-budget.json").read_text(encoding="utf-8")
+        )
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
+        self.assertIn(
+            "ANCHOR_SHA: 6fa84251ec359f22116ddd316b90ec95cd23491f", workflow
+        )
+        self.assertIn("toolchain: stable", workflow)
+        self.assertIn('CARGO_BUILD_JOBS: "1"', workflow)
+        self.assertIn(
+            'git -C "$anchor_worktree" show "$ANCHOR_SHA:manifests/printf.json"',
+            workflow,
+        )
+        self.assertIn(
+            'git -C "$anchor_worktree" show "$ANCHOR_SHA:manifests/core.number_to_text.json"',
+            workflow,
+        )
+        self.assertIn("tools/compare_latency.py", workflow)
+        self.assertNotIn("tools/check_latency.py", workflow)
+        self.assertIn("diagnostic only", workflow)
+        self.assertEqual(budgets["one_line_median_ms"], 5)
+        self.assertEqual(budgets["ten_step_median_ms"], 8)
 
     def test_warmups_and_samples_alternate_balanced_order(self) -> None:
         calls = []

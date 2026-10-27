@@ -1,0 +1,95 @@
+name: Historical latency anchor (diagnostic)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    name: Paired latency comparison on one Linux runner
+    # Dispatch this workflow from main so github.sha is the exact candidate revision.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ANCHOR_SHA: 6fa84251ec359f22116ddd316b90ec95cd23491f
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - name: Explain the diagnostic comparison
+        run: |
+          {
+            echo "This workflow compares historical anchor $ANCHOR_SHA with candidate $GITHUB_SHA on one runner."
+            echo "It is diagnostic only; the Linux latency budgets and their 5/8 ms ceilings are unchanged."
+            echo "Select main when dispatching so the candidate is a main revision."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Test the paired comparison tool
+        run: python3 tools/test_paired_latency.py
+      - name: Build both revisions with the same stable toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          anchor_worktree="$RUNNER_TEMP/latency-anchor-src"
+          anchor_bin="$RUNNER_TEMP/execute-anchor"
+          candidate_bin="$RUNNER_TEMP/execute-candidate"
+          shared_manifests="$RUNNER_TEMP/latency-shared-manifests"
+          mkdir -p "$shared_manifests"
+
+          git fetch --no-tags --depth=1 origin "$ANCHOR_SHA"
+          worktree_added=0
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( worktree_added )); then
+              git worktree remove --force "$anchor_worktree" || status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$anchor_worktree" "$ANCHOR_SHA"
+          worktree_added=1
+
+          CARGO_TARGET_DIR="$RUNNER_TEMP/candidate-target" \
+            cargo build --locked --release --bin execute
+          cp "$RUNNER_TEMP/candidate-target/release/execute" "$candidate_bin"
+
+          CARGO_TARGET_DIR="$RUNNER_TEMP/anchor-target" \
+            cargo build --locked --release --manifest-path "$anchor_worktree/Cargo.toml" --bin execute
+          cp "$RUNNER_TEMP/anchor-target/release/execute" "$anchor_bin"
+
+          # Both revisions receive the same two legacy-compatible manifests used
+          # by the latency programs: printf for one/ten lines and number.to_text
+          # for the hot loop. This avoids newer manifest additions biasing the old build.
+          git -C "$anchor_worktree" show "$ANCHOR_SHA:manifests/printf.json" > "$shared_manifests/printf.json"
+          git -C "$anchor_worktree" show "$ANCHOR_SHA:manifests/core.number_to_text.json" > "$shared_manifests/core.number_to_text.json"
+
+          {
+            echo "Candidate SHA: $GITHUB_SHA"
+            echo "Anchor SHA: $ANCHOR_SHA"
+            echo "Rust compiler: $(rustc --version)"
+            echo "Rust host: $(rustc -vV | sed -n 's/^host: //p')"
+            echo "Shared manifest SHA-256:"
+            sha256sum "$shared_manifests/printf.json" "$shared_manifests/core.number_to_text.json"
+          } | tee "$RUNNER_TEMP/latency-anchor-metadata.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          python3 tools/compare_latency.py \
+            --baseline "$anchor_bin" \
+            --candidate "$candidate_bin" \
+            --baseline-label "$ANCHOR_SHA" \
+            --candidate-label "$GITHUB_SHA" \
+            --manifest-dir "$shared_manifests" \
+            --json-out "$RUNNER_TEMP/latency-anchor-paired.json"
+      - name: Save paired diagnostic samples
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-latency-anchor-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/latency-anchor-paired.json
+            ${{ runner.temp }}/latency-anchor-metadata.txt
+          if-no-files-found: ignore
+          retention-days: 14

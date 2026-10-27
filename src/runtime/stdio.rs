@@ -467,7 +467,9 @@ impl LinuxSigpipeMask {
 
         // SAFETY: pthread_sigmask initialized old_mask on success; sigpipe_set was initialized.
         let mut guard = Self {
+            // SAFETY: the successful pthread_sigmask call above initialized old_mask.
             old_mask: unsafe { old_mask.assume_init() },
+            // SAFETY: the successful sigaddset call above initialized sigpipe_set.
             sigpipe_set: unsafe { sigpipe_set.assume_init() },
             already_pending: false,
             active: true,
@@ -726,10 +728,14 @@ mod tests {
         if let Some(mode) = std::env::var_os(CHILD_MODE) {
             // Isolate the process-wide default disposition to this child. The production writer
             // must turn EPIPE into an ordinary error without changing this action.
+            // SAFETY: sigaction is a C struct whose all-zero representation is valid storage; all
+            // fields used below are initialized before it is installed.
             let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
             action.sa_sigaction = libc::SIG_DFL;
+            // SAFETY: action.sa_mask is writable storage for sigemptyset.
             assert_eq!(unsafe { libc::sigemptyset(&mut action.sa_mask) }, 0);
             assert_eq!(
+                // SAFETY: action is fully initialized for SIGPIPE and the old-action pointer is null.
                 unsafe { libc::sigaction(libc::SIGPIPE, &action, std::ptr::null_mut()) },
                 0
             );
@@ -767,14 +773,19 @@ mod tests {
                 }
                 "pending" => {
                     let mut sigpipe_set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+                    // SAFETY: sigpipe_set is writable storage for one sigset_t.
                     assert_eq!(unsafe { libc::sigemptyset(sigpipe_set.as_mut_ptr()) }, 0);
                     assert_eq!(
+                        // SAFETY: sigemptyset initialized sigpipe_set, and SIGPIPE is valid.
                         unsafe { libc::sigaddset(sigpipe_set.as_mut_ptr(), libc::SIGPIPE) },
                         0
                     );
+                    // SAFETY: the successful sigaddset call above initialized sigpipe_set.
                     let sigpipe_set = unsafe { sigpipe_set.assume_init() };
                     let mut original_mask = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
                     assert_eq!(
+                        // SAFETY: sigpipe_set is initialized, original_mask is writable, and
+                        // pthread_sigmask returns its error number directly.
                         unsafe {
                             libc::pthread_sigmask(
                                 libc::SIG_BLOCK,
@@ -784,7 +795,9 @@ mod tests {
                         },
                         0
                     );
+                    // SAFETY: the successful pthread_sigmask call above initialized original_mask.
                     let original_mask = unsafe { original_mask.assume_init() };
+                    // SAFETY: raise targets only this thread; SIGPIPE is blocked above.
                     assert_eq!(unsafe { libc::raise(libc::SIGPIPE) }, 0);
 
                     let (reader, writer) = test_pipe();
@@ -805,13 +818,20 @@ mod tests {
                     }));
 
                     let mut pending = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+                    // SAFETY: pending is writable storage for sigpending.
                     assert_eq!(unsafe { libc::sigpending(pending.as_mut_ptr()) }, 0);
+                    // SAFETY: the successful sigpending call above initialized pending.
                     let pending = unsafe { pending.assume_init() };
+                    // SAFETY: pending is initialized and sigismember only reads it.
                     assert_eq!(unsafe { libc::sigismember(&pending, libc::SIGPIPE) }, 1);
                     let mut received = 0;
+                    // SAFETY: sigpipe_set is initialized and SIGPIPE remains blocked on this
+                    // thread until the original mask is restored below.
                     assert_eq!(unsafe { libc::sigwait(&sigpipe_set, &mut received) }, 0);
                     assert_eq!(received, libc::SIGPIPE);
                     assert_eq!(
+                        // SAFETY: original_mask was initialized by pthread_sigmask above; the null
+                        // output pointer is permitted when the previous mask is not needed.
                         unsafe {
                             libc::pthread_sigmask(
                                 libc::SIG_SETMASK,
@@ -825,9 +845,12 @@ mod tests {
                 "cancelled_inflight" => {
                     let (reader, writer) = test_pipe();
                     let writer_fd = writer.as_raw_fd();
+                    // SAFETY: writer_fd is open and F_GETFL only reads its status flags.
                     let original_flags = unsafe { libc::fcntl(writer_fd, libc::F_GETFL) };
                     assert_ne!(original_flags, -1);
                     assert_eq!(
+                        // SAFETY: writer_fd is open and original_flags is the value returned by
+                        // F_GETFL above.
                         unsafe {
                             libc::fcntl(writer_fd, libc::F_SETFL, original_flags | libc::O_NONBLOCK)
                         },
@@ -836,6 +859,8 @@ mod tests {
                     let filler = [b'f'; 4096];
                     loop {
                         let count =
+                            // SAFETY: filler is live storage, writer_fd is open and nonblocking,
+                            // and the pipe reader remains open during this fill loop.
                             unsafe { libc::write(writer_fd, filler.as_ptr().cast(), filler.len()) };
                         if count > 0 {
                             continue;
@@ -844,6 +869,7 @@ mod tests {
                         break;
                     }
                     assert_eq!(
+                        // SAFETY: writer_fd remains open and original_flags came from F_GETFL above.
                         unsafe { libc::fcntl(writer_fd, libc::F_SETFL, original_flags) },
                         0
                     );
@@ -899,8 +925,11 @@ mod tests {
                 other => panic!("unknown child mode {other}"),
             }
 
+            // SAFETY: sigaction is a C struct whose all-zero representation is valid writable
+            // storage for the query below.
             let mut observed: libc::sigaction = unsafe { std::mem::zeroed() };
             assert_eq!(
+                // SAFETY: new_action is null and observed is writable output storage for sigaction.
                 unsafe { libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut observed) },
                 0
             );

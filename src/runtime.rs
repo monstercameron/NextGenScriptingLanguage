@@ -6255,12 +6255,39 @@ mod drain_tests {
         // this process runs every installed owner's handler set, so two
         // overlapping signal-owning runs each record the same signal in their
         // own slot (and the CLI fallback), while an overlapping run without
-        // handlers stays clean. The serial lock keeps this process-wide
-        // delivery away from concurrent tests while both owners overlap, and
-        // clearing the fallback before and after keeps the run isolated.
-        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // handlers stays clean. Real delivery runs in a child test process
+        // (see the invariant on `CANCEL_SIGNAL_TEST_LOCK`) so the broadcast
+        // cannot reach handlers installed by parallel tests in this process;
+        // the parent installs no handlers and touches no fallback state.
+        const HELPER_ENV: &str = "EXECUTE_TEST_BROADCAST_SIGNAL_CHILD";
+        const TEST_NAME: &str =
+            "runtime::drain_tests::both_overlapping_owners_observe_a_real_broadcast_signal";
+        if std::env::var_os(HELPER_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(HELPER_ENV, "1")
+            .output()
+            .expect("starting broadcast-signal child");
+            assert!(
+                output.status.success(),
+                "broadcast-signal child failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // Child process: the only place a real signal is raised for #554.
+        // The `Drop` guard clears the process-wide fallback even when an
+        // assertion below panics; the child then exits, so no fallback state
+        // can leak into parallel tests in the parent process.
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
         crate::platform::clear_cancel_signal();
         let first = Signals::register_with_cancellation_and_deadline(
             Arc::new(AtomicBool::new(false)),
@@ -6295,7 +6322,6 @@ mod drain_tests {
         assert_eq!(other.cancel_exit_code(), None);
         drop(first);
         drop(second);
-        crate::platform::clear_cancel_signal();
     }
 
     #[test]

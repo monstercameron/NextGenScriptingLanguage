@@ -110,6 +110,14 @@ pub(crate) fn cancel_exit_code() -> Option<i32> {
 /// Serializes tests that touch the process-wide `CANCEL_SIGNAL` fallback so a
 /// recorded probe signal cannot leak into a concurrent test's exit-status
 /// assertion. Per-run slots need no serialization.
+///
+/// Invariant: a test that delivers a real OS signal (for example via
+/// `libc::raise`) must run that delivery in a child test process re-invoked
+/// through `current_exe` with `--exact`, never in the shared test process,
+/// because real delivery is process-wide broadcast and would run every
+/// concurrently installed handler. Tests that only write the fallback
+/// synthetically hold this lock and clear the fallback through a `Drop` guard
+/// so a panicking assertion cannot leak `Some(130)` past the lock.
 #[cfg(test)]
 pub(crate) static CANCEL_SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

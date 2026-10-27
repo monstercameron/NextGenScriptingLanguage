@@ -2,10 +2,10 @@
 //! `execute repair --from-record` and `execute resume --from-record`: a failed
 //! recorded run is repaired in its failed suffix and resumed without re-running
 //! completed native steps (counted with a fake tool). Prefix edits, completed
-//! records, missing blobs, truncated or torn records, edited program copies,
-//! manifest swaps, withheld secrets and unsupported shapes are refused without
-//! repeating completed effects; prefix file writes and loop iterations are
-//! replayed, not re-run.
+//! records, missing blobs, truncated or torn records, short or count-mismatched
+//! traces, edited program copies, manifest and executable swaps, withheld
+//! secrets and unsupported shapes are refused without repeating completed
+//! effects; prefix file writes and loop iterations are replayed, not re-run.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -734,6 +734,110 @@ fn repair_and_resume_refuse_a_truncated_record() {
     assert_eq!(count_lines(work.path()), 1);
 }
 
+/// A finished record whose trace lost whole trailing lines is refused: the
+/// trace is shorter than `run.json` counts, so the completed prefix cannot be
+/// trusted and nothing re-runs.
+#[test]
+fn repair_and_resume_refuse_a_finished_record_with_a_short_trace() {
+    let work = tempfile::tempdir().unwrap();
+    let source = failing_program();
+    let record = failed_record(work.path(), &source);
+    // Drop the final (failed) step line at a line boundary, keeping the
+    // finished run document: the trace now holds fewer steps than counted.
+    let trace_path = record.join("trace.jsonl");
+    let trace = fs::read_to_string(&trace_path).unwrap();
+    let mut lines: Vec<&str> = trace.lines().collect();
+    assert!(lines.len() >= 2);
+    lines.pop();
+    fs::write(&trace_path, lines.join("\n") + "\n").unwrap();
+
+    let repair = repair_from_record(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        text(&repair.stderr).contains("trace holds 1 steps but run.json counts 2"),
+        "{}",
+        text(&repair.stderr)
+    );
+    assert!(!record.join("repairs.jsonl").exists());
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("trace holds 1 steps but run.json counts 2"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+}
+
+/// Deleting whole trailing trace lines and flipping the run to unfinished is
+/// refused: the recorder only writes a step count when a run finishes, so the
+/// stale count proves the record was edited after the run rather than
+/// interrupted mid-way. Nothing re-runs.
+#[test]
+fn repair_and_resume_refuse_an_unfinished_record_with_a_stale_step_count() {
+    let work = tempfile::tempdir().unwrap();
+    let source = failing_program();
+    let record = failed_record(work.path(), &source);
+    // The forged-interruption shape: whole trailing lines gone at a line
+    // boundary, `finished` flipped, but the finished step count left behind.
+    let trace_path = record.join("trace.jsonl");
+    let trace = fs::read_to_string(&trace_path).unwrap();
+    let mut lines: Vec<&str> = trace.lines().collect();
+    assert!(lines.len() >= 2);
+    lines.pop();
+    fs::write(&trace_path, lines.join("\n") + "\n").unwrap();
+    let mut run_json = read_record_json(&record);
+    run_json["finished"] = serde_json::Value::Bool(false);
+    write_record_json(&record, &run_json);
+
+    let repair = repair_from_record(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        text(&repair.stderr).contains("claims an unfinished run but counts 2 steps"),
+        "{}",
+        text(&repair.stderr)
+    );
+    assert!(!record.join("repairs.jsonl").exists());
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("claims an unfinished run but counts 2 steps"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+}
+
 /// Resuming under a different manifest for the same applet name is refused:
 /// the recorded blobs belong to the recorded manifests.
 #[cfg(unix)]
@@ -777,6 +881,60 @@ fn resume_refuses_a_manifest_swap_without_repeating_effects() {
         text(&resumed.stderr)
     );
     assert!(resumed.stdout.is_empty());
+    assert_eq!(count_lines(work.path()), 1);
+}
+
+/// Swapping an executable behind an identical manifest is refused: the record
+/// pins the bytes each observed binary resolved to, so stale blobs never
+/// replay for different bytes. The refusal lands before anything launches, so
+/// the swapped binary never runs and the count never moves.
+#[cfg(unix)]
+#[test]
+fn repair_and_resume_refuse_an_executable_swap_behind_an_identical_manifest() {
+    let work = tempfile::tempdir().unwrap();
+    let (record, custom) = failed_counter_record(work.path());
+    assert_eq!(count_lines(work.path()), 1);
+    // Same path, same manifest body, different bytes. Rewriting the file keeps
+    // its executable mode, so only the pinned identity changes.
+    fs::write(
+        work.path().join("counter.sh"),
+        "#!/bin/sh\necho TAMPERED >> 'count.txt'\nprintf 'tampered\\n'\n",
+    )
+    .unwrap();
+
+    let repair = repair_from_record_with_manifests(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+        &custom,
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        text(&repair.stderr).contains("the executable for"),
+        "{}",
+        text(&repair.stderr)
+    );
+    assert!(!record.join("repairs.jsonl").exists());
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("the executable for"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+    // Neither the original nor the swapped binary ran again.
     assert_eq!(count_lines(work.path()), 1);
 }
 
@@ -928,6 +1086,11 @@ fn interrupted_record_with_a_clean_trace_still_repairs_and_resumes() {
     let (record, custom) = failed_counter_record(work.path());
     let mut run_json = read_record_json(&record);
     run_json["finished"] = serde_json::Value::Bool(false);
+    // A killed run never publishes a step count: the recorder only writes
+    // counts when a run finishes. Zero it to simulate the interruption
+    // faithfully; a stale nonzero count is refused (see the stale-step-count
+    // test above) rather than mistaken for an interruption.
+    run_json["steps"] = serde_json::Value::from(0);
     write_record_json(&record, &run_json);
 
     let repaired = execute(
@@ -963,6 +1126,45 @@ fn interrupted_record_with_a_clean_trace_still_repairs_and_resumes() {
     );
     assert_eq!(resumed.status.code(), Some(0), "{}", text(&resumed.stderr));
     assert_eq!(text(&resumed.stdout), "two\nthree\n");
+    assert_eq!(count_lines(work.path()), 1);
+}
+
+/// A second resume from the same record replays the same prefix without
+/// relaunching it: resume leaves the record reusable and never double-runs
+/// completed effects, however often it resumes.
+#[cfg(unix)]
+#[test]
+fn a_second_resume_replays_the_prefix_without_relaunching() {
+    let work = tempfile::tempdir().unwrap();
+    let (record, custom) = failed_counter_record(work.path());
+    let repaired = repair_from_record_with_manifests(
+        work.path(),
+        &record,
+        "workflow.program",
+        "replace-command 2 run printf with message \"two\"",
+        &custom,
+    );
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)
+    );
+    for _ in 0..2 {
+        let resumed = execute(
+            work.path(),
+            &[
+                "resume",
+                "workflow.program",
+                "--from-record",
+                record.to_str().unwrap(),
+                "--manifest-dir",
+                custom.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(resumed.status.code(), Some(0), "{}", text(&resumed.stderr));
+        assert_eq!(text(&resumed.stdout), "two\nthree\n");
+    }
     assert_eq!(count_lines(work.path()), 1);
 }
 

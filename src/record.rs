@@ -6,12 +6,15 @@
 //!
 //! - `run.json`: protocol `execute.record/1`. Program hash, plan (explain text) and
 //!   its hash, redacted inputs, timing, the final result and output hash, the
-//!   limits that applied, and the provenance (manifest fingerprint and working
-//!   directory) a repair or resume must still match. `truncated` marks a record
-//!   that kept hashes without bytes; repair and resume refuse such records, as
-//!   they refuse a torn trace, instead of re-running completed effects. The
-//!   record carries no authentication code (see `check_from_record_usable` for
-//!   the exact checks and the residual tampering limits).
+//!   limits that applied, and the provenance (manifest fingerprint, working
+//!   directory, and the identity of every observed executable) a repair or
+//!   resume must still match. `truncated` marks a record that kept hashes
+//!   without bytes; repair and resume refuse such records, as they refuse a
+//!   torn trace, a finished trace shorter than its step count, and an
+//!   unfinished record with a nonzero step count, instead of re-running
+//!   completed effects. The record carries no authentication code (see
+//!   `check_from_record_usable` for the exact checks and the residual
+//!   tampering limits).
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
 //!   resolved argv, status, declared outcome, wall time, and the stdout and stderr
@@ -61,6 +64,10 @@ pub const STDERR_TAIL_BYTES: usize = 2048;
 /// Maximum trace size. Further steps are counted but not written after this bound.
 pub const MAX_TRACE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RUN_BYTES: usize = 1024 * 1024;
+/// Largest executable hashed into the record's provenance. Larger files keep an
+/// `oversize:<bytes>` marker instead of a content hash; either way a swap is
+/// still detected because the marker commits to the file's length.
+const MAX_EXECUTABLE_BYTES: usize = 64 * 1024 * 1024;
 #[cfg(unix)]
 static RECORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -98,8 +105,8 @@ pub struct RecordStart<'a> {
 /// name with its binary and serialized body, hashed in name order. A resume
 /// that resolves the same applet name to a different manifest refuses instead
 /// of replaying stale blobs. This does not pin the bytes of the executables
-/// themselves: swapping a binary behind an identical manifest is not detected
-/// (see [`check_from_record_usable`]).
+/// themselves; those are pinned per observed binary by [`executable_identity`]
+/// and checked alongside this fingerprint (see [`check_from_record_usable`]).
 pub fn registry_fingerprint(registry: &Registry) -> Result<String> {
     let mut manifests = registry.manifests()?;
     manifests.sort_by(|left, right| left.name.cmp(&right.name));
@@ -114,6 +121,33 @@ pub fn registry_fingerprint(registry: &Registry) -> Result<String> {
         hash.update([0]);
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+/// Identity of one executable a record observed: the SHA-256 of the file its
+/// binary string resolved to when the step ran, or a deterministic marker when
+/// it resolved to nothing hashable. Resolution follows the same path the
+/// runtime launches (`crate::runtime::binary_path` under the run's working
+/// directory and current `PATH`), so a binary swapped behind an identical
+/// manifest no longer matches: repair and resume refuse instead of replaying
+/// stale blobs for different bytes. Markers are exact strings, so both sides
+/// of the comparison must agree: `unresolved` (no executable at that name),
+/// `unreadable` (not a regular readable file), or `oversize:<bytes>`.
+pub fn executable_identity(binary: &str, cwd: &Path) -> String {
+    let path = match crate::runtime::binary_path(binary, cwd) {
+        Ok(path) => path,
+        Err(_) => return "unresolved".to_owned(),
+    };
+    let length = match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        _ => return "unreadable".to_owned(),
+    };
+    if length > MAX_EXECUTABLE_BYTES as u64 {
+        return format!("oversize:{length}");
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => format!("sha256:{}", sha256_hex(&bytes)),
+        Err(_) => "unreadable".to_owned(),
+    }
 }
 
 /// The working directory as the record pins it: canonicalized when possible so
@@ -144,6 +178,10 @@ pub struct Recorder {
     declared_secret_names: Vec<String>,
     provenance_manifests: String,
     provenance_cwd: String,
+    /// The directory executables resolved under when their identities were
+    /// pinned: the run's working directory, kept so the check side resolves
+    /// the same spellings (relative paths and `PATH` entries) the same way.
+    resolve_cwd: PathBuf,
     state: Mutex<RecorderState>,
 }
 
@@ -157,6 +195,11 @@ struct RecorderState {
     trace_bytes: usize,
     trace_truncated: bool,
     blobs_written: BTreeSet<String>,
+    /// Identity of every executable observed so far, by the binary string the
+    /// step recorded. Pinned on first sight and published with the next run
+    /// document, so even a run killed mid-way pins the binaries its trace
+    /// already holds (up to the last fully persisted step).
+    executables: BTreeMap<String, String>,
     /// Raw streamed stdout, in order, bounded by `MAX_BLOB_BYTES`. It is redacted
     /// as a whole when the record is finished, so a secret split across two
     /// streamed writes is still found.
@@ -243,6 +286,7 @@ impl Recorder {
             declared_secret_names: security::declared_secret_environment_names(start.registry),
             provenance_manifests,
             provenance_cwd,
+            resolve_cwd: start.working_directory.to_path_buf(),
             redactor,
             state: Mutex::new(RecorderState {
                 loop_limit: None,
@@ -254,6 +298,7 @@ impl Recorder {
                 trace_bytes: 0,
                 trace_truncated: false,
                 blobs_written: BTreeSet::new(),
+                executables: BTreeMap::new(),
                 terminal: Vec::new(),
                 labels: SensitivitySet::empty(),
                 secret_environment: false,
@@ -331,7 +376,13 @@ impl Recorder {
             "inputs": self.inputs,
             "started_unix_ms": self.started_unix_ms,
             "wall_ms": self.started.elapsed().as_millis() as u64,
-            "steps": state.steps,
+            // A step count is only meaningful once the run is done: the
+            // recorder publishes `run.json` before and during the run too (so
+            // a killed run leaves executable provenance behind), and those
+            // interim documents always count zero. Any unfinished document
+            // with a nonzero count was therefore edited after the run, and
+            // `check_from_record_usable` refuses it.
+            "steps": if finished { state.steps } else { 0 },
             "result": {
                 "ok": summary.map(|summary| summary.ok),
                 "exit_status": summary.and_then(|summary| summary.exit_status),
@@ -356,6 +407,7 @@ impl Recorder {
             "provenance": {
                 "manifests_sha256": self.provenance_manifests,
                 "cwd": self.provenance_cwd,
+                "executables": state.executables,
             },
         });
         let text = serde_json::to_string_pretty(&document)?;
@@ -438,13 +490,31 @@ impl Observer for Recorder {
             })
             .collect::<Vec<_>>();
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let was_truncated = state.truncated;
         let index = state.steps;
         state.steps += 1;
         state.labels.extend(&result.sensitivity);
         state.secret_environment |= result.secret_environment;
+        // Pin the identity of every newly seen executable now, and publish it
+        // with the next run document below. A run killed after this step then
+        // still pins the binaries its trace already holds.
+        let mut publish = false;
+        for binary in &request.binaries {
+            if !state.executables.contains_key(binary) {
+                let identity = executable_identity(binary, &self.resolve_cwd);
+                state.executables.insert(binary.clone(), identity);
+                publish = true;
+            }
+        }
         if state.trace_truncated || state.trace_bytes >= MAX_TRACE_BYTES {
             state.trace_truncated = true;
             state.truncated = true;
+            // A run killed after outgrowing its bounds must refuse repair and
+            // resume: publish the truncation now so the stale interim document
+            // cannot pass as a clean interruption.
+            if !was_truncated || publish {
+                self.write_run_document_locked(&mut state, false, None)?;
+            }
             return Ok(());
         }
         let persist = persistence_allowed(
@@ -502,6 +572,13 @@ impl Observer for Recorder {
             state.trace_truncated = true;
             state.truncated = true;
         }
+        // Publish newly pinned executables — and a freshly hit size bound — so
+        // a run killed after this step still pins what it ran and cannot pass
+        // a truncated trace as a clean interruption. Steady-state steps write
+        // nothing beyond the trace line.
+        if publish || (!was_truncated && state.truncated) {
+            self.write_run_document_locked(&mut state, false, None)?;
+        }
         Ok(())
     }
 
@@ -556,8 +633,12 @@ pub struct StoredRecord {
 /// Refuse a repair or resume from a record that cannot prove its completed
 /// prefix. A truncated record (`run.truncated`, or a finished run whose trace
 /// holds fewer steps than `run.steps`) silently shortens the prefix and would
-/// re-run completed effects. A torn trace (the run died mid-line) may have a
-/// completed step with no trace entry at all. A record whose manifest or
+/// re-run completed effects. An unfinished record with a nonzero `run.steps`
+/// is refused for the same reason: the recorder only writes a step count when
+/// a run finishes, so the count is stale evidence of editing after the run
+/// (usually a finished record flipped to unfinished alongside deleted trace
+/// lines). A torn trace (the run died mid-line) may have a completed step
+/// with no trace entry at all. A record whose manifest, executable, or
 /// working-directory provenance no longer matches resolves applets, files and
 /// executables differently than the recorded run did, so replaying its blobs
 /// would answer a different program. Records without provenance predate it and
@@ -565,8 +646,9 @@ pub struct StoredRecord {
 ///
 /// What this still does not cover: `run.json` and `trace.jsonl` carry no
 /// authentication code (unlike checkpoint journals), so an edit that rewrites
-/// those files consistently — flipping a step's failure flag together with its
-/// status and outcome, or swapping an executable behind an identical manifest
+/// those files fully consistently — flipping a step's failure flag together
+/// with its status and outcome while keeping every count, or deleting whole
+/// trailing trace lines while zeroing the step count of an unfinished record
 /// — is not detected. Only resume records written on this machine by a run you
 /// trust, from a directory only you can write.
 pub fn check_from_record_usable(
@@ -593,6 +675,15 @@ pub fn check_from_record_usable(
             "the record {} trace holds {} steps but run.json counts {}; the trace is incomplete, so the completed prefix cannot be trusted; re-run the repaired program without --from-record",
             record.directory.display(),
             record.steps.len(),
+            record.run["steps"]
+        );
+    }
+    if record.run["finished"].as_bool() != Some(true)
+        && record.run["steps"].as_u64().unwrap_or(0) != 0
+    {
+        bail!(
+            "the record {} claims an unfinished run but counts {} steps; the recorder only writes a step count when a run finishes, so this record was edited after the run and its completed prefix cannot be trusted; re-run the repaired program without --from-record",
+            record.directory.display(),
             record.run["steps"]
         );
     }
@@ -626,6 +717,27 @@ pub fn check_from_record_usable(
             }
         }
     }
+    let Some(recorded_executables) = record.run["provenance"]["executables"].as_object()
+    else {
+        bail!(
+            "the record {} has no executable provenance; re-record it with this build, then repair and resume from the new record",
+            record.directory.display()
+        );
+    };
+    for (binary, expected) in recorded_executables {
+        let Some(expected) = expected.as_str() else {
+            bail!(
+                "the record {} pins executable {binary:?} to no identity; the record was edited after the run; re-record it, then repair and resume from the new record",
+                record.directory.display()
+            );
+        };
+        if executable_identity(binary, working_directory) != expected {
+            bail!(
+                "the executable for {binary:?} changed since the record {} was written; replaying its blobs would answer a different program; re-record, then repair and resume from the new record",
+                record.directory.display()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -657,7 +769,7 @@ impl StoredRecord {
         #[cfg(not(unix))]
         let run_bytes = read_regular_no_follow(&directory.join(RUN_FILE))
             .with_context(|| format!("{} is not a run record", directory.display()))?;
-        let mut run: Json =
+        let run: Json =
             serde_json::from_slice(&run_bytes).context("run.json is not valid JSON")?;
         if run["protocol"] != PROTOCOL {
             bail!("unsupported record protocol {}", run["protocol"]);
@@ -709,9 +821,13 @@ impl StoredRecord {
                 failed: value["failed"].as_bool().unwrap_or(false),
             });
         }
-        if run["finished"] == false {
-            run["steps"] = json!(steps.len());
-        }
+        // `run.steps` is kept exactly as written: the recorder only writes a
+        // step count when a run finishes, so an unfinished document with a
+        // nonzero count is stale evidence of editing after the run (usually a
+        // finished record flipped to unfinished alongside deleted trace
+        // lines). Normalizing the count here would destroy that evidence and
+        // let the forgery pass as an interruption, so repair and resume check
+        // the written value instead.
         // The program copy is content-addressed by run.json: a record whose
         // copy no longer matches its hash was edited after the run, so its
         // line numbers no longer bound any program. Records written before

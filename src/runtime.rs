@@ -5643,6 +5643,70 @@ mod typed_worker_json_reuse_tests {
             "the handshake and worker response each require one parse; the following `take` must reuse the retained response value without allocating a third parse tree"
         );
     }
+
+    #[test]
+    fn typed_program_module_result_reaches_take_without_a_second_json_parse() {
+        let directory = tempfile::tempdir().expect("temporary module directory");
+        let catalog = directory.path().join("applets");
+        std::fs::create_dir_all(&catalog).expect("creating applet catalog");
+        std::fs::write(
+            catalog.join("module.program"),
+            "define a program named entry\n  accept payload as json\n  then encode payload as json\n",
+        )
+        .expect("writing typed program module");
+        let manifest = serde_json::json!({
+            "name": "module.typed_reuse",
+            "binary": "@program-module",
+            "parameters": {
+                "payload": {
+                    "type": "record",
+                    "required": true,
+                    "fields": {"count": {"type": "integer"}}
+                }
+            },
+            "arguments": [],
+            "contract": {
+                "version": 1,
+                "backend": "program_module",
+                "program": {
+                    "source": "module.program",
+                    "entry": "entry",
+                    "interface_version": 1
+                },
+                "lifecycle": {"kind": "oneshot"},
+                "output": {
+                    "type": "record",
+                    "encoding": "json",
+                    "fields": {"count": {"type": "integer"}},
+                    "required": ["count"]
+                }
+            }
+        });
+        std::fs::write(
+            catalog.join("module.typed_reuse.json"),
+            serde_json::to_vec(&manifest).expect("encoding module manifest"),
+        )
+        .expect("writing module manifest");
+        let registry = Registry::load(&catalog).expect("loading module registry");
+        let program = crate::parser::parse(
+            "run module.typed_reuse with payload {\"count\":7} as result\ntake integer at \"/count\" from result as count\nthen encode count as json\n",
+        )
+        .expect("valid typed module program");
+        let options = RunOptions {
+            max_output_bytes: 1024 * 1024,
+            ..RunOptions::new(directory.path().to_path_buf())
+        };
+
+        crate::contracts::reset_strict_json_parse_calls();
+        let result = run(&program, &registry, &options)
+            .expect("typed module result should feed the following take");
+        assert_eq!(result.output, b"7");
+        assert_eq!(
+            crate::contracts::strict_json_parse_calls(),
+            1,
+            "the module boundary must parse JSON once and the caller must reuse its typed value"
+        );
+    }
 }
 
 #[cfg(test)]

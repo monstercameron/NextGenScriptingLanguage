@@ -345,13 +345,22 @@ fn append_line(directory: &Path, committed_bytes: u64, line: &[u8]) -> Result<()
     crate::failpoint::hit("checkpoint.append")?;
     let mut file = open_regular(&directory.join(GRAPH_LOG), "graph completed log", true)?;
     restrict_file(&file)?;
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::hit("checkpoint.graph.truncate")?;
     file.set_len(committed_bytes)
         .context("truncating graph completed log")?;
     file.seek(SeekFrom::Start(committed_bytes))
         .context("seeking graph completed log")?;
-    file.write_all(line)
-        .and_then(|()| file.write_all(b"\n"))
-        .and_then(|()| file.sync_data())
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::write_all("checkpoint.graph.write", &mut file, line)?;
+    #[cfg(not(feature = "failpoints"))]
+    file.write_all(line)?;
+    file.write_all(b"\n")
+        .and_then(|()| {
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::hit("checkpoint.graph.sync")?;
+            file.sync_data()
+        })
         .context("appending graph completed node")
 }
 

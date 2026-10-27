@@ -18,7 +18,23 @@ use std::time::{Duration, Instant};
 const STEPS: usize = 6;
 /// Checkpoint writes injected per point and mode.
 const FAILED_CALLS: usize = 6;
-const POINTS: [&str; 2] = ["checkpoint.atomic", "checkpoint.append"];
+const POINTS: [&str; 15] = [
+    "checkpoint.atomic",
+    "checkpoint.atomic.write",
+    "checkpoint.atomic.sync",
+    "checkpoint.atomic.synced",
+    "checkpoint.atomic.rename",
+    "checkpoint.atomic.renamed",
+    "checkpoint.atomic.directory_sync",
+    "checkpoint.append",
+    "checkpoint.append.truncate",
+    "checkpoint.append.write",
+    "checkpoint.append.sync",
+    "checkpoint.graph.truncate",
+    "checkpoint.graph.write",
+    "checkpoint.graph.sync",
+    "checkpoint.elements.write",
+];
 
 #[derive(Clone, Copy, Debug)]
 enum Mode {
@@ -308,6 +324,35 @@ fn fail_writes(mode: Mode) {
                 );
             }
             check_resume(&fixture, &expected, &context);
+        }
+    }
+}
+
+#[test]
+fn atomic_and_append_boundaries_survive_abort_and_torn_write_actions() {
+    let (expected, _) = baseline(Mode::Sequential);
+    let points = [
+        "checkpoint.atomic.write",
+        "checkpoint.atomic.sync",
+        "checkpoint.atomic.synced",
+        "checkpoint.atomic.rename",
+        "checkpoint.atomic.renamed",
+        "checkpoint.atomic.directory_sync",
+        "checkpoint.append.write",
+        "checkpoint.append.sync",
+    ];
+    for point in points {
+        for action in ["abort", "partial:3"] {
+            let fixture = fixture(Mode::Sequential);
+            let output = checkpointed_run(&fixture)
+                .env("EXECUTE_FAILPOINT", format!("{point}:1:{action}"))
+                .output()
+                .unwrap();
+            assert!(
+                !output.status.success(),
+                "{point}:{action} did not terminate the checkpointed run"
+            );
+            check_resume(&fixture, &expected, &format!("{point}:{action}"));
         }
     }
 }

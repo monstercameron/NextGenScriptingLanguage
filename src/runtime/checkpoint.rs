@@ -1293,6 +1293,11 @@ impl Journal {
                 continue;
             }
             if entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                #[cfg(feature = "failpoints")]
+                if let Err(error) = crate::failpoint::hit("checkpoint.blob_gc.remove") {
+                    eprintln!("warning: checkpoint blob collection stopped: {error}");
+                    return;
+                }
                 let _ = fs::remove_file(entry.path());
             }
         }
@@ -1309,13 +1314,22 @@ impl Journal {
             true,
         )?;
         restrict_file(&file)?;
+        #[cfg(feature = "failpoints")]
+        crate::failpoint::hit("checkpoint.append.truncate")?;
         file.set_len(self.completed_log_bytes)
             .context("truncating checkpoint completed log")?;
         file.seek(SeekFrom::Start(self.completed_log_bytes))
             .context("seeking checkpoint completed log")?;
-        file.write_all(line)
-            .and_then(|()| file.write_all(b"\n"))
-            .and_then(|()| file.sync_data())
+        #[cfg(feature = "failpoints")]
+        crate::failpoint::write_all("checkpoint.append.write", &mut file, line)?;
+        #[cfg(not(feature = "failpoints"))]
+        file.write_all(line)?;
+        file.write_all(b"\n")
+            .and_then(|()| {
+                #[cfg(feature = "failpoints")]
+                crate::failpoint::hit("checkpoint.append.sync")?;
+                file.sync_data()
+            })
             .context("appending checkpoint completed node")
     }
 
@@ -2253,7 +2267,13 @@ fn clean_checkpoint_temporaries(directory: &Path, blobs: &Path, acquired: std::t
 
 fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Result<()> {
     atomic_write_with(directory, stem, suffix, bytes, |file, bytes| {
-        file.write_all(bytes).and_then(|()| file.sync_all())
+        #[cfg(feature = "failpoints")]
+        crate::failpoint::write_all("checkpoint.atomic.write", file, bytes)?;
+        #[cfg(not(feature = "failpoints"))]
+        file.write_all(bytes)?;
+        #[cfg(feature = "failpoints")]
+        crate::failpoint::hit("checkpoint.atomic.sync")?;
+        file.sync_all()
     })
 }
 
@@ -2281,7 +2301,12 @@ fn atomic_write_with(
             .open(&path)
         {
             Ok(mut file) => {
-                if let Err(error) = write_and_sync(&mut file, bytes) {
+                let write_result = write_and_sync(&mut file, bytes);
+                #[cfg(feature = "failpoints")]
+                let write_result = write_result.and_then(|()| {
+                    crate::failpoint::hit("checkpoint.atomic.synced")
+                });
+                if let Err(error) = write_result {
                     // Close before unlinking so cleanup also works on Windows.
                     drop(file);
                     let _ = fs::remove_file(&path);
@@ -2298,16 +2323,22 @@ fn atomic_write_with(
     }
     let temporary =
         temporary.ok_or_else(|| anyhow!("could not allocate checkpoint temporary file"))?;
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::hit("checkpoint.atomic.rename")?;
     if let Err(error) = crate::platform::replace_file(&temporary, &target) {
         let _ = fs::remove_file(&temporary);
         return Err(error)
             .with_context(|| format!("publishing checkpoint file {}", target.display()));
     }
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::hit("checkpoint.atomic.renamed")?;
     sync_directory(directory)
 }
 
 #[cfg(unix)]
 fn sync_directory(directory: &Path) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::hit("checkpoint.atomic.directory_sync")?;
     File::open(directory)
         .with_context(|| format!("opening directory {} for sync", directory.display()))?
         .sync_all()
@@ -3231,6 +3262,8 @@ fn restrict_file(file: &File) -> Result<()> {
 
 #[cfg(windows)]
 fn sync_directory(_directory: &Path) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::hit("checkpoint.atomic.directory_sync")?;
     // Publication uses MOVEFILE_WRITE_THROUGH after flushing each file. Windows
     // does not provide the Unix directory-fsync contract through std::fs.
     Ok(())

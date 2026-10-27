@@ -778,7 +778,11 @@ impl Journal {
             .context("checking checkpoint element log")?
         {
             let file = open_regular(&path, "checkpoint element log", true)?;
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::hit("checkpoint.elements.reset.truncate")?;
             file.set_len(0).context("clearing checkpoint element log")?;
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::hit("checkpoint.elements.reset.sync")?;
             file.sync_data().context("syncing checkpoint element log")?;
         }
         self.elements_chain = Self::element_chain_start(fingerprint, start, end);
@@ -1012,6 +1016,8 @@ impl Journal {
         if self.elements_file.is_none() {
             let mut file = open_synced_element_file(&self.directory, sync)?;
             // Bytes past the verified prefix, left by an interrupted append, go first.
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::hit("checkpoint.elements.truncate")?;
             file.set_len(self.elements_bytes)
                 .context("truncating checkpoint element log")?;
             file.seek(SeekFrom::Start(self.elements_bytes))
@@ -1025,6 +1031,9 @@ impl Journal {
         // Frame in the existing serialization allocation, then restore the exact
         // line before hashing it. This also keeps one file write per element.
         line.push(b'\n');
+        #[cfg(feature = "failpoints")]
+        let written = crate::failpoint::write_all("checkpoint.elements.write", file, line);
+        #[cfg(not(feature = "failpoints"))]
         let written = file.write_all(line);
         line.pop();
         written.context("appending checkpoint element")?;
@@ -1032,6 +1041,8 @@ impl Journal {
         self.elements_bytes += line.len() as u64 + 1;
         self.elements_lines += 1;
         if durable || self.elements_synced_at.elapsed() >= ELEMENT_SYNC_INTERVAL {
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::hit("checkpoint.elements.sync")?;
             self.sync_open_element_file()?;
         } else {
             self.elements_dirty = true;

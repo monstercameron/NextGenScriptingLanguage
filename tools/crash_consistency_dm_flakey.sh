@@ -3,6 +3,10 @@ set -Eeuo pipefail
 
 # Linux-only nightly writeback-drop model. All test-filesystem block I/O goes through a
 # loop device backed by a private image under RUNNER_TEMP; no host disk is formatted.
+if [[ ${RUNNER_ENVIRONMENT:-} != github-hosted ]]; then
+  echo "dm-flakey harness is restricted to a GitHub-hosted ephemeral runner" >&2
+  exit 1
+fi
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TEMP_BASE=${RUNNER_TEMP:-/tmp}
 WORK=$(mktemp -d "$TEMP_BASE/execute-crash-dm-flakey.XXXXXX")

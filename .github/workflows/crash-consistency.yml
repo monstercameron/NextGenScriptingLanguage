@@ -29,8 +29,13 @@ jobs:
           CRASH_TRIALS: "40"
           CRASH_SEED: ${{ github.run_id }}
         run: cargo test --locked --features failpoints --test crash_consistency -- --test-threads=1 --nocapture
+      - name: Require a disposable GitHub-hosted VM for dm-flakey
+        if: runner.os == 'Linux' && runner.environment != 'github-hosted'
+        run: |
+          echo "::error::The privileged dm-flakey harness requires a GitHub-hosted ephemeral Linux VM."
+          exit 1
       - name: Drop checkpoint writeback bios on an isolated loopback filesystem (Linux only)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         env:
           CARGO_BUILD_JOBS: "1"
         run: |

@@ -614,6 +614,15 @@ fn listeners_forward_each_producer_line_to_stdout() {
     let example = fs::read_to_string(examples().join("dbus-monitor.program")).unwrap();
     let output = dbus.run(&example, &[], &[("FAKE_STDOUT", "{\"type\":\"signal\"}\n")]);
     assert!(
+        !output.status.success(),
+        "the one-shot fake is not a live producer"
+    );
+    assert!(
+        stderr(&output).contains("listener failed"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
         stdout(&output).contains("{\"type\":\"signal\"}"),
         "{}{}",
         stdout(&output),
@@ -629,6 +638,15 @@ fn listeners_forward_each_producer_line_to_stdout() {
         &example,
         &[("socket_path", "/x")],
         &[("FAKE_STDOUT", "openwindow>>abc\n")],
+    );
+    assert!(
+        !output.status.success(),
+        "the one-shot fake is not a live producer"
+    );
+    assert!(
+        stderr(&output).contains("listener failed"),
+        "{}",
+        stderr(&output)
     );
     assert!(
         stdout(&output).contains("openwindow>>abc"),

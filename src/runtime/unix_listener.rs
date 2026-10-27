@@ -110,6 +110,7 @@ fn listen(
     let mut record = Vec::new();
     let mut buffer = [0u8; 8192];
     let mut eof = false;
+    let mut failure_status = None;
     loop {
         stopped(signals)?;
         for managed in &mut children.0 {
@@ -119,7 +120,9 @@ fn listen(
                     if !source_manifest.is_some_and(|manifest| {
                         listener_source_exited_successfully(manifest, status)
                     }) {
-                        bail!("listener failed ({status})");
+                        // The child can exit after writing data that is still buffered in
+                        // stdout. Drain and deliver that data before reporting its status.
+                        failure_status = Some(status);
                     }
                 }
             }
@@ -182,6 +185,9 @@ fn listen(
             }
         }
         if eof && children.0.iter().all(|child| child.reaped) {
+            if let Some(status) = failure_status {
+                bail!("listener failed ({status})");
+            }
             return Ok(());
         }
         let mut descriptor = libc::pollfd {
@@ -198,5 +204,115 @@ fn listen(
                 return Err(error).context("polling listener");
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "test-fixtures"))]
+mod native_listener_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct FixtureListenerRun {
+        result: Result<()>,
+        output: Vec<Vec<u8>>,
+    }
+
+    fn run_fixture_status_source(status: i32, outcomes: serde_json::Value) -> FixtureListenerRun {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(format!("native-fixture{}", std::env::consts::EXE_SUFFIX));
+        assert!(fixture.is_file(), "native fixture binary is missing");
+        let manifest = serde_json::json!({
+            "name": "test.producer",
+            "binary": fixture,
+            "parameters": {},
+            "arguments": [
+                {"literal": "produce-exit"},
+                {"literal": status.to_string()}
+            ],
+            "contract": {
+                "version": 1,
+                "output": {"type": "bytes", "encoding": "raw"},
+                "outcomes": outcomes
+            }
+        });
+        let registry = Registry::from_sources(&[manifest.to_string()]).unwrap();
+        let program = crate::parser::parse(
+            "listen to test.producer\nwhenever a line arrives as event\n  then encode event as json\n",
+        )
+        .unwrap();
+        let (_, body) = split_program(&program);
+        let Trigger::Listen {
+            source, binding, ..
+        } = program.trigger.as_ref().unwrap()
+        else {
+            panic!("listener trigger")
+        };
+        let signals = Signals::with_cancellation(Arc::new(AtomicBool::new(false)), false).unwrap();
+        let options = RunOptions {
+            max_output_bytes: 1024,
+            command_timeout: Some(Duration::from_secs(1)),
+            ..RunOptions::new(directory.path().to_path_buf())
+        };
+        let mut output = Vec::new();
+        let result = listen(
+            source,
+            binding,
+            FiniteRun {
+                program: &body,
+                registry: &registry,
+                options: &options,
+                signals: &signals,
+            },
+            &ServiceLimits {
+                max_runs: None,
+                max_record_bytes: 1024,
+            },
+            &mut |bytes, _, _| {
+                output.push(bytes.to_vec());
+                Ok(())
+            },
+            &mut ServiceResult::default(),
+            None,
+        );
+        FixtureListenerRun { result, output }
+    }
+
+    #[test]
+    fn native_listener_drains_records_before_classifying_producer_exit() {
+        let successful = run_fixture_status_source(
+            7,
+            serde_json::json!([{"status": 7, "name": "complete", "kind": "success"}]),
+        );
+        successful.result.unwrap();
+        assert_eq!(successful.output.len(), 1);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&successful.output[0]).unwrap(),
+            serde_json::json!("event\n")
+        );
+
+        let explicit_failure = run_fixture_status_source(
+            8,
+            serde_json::json!([
+                {"status": 7, "name": "complete", "kind": "success"},
+                {"status": 8, "name": "failed", "kind": "failure"}
+            ]),
+        );
+        assert!(format!("{:#}", explicit_failure.result.unwrap_err()).contains("listener failed"));
+        assert_eq!(explicit_failure.output.len(), 1);
+
+        let unmapped = run_fixture_status_source(
+            9,
+            serde_json::json!([{"status": 7, "name": "complete", "kind": "success"}]),
+        );
+        assert!(format!("{:#}", unmapped.result.unwrap_err()).contains("listener failed"));
+        assert_eq!(unmapped.output.len(), 1);
     }
 }

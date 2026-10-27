@@ -96,6 +96,7 @@ fn listen(
     let mut record = Vec::new();
     let mut buffer = [0u8; 8192];
     let mut eof = false;
+    let mut failure_status = None;
     loop {
         stopped(signals)?;
         for managed in &mut children.0 {
@@ -106,7 +107,9 @@ fn listen(
                     if !source_manifest.is_some_and(|manifest| {
                         listener_source_exited_successfully(manifest, status)
                     }) {
-                        bail!("listener failed ({status})");
+                        // The child can exit after writing data that is still buffered in
+                        // stdout. Drain and deliver that data before reporting its status.
+                        failure_status = Some(status);
                     }
                 }
             }
@@ -169,6 +172,9 @@ fn listen(
             }
         }
         if eof && children.0.iter().all(|child| child.reaped) {
+            if let Some(status) = failure_status {
+                bail!("listener failed ({status})");
+            }
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -338,6 +344,7 @@ mod native_listener_tests {
             ]),
         );
         assert!(format!("{:#}", explicit_failure.result.unwrap_err()).contains("listener failed"));
+        assert_eq!(explicit_failure.output.len(), 1);
         assert_eq!(explicit_failure.accounting.launched_processes, 1);
 
         let unmapped = run_fixture_status_source(
@@ -345,6 +352,7 @@ mod native_listener_tests {
             serde_json::json!([{"status": 7, "name": "complete", "kind": "success"}]),
         );
         assert!(format!("{:#}", unmapped.result.unwrap_err()).contains("listener failed"));
+        assert_eq!(unmapped.output.len(), 1);
         assert_eq!(unmapped.accounting.launched_processes, 1);
     }
 }

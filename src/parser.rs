@@ -2556,6 +2556,343 @@ fn is_sensitive_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
         && word_is(tokens.get(cursor + 2), "secret")
 }
 
+/// Canonical invocation suffix order for `run`/`then`/`pipe to` commands.
+///
+/// Each family may appear at most once: `as NAME`, `and discard stderr`,
+/// `and keep status as NAME`, `and keep result as NAME`, `and keep secret`,
+/// `and cache`, then `and retry ...`. Redirection and environment suffixes are
+/// stripped before invocation parsing, so they accept any relative order and
+/// are not part of this ranking.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum InvocationSuffixKind {
+    Binding,
+    Discard,
+    Status,
+    Result,
+    Sensitive,
+    Cache,
+    Retry,
+}
+
+fn suffix_kind_rank(kind: InvocationSuffixKind) -> u8 {
+    match kind {
+        InvocationSuffixKind::Binding => 0,
+        InvocationSuffixKind::Discard => 1,
+        InvocationSuffixKind::Status => 2,
+        InvocationSuffixKind::Result => 3,
+        InvocationSuffixKind::Sensitive => 4,
+        InvocationSuffixKind::Cache => 5,
+        InvocationSuffixKind::Retry => 6,
+    }
+}
+
+fn valid_suffix_binding(token: Option<&Token<'_>>) -> bool {
+    match token {
+        Some(Token::Word(name)) => {
+            is_identifier(name) && !matches!(*name, "true" | "false" | "null")
+        }
+        _ => false,
+    }
+}
+
+/// Length of a syntactically valid `and retry ...` suffix starting at `cursor`
+/// (`and` included), or `None` when the words do not form a valid retry suffix.
+fn retry_suffix_len(tokens: &[Token<'_>], cursor: usize) -> Option<usize> {
+    if !is_retry_suffix(tokens, cursor) {
+        return None;
+    }
+    let mut index = cursor + 2;
+    if !(word_is(tokens.get(index), "up") && word_is(tokens.get(index + 1), "to")) {
+        return None;
+    }
+    let count = match tokens.get(index + 2) {
+        Some(Token::Word(count)) => count.parse::<u32>().ok()?,
+        _ => return None,
+    };
+    if !(1..=MAX_RETRIES).contains(&count) {
+        return None;
+    }
+    if !(word_is(tokens.get(index + 3), "times") || word_is(tokens.get(index + 3), "time")) {
+        return None;
+    }
+    index += 4;
+    if word_is(tokens.get(index), "even")
+        && word_is(tokens.get(index + 1), "if")
+        && word_is(tokens.get(index + 2), "uncertain")
+    {
+        index += 3;
+    }
+    if word_is(tokens.get(index), "with") && word_is(tokens.get(index + 1), "backoff") {
+        let amount = match tokens.get(index + 2) {
+            Some(Token::Word(amount)) => amount.parse::<u64>().ok()?,
+            _ => return None,
+        };
+        let unit = match tokens.get(index + 3) {
+            Some(Token::Word(unit)) => *unit,
+            _ => return None,
+        };
+        let factor = duration_unit_ms(unit)?;
+        let delay = amount.checked_mul(factor)?;
+        if delay > MAX_RETRY_BACKOFF_MS {
+            return None;
+        }
+        index += 4;
+        if word_is(tokens.get(index), "doubling") {
+            index += 1;
+        }
+    }
+    Some(index - cursor)
+}
+
+/// One invocation suffix segment within `kept` token order.
+struct InvocationSuffix {
+    kind: InvocationSuffixKind,
+    len: usize,
+}
+
+/// Recognize one invocation suffix at `cursor`, in any order. Returns its kind
+/// and token length, or `None` when the tokens do not form a valid suffix.
+fn invocation_suffix_at(tokens: &[Token<'_>], cursor: usize) -> Option<InvocationSuffix> {
+    if word_is(tokens.get(cursor), "as") {
+        if valid_suffix_binding(tokens.get(cursor + 1)) {
+            return Some(InvocationSuffix {
+                kind: InvocationSuffixKind::Binding,
+                len: 2,
+            });
+        }
+        return None;
+    }
+    if !word_is(tokens.get(cursor), "and") {
+        return None;
+    }
+    if is_discard_stderr_suffix(tokens, cursor) {
+        return Some(InvocationSuffix {
+            kind: InvocationSuffixKind::Discard,
+            len: 3,
+        });
+    }
+    if is_status_suffix(tokens, cursor) {
+        if word_is(tokens.get(cursor + 3), "as") && valid_suffix_binding(tokens.get(cursor + 4)) {
+            return Some(InvocationSuffix {
+                kind: InvocationSuffixKind::Status,
+                len: 5,
+            });
+        }
+        return None;
+    }
+    if is_result_suffix(tokens, cursor) {
+        if word_is(tokens.get(cursor + 3), "as") && valid_suffix_binding(tokens.get(cursor + 4)) {
+            return Some(InvocationSuffix {
+                kind: InvocationSuffixKind::Result,
+                len: 5,
+            });
+        }
+        return None;
+    }
+    if is_sensitive_suffix(tokens, cursor) {
+        return Some(InvocationSuffix {
+            kind: InvocationSuffixKind::Sensitive,
+            len: 3,
+        });
+    }
+    if word_is(tokens.get(cursor + 1), "cache") {
+        return Some(InvocationSuffix {
+            kind: InvocationSuffixKind::Cache,
+            len: 2,
+        });
+    }
+    if let Some(len) = retry_suffix_len(tokens, cursor) {
+        return Some(InvocationSuffix {
+            kind: InvocationSuffixKind::Retry,
+            len,
+        });
+    }
+    None
+}
+
+/// A safe reorder of trailing invocation suffixes into canonical order.
+///
+/// `suffix_start` is an index into the caller's full token list where the
+/// reorderable trailing region begins. `suffix_order` lists the original token
+/// indices of that trailing region in canonical order. Splicing the prefix
+/// `tokens[..suffix_start]` with those tokens in order parses, while the
+/// original order does not.
+pub(crate) struct SuffixOrderRepair {
+    pub suffix_start: usize,
+    pub suffix_order: Vec<usize>,
+}
+
+/// When `tokens` fails to parse only because invocation suffixes are out of
+/// order, return how to reorder the trailing region into canonical order.
+/// Returns `None` for valid statements and for any other parse failure, so
+/// callers never receive a misleading fix.
+pub(crate) fn suffix_order_fix(tokens: &[Token<'_>]) -> Option<SuffixOrderRepair> {
+    if tokens.is_empty() {
+        return None;
+    }
+    if word_is(tokens.first(), "hand")
+        || word_is(tokens.first(), "launch")
+        || matches!(tokens.last(), Some(Token::Word("interactively")))
+    {
+        return None;
+    }
+    if word_is(tokens.first(), "run") && word_is(tokens.get(1), "program") {
+        return None;
+    }
+    if parse_simple_statement(tokens).is_ok() {
+        return None;
+    }
+    // Strip redirection and environment suffixes, which accept any relative
+    // order. A malformed record is a different error, not a suffix-order fix.
+    let mut kept: Vec<usize> = Vec::with_capacity(tokens.len());
+    let mut trailing: Vec<usize> = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        match environment_suffix(tokens, index) {
+            Ok(Some((_, span))) => {
+                trailing.extend(index..index + span);
+                index += span;
+            }
+            Ok(None) => match redirect_suffix(tokens, index) {
+                Some((_, span)) => {
+                    trailing.extend(index..index + span);
+                    index += span;
+                }
+                None => {
+                    kept.push(index);
+                    index += 1;
+                }
+            },
+            Err(_) => return None,
+        }
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    let kept_tokens: Vec<Token<'_>> = kept.iter().map(|pos| tokens[*pos].clone()).collect();
+    if parse_invocation(&kept_tokens).is_ok() {
+        return None;
+    }
+    // Try every core/suffix split, longest core first, so the fix keeps the
+    // largest valid prefix and only reorders truly trailing suffixes.
+    for split in (0..=kept_tokens.len()).rev() {
+        let mut kinds = Vec::new();
+        let mut lengths = Vec::new();
+        let mut cursor = split;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut valid = true;
+        while cursor < kept_tokens.len() {
+            match invocation_suffix_at(&kept_tokens, cursor) {
+                Some(suffix) => {
+                    if !seen.insert(suffix_kind_rank(suffix.kind)) {
+                        valid = false;
+                        break;
+                    }
+                    kinds.push(suffix.kind);
+                    lengths.push(suffix.len);
+                    cursor += suffix.len;
+                }
+                None => {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if !valid || kinds.len() < 2 {
+            continue;
+        }
+        let mut sorted = kinds.clone();
+        sorted.sort_by_key(|kind| suffix_kind_rank(*kind));
+        if kinds == sorted {
+            continue;
+        }
+        // Reordered suffix names must stay distinct; otherwise the fix would
+        // only trade a syntax error for a duplicate-binding error.
+        let mut names = std::collections::BTreeSet::new();
+        let mut distinct = true;
+        let mut scan = split;
+        for (kind, len) in kinds.iter().zip(lengths.iter()) {
+            match kind {
+                InvocationSuffixKind::Binding => {
+                    if let Some(Token::Word(name)) = kept_tokens.get(scan + 1) {
+                        if !names.insert((*name).to_owned()) {
+                            distinct = false;
+                        }
+                    }
+                }
+                InvocationSuffixKind::Status | InvocationSuffixKind::Result => {
+                    if let Some(Token::Word(name)) = kept_tokens.get(scan + 4) {
+                        if !names.insert((*name).to_owned()) {
+                            distinct = false;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            scan += len;
+        }
+        if !distinct {
+            continue;
+        }
+        // Map kept positions back to original token indices, then order the
+        // suffix segments canonically.
+        let mut segments: Vec<(InvocationSuffixKind, Vec<usize>)> = Vec::new();
+        let mut scan = split;
+        for (kind, len) in kinds.iter().zip(lengths.iter()) {
+            let original = (scan..scan + len).map(|pos| kept[pos]).collect();
+            segments.push((*kind, original));
+            scan += len;
+        }
+        segments.sort_by_key(|(kind, _)| suffix_kind_rank(*kind));
+        let mut reordered_kept = kept[..split].to_vec();
+        for (_, original) in &segments {
+            reordered_kept.extend(original.iter().copied());
+        }
+        let reordered_kept_tokens: Vec<Token<'_>> = reordered_kept
+            .iter()
+            .map(|pos| tokens[*pos].clone())
+            .collect();
+        if parse_invocation(&reordered_kept_tokens).is_err() {
+            continue;
+        }
+        // The trailing region must be contiguous at the end of the line so the
+        // fix replaces one span without moving the core.
+        let mut suffix_indices: Vec<usize> = kept[split..].to_vec();
+        suffix_indices.extend(trailing.iter().copied());
+        suffix_indices.sort_unstable();
+        let Some(&suffix_start) = suffix_indices.first() else {
+            continue;
+        };
+        if suffix_indices != (suffix_start..tokens.len()).collect::<Vec<_>>() {
+            continue;
+        }
+        if kept[..split] != (0..suffix_start).collect::<Vec<_>>() {
+            continue;
+        }
+        let mut canonical: Vec<usize> = Vec::with_capacity(suffix_indices.len());
+        for (_, original) in &segments {
+            canonical.extend(original.iter().copied());
+        }
+        canonical.extend(trailing.iter().copied());
+        if canonical == suffix_indices {
+            continue;
+        }
+        let reordered_full: Vec<Token<'_>> = kept[..split]
+            .iter()
+            .chain(canonical.iter())
+            .map(|pos| tokens[*pos].clone())
+            .collect();
+        if validate_statement(&reordered_full).is_err() {
+            continue;
+        }
+        return Some(SuffixOrderRepair {
+            suffix_start,
+            suffix_order: canonical,
+        });
+    }
+    None
+}
+
 #[derive(Default)]
 struct InvocationLayout {
     parameters: BTreeMap<String, Range<usize>>,

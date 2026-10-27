@@ -39,7 +39,7 @@ fn once_flushes_output_before_exiting_with_status() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "done");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "tooling"))]
 #[test]
 fn generated_oncalendar_values_are_accepted_by_systemd_analyze() {
     // Skip where systemd-analyze is not installed, so the test stays a CI check.

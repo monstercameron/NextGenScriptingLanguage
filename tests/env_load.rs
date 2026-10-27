@@ -85,6 +85,7 @@ fn explain_shows_the_read_that_feeds_the_load() {
 }
 
 #[test]
+#[cfg(feature = "records")]
 fn selected_env_load_values_are_redacted_from_the_entire_run_record() {
     let root = tempfile::tempdir().unwrap();
     let canary = "ENV-LOAD-CANARY-6f24";
@@ -117,6 +118,7 @@ fn selected_env_load_values_are_redacted_from_the_entire_run_record() {
 }
 
 #[test]
+#[cfg(feature = "records")]
 fn runtime_selected_env_load_values_are_redacted_from_the_entire_run_record() {
     let root = tempfile::tempdir().unwrap();
     let canary = "ENV-LOAD-REFERENCE-CANARY-2d80";
@@ -170,6 +172,30 @@ fn checkpointed_env_load_with_secret_values_is_refused_before_writing_state() {
     assert!(!root.path().join("checkpoint").exists());
 }
 
+#[test]
+#[cfg(unix)]
+fn env_load_secret_redacts_a_failing_stdin_consumers_stderr_without_records() {
+    let root = tempfile::tempdir().unwrap();
+    let canary = "ENV-LOAD-STDERR-CANARY-91c4";
+    fs::write(
+        root.path().join("credentials.env"),
+        format!("TOKEN={canary}\n"),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "read \"credentials.env\"\nthen env.load with secret [\"TOKEN\"] as loaded\ntake text at \"/TOKEN\" from loaded as token\nuse value token\npipe to \"sh\" with arguments [\"-c\", \"cat >&2; exit 7\"]\n",
+    )
+    .unwrap();
+
+    let output = execute(root.path(), &["run", "job.program"]);
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("[REDACTED]"), "{diagnostic}");
+    assert!(!diagnostic.contains(canary));
+}
+
+#[cfg(feature = "records")]
 fn files_under(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     fn visit(root: &Path, current: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
         for entry in fs::read_dir(current).unwrap() {

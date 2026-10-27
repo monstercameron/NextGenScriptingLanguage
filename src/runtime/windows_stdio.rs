@@ -7,6 +7,26 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
+
+/// Windows currently uses the synchronous native handle writer below. Keep the run-scoped
+/// abstraction available to shared runtime code without changing Windows I/O behavior.
+pub(super) struct OutputWriterPool;
+
+impl OutputWriterPool {
+    pub(super) fn new() -> Self {
+        Self
+    }
+}
+
+pub(super) fn write_with_deadline_owned_reusing(
+    _pool: &OutputWriterPool,
+    fd: i32,
+    bytes: Vec<u8>,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<()> {
+    write_with_deadline(fd, &bytes, cancelled, deadline)
+}
 use windows_sys::Win32::{
     Foundation::*,
     Storage::FileSystem::*,

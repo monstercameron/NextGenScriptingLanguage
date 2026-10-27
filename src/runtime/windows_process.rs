@@ -226,6 +226,7 @@ fn execute_group_with_sink(
         job_diagnostic_truncation: signals.job_diagnostic_truncation.clone(),
         job_stage_results: signals.job_stage_results.clone(),
         job_run_context: Arc::clone(&signals.job_run_context),
+        output_writers: Arc::clone(&signals.output_writers),
         #[cfg(test)]
         job_panic_before_ack: signals.job_panic_before_ack.clone(),
         deadline: {

@@ -1509,12 +1509,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         && result_binding.is_none()
                         && !crate::ast::has_stdout_consumer(&program.steps, index + 1)
                     {
-                        if let Input::Bytes(bytes) = &data {
+                        if let Input::Bytes(bytes) = std::mem::replace(&mut data, Input::Empty) {
                             if !observe::suppresses_terminal_output(step.line) {
-                                write_streamed_stdout(bytes, signals)?;
+                                write_streamed_stdout_owned(bytes, signals)?;
                             }
                         }
-                        data = Input::Empty;
                     }
                     lazy_event(
                         options.trace,
@@ -2319,7 +2318,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             // Nothing consumes this value, so it is written now
                             // and the pipeline value becomes empty.
                             if !observe::suppresses_terminal_output(step.line) {
-                                write_streamed_stdout(&bytes, signals)?;
+                                write_streamed_stdout_owned(bytes, signals)?;
                             }
                             data = Input::Empty;
                         } else {

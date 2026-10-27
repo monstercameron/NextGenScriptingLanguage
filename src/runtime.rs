@@ -537,6 +537,7 @@ pub(crate) struct Signals {
     job_diagnostic_truncation: Option<Arc<Mutex<Vec<bool>>>>,
     job_stage_results: Option<Arc<Mutex<Vec<Option<execution_result::StageResult>>>>>,
     job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
+    output_writers: Arc<stdio::OutputWriterPool>,
     #[cfg(test)]
     job_panic_before_ack: Option<Arc<JobAckPanicProbe>>,
 }
@@ -674,6 +675,7 @@ impl Signals {
             job_diagnostic_truncation: None,
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
+            output_writers: Arc::new(stdio::OutputWriterPool::new()),
             #[cfg(test)]
             job_panic_before_ack: None,
         };
@@ -749,6 +751,7 @@ impl Signals {
             job_diagnostic_truncation: None,
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
+            output_writers: Arc::new(stdio::OutputWriterPool::new()),
             #[cfg(test)]
             job_panic_before_ack: None,
         })
@@ -784,6 +787,7 @@ impl Signals {
             job_diagnostic_truncation: None,
             job_stage_results: None,
             job_run_context: Arc::clone(&self.job_run_context),
+            output_writers: Arc::clone(&self.output_writers),
             #[cfg(test)]
             job_panic_before_ack: None,
         }
@@ -832,6 +836,7 @@ impl Signals {
             job_diagnostic_truncation: self.job_diagnostic_truncation.clone(),
             job_stage_results: self.job_stage_results.clone(),
             job_run_context: Arc::clone(&self.job_run_context),
+            output_writers: Arc::clone(&self.output_writers),
             #[cfg(test)]
             job_panic_before_ack: self.job_panic_before_ack.clone(),
         })
@@ -1967,16 +1972,21 @@ fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
     !crate::ast::has_stdout_consumer(&program.steps, end)
 }
 
-/// Write one streamed step's captured bytes. Native commands that inherit
-/// stdout produce no bytes here, so nothing is written twice.
-fn write_streamed_stdout(bytes: &[u8], signals: &Signals) -> Result<()> {
+/// Write owned output from a streamed step without copying its captured bytes.
+fn write_streamed_stdout_owned(bytes: Vec<u8>, signals: &Signals) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
-    observe::note_terminal_output(bytes);
+    observe::note_terminal_output(&bytes);
     if observe::writes_streamed_stdout() {
-        write_with_deadline(1, bytes, &signals.cancelled, signals.deadline)
-            .context("could not stream workflow stdout")?;
+        stdio::write_with_deadline_owned_reusing(
+            &signals.output_writers,
+            1,
+            bytes,
+            &signals.cancelled,
+            signals.deadline,
+        )
+        .context("could not stream workflow stdout")?;
     }
     Ok(())
 }

@@ -2241,7 +2241,13 @@ pub fn resolve_executable_diagnostics(
     let line_starts = LineStarts::new(source);
     let mut calls = Vec::new();
     collect_resolve_calls(&program.steps, &cwd, registry, &mut calls);
-    for definition in program.definitions.values() {
+    for (name, definition) in &program.definitions {
+        // Called files keep their own source text and line numbers. This API
+        // returns diagnostics against the caller source, so don't attach a child
+        // executable warning or fix to a caller span.
+        if name.starts_with(crate::parser::PROGRAM_FILE_PREFIX) {
+            continue;
+        }
         collect_resolve_calls(&definition.steps, &cwd, registry, &mut calls);
     }
     let path_value = std::env::var_os("PATH").unwrap_or_default();
@@ -2439,10 +2445,20 @@ fn collect_resolve_calls<'a>(
                     calls.push((step.line, call, current.clone()));
                 }
             }
-            StepKind::CallProgram { end, .. } => {
+            StepKind::CallProgram { call, end, .. } => {
                 let finish = index.saturating_add(*end).min(steps.len());
-                if let (Some(current), true) = (&cwd, finish > index + 1) {
-                    collect_resolve_calls(&steps[index + 1..finish - 1], current, registry, calls);
+                if !call
+                    .operation
+                    .starts_with(crate::parser::PROGRAM_FILE_PREFIX)
+                {
+                    if let (Some(current), true) = (&cwd, finish > index + 1) {
+                        collect_resolve_calls(
+                            &steps[index + 1..finish - 1],
+                            current,
+                            registry,
+                            calls,
+                        );
+                    }
                 }
                 index = finish;
                 continue;

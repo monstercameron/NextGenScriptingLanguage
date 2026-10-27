@@ -173,6 +173,45 @@ fn resolve_checks_direct_executables_only_and_suggests_path_names() {
     let in_definition = report(&in_definition, true);
     assert_eq!(in_definition["diagnostics"][0]["code"], "exec.not_found");
 }
+
+#[cfg(unix)]
+#[test]
+fn resolve_does_not_apply_called_file_fixes_to_the_caller_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let printf = bin.join("printf");
+    fs::write(&printf, "placeholder; resolution must not execute this file\n").unwrap();
+    fs::set_permissions(&printf, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "run program file \"helper.program\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("helper.program"),
+        "run \"prinft\" with arguments [\"x\"]\n",
+    )
+    .unwrap();
+
+    let output = invoke_with_path(
+        root.path(),
+        &bin,
+        &["check", "job.program", "--resolve", "--json"],
+    );
+    let value = report(&output, true);
+    assert!(
+        value["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|diagnostic| diagnostic["code"] != "exec.not_found"),
+        "called-file diagnostics need a child-source URI/span before they can be emitted: {value}"
+    );
+}
+
 fn report(output: &Output, ok: bool) -> Value {
     assert_eq!(
         output.status.success(),

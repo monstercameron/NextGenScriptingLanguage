@@ -734,8 +734,7 @@ pub fn check_from_record_usable(
             }
         }
     }
-    let Some(recorded_executables) = record.run["provenance"]["executables"].as_object()
-    else {
+    let Some(recorded_executables) = record.run["provenance"]["executables"].as_object() else {
         bail!(
             "the record {} has no executable provenance; re-record it with this build, then repair and resume from the new record",
             record.directory.display()
@@ -754,8 +753,7 @@ pub fn check_from_record_usable(
         // pin the same untrusted marker), so resume the repaired program
         // without `--from-record` instead.
         let actual = executable_identity(binary, working_directory);
-        if !executable_identity_proves_bytes(expected)
-            || !executable_identity_proves_bytes(&actual)
+        if !executable_identity_proves_bytes(expected) || !executable_identity_proves_bytes(&actual)
         {
             bail!(
                 "the executable for {binary:?} is larger than the {MAX_EXECUTABLE_BYTES}-byte record identity limit, so the record {} cannot prove its bytes; re-run the repaired program without --from-record",
@@ -800,8 +798,7 @@ impl StoredRecord {
         #[cfg(not(unix))]
         let run_bytes = read_regular_no_follow(&directory.join(RUN_FILE))
             .with_context(|| format!("{} is not a run record", directory.display()))?;
-        let run: Json =
-            serde_json::from_slice(&run_bytes).context("run.json is not valid JSON")?;
+        let run: Json = serde_json::from_slice(&run_bytes).context("run.json is not valid JSON")?;
         if run["protocol"] != PROTOCOL {
             bail!("unsupported record protocol {}", run["protocol"]);
         }
@@ -819,9 +816,7 @@ impl StoredRecord {
         for (number, line) in trace.lines().enumerate() {
             let value: Json = match serde_json::from_str(line) {
                 Ok(value) => value,
-                Err(_)
-                    if number + 1 == trace_line_count && has_torn_final_line =>
-                {
+                Err(_) if number + 1 == trace_line_count && has_torn_final_line => {
                     // The run died mid-line: a completed step may have no trace
                     // entry. The prefix is unprovable, so repair and resume
                     // refuse this record while `show-run` still opens it.
@@ -1490,6 +1485,17 @@ mod tests {
             file.seek(SeekFrom::Start(large - 1)).unwrap();
             file.write_all(byte).unwrap();
         }
+        // `executable_identity` follows runtime launch resolution, which
+        // requires the executable bit on Unix. Fresh files are not
+        // executable, so mark the fixtures; Windows treats every file as
+        // executable and needs nothing here.
+        #[cfg(unix)]
+        for path in [&first, &second] {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
         let cwd = directory.path();
         let a = executable_identity(&first.to_string_lossy(), cwd);
         let b = executable_identity(&second.to_string_lossy(), cwd);
@@ -1502,6 +1508,13 @@ mod tests {
         // Small files still pin their bytes.
         let small = directory.path().join("tool-small.bin");
         fs::write(&small, b"bytes").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&small).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&small, permissions).unwrap();
+        }
         let pinned = executable_identity(&small.to_string_lossy(), cwd);
         assert!(pinned.starts_with("sha256:"), "{pinned}");
         assert!(executable_identity_proves_bytes(&pinned));

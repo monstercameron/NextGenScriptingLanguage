@@ -89,7 +89,14 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         let program_path = program_override.with_context(|| {
             "repair --from-record needs the program file to edit: pass --program FILE"
         })?;
-        return repair_from_record(&record, &program_path, &operation, &operation_text, dry_run, &registry);
+        return repair_from_record(
+            &record,
+            &program_path,
+            &operation,
+            &operation_text,
+            dry_run,
+            &registry,
+        );
     }
     if program_override.is_some() {
         bail!("--program applies only to repair --from-record; {USAGE}");
@@ -141,8 +148,8 @@ fn repair_from_record(
     // repair: refuse it instead of guessing a boundary over completed steps.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     flow::record::check_from_record_usable(&record, registry, &cwd)?;
-    let source = fs::read(program_path)
-        .with_context(|| format!("reading {}", program_path.display()))?;
+    let source =
+        fs::read(program_path).with_context(|| format!("reading {}", program_path.display()))?;
     if !flow::replay::program_matches_record(&record, &source) {
         // Line numbers in the repair refer to this file, so a program that no
         // longer matches the record cannot be bounded safely. Refusing beats
@@ -153,10 +160,8 @@ fn repair_from_record(
             record_directory.display()
         );
     }
-    let text =
-        std::str::from_utf8(&source).context("the program is not UTF-8")?;
-    let (boundary, failed_line) =
-        repair::from_record_boundary(text, Some(program_path), &record)?;
+    let text = std::str::from_utf8(&source).context("the program is not UTF-8")?;
+    let (boundary, failed_line) = repair::from_record_boundary(text, Some(program_path), &record)?;
     let plan = repair::apply_at(text, Some(program_path), operation, boundary, registry)?;
     if let Some(line) = failed_line {
         eprintln!(

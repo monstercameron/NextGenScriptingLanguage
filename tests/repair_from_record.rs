@@ -950,7 +950,11 @@ fn resume_refuses_a_withheld_secret_input_without_running() {
         executable_text()
     );
     fs::write(work.path().join("workflow.program"), &source).unwrap();
-    fs::write(work.path().join("answers.json"), "{\"key\":\"s3cret-value\"}").unwrap();
+    fs::write(
+        work.path().join("answers.json"),
+        "{\"key\":\"s3cret-value\"}",
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -975,7 +979,11 @@ fn resume_refuses_a_withheld_secret_input_without_running() {
         ])
         .output()
         .unwrap();
-    assert!(!run.status.success(), "the program should fail: {}", text(&run.stderr));
+    assert!(
+        !run.status.success(),
+        "the program should fail: {}",
+        text(&run.stderr)
+    );
     assert_eq!(count_lines(work.path()), 1);
 
     let repaired = repair_from_record_with_manifests(
@@ -1037,7 +1045,11 @@ fn repair_dry_run_changes_nothing() {
         ],
     );
     assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr));
-    assert!(text(&dry.stdout).contains("dry run"), "{}", text(&dry.stdout));
+    assert!(
+        text(&dry.stdout).contains("dry run"),
+        "{}",
+        text(&dry.stdout)
+    );
     assert_eq!(
         fs::read_to_string(work.path().join("workflow.program")).unwrap(),
         before
@@ -1239,7 +1251,10 @@ fn portable_counter_manifests(work: &Path) -> PathBuf {
         let script = work.join("portable-counter.sh");
         fs::write(
             &script,
-            format!("echo invoke >> '{}'\nprintf 'counted\\n'\n", count.display()),
+            format!(
+                "echo invoke >> '{}'\nprintf 'counted\\n'\n",
+                count.display()
+            ),
         )
         .unwrap();
         #[cfg(unix)]

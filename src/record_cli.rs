@@ -136,8 +136,7 @@ pub fn resume_from_record(
     options.inputs = inputs;
     options.max_loop_iterations = max_loop_iterations;
     options.loop_budget_scope = loop_budget_scope;
-    let result =
-        runtime::with_streamed_stdout(|| runtime::run(program, registry, &options));
+    let result = runtime::with_streamed_stdout(|| runtime::run(program, registry, &options));
     drop(guard);
     let result = result?;
     io::stdout()
@@ -154,8 +153,7 @@ pub fn resume_from_record(
             .flush()
             .context("could not write workflow output")?;
         if let Some(message) = &exit.message {
-            let message =
-                flow::security::secret_redactor(registry).redact_text(message);
+            let message = flow::security::secret_redactor(registry).redact_text(message);
             runtime::write_diagnostic(format!("{message}\n").as_bytes());
         }
         std::process::exit(i32::from(exit.status));

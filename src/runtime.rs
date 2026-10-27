@@ -75,9 +75,9 @@ pub mod worker_backend;
 #[cfg(feature = "graph")]
 pub(crate) use checkpoint::graph::{open_graph_checkpoint, PersistenceAuthorizer};
 pub use checkpoint::{read_repair_state, CheckpointOptions, RepairState};
-pub use resume::run_checkpointed;
 #[cfg(feature = "records")]
 pub(crate) use resume::node_end;
+pub use resume::run_checkpointed;
 
 /// Mark descriptors inherited by this process close-on-exec before starting runtime work.
 ///

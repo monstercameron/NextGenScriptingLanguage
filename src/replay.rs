@@ -301,11 +301,7 @@ impl PrefixReplayer {
     /// Replay `record`'s completed prefix below `boundary`. Declared secrets
     /// present in the environment are registered first, so recorded redactions
     /// match.
-    pub fn new(
-        record: StoredRecord,
-        registry: &Registry,
-        boundary: usize,
-    ) -> Result<Self> {
+    pub fn new(record: StoredRecord, registry: &Registry, boundary: usize) -> Result<Self> {
         let environment = std::env::vars_os().collect::<Vec<_>>();
         security::register_declared_environment_secrets(registry, &environment)
             .map_err(|error| anyhow!("registering declared secrets: {error}"))?;
@@ -472,9 +468,7 @@ pub fn recorded_loop_budget(
             .context("recorded loop limit exceeds this platform")?,
     };
     let loop_budget_scope = match record.run["limits"].get("loop_iterations_scope") {
-        None | Some(Json::Null)
-            if recorded_limit.is_none_or(serde_json::Value::is_null) =>
-        {
+        None | Some(Json::Null) if recorded_limit.is_none_or(serde_json::Value::is_null) => {
             crate::runtime::LoopBudgetScope::LegacySharedRun
         }
         None | Some(Json::Null) => crate::runtime::LoopBudgetScope::PerLoop,

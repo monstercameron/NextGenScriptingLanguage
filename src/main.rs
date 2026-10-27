@@ -1849,7 +1849,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             }
             #[cfg(not(feature = "records"))]
             if args.from_record_dir.is_some() {
-                bail!("--from-record requires the records feature; rebuild with --features records");
+                bail!(
+                    "--from-record requires the records feature; rebuild with --features records"
+                );
             }
             if args.once {
                 if args.checkpoint_dir.is_some() {

@@ -12,6 +12,7 @@
     },
     "needles": {
       "type": "list",
+      "required": true,
       "items": "string"
     }
   },

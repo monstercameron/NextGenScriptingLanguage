@@ -11,10 +11,12 @@
       "type": "string"
     },
     "start": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     },
     "length": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     },
     "unit": {
       "type": "string"

@@ -11,7 +11,8 @@
       "type": "string"
     },
     "count": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     }
   },
   "arguments": [

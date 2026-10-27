@@ -11,7 +11,8 @@
       "type": "string"
     },
     "prefix": {
-      "type": "string"
+      "type": "string",
+      "required": true
     }
   },
   "arguments": [

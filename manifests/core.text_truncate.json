@@ -11,7 +11,8 @@
       "type": "string"
     },
     "width": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     },
     "ellipsis": {
       "type": "string"

@@ -2106,10 +2106,11 @@ fn complete_then_statement(
                 }
                 return;
             }
-            if words.get(3) != Some(&"as") || words.get(4) != Some(&"json") {
-                if words.len() == 4 && !ends_with_space {
-                    push_keyword(items, "as json", "Encode the value as JSON");
-                }
+            if (words.get(3) != Some(&"as") || words.get(4) != Some(&"json"))
+                && words.len() == 4
+                && !ends_with_space
+            {
+                push_keyword(items, "as json", "Encode the value as JSON");
             }
             // `then encode <value> as json` is complete.
         }

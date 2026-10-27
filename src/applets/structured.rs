@@ -926,6 +926,10 @@ fn parse_pointer(pointer: &str) -> Result<Vec<String>, AppletError> {
     Ok(segments)
 }
 
+pub(super) fn validate_pointer(pointer: &str) -> Result<(), AppletError> {
+    parse_pointer(pointer).map(|_| ())
+}
+
 fn lookup<'a>(root: &'a Value, pointer: &[String]) -> Result<Option<&'a Value>, AppletError> {
     let mut current = root;
     for segment in pointer {

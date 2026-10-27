@@ -32,6 +32,10 @@ pub(crate) fn valid_time_zone(zone: &str) -> bool {
     time::valid_zone(zone)
 }
 
+pub(crate) fn validate_json_pointer(pointer: &str) -> Result<(), String> {
+    structured::validate_pointer(pointer).map_err(|error| error.message)
+}
+
 use serde_json::{Map, Value};
 use std::fmt;
 use std::path::Path;

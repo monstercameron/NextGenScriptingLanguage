@@ -4614,35 +4614,56 @@ fn validate_json_pointer_literals(
                 .then_some(manifest.name_for(call))
         })
     };
-    let Some(operation) = operation.filter(|operation| operation.starts_with("json.")) else {
+    let Some(operation) = operation else {
         return;
+    };
+    let (fields, where_pointer) = match operation {
+        "json.get" => (&["pointer", "pointers"][..], false),
+        "json.set"
+        | "json.length"
+        | "json.first"
+        | "json.last"
+        | "json.keys"
+        | "json.entries"
+        | "json.values"
+        | "json.group_by"
+        | "json.unique_by"
+        | "json.sort_by" => (&["pointer"][..], false),
+        "json.map" => (&["pointer", "select"][..], false),
+        "json.filter" => (&["pointer"][..], true),
+        "json.has" | "json.delete" => (&["path"][..], false),
+        _ => return,
     };
 
     let mut invalid = Vec::new();
-    for name in ["pointer", "select", "path"] {
+    for name in fields {
         if let Some(value) = call.parameters.get(name) {
             collect_invalid_pointers(name, value, &mut invalid);
         }
     }
-    if let Some(Value::List(pointers)) = call.parameters.get("pointers") {
-        for value in pointers {
-            collect_invalid_pointers("pointers", value, &mut invalid);
+    if fields.contains(&"pointers") {
+        if let Some(Value::List(pointers)) = call.parameters.get("pointers") {
+            for value in pointers {
+                collect_invalid_pointers("pointers", value, &mut invalid);
+            }
         }
     }
-    if let Some(Value::List(predicates)) = call.parameters.get("where") {
-        for predicate in predicates {
-            if let Value::Record(fields) = predicate {
-                if let Some(value) = fields.get("pointer") {
-                    collect_invalid_pointers("where", value, &mut invalid);
+    if where_pointer {
+        if let Some(Value::List(predicates)) = call.parameters.get("where") {
+            for predicate in predicates {
+                if let Value::Record(fields) = predicate {
+                    if let Some(value) = fields.get("pointer") {
+                        collect_invalid_pointers("where", value, &mut invalid);
+                    }
                 }
             }
         }
     }
 
-    for (parameter, pointer) in invalid {
+    for (parameter, pointer, reason) in invalid {
         let message = format!(
-            "parameter {parameter:?} of applet {operation:?} contains malformed JSON Pointer \
-             {pointer:?}; a JSON Pointer must be empty or start with '/' and use only '~0' or '~1' escapes"
+            "parameter {parameter:?} of applet {operation:?} contains invalid JSON Pointer \
+             {pointer:?}: {reason}"
         );
         diagnostics.push(Diagnostic::error(
             "applet.parameter.constraint",
@@ -4653,10 +4674,14 @@ fn validate_json_pointer_literals(
     }
 }
 
-fn collect_invalid_pointers(parameter: &str, value: &Value, invalid: &mut Vec<(String, String)>) {
+fn collect_invalid_pointers(
+    parameter: &str,
+    value: &Value,
+    invalid: &mut Vec<(String, String, String)>,
+) {
     if let Value::String(pointer) = value {
-        if crate::structured::validate_pointer(pointer).is_err() {
-            invalid.push((parameter.to_owned(), pointer.clone()));
+        if let Err(reason) = crate::applets::validate_json_pointer(pointer) {
+            invalid.push((parameter.to_owned(), pointer.clone(), reason));
         }
     }
 }
@@ -5483,6 +5508,22 @@ mod tests {
             );
         }
 
+        for source in [
+            "run json.get with document {} and pointers [\"/~2\"] as result\n",
+            "run json.map with document [] and select \"/~2\" as result\n",
+            "run json.filter with document [] and where [{\"pointer\":\"/~2\",\"exists\":true}] as result\n",
+            "run json.has with document {} and path \"/~2\" as result\n",
+            "run json.delete with document {} and path \"/~2\" as result\n",
+        ] {
+            let diagnostics = analyze_source(source, &registry);
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+                "the dispatched JSON operation accepted an invalid pointer: {source:?} {diagnostics:#?}"
+            );
+        }
+
         for pointer in ["", "/a", "/~0", "/~1", "/a~0b~1c"] {
             let source = format!(
                 "run json.keys with document {{\"a\":1}} and pointer {pointer:?} as result\n"
@@ -5493,6 +5534,40 @@ mod tests {
                     .iter()
                     .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
                 "valid pointer {pointer:?} was rejected: {diagnostics:#?}"
+            );
+        }
+
+        let maximum_bytes = format!("/{}", "a".repeat(4095));
+        let overlong = format!("/{}", "a".repeat(4096));
+        for (pointer, valid) in [(&maximum_bytes, true), (&overlong, false)] {
+            let source = format!(
+                "run json.keys with document {{}} and pointer {pointer:?} as result\n"
+            );
+            let diagnostics = analyze_source(&source, &registry);
+            assert_eq!(
+                !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+                valid,
+                "incorrect byte-limit result for pointer of {} bytes: {diagnostics:#?}",
+                pointer.len()
+            );
+        }
+
+        let maximum_segments = "/".repeat(256);
+        let over_segments = "/".repeat(257);
+        for (pointer, valid) in [(&maximum_segments, true), (&over_segments, false)] {
+            let source = format!(
+                "run json.keys with document {{}} and pointer {pointer:?} as result\n"
+            );
+            let diagnostics = analyze_source(&source, &registry);
+            assert_eq!(
+                !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+                valid,
+                "incorrect segment-limit result for pointer with {} slashes: {diagnostics:#?}",
+                pointer.len()
             );
         }
 
@@ -5511,7 +5586,8 @@ mod tests {
             "binary": "custom-json-keys",
             "parameters": {
                 "document": { "type": "json", "required": true },
-                "pointer": { "type": "string" }
+                "pointer": { "type": "string" },
+                "path": { "type": "string" }
             },
             "arguments": [{ "parameter": "pointer" }]
         })
@@ -5542,7 +5618,8 @@ mod tests {
             "binary": "@execute-applet",
             "parameters": {
                 "document": { "type": "json", "required": true },
-                "pointer": { "type": "string" }
+                "pointer": { "type": "string" },
+                "path": { "type": "string" }
             },
             "arguments": [
                 { "literal": "json.keys" },
@@ -5558,6 +5635,13 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
             "a fixed helper dispatch to json.keys was not pointer-checked"
+        );
+        let ignored_path = "run fixture.json_keys with document {} and pointer \"\" and path \"/~2\" as result\n";
+        assert!(
+            !analyze_source(ignored_path, &helper)
+                .iter()
+                .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+            "json.keys validated a path parameter that its runtime implementation ignores"
         );
     }
 

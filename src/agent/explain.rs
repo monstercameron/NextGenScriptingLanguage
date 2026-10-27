@@ -308,6 +308,24 @@ struct Walker<'a> {
 }
 
 impl Walker<'_> {
+    /// Resolve the filesystem working directory when the explanation walk still
+    /// has a known cwd. `Cwd` components are relative to the program's starting
+    /// directory, matching `change_folder` and runtime program-file semantics.
+    fn known_working_directory(&self) -> Option<std::path::PathBuf> {
+        let base = self
+            .program_directory
+            .clone()
+            .or_else(|| std::env::current_dir().ok())?;
+        match &self.cwd {
+            Cwd::Known(components) => Some(
+                components
+                    .iter()
+                    .fold(base, |path, component| path.join(component)),
+            ),
+            Cwd::Unknown => None,
+        }
+    }
+
     /// Walk a step list in order. A called definition's body is inlined after its
     /// `CallProgram`, using a relative `end` offset. The definition is walked once
     /// through the call, so the inlined copy is skipped. An invalid offset falls
@@ -697,7 +715,7 @@ impl Walker<'_> {
             // A quoted executable bypasses the catalog, so its effects are unknown.
             row.binary = Some(call.operation.clone());
             row.process = Some(true);
-            if let Ok(cwd) = std::env::current_dir() {
+            if let Some(cwd) = self.known_working_directory() {
                 let resolved = crate::runtime::binary_path(&call.operation, &cwd);
                 row.resolved = Some(resolved.is_ok());
                 row.resolved_path = resolved

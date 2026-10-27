@@ -116,6 +116,49 @@ fn unresolved_direct_executable_is_false_in_json_plan() {
     assert!(object["steps"][0]["resolved_path"].is_null());
 }
 
+#[cfg(unix)]
+#[test]
+fn direct_executable_resolution_uses_the_walkers_known_folder() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = write_manifests(directory.path());
+    let bin = directory.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let printf = bin.join("printf");
+    std::fs::write(&printf, "placeholder; explain must not execute this file\n").unwrap();
+    std::fs::set_permissions(&printf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        directory.path().join("plan.program"),
+        "use folder \"bin\"\nrun \"printf\"\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args([
+            "explain",
+            "plan.program",
+            "--json",
+            "--manifest-dir",
+        ])
+        .arg(manifests)
+        .current_dir(directory.path())
+        .env("PATH", ".")
+        .env_remove("EXECUTE_MODELS_OFFLINE")
+        .stdin(Stdio::null())
+        .output()
+        .expect("start execute");
+    let object = plan(&output);
+    let invocation = rows_of_kind(&object, "invoke")[0];
+    assert_eq!(invocation["resolved"], true);
+    assert_eq!(
+        invocation["resolved_path"],
+        std::fs::canonicalize(printf)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
+}
+
 fn plan(output: &Output) -> Value {
     assert!(
         output.status.success(),

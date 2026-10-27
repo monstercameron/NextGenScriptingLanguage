@@ -265,14 +265,27 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         job_supervisor: external_job_supervisor,
         job_last_uses: source_job_last_uses,
     } = start;
-    // Literal components of explicitly secret-producing calls must be masked
-    // before their invocation trace or any dynamic binding can be observed.
-    crate::security::register_sensitive_program(registry, program)?;
-    let sensitive_bindings = crate::runtime::sensitive_binding_names(program, registry);
     // Nested finite module and task calls share one admission/output budget.
     // The last returning lexical run drops the slot, so repeated service
     // handlers begin with a fresh per-run budget while sharing their Signals.
     let (_finite_depth, depth) = FiniteDepth::enter();
+    if depth == 0 {
+        // Outermost run in this thread: mask secrets a library host
+        // registered before hardening was enabled, then drop any line state
+        // a previous run left in the process-global sanitizers. The sweep
+        // runs first on purpose: the inherited state still tells whether
+        // the log is mid-line, so the first mask starts its own line; masks
+        // end with a newline, so the reset afterwards lands on a true line
+        // start. Both are no-ops without hardening, so non-CI runs stay
+        // byte-identical. Nested runs share the terminal stream with their
+        // parent and must neither sweep nor reset it.
+        crate::github_actions::emit_masks_for_registry(registry);
+        crate::github_actions::reset_terminal_state();
+    }
+    // Literal components of explicitly secret-producing calls must be masked
+    // before their invocation trace or any dynamic binding can be observed.
+    crate::security::register_sensitive_program(registry, program)?;
+    let sensitive_bindings = crate::runtime::sensitive_binding_names(program, registry);
     // Only the CLI's top-level run streams. Module, handler and library runs
     // keep capturing, because their callers consume the bytes.
     let stream_top = depth == 0 && STREAM_REQUEST.with(|request| request.get());
@@ -2351,6 +2364,39 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             let completed = match completed {
                                 Ok(completed) => completed,
                                 Err(error) => {
+                                    // A sensitive step's failure bytes must be
+                                    // masked before the diagnostic reaches the
+                                    // log: registration emits the mask lines,
+                                    // and the caller redacts the diagnostic
+                                    // from the same registry. Fail closed when
+                                    // the value cannot be secured.
+                                    if sensitive_terminal_output {
+                                        if let Some(failure) =
+                                            error.downcast_ref::<CommandFailed>()
+                                        {
+                                            let mut outputs = Vec::new();
+                                            outputs.extend(failure.stdout.as_deref());
+                                            outputs.extend(failure.stderr.as_deref());
+                                            outputs.extend(
+                                                failure
+                                                    .stages
+                                                    .iter()
+                                                    .filter_map(|stage| stage.stderr.as_deref()),
+                                            );
+                                            for output in outputs {
+                                                if crate::security::register_sensitive_bytes(
+                                                    registry, output,
+                                                )
+                                                .is_err()
+                                                {
+                                                    return Err(anyhow::anyhow!(
+                                                        "line {}: sensitive step failed and its output could not be secured; diagnostic withheld",
+                                                        step.line
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
                                     // A failed command's stderr still goes to its
                                     // file target before the failure propagates; a
                                     // streamed file already holds it and is synced.
@@ -2403,6 +2449,39 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         if let Some(pending) = merged_redirect {
                             bytes = pending.route(bytes, &redirected_stderr, signals)?;
                         }
+                        // A streamed step's stdout went to the terminal rather than into the
+                        // result, so its execution record reports no captured output.
+                        let reported_stdout_captured = stdout_captured && !streamed;
+                        let sensitive_output = output_call
+                            .binding
+                            .as_ref()
+                            .is_some_and(|name| sensitive_bindings.contains(name))
+                            || output_call
+                                .result_binding
+                                .as_ref()
+                                .is_some_and(|name| sensitive_bindings.contains(name));
+                        if sensitive_output {
+                            // Register before any terminal copy below: the
+                            // registry hook emits each `::add-mask::` line, so
+                            // the mask precedes the value in the log. A value
+                            // that cannot yet be registered cannot be masked —
+                            // registration failure fails closed instead.
+                            crate::security::register_sensitive_bytes(registry, &bytes)?;
+                            if let Some(stderr) = stderr {
+                                crate::security::register_sensitive_bytes(registry, stderr)?;
+                            }
+                            for stage_stderr in
+                                stages.iter().filter_map(|stage| stage.stderr.as_deref())
+                            {
+                                crate::security::register_sensitive_bytes(registry, stage_stderr)?;
+                            }
+                            if let Some(value) = typed_json.as_ref() {
+                                crate::security::register_sensitive_value(
+                                    registry,
+                                    &crate::structured::from_json(value.clone()),
+                                )?;
+                            }
+                        }
                         // Under Actions hardening, terminal-bound child stderr was
                         // force-captured instead of inherited, so it never reached
                         // the log. Re-emit it sanitized on the success path to
@@ -2448,34 +2527,6 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             );
                             failure.stages = stages;
                             return Err(execution_result::ExecutionFailure::new(failure).into());
-                        }
-                        // A streamed step's stdout went to the terminal rather than into the
-                        // result, so its execution record reports no captured output.
-                        let reported_stdout_captured = stdout_captured && !streamed;
-                        let sensitive_output = output_call
-                            .binding
-                            .as_ref()
-                            .is_some_and(|name| sensitive_bindings.contains(name))
-                            || output_call
-                                .result_binding
-                                .as_ref()
-                                .is_some_and(|name| sensitive_bindings.contains(name));
-                        if sensitive_output {
-                            crate::security::register_sensitive_bytes(registry, &bytes)?;
-                            if let Some(stderr) = stderr {
-                                crate::security::register_sensitive_bytes(registry, stderr)?;
-                            }
-                            for stage_stderr in
-                                stages.iter().filter_map(|stage| stage.stderr.as_deref())
-                            {
-                                crate::security::register_sensitive_bytes(registry, stage_stderr)?;
-                            }
-                            if let Some(value) = typed_json.as_ref() {
-                                crate::security::register_sensitive_value(
-                                    registry,
-                                    &crate::structured::from_json(value.clone()),
-                                )?;
-                            }
                         }
                         let output_value = if let Some(name) = &output_call.binding {
                             bind_call_output(

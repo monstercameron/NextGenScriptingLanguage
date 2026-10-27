@@ -15,20 +15,34 @@
 //! sequence. The bytes stay human-readable but no longer parse as a workflow
 //! command. Every newly registered secret value is additionally masked with
 //! `::add-mask::` so the runner redacts it from the log from that point on.
+//! Each mask is synchronized onto its own log line (a line break is written
+//! first when the log is mid-line) because the runner only recognizes `::`
+//! commands at a line start; the pre-registered-secret sweep at run start
+//! runs before the terminal state reset for the same reason.
 //!
 //! Hardening is opt-in through [`set_enabled`]. The `execute` CLI enables it for
 //! `run` and `resume` when `GITHUB_ACTIONS` is `"true"`. Library hosts running
 //! under Actions should call [`set_enabled`] before executing; it defaults to
 //! off so library tests and framed protocols (LSP, DAP, repl JSON) never see
-//! mask lines or rewritten bytes unless the host asked for them.
+//! mask lines or rewritten bytes unless the host asked for them. A host that
+//! registered secrets before enabling must call [`emit_masks_for_registry`]
+//! (each finite run also sweeps its own registry at start); secrets registered
+//! afterwards mask themselves through the registry hook. Values Execute has
+//! not yet learned — for example dynamic command output before the producing
+//! step completes — cannot be masked before discovery; sensitive-marked steps
+//! are therefore captured and only copied to the log after registration, so
+//! the mask precedes the value. Already-echoed bytes are never retroactively
+//! redacted by the runner.
 //!
 //! Under hardening, terminal-bound child streams are captured and re-emitted
 //! through the sanitizing writers instead of inheriting the raw descriptors,
 //! including manifest `inherit` dispositions and the streamed-step inherit
 //! fast path. Program-level redirects to files stay raw in their files; only
 //! the bytes Execute itself copies to the log are filtered. `hand over to`
-//! is refused before any step runs: the handed-over child would inherit the
-//! terminal and write raw after `exec`, which sanitization cannot intercept.
+//! is refused before any step runs: the handed-over program replaces the
+//! process and its terminal writes after `exec` cannot be intercepted.
+//! Detached launches, observers and record/replay captures intentionally see
+//! pre-filter bytes (they own their own sinks, not the job log) and stay raw;
 //! `execute check --format github` intentionally emits workflow commands and
 //! is unaffected.
 
@@ -57,27 +71,15 @@ pub fn is_ci() -> bool {
 
 /// Enable hardening when running under GitHub Actions. Returns the new state.
 /// The CLI calls this at the start of `run`/`resume`; library hosts running
-/// under Actions should call it before executing.
+/// under Actions should call it before executing. Secrets registered before
+/// this call are not covered here — there is no global registry list to
+/// sweep — so hosts with pre-registered secrets must call
+/// [`emit_masks_for_registry`]; every finite run sweeps its own registry at
+/// start as a backstop.
 pub fn enable_if_ci() -> bool {
     let on = is_ci();
     set_enabled(on);
-    // A fresh CLI registry holds no secrets yet, so this snapshot is usually
-    // empty; it covers library hosts that registered secrets before enabling.
-    if on {
-        emit_pending_snapshot();
-    }
     on
-}
-
-/// Emit mask lines for secrets already registered with the process registries.
-/// Registration order is registry-scoped, so this best-effort sweep covers
-/// the common CLI case (one registry per process). Secrets registered after
-/// this call are masked individually by the secret registry hook.
-fn emit_pending_snapshot() {
-    // The CLI creates its registry after enabling; library hosts may have
-    // registered before. Without a global registry list we cannot enumerate
-    // them here, so this is a no-op placeholder kept to document the ordering:
-    // enable before registering, and each fresh registration masks itself.
 }
 
 /// Emit one mask line per already-registered secret in `registry`. Call after
@@ -94,8 +96,16 @@ pub fn emit_masks_for_registry(registry: &crate::manifest::Registry) {
     }
 }
 
-/// Reset the terminal sanitizer line state. Tests use this between cases so a
-/// trailing newline (or a held prefix) from one case cannot leak into the next.
+/// Reset the terminal sanitizer line state. Each outermost finite run calls
+/// this after sweeping pre-registered secrets (see the depth-zero block in
+/// `run_finite_state`) so a trailing partial line (or a held prefix) from a
+/// previous run in a long-lived host cannot misclassify the next run's first
+/// chunk. The sweep runs first on purpose: the inherited state still tells
+/// whether the log is mid-line, so the first mask starts its own line; every
+/// mask ends with a newline, so resetting afterwards lands on a true line
+/// start. Tests use this between cases for the same reason. Callers must not
+/// reset while another run is concurrently streaming to the terminal: the
+/// sanitizers are process-global by design.
 pub fn reset_terminal_state() {
     if let Some(slot) = STDOUT_SANITIZER.get() {
         if let Ok(mut guard) = slot.lock() {
@@ -359,6 +369,24 @@ impl StreamSanitizer {
         out
     }
 
+    /// Account for one raw log line written out-of-band, past this sanitizer.
+    /// Mask lines must reach the runner literally, so they bypass [`push`](Self::push);
+    /// without this call the sanitizer would still believe it is mid-line and
+    /// a following line-leading `::` would pass through raw. Held-back bytes
+    /// (a split prefix or a partial UTF-8 sequence) are kept: they rejoin the
+    /// next chunk, which is now correctly classified as starting a new line.
+    pub fn note_external_line(&mut self) {
+        self.leading = true;
+    }
+
+    /// Whether the log is positioned at the start of a line: every byte the
+    /// sanitizer released has been followed by `\n`/`\r`, or nothing was
+    /// released yet. Mask emission reads this to decide whether the mask
+    /// needs a line break first so the runner recognizes it as its own line.
+    pub fn at_line_start(&self) -> bool {
+        self.leading
+    }
+
     /// Release bytes held by [`push`](Self::push): a line-leading `:`,
     /// trailing `#`s and an incomplete UTF-8 tail. Returns empty when nothing
     /// is pending.
@@ -582,27 +610,82 @@ pub fn mask_lines(secrets: &[Vec<u8>]) -> Vec<String> {
         .collect()
 }
 
+/// Render the exact bytes to write for one mask line. When the log is
+/// mid-line the mask is prefixed with a line break so the runner's parser
+/// (which requires `::` at a line start after `TrimStart`) recognizes the
+/// mask as its own command instead of trailing garbage on the previous line.
+/// The returned bytes always hold exactly one `\n`-terminated line and only
+/// the escaped secret — never the raw value.
+fn mask_line_bytes(line: &str, mid_line: bool) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(line.len() + 2);
+    if mid_line {
+        buf.push(b'\n');
+    }
+    buf.extend_from_slice(line.as_bytes());
+    buf.push(b'\n');
+    buf
+}
+
 /// Emit one `::add-mask::` line to standard output for a newly registered
 /// secret. Called from the secret registry, so a mask always precedes any
 /// later log line that could echo the value. Best-effort and silent when
 /// hardening is off or the write fails: masking must never fail a run.
+///
+/// The mask line bypasses the stdout sanitizer (it must stay a literal
+/// workflow command), but it is first synchronized onto its own log line:
+/// when either terminal sanitizer is mid-line — for example a previous step
+/// streamed `lead` with no trailing newline — a `\n` is written before the
+/// mask so the runner recognizes it. Both sanitizers are then resynced to
+/// line-start: otherwise a mask landing mid-line would desynchronize them
+/// and the next line-leading `::` would pass through raw. Checking both
+/// streams covers the merged job log the runner parses (stdout and stderr
+/// share its lines); when the descriptors diverge the extra break is at
+/// most one blank line in one sink. Resyncing is fail-safe — a concurrent
+/// mid-line write classified as line-start is only over-neutralized, never
+/// under — and held-back split prefixes are kept so they still join the
+/// next chunk. The line goes out in a single `write_all` so concurrent
+/// terminal bytes cannot split it.
 pub fn emit_mask_for_bytes(secret: &[u8]) {
     if !enabled() || secret.is_empty() {
         return;
     }
-    use std::io::Write as _;
     let line = mask_command(&String::from_utf8_lossy(secret));
-    let _ = writeln!(std::io::stdout().lock(), "{line}");
+    // Fixed order (stdout, then stderr): the only site holding both locks,
+    // so no reverse-order nesting can deadlock against it.
+    let mid_line = {
+        let mut stdout_guard = stdout_sanitizer()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stderr_guard = stderr_sanitizer()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mid_line = !stdout_guard.at_line_start() || !stderr_guard.at_line_start();
+        stdout_guard.note_external_line();
+        stderr_guard.note_external_line();
+        mid_line
+    };
+    use std::io::Write as _;
+    let bytes = mask_line_bytes(&line, mid_line);
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(&bytes).and_then(|()| stdout.flush());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Serializes the tests that flip the process-global hardening switch, so
+    /// they cannot interleave with the read-only default-off assertion.
+    #[cfg(test)]
+    static GLOBAL_HARDENING_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn hardening_defaults_to_off_without_touching_process_state() {
         // Read-only: this suite never enables hardening, so parallel tests
         // keep legacy behavior.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(!enabled());
     }
 
@@ -829,3 +912,209 @@ mod tests {
         expected.extend_from_slice(":\u{200b}:error::x\n".as_bytes());
         assert_eq!(out, expected);
     }
+
+    #[test]
+    fn external_line_resyncs_a_mid_line_sanitizer_without_dropping_prefixes() {
+        // A mask line lands out-of-band while the log is mid-line: the next
+        // line starts over in the terminal, so the sanitizer must too.
+        let mut stream = StreamSanitizer::new();
+        let mut out = stream.push(b"partial ");
+        assert_eq!(out, b"partial ");
+        stream.note_external_line();
+        out = stream.push(b"::error::after-mask\n");
+        assert_eq!(out, ":\u{200b}:error::after-mask\n".as_bytes());
+        assert!(stream.flush().is_empty());
+
+        // A held-back split prefix still joins the next chunk after the
+        // external line instead of being lost.
+        let mut split = StreamSanitizer::new();
+        assert_eq!(split.push(b"\n:"), b"\n");
+        split.note_external_line();
+        assert_eq!(
+            split.push(b":notice::hi\n"),
+            ":\u{200b}:notice::hi\n".as_bytes()
+        );
+        assert!(split.flush().is_empty());
+
+        // Trailing `#`s are kept as well: the legacy command they may open
+        // is neutralized anywhere in the line regardless.
+        let mut hashes = StreamSanitizer::new();
+        assert_eq!(hashes.push(b"mid ##"), b"mid ");
+        hashes.note_external_line();
+        let mut out = hashes.push(b"[warning]x\n");
+        out.extend(hashes.flush());
+        assert_eq!(out, "#\u{200b}#[warning]x\n".as_bytes());
+    }
+
+    #[test]
+    fn mask_emission_resyncs_the_shared_stdout_sanitizer() {
+        // End-to-end through the process-global path: streamed bytes leave the
+        // sanitizer mid-line, a mask line is emitted out-of-band, and a forged
+        // command opening the next terminal line is still neutralized.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = enabled();
+        set_enabled(true);
+        reset_terminal_state();
+        let streamed = filter_stdout(b"partial ");
+        assert_eq!(streamed, b"partial ");
+        // Writes a real `::add-mask::` line to the test harness output; the
+        // value is a canary, and the harness captures it per test.
+        emit_mask_for_bytes(b"mask-resync-canary-499");
+        let forged = filter_stdout(b"::error::after-mask\n");
+        assert_eq!(forged, ":\u{200b}:error::after-mask\n".as_bytes());
+        assert!(flush_stdout().is_empty());
+        reset_terminal_state();
+        set_enabled(was);
+    }
+
+    #[test]
+    fn terminal_reset_clears_cross_run_line_carryover() {
+        // A previous run ending mid-line (or holding a split prefix) must not
+        // misclassify the next run's first chunk in a long-lived host.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = enabled();
+        set_enabled(true);
+        reset_terminal_state();
+        let _ = filter_stdout(b"leftover ");
+        let _ = filter_stderr(b"\n:");
+        reset_terminal_state();
+        assert_eq!(
+            filter_stdout(b"::error::next-run\n"),
+            ":\u{200b}:error::next-run\n".as_bytes()
+        );
+        assert_eq!(
+            filter_stderr(b"::error::next-run\n"),
+            ":\u{200b}:error::next-run\n".as_bytes()
+        );
+        assert!(flush_stdout().is_empty());
+        assert!(flush_stderr().is_empty());
+        reset_terminal_state();
+        set_enabled(was);
+    }
+
+    #[test]
+    fn registry_sweep_is_a_no_op_without_hardening_or_secrets() {
+        // The sweep must never emit mask lines (or fail) when hardening is
+        // off, so non-CI runs stay byte-identical.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = enabled();
+        set_enabled(false);
+        let registry = crate::manifest::Registry::default();
+        emit_masks_for_registry(&registry);
+        assert!(!enabled());
+        set_enabled(was);
+    }
+
+    #[test]
+    fn mask_line_bytes_start_their_own_line_only_when_mid_line() {
+        // Pure layout: no global state, no stdout writes.
+        let line = mask_command("s3cret%0A");
+        assert_eq!(
+            mask_line_bytes(&line, false),
+            format!("{line}\n").into_bytes()
+        );
+        assert_eq!(
+            mask_line_bytes(&line, true),
+            format!("\n{line}\n").into_bytes()
+        );
+        // Exactly one terminated mask line either way (plus the line break
+        // that opens it when mid-line): the runner parses per line, so a
+        // mask must never span lines or smuggle a raw newline.
+        for mid_line in [false, true] {
+            let bytes = mask_line_bytes(&line, mid_line);
+            let expected_newlines = if mid_line { 2 } else { 1 };
+            assert_eq!(
+                bytes.iter().filter(|byte| **byte == b'\n').count(),
+                expected_newlines
+            );
+            assert!(bytes.ends_with(b"\n"));
+            assert!(!bytes.contains(&b'\r'));
+            let mask_part = bytes.strip_prefix(b"\n".as_slice()).unwrap_or(&bytes);
+            assert_eq!(mask_part, format!("{line}\n").into_bytes());
+        }
+    }
+
+    #[test]
+    fn at_line_start_tracks_released_newlines() {
+        let mut stream = StreamSanitizer::new();
+        assert!(stream.at_line_start());
+        let _ = stream.push(b"partial ");
+        assert!(!stream.at_line_start());
+        let _ = stream.push(b"done\n");
+        assert!(stream.at_line_start());
+        // Held-back bytes do not move the terminal: a line-leading `:`
+        // still counts as a line start until it is released.
+        let _ = stream.push(b":");
+        assert!(stream.at_line_start());
+        assert!(!stream.flush().is_empty());
+    }
+
+    #[test]
+    fn mask_emission_resyncs_both_shared_sanitizers() {
+        // The merged job log shares lines across stdout and stderr: a
+        // partial stderr line must break the stdout mask onto its own line
+        // too, and both streams must classify the next line as a line start
+        // afterwards so forgeries stay neutralized.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = enabled();
+        set_enabled(true);
+        reset_terminal_state();
+        let _ = filter_stdout(b"lead");
+        assert!(!stdout_sanitizer()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .at_line_start());
+        // Writes a real `::add-mask::` line to the test harness output; the
+        // value is a canary, and the harness captures it per test.
+        emit_mask_for_bytes(b"mask-resync-both-499");
+        // Both streams resync even though only stdout was mid-line here;
+        // either stream mid-line breaks the next mask onto its own line.
+        for filtered in [
+            filter_stdout(b"::error::after-mask\n"),
+            filter_stderr(b"::warning::after-mask\n"),
+        ] {
+            assert!(!filtered.starts_with(b"::"), "{filtered:?}");
+        }
+        assert_eq!(
+            filter_stdout(b"::error::after-mask\n"),
+            ":\u{200b}:error::after-mask\n".as_bytes()
+        );
+        assert!(flush_stdout().is_empty());
+        assert!(flush_stderr().is_empty());
+        reset_terminal_state();
+        set_enabled(was);
+    }
+
+    #[test]
+    fn mask_emission_breaks_after_a_partial_stderr_line() {
+        // A partial stderr line leaves the merged log mid-line while stdout
+        // alone looks line-started: the next stdout mask must still open a
+        // fresh line, and stderr must resync with it.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = enabled();
+        set_enabled(true);
+        reset_terminal_state();
+        let _ = filter_stderr(b"err-partial ");
+        // Writes a real `::add-mask::` line to the test harness output; the
+        // value is a canary, and the harness captures it per test.
+        emit_mask_for_bytes(b"mask-resync-stderr-499");
+        assert_eq!(
+            filter_stderr(b"::error::after-mask\n"),
+            ":\u{200b}:error::after-mask\n".as_bytes()
+        );
+        assert!(flush_stdout().is_empty());
+        assert!(flush_stderr().is_empty());
+        reset_terminal_state();
+        set_enabled(was);
+    }
+}

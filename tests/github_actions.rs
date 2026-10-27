@@ -71,6 +71,51 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// Minimal model of the GitHub runner (V2) workflow-command parser: it
+/// splits the log into lines and recognizes a `::` command only when the
+/// line starts with `::` after trimming leading whitespace. A mask glued
+/// onto a previous partial line (`lead::add-mask::...`) is trailing garbage
+/// the runner never executes, so the secret would stay unmasked. Neutralized
+/// prefixes (`:` + zero-width space + `:`) do not parse, which is the point.
+fn runner_commands(text: &str) -> Vec<(String, String)> {
+    text.split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .filter_map(|line| {
+            let rest = line.trim_start().strip_prefix("::")?;
+            match rest.find("::") {
+                Some(offset) => Some((rest[..offset].to_owned(), rest[offset + 2..].to_owned())),
+                None => Some((rest.to_owned(), String::new())),
+            }
+        })
+        .collect()
+}
+
+/// The log without runner mask lines: mask *data* may legitimately hold
+/// secret bytes — including forged-looking ones from masked literals —
+/// because the runner treats the whole line as opaque data for one
+/// `add-mask` command. Neutralization is checked on the other lines.
+fn non_mask_text(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("::add-mask::"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every `::add-mask::` occurrence in the log must open its own line (after
+/// trimming leading whitespace), or the runner never executes it. A mask
+/// glued onto a previous partial line (`lead::add-mask::...`) is the
+/// regression this guards against.
+fn assert_no_glued_masks(text: &str) {
+    for line in text.lines() {
+        if line.contains("::add-mask::") {
+            assert!(
+                line.trim_start().starts_with("::add-mask::"),
+                "mask glued mid-line in {text:?}"
+            );
+        }
+    }
+}
+
 fn assert_neutralized(text: &str, forged: &str) {
     // The visible text is preserved apart from the zero-width break.
     assert!(
@@ -312,6 +357,159 @@ fn manifest_inherit_output_stays_raw_without_the_ci_marker() {
     let text = stdout(&output);
     assert!(text.contains("::error::via-inherit\n"), "{text:?}");
     assert!(!text.contains(ZWSP), "non-CI output was rewritten: {text:?}");
+}
+
+#[test]
+fn sensitive_streamed_value_is_masked_before_it_is_echoed() {
+    // A sensitive step's bytes are registered (mask first) before the value
+    // can reach the log. The `keep secret` literals are masked too, so their
+    // mask *data* legitimately holds forged-looking bytes; the runner treats
+    // each mask line as opaque data, and no forged command may parse.
+    let source = concat!(
+        "run \"sh\" with arguments [\"-c\", \"printf 'lead'\"]\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::masked-forgery\\n'\"] as token and keep secret\n",
+    );
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert_no_glued_masks(&text);
+    let commands = runner_commands(&text);
+    assert!(
+        commands.iter().any(|(name, _)| name == "add-mask"),
+        "no mask recognized in {text:?}"
+    );
+    assert!(
+        commands
+            .iter()
+            .all(|(name, _)| name == "add-mask"),
+        "forgery parsed as a command in {text:?} (parsed: {commands:?})"
+    );
+}
+
+#[test]
+fn masks_start_their_own_lines_after_partial_output() {
+    // Regression for the mid-line mask (`lead::add-mask::...`): a step
+    // streaming `lead` with no trailing newline is followed by a sensitive
+    // step whose value is itself a forged command, then by a plain step
+    // streaming another forged command. Every mask must be its own log line
+    // or the runner never executes it and the secret stays unmasked, while
+    // neither forged value may parse: the post-mask one is neutralized
+    // because the out-of-band mask resynced the sanitizer to line-start.
+    let source = concat!(
+        "run \"sh\" with arguments [\"-c\", \"printf 'lead'\"]\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::masked-forgery\\n'\"] as token and keep secret\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::after-mask\\n'\"]\n",
+    );
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert_no_glued_masks(&text);
+    assert!(
+        text.contains("lead\n::add-mask::::error::masked-forgery%0A\n"),
+        "mask did not open its own line after the partial write in {text:?}"
+    );
+    let commands = runner_commands(&text);
+    // The escaped sensitive value round-trips through its mask command.
+    assert!(
+        commands.contains(&(
+            "add-mask".to_owned(),
+            "::error::masked-forgery%0A".to_owned()
+        )),
+        "value mask missing in {text:?} (parsed: {commands:?})"
+    );
+    // Neither forged command parses: the literals only travel as mask data,
+    // and the post-mask copy is neutralized.
+    assert!(
+        commands
+            .iter()
+            .all(|(name, _)| name == "add-mask"),
+        "forgery parsed as a command in {text:?} (parsed: {commands:?})"
+    );
+    assert_neutralized(
+        &non_mask_text(&text),
+        "::error::after-mask",
+    );
+}
+
+#[test]
+fn masks_start_a_fresh_line_after_partial_stderr() {
+    // The merged job log shares lines across streams: a partial stderr line
+    // must not glue the next stdout mask mid-line either, even though
+    // stdout alone never left its line start. The break terminates the
+    // stderr line in the merged view (a blank line in the isolated stdout
+    // pipe), and the mask still parses.
+    let source = concat!(
+        "run \"sh\" with arguments [\"-c\", \"printf 'err-lead' >&2\"]\n",
+        "run \"sh\" with arguments [\"-c\", \"printf 'value\\n'\"] as token and keep secret\n",
+    );
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert_eq!(stderr(&output), "err-lead");
+    let text = stdout(&output);
+    assert_no_glued_masks(&text);
+    assert!(
+        text.contains("\n::add-mask::value%0A\n"),
+        "mask did not open a fresh line in {text:?}"
+    );
+    let commands = runner_commands(&text);
+    assert!(
+        commands.contains(&("add-mask".to_owned(), "value%0A".to_owned())),
+        "value mask missing in {text:?} (parsed: {commands:?})"
+    );
+    assert!(
+        commands
+            .iter()
+            .all(|(name, _)| name == "add-mask"),
+        "unexpected runner command in {text:?} (parsed: {commands:?})"
+    );
+}
+
+#[test]
+fn stderr_file_redirect_stays_raw_under_ci() {
+    // File redirect targets are not the job log: their bytes stay raw under
+    // hardening, and forcing their capture must not leak them to stderr.
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("job.program");
+    fs::write(
+        &program,
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::in-file\\n' >&2\"] and stderr to \"err.txt\"\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run"])
+        .arg(&program)
+        .current_dir(directory.path())
+        .env_remove("GITHUB_ACTIONS")
+        .env("GITHUB_ACTIONS", "true")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let filed = fs::read_to_string(directory.path().join("err.txt")).unwrap();
+    assert!(
+        filed.contains("::error::in-file\n"),
+        "redirect file was rewritten: {filed:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("::error::in-file"),
+        "file bytes leaked to the log: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

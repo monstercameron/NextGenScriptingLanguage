@@ -181,7 +181,15 @@ jobs:
         run: python3 -m unittest tests/test_bench_budget.py -v
       - name: Measure Linux latency budget
         id: linux_latency
-        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests --require-rss
+        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests --require-rss --json-out target/linux-latency-samples.json
+      - name: Save Linux latency samples
+        if: always() && (steps.linux_latency.outcome == 'success' || steps.linux_latency.outcome == 'failure')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-latency-samples-${{ github.run_id }}
+          path: target/linux-latency-samples.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Compare failed latency budget with push parent on the same runner
         id: paired_latency
         if: failure() && steps.linux_latency.outcome == 'failure' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'

@@ -230,6 +230,25 @@ fn listener_source_exited_successfully(
         .is_some_and(|code| manifest.outcome_for(code).kind == OutcomeKind::Success)
 }
 
+fn finish_listener(failure_status: Option<std::process::ExitStatus>) -> Result<()> {
+    if let Some(status) = failure_status {
+        bail!("listener failed ({status})");
+    }
+    Ok(())
+}
+
+fn finish_listener_at_limit(
+    limits: &ServiceLimits,
+    result: &ServiceResult,
+    failure_status: Option<std::process::ExitStatus>,
+) -> Result<bool> {
+    if !limit_reached(limits, result) {
+        return Ok(false);
+    }
+    finish_listener(failure_status)?;
+    Ok(true)
+}
+
 fn trace_event(
     enabled: bool,
     signals: &Signals,
@@ -1177,6 +1196,28 @@ mod tests {
         assert_eq!(next_record_segment(b"abc\n", 0, 4).unwrap(), (4, true));
         assert!(next_record_segment(b"abcd\n", 0, 4).is_err());
         assert!(next_record_segment(b"bc", 3, 4).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_limit_preserves_an_already_observed_producer_failure() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let limits = ServiceLimits {
+            max_runs: Some(1),
+            max_record_bytes: 1024,
+        };
+        let result = ServiceResult {
+            runs: 1,
+            ..ServiceResult::default()
+        };
+        let failed_status = std::process::ExitStatus::from_raw(9 << 8);
+        let error = finish_listener_at_limit(&limits, &result, Some(failed_status)).unwrap_err();
+        assert!(error.to_string().contains("listener failed"));
+        assert!(finish_listener_at_limit(&limits, &result, None).unwrap());
+
+        let before_limit = ServiceResult::default();
+        assert!(!finish_listener_at_limit(&limits, &before_limit, None).unwrap());
     }
 
     #[test]

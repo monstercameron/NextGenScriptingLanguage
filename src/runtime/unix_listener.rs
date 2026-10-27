@@ -144,7 +144,7 @@ fn listen(
                             result,
                             journal.as_deref_mut(),
                         )?;
-                        if limit_reached(limits, result) {
+                        if finish_listener_at_limit(limits, result, failure_status)? {
                             return Ok(());
                         }
                     }
@@ -172,7 +172,7 @@ fn listen(
                                 result,
                                 journal.as_deref_mut(),
                             )?;
-                            if limit_reached(limits, result) {
+                            if finish_listener_at_limit(limits, result, failure_status)? {
                                 return Ok(());
                             }
                         }
@@ -185,9 +185,7 @@ fn listen(
             }
         }
         if eof && children.0.iter().all(|child| child.reaped) {
-            if let Some(status) = failure_status {
-                bail!("listener failed ({status})");
-            }
+            finish_listener(failure_status)?;
             return Ok(());
         }
         let mut descriptor = libc::pollfd {

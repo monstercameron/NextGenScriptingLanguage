@@ -91,5 +91,33 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "parameter_alternatives": [
+    {
+      "message": "start must be an integer from -16777216 through 16777216",
+      "any_of": [
+        [
+          {
+            "test": "number_range",
+            "parameter": "start",
+            "minimum": -16777216,
+            "maximum": 16777216
+          }
+        ]
+      ]
+    },
+    {
+      "message": "length must be an integer from 0 through 16777216",
+      "any_of": [
+        [
+          {
+            "test": "number_range",
+            "parameter": "length",
+            "minimum": 0,
+            "maximum": 16777216
+          }
+        ]
+      ]
+    }
+  ]
 }

@@ -85,5 +85,33 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "parameter_alternatives": [
+    {
+      "message": "offset must be an integer from -100000 through 100000",
+      "any_of": [
+        [
+          {
+            "test": "number_range",
+            "parameter": "offset",
+            "minimum": -100000,
+            "maximum": 100000
+          }
+        ]
+      ]
+    },
+    {
+      "message": "length must be an integer from 0 through 100000",
+      "any_of": [
+        [
+          {
+            "test": "number_range",
+            "parameter": "length",
+            "minimum": 0,
+            "maximum": 100000
+          }
+        ]
+      ]
+    }
+  ]
 }

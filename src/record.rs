@@ -65,8 +65,10 @@ pub const STDERR_TAIL_BYTES: usize = 2048;
 pub const MAX_TRACE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RUN_BYTES: usize = 1024 * 1024;
 /// Largest executable hashed into the record's provenance. Larger files keep an
-/// `oversize:<bytes>` marker instead of a content hash; either way a swap is
-/// still detected because the marker commits to the file's length.
+/// `oversize:<bytes>` marker instead of a content hash. The marker commits
+/// only to the file's length, so two different files of the same length share
+/// it: repair and resume never trust it and refuse instead (see
+/// [`check_from_record_usable`]).
 const MAX_EXECUTABLE_BYTES: usize = 64 * 1024 * 1024;
 #[cfg(unix)]
 static RECORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -132,6 +134,8 @@ pub fn registry_fingerprint(registry: &Registry) -> Result<String> {
 /// stale blobs for different bytes. Markers are exact strings, so both sides
 /// of the comparison must agree: `unresolved` (no executable at that name),
 /// `unreadable` (not a regular readable file), or `oversize:<bytes>`.
+/// An `oversize:<bytes>` marker commits only to the length, so it is never
+/// trusted: even two equal markers refuse (see [`check_from_record_usable`]).
 pub fn executable_identity(binary: &str, cwd: &Path) -> String {
     let path = match crate::runtime::binary_path(binary, cwd) {
         Ok(path) => path,
@@ -148,6 +152,16 @@ pub fn executable_identity(binary: &str, cwd: &Path) -> String {
         Ok(bytes) => format!("sha256:{}", sha256_hex(&bytes)),
         Err(_) => "unreadable".to_owned(),
     }
+}
+
+/// Whether an executable identity proves the file's bytes. Length-only
+/// `oversize:<bytes>` markers never do: two different files of the same length
+/// share one marker, so trusting equal markers would replay stale blobs for
+/// different bytes. Only the byte hash (or a non-hashable marker that still
+/// compares exactly) can pass; oversize always refuses on both sides of the
+/// comparison, for both old and new records.
+fn executable_identity_proves_bytes(identity: &str) -> bool {
+    !identity.starts_with("oversize:")
 }
 
 /// The working directory as the record pins it: canonicalized when possible so
@@ -642,7 +656,10 @@ pub struct StoredRecord {
 /// working-directory provenance no longer matches resolves applets, files and
 /// executables differently than the recorded run did, so replaying its blobs
 /// would answer a different program. Records without provenance predate it and
-/// are refused with a re-record hint.
+/// are refused with a re-record hint. An executable larger than the
+/// 64 MiB identity limit is refused on either side of the comparison — even
+/// when the recorded and current markers are equal — because equal lengths
+/// do not prove equal bytes.
 ///
 /// What this still does not cover: `run.json` and `trace.jsonl` carry no
 /// authentication code (unlike checkpoint journals), so an edit that rewrites
@@ -731,7 +748,21 @@ pub fn check_from_record_usable(
                 record.directory.display()
             );
         };
-        if executable_identity(binary, working_directory) != expected {
+        // Length-only markers never prove the bytes: two different files of
+        // the same length share one `oversize:<bytes>` marker, so even equal
+        // markers refuse. Re-recording cannot help (the same large file would
+        // pin the same untrusted marker), so resume the repaired program
+        // without `--from-record` instead.
+        let actual = executable_identity(binary, working_directory);
+        if !executable_identity_proves_bytes(expected)
+            || !executable_identity_proves_bytes(&actual)
+        {
+            bail!(
+                "the executable for {binary:?} is larger than the {MAX_EXECUTABLE_BYTES}-byte record identity limit, so the record {} cannot prove its bytes; re-run the repaired program without --from-record",
+                record.directory.display()
+            );
+        }
+        if actual != expected {
             bail!(
                 "the executable for {binary:?} changed since the record {} was written; replaying its blobs would answer a different program; re-record, then repair and resume from the new record",
                 record.directory.display()
@@ -1437,6 +1468,43 @@ mod tests {
     fn tails_keep_the_end_of_stderr() {
         assert_eq!(tail(b"abcdef", 3), b"def".to_vec());
         assert_eq!(tail(b"ab", 3), b"ab".to_vec());
+    }
+
+    #[test]
+    fn oversize_executables_share_one_length_marker_and_never_prove_bytes() {
+        use std::io::{Seek, SeekFrom, Write};
+        let directory = tempfile::tempdir().unwrap();
+        // Sparse files: the length without 64 MiB of I/O.
+        let large = MAX_EXECUTABLE_BYTES as u64 + 1;
+        let first = directory.path().join("tool-a.bin");
+        let second = directory.path().join("tool-b.bin");
+        for (path, byte) in [(&first, b"A"), (&second, b"B")] {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(path)
+                .unwrap();
+            file.set_len(large).unwrap();
+            file.seek(SeekFrom::Start(0)).unwrap();
+            file.write_all(byte).unwrap();
+            file.seek(SeekFrom::Start(large - 1)).unwrap();
+            file.write_all(byte).unwrap();
+        }
+        let cwd = directory.path();
+        let a = executable_identity(&first.to_string_lossy(), cwd);
+        let b = executable_identity(&second.to_string_lossy(), cwd);
+        // Same length, different bytes: one shared marker. A length-only
+        // comparison accepts this pair, so the check must refuse it instead.
+        assert_eq!(a, format!("oversize:{large}"));
+        assert_eq!(a, b);
+        assert!(!executable_identity_proves_bytes(&a));
+        assert!(!executable_identity_proves_bytes(&b));
+        // Small files still pin their bytes.
+        let small = directory.path().join("tool-small.bin");
+        fs::write(&small, b"bytes").unwrap();
+        let pinned = executable_identity(&small.to_string_lossy(), cwd);
+        assert!(pinned.starts_with("sha256:"), "{pinned}");
+        assert!(executable_identity_proves_bytes(&pinned));
     }
 
     #[test]

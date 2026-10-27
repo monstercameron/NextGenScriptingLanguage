@@ -713,6 +713,8 @@ longer matches, bytes the record never kept, and a record that completed
 successfully refuse the repair or resume with the step and reason, as do
 truncated or torn records, short or count-mismatched traces, edited program
 copies, and changed manifests, executables, or working directories. Records
+involving an executable larger than the 64 MiB identity limit refuse as well:
+a length-only marker never proves the bytes. Records
 are not tamper-evident (no authentication code, unlike checkpoint journals):
 a fully consistently rewritten record is not detected.
 

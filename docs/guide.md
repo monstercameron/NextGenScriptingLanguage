@@ -538,7 +538,10 @@ Records are not tamper-evident. Unlike checkpoint journals, `run.json` and
 files fully consistently — for example flipping a step's failure flag together
 with its status while keeping every count — is not detected. Swapping an
 executable behind an identical manifest is detected: the record pins the bytes
-each observed binary resolved to. Only resume records written on this machine
+each observed binary resolved to. Executables larger than the 64 MiB identity
+limit pin only their length, which never proves their bytes, so any record
+involving one refuses repair and resume instead of replaying its prefix.
+Only resume records written on this machine
 by a run you trust, from a record directory only you can write (record
 directories are private to their owner).
 

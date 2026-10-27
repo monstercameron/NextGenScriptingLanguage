@@ -110,11 +110,12 @@ original version labels.
   the failed suffix, and `execute resume FILE --from-record DIR` replays the completed
   prefix from captured blobs instead of re-running it. Prefix edits, completed records,
   missing or withheld bytes, truncated or torn records, short or count-mismatched
-  traces, and changed manifests, executables, or working directories are refused
-  with the step and reason instead of re-running completed effects. Records are not
-  tamper-evident: unlike checkpoint journals they carry no authentication code, so a
-  fully consistently rewritten record is not detected — resume only records you
-  wrote, from a directory only you can write. See
+  traces, changed manifests, executables, or working directories, and executables
+  larger than the 64 MiB identity limit (a length-only marker never proves the
+  bytes) are refused with the step and reason instead of re-running completed
+  effects. Records are not tamper-evident: unlike checkpoint journals they carry
+  no authentication code, so a fully consistently rewritten record is not
+  detected — resume only records you wrote, from a directory only you can write. See
   [record a run](docs/guide.md#record-a-run-show-what-failed-and-replay-it).
 - Checkpoint input digests are a keyed HMAC under a per-user key. A journal written
   before the change matches its unkeyed digest once and is rewritten; a keyed journal never

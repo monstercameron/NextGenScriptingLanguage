@@ -1207,3 +1207,242 @@ fn resume_from_record_refuses_a_prefix_step_with_missing_bytes() {
         text(&resumed.stderr)
     );
 }
+
+/// A counting fake tool that runs on Unix and Windows. The manifest invokes
+/// the platform shell on a generated script (batch files never run without an
+/// explicit `cmd.exe` invocation), so the same acceptance test counts native
+/// invocations on both systems.
+fn portable_counter_manifests(work: &Path) -> PathBuf {
+    let custom = work.join("portable-manifests");
+    fs::create_dir(&custom).unwrap();
+    fs::copy(manifests().join("printf.json"), custom.join("printf.json")).unwrap();
+    let count = work.join("portable-count.txt");
+    let (binary, arguments) = if cfg!(windows) {
+        let script = work.join("portable-counter.cmd");
+        fs::write(
+            &script,
+            format!(
+                "@echo off\r\n>>\"{}\" echo invoke\r\necho counted\r\n",
+                count.display()
+            ),
+        )
+        .unwrap();
+        (
+            "cmd.exe".to_owned(),
+            serde_json::json!([
+                {"literal": "/d"},
+                {"literal": "/c"},
+                {"literal": script.to_string_lossy()},
+            ]),
+        )
+    } else {
+        let script = work.join("portable-counter.sh");
+        fs::write(
+            &script,
+            format!("echo invoke >> '{}'\nprintf 'counted\\n'\n", count.display()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        (
+            "/bin/sh".to_owned(),
+            serde_json::json!([{"literal": script.to_string_lossy()}]),
+        )
+    };
+    // The fake tool records every launch by appending to the count file, so a
+    // resumed prefix that re-ran it would leave more than one line behind.
+    fs::write(
+        custom.join("counter.json"),
+        serde_json::json!({
+            "name": "counter",
+            "binary": binary,
+            "arguments": arguments,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    custom
+}
+
+fn portable_count_lines(work: &Path) -> usize {
+    fs::read_to_string(work.join("portable-count.txt"))
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
+}
+
+/// The counting acceptance test, portable across Unix and Windows: a failed
+/// recorded run is repaired with one operation and resumes without re-running
+/// the completed native step, which the counting fake tool proves.
+#[test]
+fn recorded_failure_repairs_and_resumes_without_repeating_completed_effects_portable() {
+    let work = tempfile::tempdir().unwrap();
+    let custom = portable_counter_manifests(work.path());
+    let source = format!(
+        "run counter\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"three\"\n",
+        executable_text()
+    );
+    fs::write(work.path().join("workflow.program"), &source).unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "workflow.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert!(!run.status.success(), "the program should fail");
+    // The failure itself names the repair loop, since the first failure usually
+    // has no checkpoint.
+    assert!(
+        text(&run.stderr).contains("repair --from-record"),
+        "{}",
+        text(&run.stderr)
+    );
+    assert_eq!(portable_count_lines(work.path()), 1);
+    let run_json = fs::read(record.join("run.json")).unwrap();
+    let trace = fs::read(record.join("trace.jsonl")).unwrap();
+
+    let repaired = execute(
+        work.path(),
+        &[
+            "repair",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--program",
+            "workflow.program",
+            "--op",
+            "replace-command 2 run printf with message \"two\"",
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)
+    );
+    assert!(
+        text(&repaired.stdout).contains("repair 1 applied"),
+        "{}",
+        text(&repaired.stdout)
+    );
+    assert!(fs::read_to_string(work.path().join("workflow.program"))
+        .unwrap()
+        .contains("with message \"two\""));
+
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(0), "{}", text(&resumed.stderr));
+    assert_eq!(text(&resumed.stdout), "two\nthree\n");
+    assert!(
+        text(&resumed.stderr).contains("1 steps replayed"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    // The completed prefix replayed from captured blobs: the fake tool ran only
+    // for the original failure, never for the resume.
+    assert_eq!(portable_count_lines(work.path()), 1);
+    // The repair is logged beside the record; the record itself is untouched.
+    assert_eq!(fs::read(record.join("run.json")).unwrap(), run_json);
+    assert_eq!(fs::read(record.join("trace.jsonl")).unwrap(), trace);
+    assert!(record.join("repairs.jsonl").is_file());
+}
+
+/// An executable the record cannot prove refuses repair and resume on every
+/// platform: the forged length-only `oversize:<bytes>` marker below is the
+/// shape files larger than the 64 MiB identity limit pin, and equal markers
+/// never prove equal bytes, so nothing re-runs.
+#[test]
+fn repair_and_resume_refuse_an_oversize_executable_without_rerunning() {
+    let work = tempfile::tempdir().unwrap();
+    let custom = portable_counter_manifests(work.path());
+    let source = format!(
+        "run counter\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"three\"\n",
+        executable_text()
+    );
+    fs::write(work.path().join("workflow.program"), &source).unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "workflow.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert!(!run.status.success(), "the program should fail");
+    assert_eq!(portable_count_lines(work.path()), 1);
+    // Forge the recorded side into the oversize shape: a large executable pins
+    // only its length, so this marker stands for any same-length bytes.
+    let mut run_json = read_record_json(&record);
+    let executables = run_json["provenance"]["executables"]
+        .as_object_mut()
+        .expect("the record pins executable provenance");
+    assert!(!executables.is_empty());
+    for identity in executables.values_mut() {
+        *identity = serde_json::Value::from("oversize:67108865");
+    }
+    write_record_json(&record, &run_json);
+
+    let repair = execute(
+        work.path(),
+        &[
+            "repair",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--program",
+            "workflow.program",
+            "--op",
+            "replace-command 2 run printf with message \"two\"",
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        text(&repair.stderr).contains("larger than"),
+        "{}",
+        text(&repair.stderr)
+    );
+    assert!(!record.join("repairs.jsonl").exists());
+    let resumed = execute(
+        work.path(),
+        &[
+            "resume",
+            "workflow.program",
+            "--from-record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            custom.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(
+        text(&resumed.stderr).contains("larger than"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert!(resumed.stdout.is_empty());
+    // Neither refusal re-ran the completed prefix.
+    assert_eq!(portable_count_lines(work.path()), 1);
+}

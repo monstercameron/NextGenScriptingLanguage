@@ -15,6 +15,38 @@ fn invoke(root: &Path, arguments: &[&str]) -> Output {
         .output()
         .unwrap()
 }
+
+fn diagnostic_fixture_manifests(root: &Path) -> std::path::PathBuf {
+    let directory = root.join("diagnostic-manifests");
+    fs::create_dir_all(&directory).unwrap();
+    for manifest in [
+        json!({
+            "name": "fixture.reader",
+            "binary": "fixture-reader",
+            "accepts_stdin": false,
+            "cacheable": false,
+            "parameters": { "arguments": { "type": "string", "required": true } },
+            "arguments": [{ "parameter": "arguments" }]
+        }),
+        json!({
+            "name": "fixture.count",
+            "binary": "fixture-count",
+            "accepts_stdin": false,
+            "cacheable": false,
+            "parameters": { "count": { "type": "integer", "required": true } },
+            "arguments": [{ "parameter": "count" }]
+        }),
+    ] {
+        let name = manifest["name"].as_str().unwrap().replace('.', "_");
+        fs::write(
+            directory.join(format!("{name}.json")),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+    directory
+}
+
 fn report(output: &Output, ok: bool) -> Value {
     assert_eq!(
         output.status.success(),
@@ -99,6 +131,127 @@ fn failures_in_all_execution_forms_are_structured_without_side_effects() {
         }
         assert!(!root.path().join("forbidden").exists());
     }
+}
+
+#[test]
+fn representative_invalid_programs_keep_specific_cli_diagnostics() {
+    let root = tempfile::tempdir().unwrap();
+    let manifests = diagnostic_fixture_manifests(root.path());
+    let manifest_arg = manifests.to_str().unwrap();
+    let cases = [
+        ("use value missing\n", "check.undefined_name", "missing"),
+        ("await job\n", "check.scope", "job"),
+        ("exit with status 300\n", "check.range", "status"),
+        (
+            "run \"true\" as result\nrun \"true\" as result\n",
+            "check.duplicate_name",
+            "result",
+        ),
+        (
+            "accept input as text\naccept input as text\n",
+            "check.duplicate_name",
+            "input",
+        ),
+        (
+            "step: run \"true\"\nstep: run \"true\"\n",
+            "check.duplicate_name",
+            "step",
+        ),
+        (
+            "define a program named worker\n  run \"true\"\nrun program workre\n",
+            "check.program.unknown",
+            "workre",
+        ),
+        (
+            "define a program named worker\n  accept input as text\n  use value input\nrun program worker with inpt \"x\"\n",
+            "check.program.input.unknown",
+            "inpt",
+        ),
+        (
+            "define a program named worker\n  accept input as text\n  use value input\nrun program worker\n",
+            "check.program.input.required",
+            "worker",
+        ),
+        (
+            "run \"fixture-reader\" with args [\"needle\"]\n",
+            "check.parameter.direct",
+            "args",
+        ),
+        (
+            "run fixture.count with unknown 1\n",
+            "applet.parameter.unknown",
+            "unknown",
+        ),
+        (
+            "run fixture.count with count \"wrong\"\n",
+            "applet.parameter.type",
+            "\"wrong\"",
+        ),
+    ];
+
+    for (source, expected_code, expected_token) in cases {
+        fs::write(root.path().join("representative.program"), source).unwrap();
+        let output = invoke(
+            root.path(),
+            &[
+                "check",
+                "representative.program",
+                "--json",
+                "--manifest-dir",
+                manifest_arg,
+            ],
+        );
+        let value = report(&output, false);
+        let diagnostics = value["diagnostics"].as_array().unwrap();
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic["code"] != "check_failed"),
+            "generic CLI diagnostic for {source:?}: {value}"
+        );
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == expected_code)
+            .unwrap_or_else(|| panic!("expected {expected_code} for {source:?}: {value}"));
+        assert_eq!(diagnostic["severity"], "error");
+        let span = &diagnostic["span"];
+        assert_eq!(span["precision"], "token");
+        let start = span["start_byte"].as_u64().unwrap() as usize;
+        let end = span["end_byte"].as_u64().unwrap() as usize;
+        assert_eq!(&source[start..end], expected_token, "{source:?}: {value}");
+    }
+}
+
+#[test]
+fn condition_text_integer_mismatch_keeps_a_precise_cli_span() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("condition.program"),
+        "accept out as text\nif out contains 3\n  run \"true\"\n",
+    )
+    .unwrap();
+    let output = invoke(root.path(), &["check", "condition.program", "--json"]);
+    let value = report(&output, false);
+    let diagnostics = value["diagnostics"].as_array().unwrap();
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["code"] != "check_failed"),
+        "generic CLI diagnostic: {value}"
+    );
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "check.type_mismatch")
+        .unwrap_or_else(|| panic!("expected condition mismatch: {value}"));
+    assert_eq!(diagnostic["severity"], "error");
+    let span = &diagnostic["span"];
+    assert_eq!(span["precision"], "token");
+    let start = span["start_byte"].as_u64().unwrap() as usize;
+    let end = span["end_byte"].as_u64().unwrap() as usize;
+    assert_eq!(
+        &"accept out as text\nif out contains 3\n  run \"true\"\n"[start..end],
+        "out"
+    );
 }
 
 #[test]

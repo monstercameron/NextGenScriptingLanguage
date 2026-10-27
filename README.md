@@ -289,12 +289,34 @@ run "printf" with arguments ["theme %s active\n", theme_name]
 ```
 
 ```sh
-execute check theme-refresh.program
-execute run theme-refresh.program --what-if                # plan plus a fingerprint
-execute run theme-refresh.program --confirm FINGERPRINT --checkpoint ck
+# Run from the repository root. The same inputs must be used for review,
+# confirmation and resume so the fingerprint and checkpoint match.
+demo_root=$(mktemp -d)
+mkdir -p "$demo_root/themes" "$demo_root/current"
+# Use the fake compositor from the demo, and keep its log with the scratch files.
+export PATH="$PWD/examples/demo/fixtures/bin:$PATH"
+DEMO_LOG="$demo_root/calls.log"
+export DEMO_LOG
+program="$demo_root/theme-refresh.program"
+cp examples/demo/theme-refresh.program "$program"
+templates="$PWD/examples/demo/templates/*.tpl"
+values_json='{"background":"#1e1e2e","foreground":"#cdd6f4"}'
+
+with_theme_inputs() {
+  "$@" \
+    --input theme_name=dark \
+    --input "themes_root=$demo_root/themes" \
+    --input "current_link=$demo_root/current/theme" \
+    --input "templates=$templates" \
+    --input "values_json=$values_json"
+}
+
+with_theme_inputs execute check "$program"
+with_theme_inputs execute run "$program" --what-if # plan plus a fingerprint
+with_theme_inputs execute run "$program" --confirm FINGERPRINT --checkpoint "$demo_root/ck"
 # the reload fails: repair that one step as a structured edit, then continue
-execute repair ck --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
-execute resume theme-refresh.program --checkpoint ck --retry-uncertain
+execute repair "$demo_root/ck" --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
+with_theme_inputs execute resume "$program" --checkpoint "$demo_root/ck" --retry-uncertain
 ```
 
 The rendered files and the link swap are not redone on resume; the failed reload is

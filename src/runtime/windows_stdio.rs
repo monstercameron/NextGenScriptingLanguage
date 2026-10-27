@@ -108,6 +108,13 @@ pub fn write_with_deadline(
     })
 }
 
+/// Maps arbitrary output bytes onto console text: valid UTF-8 passes through and
+/// each invalid sequence becomes U+FFFD, so display never fails the run. Handles
+/// that are not consoles keep the exact bytes in the branch below.
+fn console_wide(data: &[u8]) -> Vec<u16> {
+    String::from_utf8_lossy(data).encode_utf16().collect()
+}
+
 /// Writes every byte to `target`, checking `stop` between chunks and retrying partial
 /// writes until all bytes are out.
 fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
@@ -116,9 +123,7 @@ fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
     // the out-parameter. GetConsoleMode returns 0 for a non-console handle, which selects the
     // byte-write branch below.
     if unsafe { GetConsoleMode(target, &mut mode) } != 0 {
-        let text = std::str::from_utf8(data)
-            .context("terminal output is not UTF-8; redirect binary output")?;
-        let wide: Vec<u16> = text.encode_utf16().collect();
+        let wide = console_wide(data);
         let mut offset = 0;
         while offset < wide.len() {
             if stop.load(Ordering::Relaxed) {
@@ -223,4 +228,33 @@ pub(super) fn capture_stdin(
             output.extend_from_slice(&chunk[..read as usize]);
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::console_wide;
+
+    fn displayed(data: &[u8]) -> String {
+        String::from_utf16_lossy(&console_wide(data))
+    }
+
+    #[test]
+    fn invalid_console_byte_becomes_replacement_char_and_keeps_exit_zero_path() {
+        assert_eq!(displayed(&[0xFF, 0x41]), "�A");
+    }
+
+    #[test]
+    fn valid_utf8_console_output_passes_through_unchanged() {
+        assert_eq!(displayed("héllo 雪".as_bytes()), "héllo 雪");
+    }
+
+    #[test]
+    fn empty_console_output_stays_empty() {
+        assert!(console_wide(&[]).is_empty());
+    }
+
+    #[test]
+    fn truncated_multibyte_sequence_becomes_one_replacement_char() {
+        assert_eq!(displayed(&[0xE2, 0x82]), "�");
+    }
 }

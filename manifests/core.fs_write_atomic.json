@@ -121,6 +121,26 @@
           }
         ]
       ]
+    },
+    {
+      "message": "mode must be an integer from 0 through 4095 when permissions_policy is exact",
+      "any_of": [
+        [
+          {
+            "test": "string_not_equals",
+            "parameter": "permissions_policy",
+            "value": "exact"
+          }
+        ],
+        [
+          {
+            "test": "number_range",
+            "parameter": "mode",
+            "minimum": 0,
+            "maximum": 4095
+          }
+        ]
+      ]
     }
   ]
 }

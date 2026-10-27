@@ -2029,6 +2029,11 @@ fn parameter_accepts_reference(
 /// `parameter_accepts_reference`; list-valued references inside a list are
 /// intentionally unsupported.
 fn list_item_accepts_reference(item_type: Option<ParameterType>, actual: InputType) -> bool {
+    if item_type == Some(ParameterType::Json) {
+        // Every declared input except raw bytes has a JSON representation. A
+        // JSON list item may be any of those values, including nested arrays.
+        return actual != InputType::Bytes;
+    }
     if actual == InputType::Json {
         // A JSON reference is an aggregate at this boundary. Whole-list JSON
         // references may defer their shape check, but a scalar list item must
@@ -2117,6 +2122,7 @@ fn validate_value(
                             | ParameterType::Path
                             | ParameterType::Integer
                             | ParameterType::Boolean
+                            | ParameterType::Json
                             | ParameterType::Scalar
                     )
                     && matches!(item, Value::Reference(_)))
@@ -3643,6 +3649,28 @@ impl std::fmt::Display for ParameterType {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn json_list_item_references_accept_json_values_but_reject_bytes() {
+        for kind in [
+            InputType::Text,
+            InputType::Integer,
+            InputType::Boolean,
+            InputType::TextList,
+            InputType::IntegerList,
+            InputType::JsonList,
+            InputType::Json,
+        ] {
+            assert!(
+                list_item_accepts_reference(Some(ParameterType::Json), kind),
+                "expected {kind} to be a JSON-compatible list item"
+            );
+        }
+        assert!(!list_item_accepts_reference(
+            Some(ParameterType::Json),
+            InputType::Bytes
+        ));
+    }
 
     #[test]
     fn string_parameter_enums_are_validated_and_projected() {

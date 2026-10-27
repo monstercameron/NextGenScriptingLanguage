@@ -5,11 +5,16 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn invoke(root: &Path, source: &str, command: &str) -> Output {
+    invoke_with_arguments(root, source, command, &[])
+}
+
+fn invoke_with_arguments(root: &Path, source: &str, command: &str, arguments: &[&str]) -> Output {
     fs::write(root.join("case.program"), source).unwrap();
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .current_dir(root)
         .args([command, "case.program", "--manifest-dir"])
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"))
+        .args(arguments)
         .output()
         .unwrap()
 }
@@ -187,4 +192,37 @@ fn aggregation_items_require_lists_but_keep_arbitrary_json_elements() {
     );
     let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(actual, json!([null, true, {"nested":[1]}]));
+}
+
+#[test]
+fn aggregation_json_list_items_accept_dynamic_json_values() {
+    let root = tempfile::tempdir().unwrap();
+    let cases = [
+        ("accept value as text\n", "value=hello", json!("hello")),
+        ("accept value as integer\n", "value=42", json!(42)),
+        ("accept value as boolean\n", "value=true", json!(true)),
+        (
+            "accept value as json\n",
+            r#"value={"nested":[1]}"#,
+            json!({"nested":[1]}),
+        ),
+        (
+            "accept value as list of json\n",
+            r#"value=[1,{"nested":true}]"#,
+            json!([1, {"nested":true}]),
+        ),
+    ];
+    for (declaration, input, expected) in cases {
+        let source = format!(
+            "{declaration}run list.unique with items [value] as result\nthen encode result as json\n"
+        );
+        let output = invoke_with_arguments(root.path(), &source, "run", &["--input", input]);
+        assert!(
+            output.status.success(),
+            "{source}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(actual, json!([expected]), "{declaration}");
+    }
 }

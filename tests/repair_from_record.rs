@@ -1220,14 +1220,77 @@ fn resume_from_record_refuses_a_prefix_step_with_missing_bytes() {
     );
 }
 
+/// An MSYS `printf.exe` next to its runtime, mirroring `tests/windows_native.rs`:
+/// the Git for Windows layout first, then `PATH`, and only when the sibling
+/// `msys-2.0.dll` proves it is the MSYS build the portable assertions pin.
+#[cfg(windows)]
+fn msys_printf() -> Option<PathBuf> {
+    let candidates = ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|root| Path::new(&root).join("Git/usr/bin/printf.exe"))
+        .chain(
+            std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+                .map(|directory| directory.join("printf.exe")),
+        );
+    candidates.find(|path| {
+        path.is_file()
+            && path
+                .parent()
+                .is_some_and(|directory| directory.join("msys-2.0.dll").is_file())
+    })
+}
+
+/// The absolute `printf` binary the portable acceptance pins: MSYS on Windows,
+/// the system binary elsewhere. Absolute so neither the failing run nor the
+/// resume depends on whatever a `PATH` lookup happens to find.
+fn portable_printf() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        msys_printf()
+    }
+    #[cfg(not(windows))]
+    {
+        ["/usr/bin/printf", "/bin/printf"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+    }
+}
+
+/// The pinned `printf` fixture, or `None` after recording why the portable
+/// acceptance cannot run here: CI must provide it, other machines skip.
+fn require_portable_printf() -> Option<PathBuf> {
+    let printf = portable_printf();
+    if printf.is_none() {
+        if std::env::var_os("CI").is_some() {
+            panic!(
+                "CI requires an MSYS printf.exe with sibling msys-2.0.dll on Windows \
+                 (see the Windows workflow fixture-verification step), or \
+                 /usr/bin/printf or /bin/printf elsewhere"
+            );
+        }
+        eprintln!("skipping portable acceptance: no system printf fixture was found");
+    }
+    printf
+}
+
 /// A counting fake tool that runs on Unix and Windows. The manifest invokes
 /// the platform shell on a generated script (batch files never run without an
 /// explicit `cmd.exe` invocation), so the same acceptance test counts native
 /// invocations on both systems.
-fn portable_counter_manifests(work: &Path) -> PathBuf {
+fn portable_counter_manifests(work: &Path, printf: &Path) -> PathBuf {
     let custom = work.join("portable-manifests");
     fs::create_dir(&custom).unwrap();
-    fs::copy(manifests().join("printf.json"), custom.join("printf.json")).unwrap();
+    // Pin the absolute fixture binary instead of the shipped `PATH`-resolved
+    // manifest, so the run and its resume prove the record logic rather than
+    // the runner's `PATH`.
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(manifests().join("printf.json")).unwrap()).unwrap();
+    manifest["binary"] = serde_json::Value::String(printf.to_string_lossy().replace('\\', "/"));
+    fs::write(custom.join("printf.json"), manifest.to_string()).unwrap();
     let count = work.join("portable-count.txt");
     let (binary, arguments) = if cfg!(windows) {
         let script = work.join("portable-counter.cmd");
@@ -1294,7 +1357,10 @@ fn portable_count_lines(work: &Path) -> usize {
 #[test]
 fn recorded_failure_repairs_and_resumes_without_repeating_completed_effects_portable() {
     let work = tempfile::tempdir().unwrap();
-    let custom = portable_counter_manifests(work.path());
+    let Some(printf) = require_portable_printf() else {
+        return;
+    };
+    let custom = portable_counter_manifests(work.path(), &printf);
     let source = format!(
         "run counter\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"three\"\n",
         executable_text()
@@ -1387,7 +1453,10 @@ fn recorded_failure_repairs_and_resumes_without_repeating_completed_effects_port
 #[test]
 fn repair_and_resume_refuse_an_oversize_executable_without_rerunning() {
     let work = tempfile::tempdir().unwrap();
-    let custom = portable_counter_manifests(work.path());
+    let Some(printf) = require_portable_printf() else {
+        return;
+    };
+    let custom = portable_counter_manifests(work.path(), &printf);
     let source = format!(
         "run counter\nrun \"{}\" with arguments [\"--no-such-option\"]\nrun printf with message \"three\"\n",
         executable_text()

@@ -279,4 +279,6 @@ jobs:
           Copy-Item -Path manifests -Destination $fixture -Recurse
 
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions -- --test-threads=1
+      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test repair_from_record recorded_failure_repairs_and_resumes_without_repeating_completed_effects_portable -- --test-threads=1
+      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test repair_from_record repair_and_resume_refuse_an_oversize_executable_without_rerunning -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --lib -- --test-threads=1

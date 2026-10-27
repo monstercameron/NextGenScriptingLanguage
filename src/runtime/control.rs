@@ -1,6 +1,7 @@
 //! Validated structured control flow; no shell, byte copies or truthiness.
 use super::*;
 use crate::ast::{Condition, InputType, Step};
+use std::sync::Arc;
 
 pub(super) fn validate_shape(steps: &[Step], return_allowed: bool) -> Result<()> {
     enum Frame {
@@ -425,6 +426,15 @@ pub(super) fn evaluate(condition: &Condition, bindings: &BTreeMap<String, Value>
 pub(super) struct FlowState {
     pub names: BTreeSet<String>,
     pub types: BTreeMap<String, InputType>,
+    /// Text bindings known at validation time to contain NUL. This lets later
+    /// command-environment references fail before an earlier step can take effect.
+    pub nul_text_bindings: BTreeSet<String>,
+    /// Binding values available as literals during validation. Kept only when
+    /// every incoming control-flow path agrees on the value.
+    pub known_values: BTreeMap<String, Arc<crate::ast::Value>>,
+    /// Per-binding assignment generation. Snapshots let loop and finally joins
+    /// distinguish a fresh assignment from one recorded earlier in the program.
+    pub mutation_versions: BTreeMap<String, u64>,
     /// Job handles available for inspection/await/cancel in this lexical call.
     pub jobs: BTreeSet<String>,
     /// Handles that have not yet been explicitly awaited or cancelled.
@@ -440,7 +450,22 @@ pub(super) struct FlowState {
     pub loop_depth: usize,
 }
 impl FlowState {
+    pub fn bind_known_value(&mut self, name: &str, value: crate::ast::Value) {
+        self.bind_known_value_arc(name, Arc::new(value));
+    }
+
+    pub fn bind_known_value_arc(&mut self, name: &str, value: Arc<crate::ast::Value>) {
+        if matches!(value.as_ref(), crate::ast::Value::String(text) if text.contains('\0')) {
+            self.nul_text_bindings.insert(name.to_owned());
+        }
+        self.known_values.insert(name.to_owned(), value);
+    }
+
     pub fn bind_type(&mut self, name: &str, kind: InputType) -> Result<()> {
+        let version = self.mutation_versions.entry(name.to_owned()).or_default();
+        *version = version.saturating_add(1);
+        self.nul_text_bindings.remove(name);
+        self.known_values.remove(name);
         if self.invariant_names.contains(name) && !self.invariant.contains_key(name) {
             bail!(
                 "loop cannot rebind {name:?}: its outer type is unknown; bind a typed result before the loop"
@@ -469,6 +494,16 @@ impl FlowState {
         }
         yes.types
             .retain(|name, _| yes.names.contains(name) && no.types.contains_key(name));
+        yes.nul_text_bindings
+            .retain(|name| no.nul_text_bindings.contains(name));
+        yes.known_values
+            .retain(|name, value| no.known_values.get(name) == Some(value));
+        for (name, version) in &no.mutation_versions {
+            yes.mutation_versions
+                .entry(name.clone())
+                .and_modify(|existing| *existing = (*existing).max(*version))
+                .or_insert(*version);
+        }
         yes.jobs.retain(|name| no.jobs.contains(name));
         yes.unresolved_jobs
             .extend(no.unresolved_jobs.iter().cloned());
@@ -591,6 +626,39 @@ mod loop_shape_tests {
             step(StepKind::EndLoop { back: 2 }),
         ];
         assert!(validate_shape(&valid_loop, false).is_ok());
+    }
+
+    #[test]
+    fn flow_snapshots_share_immutable_known_json_values() {
+        let mut flow = FlowState {
+            names: BTreeSet::new(),
+            types: BTreeMap::new(),
+            nul_text_bindings: BTreeSet::new(),
+            known_values: BTreeMap::new(),
+            mutation_versions: BTreeMap::new(),
+            jobs: BTreeSet::new(),
+            unresolved_jobs: BTreeSet::new(),
+            has_data: false,
+            stdout_unavailable: false,
+            started: false,
+            invariant: BTreeMap::new(),
+            invariant_names: BTreeSet::new(),
+            loop_depth: 0,
+        };
+        let value = Value::Record(
+            [(
+                "payload".to_owned(),
+                Value::List(vec![Value::String("x".repeat(64 * 1024))]),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        flow.bind_known_value("document", value);
+        let snapshot = flow.clone();
+        assert!(Arc::ptr_eq(
+            flow.known_values.get("document").unwrap(),
+            snapshot.known_values.get("document").unwrap()
+        ));
     }
 }
 

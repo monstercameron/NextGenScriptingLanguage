@@ -74,6 +74,249 @@ fn environment_value_can_come_from_a_binding() {
 }
 
 #[test]
+fn literal_nul_environment_is_rejected_before_earlier_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"first\"\nthen save to \"marker.txt\"\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": \"x\\u0000y\"}\n";
+    let check = run_script(directory.path(), "check", script, &[]);
+    assert_ne!(
+        check.status.code(),
+        Some(0),
+        "check stdout: {:?}",
+        check.stdout
+    );
+    let check_stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(check_stderr.contains("environment value"), "{check_stderr}");
+
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert_ne!(output.status.code(), Some(0), "{:?}", output.stdout);
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("environment value"),
+        "{:?}",
+        output.stderr
+    );
+    assert!(
+        !directory.path().join("marker.txt").exists(),
+        "the earlier save ran before environment validation"
+    );
+}
+
+#[test]
+fn nul_in_a_text_binding_is_rejected_before_spawning_the_command() {
+    let (_directory, output) = run(
+        "run \"printf\" with arguments [\"\\\\000\"] as value\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": value}\n",
+        &[],
+    );
+    assert_ne!(output.status.code(), Some(0), "{:?}", output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("environment value"), "{stderr}");
+    assert!(stderr.contains("NUL byte"), "{stderr}");
+}
+
+#[test]
+fn known_nul_text_binding_is_rejected_before_earlier_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"x\\u0000y\" as bad\nuse value bad as alias\nthen save to \"marker.txt\"\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": alias}\n";
+    let check = run_script(directory.path(), "check", script, &[]);
+    assert_ne!(
+        check.status.code(),
+        Some(0),
+        "check stdout: {:?}",
+        check.stdout
+    );
+    let check_stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(check_stderr.contains("environment value"), "{check_stderr}");
+    assert!(check_stderr.contains("NUL byte"), "{check_stderr}");
+
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert_ne!(output.status.code(), Some(0), "{:?}", output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("environment value"), "{stderr}");
+    assert!(stderr.contains("NUL byte"), "{stderr}");
+    assert!(
+        !directory.path().join("marker.txt").exists(),
+        "the save ran before validating the known NUL binding"
+    );
+}
+
+#[test]
+fn known_nul_environment_binding_survives_branch_merge() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "accept enabled as boolean with default false\nif enabled is true\n  use value \"x\\u0000y\" as bad\notherwise\n  use value \"a\\u0000b\" as bad\nthen save to \"marker.txt\"\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": bad}\n";
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert_ne!(output.status.code(), Some(0), "{:?}", output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("environment value"), "{stderr}");
+    assert!(stderr.contains("NUL byte"), "{stderr}");
+    assert!(
+        !directory.path().join("marker.txt").exists(),
+        "the save ran before validating the merged NUL binding"
+    );
+}
+
+#[test]
+fn known_nul_taken_through_a_static_pointer_is_rejected_before_earlier_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"/x\" as pointer\nuse value {\"x\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\ntake text at pointer from document as bad\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": bad}\n";
+    let check = run_script(directory.path(), "check", script, &[]);
+    assert_ne!(
+        check.status.code(),
+        Some(0),
+        "check stdout: {:?}",
+        check.stdout
+    );
+    let check_stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(check_stderr.contains("NUL byte"), "{check_stderr}");
+
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert_ne!(output.status.code(), Some(0), "{:?}", output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("NUL byte"), "{stderr}");
+    assert!(
+        !directory.path().join("marker.txt").exists(),
+        "the save ran before validating the statically known take result"
+    );
+}
+
+#[test]
+fn unknown_pointer_does_not_treat_an_unselected_nul_as_the_take_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "accept pointer as text with default \"/safe\"\nuse value {\"safe\": \"ok\", \"other\": \"x\\u0000y\"} as document\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let check = run_script(directory.path(), "check", script, &[]);
+    assert!(check.status.success(), "check stderr: {:?}", check.stderr);
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert!(output.status.success(), "run stderr: {:?}", output.stderr);
+}
+
+#[test]
+fn exact_loop_rebinding_updates_known_pointer_values() {
+    let invalid = tempfile::tempdir().unwrap();
+    let invalid_script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 1 times\n  use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let invalid_output = run_script(invalid.path(), "run", invalid_script, &[]);
+    assert_ne!(invalid_output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&invalid_output.stderr).contains("NUL byte"),
+        "{:?}",
+        invalid_output.stderr
+    );
+    assert!(!invalid.path().join("marker.txt").exists());
+
+    let valid = tempfile::tempdir().unwrap();
+    let valid_script = "use value \"/nul\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 1 times\n  use value \"/safe\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let valid_output = run_script(valid.path(), "run", valid_script, &[]);
+    assert!(valid_output.status.success(), "{:?}", valid_output.stderr);
+    assert!(valid.path().join("marker.txt").exists());
+}
+
+#[test]
+fn finally_rebinding_updates_known_pointer_values() {
+    let invalid = tempfile::tempdir().unwrap();
+    let invalid_script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 1 times\n  try\n    use value \"/safe\" as pointer\n  finally\n    use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let invalid_output = run_script(invalid.path(), "run", invalid_script, &[]);
+    assert_ne!(invalid_output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&invalid_output.stderr).contains("NUL byte"),
+        "{:?}",
+        invalid_output.stderr
+    );
+    assert!(!invalid.path().join("marker.txt").exists());
+
+    let valid = tempfile::tempdir().unwrap();
+    let valid_script = "use value \"/nul\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 1 times\n  try\n    use value \"/nul\" as pointer\n  finally\n    use value \"/safe\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let valid_output = run_script(valid.path(), "run", valid_script, &[]);
+    assert!(valid_output.status.success(), "{:?}", valid_output.stderr);
+    assert!(valid.path().join("marker.txt").exists());
+}
+
+#[test]
+fn unreachable_loop_assignments_do_not_replace_known_pointer_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 1 times\n  break\n  use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(directory.path().join("marker.txt").exists());
+}
+
+#[test]
+fn finally_created_pointer_facts_are_merged_for_preflight() {
+    let invalid = tempfile::tempdir().unwrap();
+    let invalid_script = "use value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\ntry\n  use value \"body\"\nfinally\n  use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let invalid_output = run_script(invalid.path(), "run", invalid_script, &[]);
+    assert_ne!(invalid_output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&invalid_output.stderr).contains("NUL byte"),
+        "{:?}",
+        invalid_output.stderr
+    );
+    assert!(!invalid.path().join("marker.txt").exists());
+
+    let valid = tempfile::tempdir().unwrap();
+    let valid_script = "use value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\ntry\n  use value \"body\"\nfinally\n  use value \"/safe\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let valid_output = run_script(valid.path(), "run", valid_script, &[]);
+    assert!(valid_output.status.success(), "{:?}", valid_output.stderr);
+    assert!(valid.path().join("marker.txt").exists());
+}
+
+#[test]
+fn nested_loop_break_does_not_hide_outer_loop_rebinding() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 1 times\n  repeat 1 times\n    break\n  use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("NUL byte"),
+        "{:?}",
+        output.stderr
+    );
+    assert!(!directory.path().join("marker.txt").exists());
+}
+
+#[test]
+fn repeated_constant_loop_assignments_keep_the_final_known_value() {
+    let invalid = tempfile::tempdir().unwrap();
+    let invalid_script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 2 times\n  use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let invalid_output = run_script(invalid.path(), "run", invalid_script, &[]);
+    assert_ne!(invalid_output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&invalid_output.stderr).contains("NUL byte"),
+        "{:?}",
+        invalid_output.stderr
+    );
+    assert!(!invalid.path().join("marker.txt").exists());
+
+    let valid = tempfile::tempdir().unwrap();
+    let valid_script = "use value \"/nul\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 2 times\n  use value \"/safe\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let valid_output = run_script(valid.path(), "run", valid_script, &[]);
+    assert!(valid_output.status.success(), "{:?}", valid_output.stderr);
+    assert!(valid.path().join("marker.txt").exists());
+}
+
+#[test]
+fn two_item_for_each_does_not_require_a_repeat_summary() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nuse value [\"one\", \"two\"] as items\nfor each item in items\n  use value \"/safe\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(directory.path().join("marker.txt").exists());
+}
+
+#[test]
+fn repeat_with_early_transfer_does_not_require_a_repeat_summary() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nthen save to \"marker.txt\"\nrepeat 2 times\n  break\n  use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let output = run_script(directory.path(), "run", script, &[]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(directory.path().join("marker.txt").exists());
+}
+
+#[test]
+fn nested_loop_exit_still_blocks_outer_loop_fact_propagation() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = "use value \"/safe\" as pointer\nuse value {\"safe\": \"ok\", \"nul\": \"x\\u0000y\"} as document\nrepeat 1 times\n  repeat 1 times\n    exit with status 0\n  use value \"/nul\" as pointer\ntake text at pointer from document as selected\nrun \"env\" with arguments [] and environment {\"LANE_B_NUL\": selected}\n";
+    let check = run_script(directory.path(), "check", script, &[]);
+    assert!(check.status.success(), "{:?}", check.stderr);
+}
+
+#[test]
 fn explain_shows_names_but_not_values() {
     let directory = tempfile::tempdir().unwrap();
     let output = run_script(

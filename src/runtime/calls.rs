@@ -21,6 +21,9 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                     .iter()
                     .map(|input| (input.name.clone(), input.kind))
                     .collect(),
+                nul_text_bindings: BTreeSet::new(),
+                known_values: BTreeMap::new(),
+                mutation_versions: BTreeMap::new(),
                 jobs: BTreeSet::new(),
                 unresolved_jobs: BTreeSet::new(),
                 has_data: true,

@@ -590,6 +590,73 @@ fn binding(
     }
     Ok(())
 }
+
+/// Whether this loop body contains a transfer that can bypass the rest of the
+/// current iteration. Nested loops and reusable-program bodies own their own
+/// break/continue scope, so their transfers do not make this loop's summary
+/// unreachable.
+fn loop_body_has_early_transfer(steps: &[crate::ast::Step], range: std::ops::Range<usize>) -> bool {
+    fn scan(
+        steps: &[crate::ast::Step],
+        range: std::ops::Range<usize>,
+        nested_loops: usize,
+        called_programs: usize,
+    ) -> bool {
+        let mut index = range.start;
+        while index < range.end {
+            let step = &steps[index];
+            match &step.kind {
+                StepKind::Loop { end, .. } => {
+                    let after_block = index.saturating_add(*end).min(range.end);
+                    if after_block > index + 1
+                        && scan(
+                            steps,
+                            index + 1..after_block - 1,
+                            nested_loops + 1,
+                            called_programs,
+                        )
+                    {
+                        return true;
+                    }
+                    index = if after_block > index {
+                        after_block
+                    } else {
+                        index + 1
+                    };
+                }
+                StepKind::CallProgram { end, .. } => {
+                    let after_block = index.saturating_add(*end).min(range.end);
+                    if after_block > index + 1
+                        && scan(
+                            steps,
+                            index + 1..after_block - 1,
+                            nested_loops,
+                            called_programs + 1,
+                        )
+                    {
+                        return true;
+                    }
+                    index = if after_block > index {
+                        after_block
+                    } else {
+                        index + 1
+                    };
+                }
+                StepKind::BreakLoop | StepKind::ContinueLoop
+                    if nested_loops == 0 && called_programs == 0 =>
+                {
+                    return true;
+                }
+                StepKind::Return if called_programs == 0 => return true,
+                StepKind::Exit { .. } | StepKind::Fail { .. } => return true,
+                _ => index += 1,
+            }
+        }
+        false
+    }
+
+    scan(steps, range, 0, 0)
+}
 #[cfg(not(target_arch = "wasm32"))]
 fn pipe_at(program: &Program, index: usize) -> bool {
     pipe_in_steps(&program.steps, index)
@@ -990,6 +1057,9 @@ fn validate_inputs(
     let mut flow = control::FlowState {
         names,
         types,
+        nul_text_bindings: BTreeSet::new(),
+        known_values: BTreeMap::new(),
+        mutation_versions: BTreeMap::new(),
         jobs: BTreeSet::new(),
         unresolved_jobs: BTreeSet::new(),
         has_data,
@@ -1163,6 +1233,21 @@ fn validate_range(
                     if let Some(kind) = finalizer_flow.types.get(name) {
                         after_try.types.insert(name.clone(), *kind);
                     }
+                    after_try.known_values.remove(name);
+                    after_try.nul_text_bindings.remove(name);
+                    if let Some(value) = finalizer_flow.known_values.get(name) {
+                        after_try.known_values.insert(name.clone(), value.clone());
+                    }
+                    if finalizer_flow.nul_text_bindings.contains(name) {
+                        after_try.nul_text_bindings.insert(name.clone());
+                    }
+                    if let Some(version) = finalizer_flow.mutation_versions.get(name) {
+                        after_try
+                            .mutation_versions
+                            .entry(name.clone())
+                            .and_modify(|current| *current = (*current).max(*version))
+                            .or_insert(*version);
+                    }
                 }
                 for (name, kind) in &entry.types {
                     if finalizer_flow.types.get(name) != Some(kind) {
@@ -1179,6 +1264,39 @@ fn validate_range(
                         }
                     }
                 }
+                let finalizer_mutations = finalizer_flow
+                    .mutation_versions
+                    .iter()
+                    .filter(|(name, version)| {
+                        entry.names.contains(*name)
+                            && **version
+                                > entry
+                                    .mutation_versions
+                                    .get(*name)
+                                    .copied()
+                                    .unwrap_or_default()
+                    })
+                    .map(|(name, _)| (*name).clone())
+                    .collect::<Vec<_>>();
+                for name in &finalizer_mutations {
+                    after_try.known_values.remove(name);
+                    after_try.nul_text_bindings.remove(name);
+                    if let Some(value) = finalizer_flow.known_values.get(name) {
+                        after_try.known_values.insert(name.clone(), value.clone());
+                    }
+                    if finalizer_flow.nul_text_bindings.contains(name) {
+                        after_try.nul_text_bindings.insert(name.clone());
+                    }
+                }
+                for name in &finalizer_mutations {
+                    if let Some(version) = finalizer_flow.mutation_versions.get(name) {
+                        after_try
+                            .mutation_versions
+                            .entry(name.clone())
+                            .and_modify(|current| *current = (*current).max(*version))
+                            .or_insert(*version);
+                    }
+                }
                 after_try.has_data |= finalizer_flow.has_data;
                 after_try.stdout_unavailable |= finalizer_flow.stdout_unavailable;
                 after_try.started |= finalizer_flow.started;
@@ -1191,6 +1309,24 @@ fn validate_range(
             loops::validate(kind, flow)
                 .map_err(|error| loops::at_line(error, step.line))
                 .with_context(|| format!("line {}", step.line))?;
+            let known_iterations = match kind {
+                crate::ast::LoopKind::Repeat { count } => {
+                    if let Ok(value) = resolve(count, &flow.known_values) {
+                        loops::repeat_count(&value).ok()
+                    } else {
+                        None
+                    }
+                }
+                crate::ast::LoopKind::ForEach { values, .. } => resolve(values, &flow.known_values)
+                    .ok()
+                    .and_then(|value| match value {
+                        Value::List(items) => Some(items.len()),
+                        _ => None,
+                    }),
+                crate::ast::LoopKind::While { .. } | crate::ast::LoopKind::WhileCommand { .. } => {
+                    None
+                }
+            };
             if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
                 validate_command_condition(call, registry, flow)
                     .with_context(|| format!("line {}", step.line))?;
@@ -1207,7 +1343,14 @@ fn validate_range(
                 let kind = loops::element_type(values, &flow.types)?;
                 body.names.insert(binding.clone());
                 body.types.insert(binding.clone(), kind);
+                body.nul_text_bindings.remove(binding);
+                body.known_values.remove(binding);
                 body.invariant.insert(binding.clone(), kind);
+                if known_iterations == Some(1) {
+                    if let Ok(Value::List(items)) = resolve(values, &flow.known_values) {
+                        body.bind_known_value(binding, items[0].clone());
+                    }
+                }
             }
             validate_range(
                 steps,
@@ -1225,8 +1368,80 @@ fn validate_range(
                     step.line
                 );
             }
-            // A loop may execute zero times. Its existing bindings retain their
-            // types, and body-local names never become available afterwards.
+            let loop_body = index + 1..finish - 1;
+            let body_has_early_transfer = loop_body_has_early_transfer(steps, loop_body.clone());
+            let repeated_body = if matches!(kind, crate::ast::LoopKind::Repeat { .. })
+                && known_iterations.is_some_and(|iterations| iterations > 1)
+                && !body_has_early_transfer
+            {
+                let mut repeated_body = body.clone();
+                validate_range(
+                    steps,
+                    registry,
+                    &mut repeated_body,
+                    loop_body,
+                    true,
+                    allow_rebinding,
+                    return_allowed,
+                )
+                .with_context(|| format!("second iteration of loop at line {}", step.line))?;
+                Some(repeated_body)
+            } else {
+                None
+            };
+            if known_iterations != Some(0) {
+                let changed = body
+                    .mutation_versions
+                    .iter()
+                    .filter(|(name, version)| {
+                        flow.names.contains(*name)
+                            && **version
+                                > flow
+                                    .mutation_versions
+                                    .get(*name)
+                                    .copied()
+                                    .unwrap_or_default()
+                    })
+                    .map(|(name, _)| (*name).clone())
+                    .collect::<Vec<_>>();
+                let repeated_is_stable = repeated_body.as_ref().is_some_and(|repeated| {
+                    changed.iter().all(|name| {
+                        body.known_values.get(name) == repeated.known_values.get(name)
+                            && body.nul_text_bindings.contains(name)
+                                == repeated.nul_text_bindings.contains(name)
+                    })
+                });
+                let propagate_body = known_iterations == Some(1) && !body_has_early_transfer;
+                let propagate_repeated =
+                    repeated_body.is_some() && (repeated_is_stable || known_iterations == Some(2));
+                let summary = if propagate_repeated {
+                    repeated_body.as_ref().unwrap()
+                } else {
+                    &body
+                };
+                for name in &changed {
+                    flow.nul_text_bindings.remove(name);
+                    flow.known_values.remove(name);
+                    if propagate_body || propagate_repeated {
+                        if let Some(value) = summary.known_values.get(name) {
+                            flow.known_values.insert(name.clone(), value.clone());
+                        }
+                        if summary.nul_text_bindings.contains(name) {
+                            flow.nul_text_bindings.insert(name.clone());
+                        }
+                    }
+                }
+                for name in changed {
+                    if let Some(version) = summary.mutation_versions.get(&name) {
+                        flow.mutation_versions
+                            .entry(name)
+                            .and_modify(|current| *current = (*current).max(*version))
+                            .or_insert(*version);
+                    }
+                }
+            }
+            // A loop may execute zero times. Only a statically exact single
+            // iteration can replace an outer binding's value facts afterward.
             flow.has_data = true;
             flow.stdout_unavailable |= body.stdout_unavailable;
             flow.started = true;
@@ -1256,6 +1471,9 @@ fn validate_range(
                     .iter()
                     .map(|input| (input.name.clone(), input.kind))
                     .collect(),
+                nul_text_bindings: BTreeSet::new(),
+                known_values: BTreeMap::new(),
+                mutation_versions: BTreeMap::new(),
                 jobs: BTreeSet::new(),
                 unresolved_jobs: BTreeSet::new(),
                 has_data,
@@ -1523,12 +1741,16 @@ fn validate_range(
                 } => {
                     check_value(source, &flow.names)?;
                     let kind = binding_value_type(source, &flow.types)?;
+                    let known_value = resolve_known_arc(source, &flow.known_values);
                     binding(
                         &Some(name.clone()),
                         &mut flow.names,
                         allow_rebinding || flow.loop_depth > 0,
                     )?;
                     flow.bind_type(name, kind)?;
+                    if let Some(value) = known_value {
+                        flow.bind_known_value_arc(name, value);
+                    }
                     flow.has_data = true;
                     flow.stdout_unavailable = false;
                     flow.started = true;
@@ -1613,17 +1835,24 @@ fn validate_range(
                 } => {
                     crate::structured::validate_pointer(pointer)?;
                     check_value(source, &flow.names)?;
-                    // A named JSON source has dynamic contents, checked when selected.
-                    // Literal sources can be checked now, before earlier native effects.
-                    if !contains_reference(source) {
-                        crate::structured::take(pointer, source, *kind, step.line)?;
-                    }
+                    // Resolve what is statically known so a selection that is
+                    // already invalid can fail before earlier native effects.
+                    let known_value = resolve(source, &flow.known_values)
+                        .ok()
+                        .map(|source| {
+                            crate::structured::take(pointer, &source, *kind, step.line)
+                                .cloned()
+                        })
+                        .transpose()?;
                     binding(
                         &Some(name.clone()),
                         &mut flow.names,
                         allow_rebinding || flow.loop_depth > 0,
                     )?;
                     flow.bind_type(name, *kind)?;
+                    if let Some(value) = known_value {
+                        flow.bind_known_value(name, value);
+                    }
                 }
                 StepKind::TakeJsonDynamic {
                     pointer,
@@ -1644,17 +1873,31 @@ fn validate_range(
                         crate::structured::validate_pointer(pointer)?;
                     }
                     check_value(source, &flow.names)?;
-                    if !contains_reference(source) && !contains_reference(pointer) {
-                        if let Value::String(pointer) = pointer {
-                            crate::structured::take(pointer, source, *kind, step.line)?;
-                        }
-                    }
+                    let known_value = resolve(pointer, &flow.known_values)
+                        .ok()
+                        .and_then(|pointer| match pointer {
+                            Value::String(pointer) => Some(pointer),
+                            _ => None,
+                        })
+                        .and_then(|pointer| {
+                            resolve(source, &flow.known_values)
+                                .ok()
+                                .map(|source| (pointer, source))
+                        })
+                        .map(|(pointer, source)| {
+                            crate::structured::take(&pointer, &source, *kind, step.line)
+                                .cloned()
+                        })
+                        .transpose()?;
                     binding(
                         &Some(name.clone()),
                         &mut flow.names,
                         allow_rebinding || flow.loop_depth > 0,
                     )?;
                     flow.bind_type(name, *kind)?;
+                    if let Some(value) = known_value {
+                        flow.bind_known_value(name, value);
+                    }
                 }
                 StepKind::EncodeJson { source } => {
                     check_value(source, &flow.names)?;
@@ -2098,6 +2341,10 @@ fn validate_range(
                 }
                 StepKind::Environment { set, .. } => {
                     for (name, value) in set {
+                        if matches!(value, Value::Reference(binding) if flow.nul_text_bindings.contains(binding))
+                        {
+                            bail!("environment value for {name:?} cannot contain a NUL byte");
+                        }
                         validate_text_operand(
                             value,
                             flow,
@@ -2565,11 +2812,14 @@ pub fn explain_with_inputs(
     Ok(crate::terminal_text::escape_controls(&rows.join("\n")))
 }
 
-fn resolve(value: &Value, bindings: &BTreeMap<String, Value>) -> Result<Value> {
+fn resolve<B>(value: &Value, bindings: &BTreeMap<String, B>) -> Result<Value>
+where
+    B: std::borrow::Borrow<Value>,
+{
     Ok(match value {
         Value::Reference(name) => bindings
             .get(name)
-            .cloned()
+            .map(|value| value.borrow().clone())
             .ok_or_else(|| anyhow!("undefined result {name:?}"))?,
         Value::List(values) => Value::List(
             values
@@ -2585,6 +2835,16 @@ fn resolve(value: &Value, bindings: &BTreeMap<String, Value>) -> Result<Value> {
         ),
         value => value.clone(),
     })
+}
+
+fn resolve_known_arc(
+    value: &Value,
+    bindings: &BTreeMap<String, std::sync::Arc<Value>>,
+) -> Option<std::sync::Arc<Value>> {
+    if let Value::Reference(name) = value {
+        return bindings.get(name).cloned();
+    }
+    resolve(value, bindings).ok().map(std::sync::Arc::new)
 }
 fn contains_reference(value: &Value) -> bool {
     match value {

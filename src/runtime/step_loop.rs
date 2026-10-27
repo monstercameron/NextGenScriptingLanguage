@@ -1340,6 +1340,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 step.line
                             );
                         };
+                        if text.contains('\0') {
+                            bail!(
+                                "line {}: environment value for {name:?} cannot contain a NUL byte",
+                                step.line
+                            );
+                        }
                         overlay.set.insert(name.clone(), text);
                     }
                     pending_env = Some(overlay);

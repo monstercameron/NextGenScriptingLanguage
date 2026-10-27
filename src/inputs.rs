@@ -1,6 +1,6 @@
 //! Declared program inputs: one schema for CLI values, runtime calls and live edits.
 use crate::ast::{InputDeclaration, InputSource, InputType, Value};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl std::fmt::Display for InputType {

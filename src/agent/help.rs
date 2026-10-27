@@ -6,8 +6,8 @@
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
 use crate::terminal_text::escape_controls;
-use anyhow::{Result, anyhow, bail};
-use serde_json::{Value, json};
+use anyhow::{anyhow, bail, Result};
+use serde_json::{json, Value};
 use std::io::{self, Write};
 use std::path::Path;
 

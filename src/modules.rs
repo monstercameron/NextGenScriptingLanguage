@@ -10,10 +10,10 @@ use crate::ast::{
 };
 pub use crate::contracts::ProgramModule;
 use crate::contracts::{
-    AppletBackend, AppletContract, AppletPorts, Lifecycle, OutcomeKind, OutcomeSpec, OutputSchema,
-    OutputType, PortDelivery, ValueSchema, deserialize_present,
+    deserialize_present, AppletBackend, AppletContract, AppletPorts, Lifecycle, OutcomeKind,
+    OutcomeSpec, OutputSchema, OutputType, PortDelivery, ValueSchema,
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2278,8 +2278,8 @@ impl PartialOrd for SemVer {
 
 impl Ord for PrereleaseIdentifier {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use PrereleaseIdentifier::{AlphaNumeric, Numeric};
         use std::cmp::Ordering;
+        use PrereleaseIdentifier::{AlphaNumeric, Numeric};
         match (self, other) {
             (Numeric(left), Numeric(right)) => left.cmp(right),
             (Numeric(_), AlphaNumeric(_)) => Ordering::Less,

@@ -14,7 +14,7 @@ use crate::graph::{
     RuntimeGraphExecutor,
 };
 use crate::structured;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
@@ -2451,7 +2451,7 @@ mod terminal_tests {
 #[cfg(all(test, unix))]
 mod private_renderer_asset_tests {
     use super::{PrivateRendererAssets, QUICKSHELL_SOURCE};
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::process::Command;
 
     #[test]

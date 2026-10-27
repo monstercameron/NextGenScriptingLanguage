@@ -6,7 +6,7 @@ pub use crate::contracts::{
     OutputEncoding, OutputSchema, OutputType, PortDelivery, ProgramModule, RemoteAuthSource,
     RemoteEndpointConfig, Sensitivity, StdioContract, StdioDisposition, ValueSchema,
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
@@ -1657,7 +1657,7 @@ impl Manifest {
             values: &BTreeMap<String, serde_json::Value>,
             out: &mut Vec<serde_json::Value>,
         ) {
-            use serde_json::{Value as J, json};
+            use serde_json::{json, Value as J};
             fn scalar(value: &J) -> J {
                 match value {
                     J::String(_) | J::Object(_) => value.clone(),

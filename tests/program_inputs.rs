@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 

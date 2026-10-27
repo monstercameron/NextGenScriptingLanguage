@@ -106,23 +106,46 @@ pub(super) fn validate_arguments(
             }
         } else if !contains_reference(value) {
             input.validate_value(value)?;
-        } else if matches!(input.kind, InputType::TextList | InputType::IntegerList | InputType::JsonList) {
+        } else if matches!(
+            input.kind,
+            InputType::TextList | InputType::IntegerList | InputType::JsonList
+        ) {
             let Value::List(items) = value else {
                 bail!("program input {:?} expects {}", input.name, input.kind);
             };
             for item in items {
                 match item {
-                    Value::String(text) if input.kind == InputType::TextList && !text.contains('\0') => {}
+                    Value::String(text)
+                        if input.kind == InputType::TextList && !text.contains('\0') => {}
                     Value::Integer(_) if input.kind == InputType::IntegerList => {}
-                    Value::Null | Value::Bool(_) | Value::Integer(_) | Value::Number(_) | Value::String(_) | Value::List(_) | Value::Record(_) if input.kind == InputType::JsonList => {}
+                    Value::Null
+                    | Value::Bool(_)
+                    | Value::Integer(_)
+                    | Value::Number(_)
+                    | Value::String(_)
+                    | Value::List(_)
+                    | Value::Record(_)
+                        if input.kind == InputType::JsonList => {}
                     Value::Reference(name)
                         if match input.kind {
-                            InputType::TextList => flow.types.get(name).is_none_or(|kind| *kind == InputType::Text),
-                            InputType::IntegerList => flow.types.get(name) == Some(&InputType::Integer),
-                            InputType::JsonList => flow.types.get(name).is_none_or(|kind| *kind != InputType::Bytes),
+                            InputType::TextList => flow
+                                .types
+                                .get(name)
+                                .is_none_or(|kind| *kind == InputType::Text),
+                            InputType::IntegerList => {
+                                flow.types.get(name) == Some(&InputType::Integer)
+                            }
+                            InputType::JsonList => flow
+                                .types
+                                .get(name)
+                                .is_none_or(|kind| *kind != InputType::Bytes),
                             _ => false,
                         } => {}
-                    _ => bail!("program input {:?} expects {} items", input.name, input.kind),
+                    _ => bail!(
+                        "program input {:?} expects {} items",
+                        input.name,
+                        input.kind
+                    ),
                 }
             }
         } else if input.kind != InputType::Json {

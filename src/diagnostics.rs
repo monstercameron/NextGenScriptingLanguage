@@ -2241,7 +2241,7 @@ pub fn resolve_executable_diagnostics(
     let line_starts = LineStarts::new(source);
     let mut calls = Vec::new();
     collect_resolve_calls(&program.steps, &cwd, registry, &mut calls);
-    for (name, definition) in &program.definitions {
+    for (name, definition) in program.definitions.iter() {
         // Called files keep their own source text and line numbers. This API
         // returns diagnostics against the caller source, so don't attach a child
         // executable warning or fix to a caller span.

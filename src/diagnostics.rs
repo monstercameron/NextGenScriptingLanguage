@@ -446,6 +446,31 @@ pub fn analyze_source_at(
     path: Option<&std::path::Path>,
     registry: &Registry,
 ) -> Vec<Diagnostic> {
+    analyze_source_impl(
+        source,
+        path,
+        registry,
+        #[cfg(feature = "lsp")]
+        None,
+    )
+}
+
+#[cfg(feature = "lsp")]
+pub(crate) fn analyze_source_scoped<'a>(
+    source: &str,
+    path: Option<&std::path::Path>,
+    registry: &'a Registry,
+    scope: Option<&'a crate::program_files::SourceScope<'a>>,
+) -> Vec<Diagnostic> {
+    analyze_source_impl(source, path, registry, scope)
+}
+
+fn analyze_source_impl(
+    source: &str,
+    path: Option<&std::path::Path>,
+    registry: &Registry,
+    #[cfg(feature = "lsp")] scope: Option<&crate::program_files::SourceScope<'_>>,
+) -> Vec<Diagnostic> {
     const MAX_DIAGNOSTICS: usize = 10_000;
     let mut diagnostics = Vec::new();
     let mut local_error_lines = BTreeSet::new();
@@ -558,7 +583,11 @@ pub fn analyze_source_at(
         registry,
         cwd: &cwd,
     };
-    match crate::program_files::parse_at(source, path, Some(access)) {
+    #[cfg(feature = "lsp")]
+    let parsed = crate::program_files::parse_at_scoped(source, path, Some(access), scope);
+    #[cfg(not(feature = "lsp"))]
+    let parsed = crate::program_files::parse_at(source, path, Some(access));
+    match parsed {
         Ok(program) => {
             collect_lint_diagnostics(source, &program, &line_starts, &mut diagnostics);
             if let Some(step) = program

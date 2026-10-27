@@ -5,7 +5,7 @@
 //! It uses JSON-RPC framing from the LSP specification and writes no logs to
 //! stdout, keeping the channel safe for editor clients.
 
-use crate::diagnostics::{analyze_source, Diagnostic};
+use crate::diagnostics::{analyze_source, analyze_source_scoped, Diagnostic, DiagnosticSeverity};
 use crate::manifest::Registry;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value as JsonValue};
@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -85,6 +85,8 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
     let mut reader = BufReader::new(reader);
     let mut writer = writer;
     let mut documents = BTreeMap::<String, Document>::new();
+    let mut workspace = Workspace::default();
+    let mut watch_dynamic_registration = false;
     while let Some(message) = read_message(&mut reader)? {
         let message = match message {
             Ok(message) => message,
@@ -99,20 +101,41 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
         let id = message.get("id").cloned();
         let params = message.get("params").cloned().unwrap_or(JsonValue::Null);
         let result = match method {
-            "initialize" => Some(json!({
-                "capabilities": {
-                    "textDocumentSync": 2,
-                    "positionEncoding": "utf-16",
-                    "completionProvider": { "triggerCharacters": [" ", "."] },
-                    "hoverProvider": true,
-                    "definitionProvider": true,
-                    "referencesProvider": true,
-                    "renameProvider": { "prepareProvider": true },
-                    "codeActionProvider": { "codeActionKinds": ["quickfix"] }
-                },
-                "serverInfo": { "name": "execute-language-server", "version": env!("CARGO_PKG_VERSION") }
-            })),
-            "initialized" | "$/cancelRequest" => None,
+            "initialize" => {
+                workspace = Workspace::from_initialize(&params);
+                watch_dynamic_registration = params
+                    .pointer("/capabilities/workspace/didChangeWatchedFiles/dynamicRegistration")
+                    .and_then(JsonValue::as_bool)
+                    == Some(true);
+                Some(json!({
+                    "capabilities": {
+                        "textDocumentSync": { "openClose": true, "change": 2, "save": { "includeText": false } },
+                        "positionEncoding": "utf-16",
+                        "completionProvider": { "triggerCharacters": [" ", "."] },
+                        "hoverProvider": true,
+                        "definitionProvider": true,
+                        "referencesProvider": true,
+                        "renameProvider": { "prepareProvider": true },
+                        "codeActionProvider": { "codeActionKinds": ["quickfix"] },
+                    "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } }
+                    },
+                    "serverInfo": { "name": "execute-language-server", "version": env!("CARGO_PKG_VERSION") }
+                }))
+            }
+            "initialized" => {
+                if watch_dynamic_registration {
+                    write_message(
+                        &mut writer,
+                        &json!({
+                            "jsonrpc": "2.0", "id": "execute-watch-program-files",
+                            "method": "client/registerCapability",
+                            "params": { "registrations": [{ "id": "execute-watch-program-files", "method": "workspace/didChangeWatchedFiles", "registerOptions": { "watchers": [{ "globPattern": "**/*", "kind": 7 }] } }] }
+                        }),
+                    )?;
+                }
+                None
+            }
+            "$/cancelRequest" => None,
             "shutdown" => Some(JsonValue::Null),
             "exit" => break,
             "textDocument/didOpen" => {
@@ -162,11 +185,12 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                                 version: Some(version),
                             },
                         );
-                        publish_diagnostics(
+                        publish_affected_diagnostics(
                             &mut writer,
-                            uri,
-                            documents.get(uri).unwrap(),
+                            &documents,
+                            &workspace,
                             &registry,
+                            Some(uri),
                         )?;
                     }
                 }
@@ -192,7 +216,13 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                                         continue;
                                     }
                                     *document = candidate;
-                                    publish_diagnostics(&mut writer, uri, document, &registry)?;
+                                    publish_affected_diagnostics(
+                                        &mut writer,
+                                        &documents,
+                                        &workspace,
+                                        &registry,
+                                        Some(uri),
+                                    )?;
                                 }
                                 Err(error) => {
                                     show_message(
@@ -217,7 +247,32 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                         "textDocument/publishDiagnostics",
                         json!({ "uri": uri, "diagnostics": [] }),
                     )?;
+                    publish_affected_diagnostics(
+                        &mut writer,
+                        &documents,
+                        &workspace,
+                        &registry,
+                        Some(uri),
+                    )?;
                 }
+                None
+            }
+            "workspace/didChangeWorkspaceFolders" => {
+                workspace.apply_folder_changes(&params);
+                publish_affected_diagnostics(&mut writer, &documents, &workspace, &registry, None)?;
+                None
+            }
+            "textDocument/didSave" | "workspace/didChangeWatchedFiles" => {
+                let changed = params
+                    .pointer("/textDocument/uri")
+                    .and_then(JsonValue::as_str);
+                publish_affected_diagnostics(
+                    &mut writer,
+                    &documents,
+                    &workspace,
+                    &registry,
+                    changed,
+                )?;
                 None
             }
             "textDocument/completion" => {
@@ -370,22 +425,202 @@ fn document_bytes_except(documents: &BTreeMap<String, Document>, excluded_uri: &
         .sum()
 }
 
-fn publish_diagnostics<W: Write>(
-    writer: &mut W,
-    uri: &str,
-    document: &Document,
-    registry: &Registry,
-) -> Result<()> {
-    let positions = SourcePositions::new(&document.text);
-    let diagnostics = analyze_source(&document.text, registry)
-        .into_iter()
-        .map(|diagnostic| lsp_diagnostic(&document.text, &positions, diagnostic))
-        .collect::<Vec<_>>();
-    let mut params = json!({ "uri": uri, "diagnostics": diagnostics });
-    if let Some(version) = document.version {
-        params["version"] = version.into();
+#[derive(Default)]
+struct Workspace {
+    roots: Vec<PathBuf>,
+    explicitly_configured: bool,
+}
+
+fn local_file_path(uri: &str) -> Option<PathBuf> {
+    let uri = url::Url::parse(uri).ok()?;
+    if uri.scheme() != "file"
+        || uri.query().is_some()
+        || uri.fragment().is_some()
+        || uri
+            .host_str()
+            .is_some_and(|host| !host.eq_ignore_ascii_case("localhost"))
+    {
+        return None;
     }
-    write_notification(writer, "textDocument/publishDiagnostics", params)
+    uri.to_file_path().ok()
+}
+
+impl Workspace {
+    fn from_initialize(params: &JsonValue) -> Self {
+        let mut workspace = Self::default();
+        if let Some(folders) = params.get("workspaceFolders").and_then(JsonValue::as_array) {
+            workspace.explicitly_configured = !folders.is_empty();
+            for folder in folders {
+                if let Some(root) = folder
+                    .get("uri")
+                    .and_then(JsonValue::as_str)
+                    .and_then(local_file_path)
+                    .and_then(|path| fs::canonicalize(path).ok())
+                    .filter(|path| path.is_dir())
+                {
+                    workspace.roots.push(root);
+                }
+            }
+        }
+        if !workspace.explicitly_configured {
+            if let Some(uri) = params.get("rootUri").and_then(JsonValue::as_str) {
+                workspace.explicitly_configured = true;
+                if let Some(root) = local_file_path(uri)
+                    .and_then(|path| fs::canonicalize(path).ok())
+                    .filter(|path| path.is_dir())
+                {
+                    workspace.roots.push(root);
+                }
+            }
+        }
+        workspace
+    }
+
+    fn apply_folder_changes(&mut self, params: &JsonValue) {
+        self.explicitly_configured = true;
+        let Some(event) = params.get("event") else {
+            self.roots.clear();
+            return;
+        };
+        let Some(removed) = event.get("removed").and_then(JsonValue::as_array) else {
+            self.roots.clear();
+            return;
+        };
+        for folder in removed {
+            let root = folder
+                .get("uri")
+                .and_then(JsonValue::as_str)
+                .and_then(local_file_path)
+                .and_then(|path| fs::canonicalize(path).ok());
+            match root {
+                Some(root) => self.roots.retain(|existing| existing != &root),
+                // If a removed path no longer resolves, do not retain any stale grant.
+                None => self.roots.clear(),
+            }
+        }
+        let Some(added) = event.get("added").and_then(JsonValue::as_array) else {
+            self.roots.clear();
+            return;
+        };
+        for folder in added {
+            if let Some(root) = folder
+                .get("uri")
+                .and_then(JsonValue::as_str)
+                .and_then(local_file_path)
+                .and_then(|path| fs::canonicalize(path).ok())
+                .filter(|path| path.is_dir())
+            {
+                if !self.roots.contains(&root) {
+                    self.roots.push(root);
+                }
+            }
+        }
+    }
+
+    fn root_for(&self, path: &Path) -> Option<PathBuf> {
+        if self.explicitly_configured {
+            self.roots
+                .iter()
+                .filter(|root| path.starts_with(root))
+                .max_by_key(|root| root.components().count())
+                .cloned()
+        } else {
+            path.parent().map(Path::to_path_buf)
+        }
+    }
+}
+
+fn open_document_overlays(documents: &BTreeMap<String, Document>) -> BTreeMap<PathBuf, &str> {
+    documents
+        .iter()
+        .filter_map(|(uri, document)| {
+            local_file_path(uri)
+                .and_then(|path| fs::canonicalize(path).ok())
+                .map(|path| (path, document.text.as_str()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn diagnostics_for_document(
+    uri: &str,
+    documents: &BTreeMap<String, Document>,
+    workspace: &Workspace,
+    registry: &Registry,
+) -> Vec<Diagnostic> {
+    let open_documents = open_document_overlays(documents);
+    diagnostics_with_overlays(uri, documents, workspace, registry, &open_documents)
+}
+
+fn diagnostics_with_overlays<'a>(
+    uri: &str,
+    documents: &BTreeMap<String, Document>,
+    workspace: &Workspace,
+    registry: &'a Registry,
+    open_documents: &'a BTreeMap<PathBuf, &'a str>,
+) -> Vec<Diagnostic> {
+    let document = &documents[uri];
+    let path = local_file_path(uri).and_then(|path| fs::canonicalize(path).ok());
+    let root = path.as_deref().and_then(|path| workspace.root_for(path));
+    let scope = root.as_ref().map(|root| crate::program_files::SourceScope {
+        root,
+        open_documents,
+    });
+    let usable_path = if scope.is_some() {
+        path.as_deref()
+    } else {
+        None
+    };
+    let mut diagnostics =
+        analyze_source_scoped(&document.text, usable_path, registry, scope.as_ref());
+    if usable_path.is_none() {
+        for diagnostic in &mut diagnostics {
+            if diagnostic
+                .message
+                .contains("needs the program loaded from its file")
+            {
+                diagnostic.severity = DiagnosticSeverity::Information;
+                diagnostic.message = if path.is_some() {
+                    "Called program files cannot be resolved outside the language server workspace"
+                        .to_owned()
+                } else {
+                    "Called program files need a saved local file location to resolve".to_owned()
+                };
+            }
+        }
+    }
+    diagnostics
+}
+
+fn publish_affected_diagnostics<W: Write>(
+    writer: &mut W,
+    documents: &BTreeMap<String, Document>,
+    workspace: &Workspace,
+    registry: &Registry,
+    changed_uri: Option<&str>,
+) -> Result<()> {
+    let open_documents = open_document_overlays(documents);
+    for (uri, document) in documents {
+        // Any file call, including a transitive one, contains these literal words.
+        // This is a conservative filter; comments can cause harmless extra checks.
+        if changed_uri != Some(uri.as_str())
+            && !(document.text.contains("program") && document.text.contains("file"))
+        {
+            continue;
+        }
+        let positions = SourcePositions::new(&document.text);
+        let diagnostics =
+            diagnostics_with_overlays(uri, documents, workspace, registry, &open_documents)
+                .into_iter()
+                .map(|diagnostic| lsp_diagnostic(&document.text, &positions, diagnostic))
+                .collect::<Vec<_>>();
+        let mut params = json!({ "uri": uri, "diagnostics": diagnostics });
+        if let Some(version) = document.version {
+            params["version"] = version.into();
+        }
+        write_notification(writer, "textDocument/publishDiagnostics", params)?;
+    }
+    Ok(())
 }
 
 fn lsp_diagnostic(source: &str, positions: &SourcePositions, diagnostic: Diagnostic) -> JsonValue {
@@ -497,6 +732,9 @@ fn code_actions(
         Some((start, end))
     });
     let mut actions = Vec::new();
+    // File-call diagnostics currently do not identify the callee in edit spans (#474).
+    // Keep quick fixes on pathless caller-only analysis so a callee diagnostic cannot
+    // accidentally edit a matching line in the caller.
     for diagnostic in analyze_source(source, registry) {
         if diagnostic.fixes.is_empty() {
             continue;
@@ -1193,6 +1431,476 @@ mod tests {
             messages.push(message.unwrap());
         }
         messages
+    }
+
+    #[test]
+    fn advertises_save_and_registers_file_watches_when_supported() {
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({"capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}}}),
+        ));
+        input.extend(frame(
+            json!({"jsonrpc":"2.0", "method":"initialized", "params":{}}),
+        ));
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        assert_eq!(
+            messages[0]["result"]["capabilities"]["textDocumentSync"]["save"]["includeText"],
+            false
+        );
+        let registration = messages
+            .iter()
+            .find(|message| message["method"] == "client/registerCapability")
+            .unwrap();
+        assert_eq!(
+            registration["params"]["registrations"][0]["method"],
+            "workspace/didChangeWatchedFiles"
+        );
+        assert_eq!(
+            registration["params"]["registrations"][0]["registerOptions"]["watchers"][0]
+                ["globPattern"],
+            "**/*"
+        );
+    }
+
+    #[test]
+    fn caller_diagnostics_follow_open_callee_and_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_dir = dir.path().join("sub");
+        fs::create_dir(&child_dir).unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = child_dir.join("callee.program");
+        let caller_text = "accept here as text from program directory\nrun program file \"sub/callee.program\" with theme \"dark\" as out\nuse value out\n";
+        let callee_text = "accept theme as text\nuse value theme\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, callee_text).unwrap();
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({ "rootUri": root_uri, "capabilities": {} }),
+        ));
+        for (uri, text) in [(&caller_uri, caller_text), (&callee_uri, callee_text)] {
+            input.extend(frame(json!({ "jsonrpc":"2.0", "method":"textDocument/didOpen", "params":{"textDocument":{"uri":uri,"version":1,"text":text}} })));
+        }
+        input.extend(frame(json!({"jsonrpc":"2.0", "method":"textDocument/didChange", "params":{"textDocument":{"uri":callee_uri,"version":2},"contentChanges":[{"text":"run\n"}]}})));
+        input.extend(frame(json!({"jsonrpc":"2.0", "method":"textDocument/didSave", "params":{"textDocument":{"uri":callee_uri}}})));
+        input.extend(frame(json!({"jsonrpc":"2.0", "method":"textDocument/didClose", "params":{"textDocument":{"uri":callee_uri}}})));
+        input.extend(frame(json!({"jsonrpc":"2.0", "method":"workspace/didChangeWatchedFiles", "params":{"changes":[{"uri":callee_uri,"type":2}]}})));
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({"jsonrpc":"2.0", "method":"exit"})));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let caller_notifications: Vec<_> = messages
+            .iter()
+            .filter(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == caller_uri
+            })
+            .collect();
+        assert!(caller_notifications.len() >= 6, "{caller_notifications:#?}");
+        assert!(
+            caller_notifications[0]["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{caller_notifications:#?}"
+        );
+        assert!(
+            caller_notifications[2]["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["severity"] == 1),
+            "{caller_notifications:#?}"
+        );
+        assert!(
+            caller_notifications[3]["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["severity"] == 1),
+            "{caller_notifications:#?}"
+        );
+        assert!(
+            caller_notifications[4]["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{caller_notifications:#?}"
+        );
+        assert!(
+            caller_notifications[5]["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{caller_notifications:#?}"
+        );
+    }
+
+    #[test]
+    fn missing_callee_matches_path_aware_check_and_untitled_is_informational() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let source = "run program file \"missing.program\"\n";
+        fs::write(&caller, source).unwrap();
+        let uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        let diagnostics = diagnostics_for_document(
+            &uri,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        let check =
+            crate::diagnostics::analyze_source_at(source, Some(&caller), &Registry::default());
+        assert_eq!(diagnostics, check);
+        let mut input = frame(request(1, "initialize", json!({"capabilities": {}})));
+        input.extend(frame(json!({"jsonrpc":"2.0", "method":"textDocument/didOpen", "params":{"textDocument":{"uri":uri,"version":1,"text":source}}})));
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let published = messages
+            .iter()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == uri
+            })
+            .unwrap();
+        let lsp = published["params"]["diagnostics"].as_array().unwrap();
+        assert!(
+            check.iter().all(|diagnostic| lsp.iter().any(
+                |item| item["code"] == diagnostic.code && item["message"] == diagnostic.message
+            )),
+            "{published:#?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.severity == DiagnosticSeverity::Error),
+            "{diagnostics:#?}"
+        );
+        let untitled = "untitled:caller".to_owned();
+        documents.insert(
+            untitled.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        let diagnostics = diagnostics_for_document(
+            &untitled,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.severity == DiagnosticSeverity::Information
+                    && d.message.contains("saved local file")),
+            "{diagnostics:#?}"
+        );
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.severity == DiagnosticSeverity::Error),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn issue_example_resolves_program_directory_and_callee() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        let caller = dir.path().join("caller.program");
+        let source = "accept here as text from program directory\nrun program file \"sub/callee.program\" with theme \"dark\" as out\n";
+        fs::write(&caller, source).unwrap();
+        fs::write(
+            dir.path().join("sub/callee.program"),
+            "accept theme as text\nuse value theme\n",
+        )
+        .unwrap();
+        let uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        let diagnostics = diagnostics_for_document(
+            &uri,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+
+    #[test]
+    fn unsaved_transitive_callee_change_rechecks_top_level_caller() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let middle = dir.path().join("middle.program");
+        let leaf = dir.path().join("leaf.program");
+        let source = "run program file \"middle.program\"\n";
+        fs::write(&caller, source).unwrap();
+        fs::write(&middle, "run program file \"leaf.program\"\n").unwrap();
+        fs::write(&leaf, "use value \"ok\"\n").unwrap();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let leaf_uri = url::Url::from_file_path(&leaf).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            caller_uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        documents.insert(
+            leaf_uri.clone(),
+            Document {
+                text: "run\n".to_owned(),
+                version: Some(1),
+            },
+        );
+        let failed = diagnostics_for_document(
+            &caller_uri,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        assert!(
+            failed
+                .iter()
+                .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error),
+            "{failed:#?}"
+        );
+        documents.get_mut(&leaf_uri).unwrap().text = "use value \"fixed\"\n".to_owned();
+        let fixed = diagnostics_for_document(
+            &caller_uri,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        assert!(fixed.is_empty(), "{fixed:#?}");
+    }
+
+    #[test]
+    fn workspace_root_allows_parent_directory_calls_but_not_outside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        let caller = sub.join("caller.program");
+        let source = "run program file \"../callee.program\"\n";
+        fs::write(&caller, source).unwrap();
+        fs::write(dir.path().join("callee.program"), "use value \"ok\"\n").unwrap();
+        let uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        let workspace = Workspace {
+            roots: vec![fs::canonicalize(dir.path()).unwrap()],
+            explicitly_configured: true,
+        };
+        let diagnostics =
+            diagnostics_for_document(&uri, &documents, &workspace, &Registry::default());
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+        let fallback = diagnostics_for_document(
+            &uri,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        assert!(
+            fallback
+                .iter()
+                .any(|d| d.message.contains("outside the language server workspace")),
+            "{fallback:#?}"
+        );
+    }
+
+    #[test]
+    fn callee_diagnostics_do_not_offer_edits_to_the_caller() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let source = "run program file \"callee.program\"\n";
+        fs::write(&caller, source).unwrap();
+        fs::write(
+            dir.path().join("callee.program"),
+            "run fixture.echo with txet \"x\"\n",
+        )
+        .unwrap();
+        let registry = Registry::from_sources(&[serde_json::json!({
+            "name": "fixture.echo", "binary": "fixture", "parameters": { "text": {"type":"string"} }, "arguments": []
+        }).to_string()]).unwrap();
+        let uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        let diagnostics =
+            diagnostics_for_document(&uri, &documents, &Workspace::default(), &registry);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code == "applet.parameter.unknown"),
+            "{diagnostics:#?}"
+        );
+        let actions = code_actions(&json!({"textDocument":{"uri":uri}}), &documents, &registry);
+        assert!(actions.as_array().unwrap().is_empty(), "{actions:#?}");
+    }
+
+    #[test]
+    fn caller_rechecks_callee_after_disk_changes_and_bounds_open_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = dir.path().join("callee.program");
+        let source = "run program file \"callee.program\"\n";
+        fs::write(&caller, source).unwrap();
+        fs::write(&callee, "use value \"ok\"\n").unwrap();
+        let uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        let diagnostics = || {
+            diagnostics_for_document(
+                &uri,
+                &documents,
+                &Workspace::default(),
+                &Registry::default(),
+            )
+        };
+        assert!(!diagnostics()
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error));
+        fs::write(&callee, "run\n").unwrap();
+        assert!(diagnostics()
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error));
+        fs::write(&callee, "use value \"ok\"\n").unwrap();
+        documents.insert(
+            callee_uri,
+            Document {
+                text: "x".repeat(1024 * 1024 + 1),
+                version: Some(1),
+            },
+        );
+        let bounded = diagnostics_for_document(
+            &uri,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        assert!(
+            bounded
+                .iter()
+                .any(|d| d.message.contains("larger than 1 MiB")),
+            "{bounded:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn callee_cannot_escape_workspace_through_a_symlink() {
+        use std::os::unix::fs::symlink;
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(
+            outside.path().join("outside.program"),
+            "use value \"secret\"\n",
+        )
+        .unwrap();
+        symlink(
+            outside.path().join("outside.program"),
+            workspace_dir.path().join("link.program"),
+        )
+        .unwrap();
+        let caller = workspace_dir.path().join("caller.program");
+        let source = "run program file \"link.program\"\n";
+        fs::write(&caller, source).unwrap();
+        let uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+            },
+        );
+        let workspace = Workspace {
+            roots: vec![fs::canonicalize(workspace_dir.path()).unwrap()],
+            explicitly_configured: true,
+        };
+        let diagnostics =
+            diagnostics_for_document(&uri, &documents, &workspace, &Registry::default());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("outside the language server workspace")),
+            "{diagnostics:#?}"
+        );
+        assert!(!format!("{diagnostics:?}").contains("secret"));
+    }
+
+    #[test]
+    fn removed_workspace_folder_revokes_file_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
+        let mut workspace =
+            Workspace::from_initialize(&json!({"workspaceFolders": [{"uri": uri}]}));
+        assert!(workspace.root_for(&root.join("caller.program")).is_some());
+        workspace.apply_folder_changes(&json!({"event": {"removed": [{"uri": uri}], "added": []}}));
+        assert!(workspace.root_for(&root.join("caller.program")).is_none());
+        workspace.apply_folder_changes(&json!({"event": {"removed": [], "added": [{"uri": uri}]}}));
+        assert!(workspace.root_for(&root.join("caller.program")).is_some());
+    }
+
+    #[test]
+    fn document_uri_must_be_local_and_preserves_encoded_filename_characters() {
+        assert!(local_file_path("https://example.com/test.program").is_none());
+        assert!(local_file_path("file://remote.example/test.program").is_none());
+        assert!(local_file_path("file:///tmp/test.program?x=1").is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a #+雪.program");
+        let uri = url::Url::from_file_path(&path).unwrap().to_string();
+        assert_eq!(local_file_path(&uri).as_deref(), Some(path.as_path()));
     }
 
     #[test]

@@ -31,6 +31,20 @@ each document to 4 MiB, all open text to 32 MiB, each change notification to
 `Content-Length` headers, stale document versions, and invalid edit batches
 without applying any part of the batch.
 
+For a saved local `file://` document, diagnostics resolve `run program file` and
+program-location inputs from that file. Called files must be regular files no
+larger than 1 MiB and must resolve inside a configured workspace folder; if no
+workspace is configured, the calling file's directory is the boundary. Open
+callee text is used for diagnostics before it is saved. Opening, changing, saving,
+closing, or reporting a watched-file change republishes diagnostics for open
+callers that may contain file calls. Workspace-folder changes update the allowed
+roots. The server requests workspace file watches when the client supports dynamic
+registration; otherwise watched-file notifications depend on the client. An untitled
+or unsaved file without a resolvable local path receives an
+informational message for file calls. Callee-specific locations and fixes remain
+limited by the diagnostic model; quick fixes use caller-only analysis until callee
+spans are available, and navigation and rename remain local to one file.
+
 The VS Code grammar package remains usable without a language server. Configure
 an LSP client to launch `execute` with the `lsp` argument and associate it with
 the `execute-program` language ID (or `.program` files) to enable semantic

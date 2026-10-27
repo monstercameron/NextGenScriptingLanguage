@@ -56,10 +56,37 @@ pub fn parse_source_resolved(
     source: &str,
     access: Option<Access<'_>>,
 ) -> Result<Program> {
+    parse_source_resolved_inner(
+        canonical,
+        source,
+        access,
+        #[cfg(feature = "lsp")]
+        None,
+    )
+}
+
+#[cfg(feature = "lsp")]
+pub(crate) struct SourceScope<'a> {
+    pub root: &'a Path,
+    pub open_documents: &'a BTreeMap<PathBuf, &'a str>,
+}
+
+fn parse_source_resolved_inner<'a>(
+    canonical: &Path,
+    source: &str,
+    access: Option<Access<'a>>,
+    #[cfg(feature = "lsp")] scope: Option<&'a SourceScope<'a>>,
+) -> Result<Program> {
+    #[cfg(feature = "lsp")]
+    if scope.is_some_and(|scope| !canonical.starts_with(scope.root)) {
+        bail!("program file is outside the language server workspace");
+    }
     let mut loader = Loader {
         access,
         called: BTreeMap::new(),
         stack: Vec::new(),
+        #[cfg(feature = "lsp")]
+        scope,
     };
     let mut raw = parser::parse_raw(source)?;
     loader.stack.push(canonical.to_path_buf());
@@ -79,8 +106,27 @@ pub fn parse_at(source: &str, path: Option<&Path>, access: Option<Access<'_>>) -
     }
 }
 
+#[cfg(feature = "lsp")]
+pub(crate) fn parse_at_scoped<'a>(
+    source: &str,
+    path: Option<&Path>,
+    access: Option<Access<'a>>,
+    scope: Option<&'a SourceScope<'a>>,
+) -> Result<Program> {
+    match path {
+        Some(path) => {
+            let canonical =
+                fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))?;
+            parse_source_resolved_inner(&canonical, source, access, scope)
+        }
+        None => parser::parse(source),
+    }
+}
+
 struct Loader<'a> {
     access: Option<Access<'a>>,
+    #[cfg(feature = "lsp")]
+    scope: Option<&'a SourceScope<'a>>,
     /// Called files, keyed by `file:` plus their canonical path.
     called: BTreeMap<String, ReusableProgram>,
     /// Canonical paths of the files being resolved, outermost first.
@@ -124,6 +170,13 @@ impl Loader<'_> {
         let canonical = fs::canonicalize(path)
             .with_context(|| format!("line {line}: program file {} not found", path.display()))?;
         let shown = display_path(&canonical);
+        #[cfg(feature = "lsp")]
+        if self
+            .scope
+            .is_some_and(|scope| !canonical.starts_with(scope.root))
+        {
+            bail!("line {line}: called program file is outside the language server workspace");
+        }
         let key = format!("{PROGRAM_FILE_PREFIX}{shown}");
         if self.called.contains_key(&key) {
             return Ok(key);
@@ -146,8 +199,22 @@ impl Loader<'_> {
             bail!("line {line}: a program may call at most {MAX_CALLED_FILES} program files");
         }
         authorize_read(access, &canonical, &shown, line)?;
-        let source = read_program_file(&canonical, &shown, line)?;
-        let mut raw = parser::parse_raw(&source).map_err(|error| {
+        let disk_source = read_program_file(&canonical, &shown, line)?;
+        #[cfg(not(feature = "lsp"))]
+        let source = disk_source.as_str();
+        #[cfg(feature = "lsp")]
+        let source = if let Some(edited) = self
+            .scope
+            .and_then(|scope| scope.open_documents.get(&canonical))
+        {
+            if edited.len() as u64 > MAX_PROGRAM_FILE_BYTES {
+                bail!("line {line}: program file {shown} is larger than 1 MiB");
+            }
+            *edited
+        } else {
+            disk_source.as_str()
+        };
+        let mut raw = parser::parse_raw(source).map_err(|error| {
             anyhow::anyhow!(
                 "line {}: called program file {shown} is not valid program text",
                 error_line(&error).unwrap_or(1)

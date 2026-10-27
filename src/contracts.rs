@@ -1441,6 +1441,8 @@ impl OutputSchema {
                     &self.required,
                     self.enum_values.as_deref(),
                     false,
+                    false,
+                    None,
                     &json,
                 )?;
                 Ok(AppletOutput::Value(crate::structured::from_json(json)))
@@ -1825,7 +1827,9 @@ fn validate_json_value(
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
     enum_values: Option<&[String]>,
+    single_line: bool,
     nullable: bool,
+    minimum: Option<&serde_json::Number>,
     value: &serde_json::Value,
 ) -> Result<()> {
     if nullable && value.is_null() {
@@ -1848,23 +1852,34 @@ fn validate_json_value(
             if kind == OutputType::Text {
                 let text = value.as_str().expect("string checked above");
                 validate_enum_value(enum_values, text)?;
+                if single_line && (text.contains('\n') || text.contains('\r')) {
+                    bail!("text value must not contain a carriage return or line feed");
+                }
                 if nonempty && (text.trim().is_empty() || text.contains('\0')) {
                     bail!("text value must be nonempty");
                 }
             }
         }
         OutputType::Integer => {
-            if value.as_i64().is_none() {
+            let number = value.as_number().ok_or_else(|| {
+                anyhow!(
+                    "expected JSON signed 64-bit integer, got {}",
+                    json_kind(value)
+                )
+            })?;
+            if number.as_i64().is_none() {
                 bail!(
                     "expected JSON signed 64-bit integer, got {}",
                     json_kind(value)
                 );
             }
+            validate_numeric_minimum(minimum, NumericValue::Number(number))?;
         }
         OutputType::Number => {
-            if !value.is_number() {
-                bail!("expected JSON number, got {}", json_kind(value));
-            }
+            let number = value
+                .as_number()
+                .ok_or_else(|| anyhow!("expected JSON number, got {}", json_kind(value)))?;
+            validate_numeric_minimum(minimum, NumericValue::Number(number))?;
         }
         OutputType::Boolean => {
             if !value.is_boolean() {
@@ -1904,7 +1919,9 @@ fn validate_json_value(
                         &schema.fields,
                         &schema.required,
                         schema.enum_values.as_deref(),
+                        schema.single_line,
                         schema.nullable,
+                        schema.minimum.as_ref(),
                         value,
                     )
                     .with_context(|| format!("validating record field {name:?}"))?;
@@ -1928,7 +1945,9 @@ fn validate_json_value(
                     &item_schema.fields,
                     &item_schema.required,
                     item_schema.enum_values.as_deref(),
+                    item_schema.single_line,
                     item_schema.nullable,
+                    item_schema.minimum.as_ref(),
                     value,
                 )
                 .with_context(|| format!("validating list item {index}"))?;
@@ -2682,6 +2701,34 @@ mod typed_json_decode_tests {
                     "fields":{"count":{"type":"integer"}},"required":["count"]
                 }),
                 json!({"count":"four"}),
+            ),
+            (
+                json!({
+                    "type":"record","encoding":"json",
+                    "fields":{"count":{"type":"number","minimum":1}},"required":["count"]
+                }),
+                json!({"count":0}),
+            ),
+            (
+                json!({
+                    "type":"record","encoding":"json",
+                    "fields":{"line":{"type":"text","single_line":true}},"required":["line"]
+                }),
+                json!({"line":"first\nsecond"}),
+            ),
+            (
+                json!({
+                    "type":"list","encoding":"json",
+                    "items":{"type":"number","minimum":1}
+                }),
+                json!([0]),
+            ),
+            (
+                json!({
+                    "type":"list","encoding":"json",
+                    "items":{"type":"text","single_line":true}
+                }),
+                json!(["first\nsecond"]),
             ),
         ];
         for (schema, invalid) in invalid_cases {

@@ -49,6 +49,6 @@ benchmark ran concurrently.
 - Relevant source SHA-256: `tests/worker_backend.rs` `d4234e37187b3f415330514bf30d0c5f7045903d56e4be38de4d951b0bbbe404`; `src/runtime/worker_backend.rs` `9f67d24b0608130f2b44f060c012021055f782e5c458195f066dbde6be4e41bc`; `tests/fixtures/native_fixture.rs` `f67942d4bc5142e219828b198cc97393118d9d0ab528bfb5a0d8062a4b6da3d0`.
 - `base64` is already a direct dependency (`0.23`) locked to `0.23.1` in both the root and browser lockfiles.
 
-The test output confirms **24 passed, 0 failed, 1 ignored** for the complete
-`worker_backend` integration target; the ignored entry is the paired benchmark
-recorded above.
+The attached log is the filtered paired-benchmark invocation; it reports **1
+passed, 0 failed, 24 filtered out**. Separately, the complete release
+`worker_backend` integration target passed **24 tests, 0 failed, 1 ignored**.

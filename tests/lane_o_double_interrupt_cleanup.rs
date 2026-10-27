@@ -26,7 +26,8 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, AtomicBool, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// `sh -c` body that records `marker` immediately before execing a 30-second

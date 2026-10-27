@@ -100,11 +100,23 @@ fn in_process_path_parameters_expand_in_the_json_handed_to_the_applet() {
     let mode = manifest
         .parameters_json(&BTreeMap::from([
             ("path".to_owned(), Value::String("x".to_owned())),
-            ("mode".to_owned(), Value::String("~/mode".to_owned())),
+            ("mode".to_owned(), Value::String("0755".to_owned())),
         ]))
         .unwrap();
     assert_eq!(
-        mode["mode"], "~/mode",
-        "a string parameter keeps ~ as written"
+        mode["mode"], "0755",
+        "the validated octal mode remains unchanged"
     );
+
+    let manifest = registry.resolve("fs.ensure_file").unwrap();
+    let file = manifest
+        .parameters_json(&BTreeMap::from([
+            ("path".to_owned(), Value::String("~/work/build".to_owned())),
+            ("content".to_owned(), Value::String("~/label".to_owned())),
+            ("mode".to_owned(), Value::String("0644".to_owned())),
+        ]))
+        .unwrap();
+    assert_eq!(file["path"], expanded("~/work/build"));
+    assert_eq!(file["content"], "~/label", "string content is not a path");
+    assert_eq!(file["mode"], "0644");
 }

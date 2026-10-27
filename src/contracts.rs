@@ -2858,3 +2858,110 @@ mod duplicate_map_tests {
         assert!(error.to_string().contains("duplicate key \"a\""), "{error}");
     }
 }
+
+#[cfg(test)]
+mod numeric_minimum_tests {
+    use super::*;
+
+    fn schema(kind: OutputType, minimum: Option<serde_json::Number>) -> ValueSchema {
+        ValueSchema {
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            kind,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            single_line: false,
+            minimum,
+        }
+    }
+
+    #[test]
+    fn numeric_minimum_compares_large_integers_exactly_and_handles_fractions() {
+        let above_f64_integer_range = schema(
+            OutputType::Number,
+            Some(serde_json::Number::from(9_007_199_254_740_993_u64)),
+        );
+        assert!(above_f64_integer_range
+            .validate_value(&Value::Number(serde_json::Number::from(9_007_199_254_740_992_u64)))
+            .is_err());
+        assert!(above_f64_integer_range
+            .validate_value(&Value::Number(serde_json::Number::from(9_007_199_254_740_993_u64)))
+            .is_ok());
+
+        let beyond_i64 = schema(
+            OutputType::Number,
+            Some(serde_json::Number::from(9_223_372_036_854_775_808_u64)),
+        );
+        assert!(beyond_i64.validate_value(&Value::Integer(i64::MAX)).is_err());
+
+        let mixed_integer_float_minimum = schema(
+            OutputType::Number,
+            Some(serde_json::Number::from_f64(9_007_199_254_740_994.0).unwrap()),
+        );
+        assert!(mixed_integer_float_minimum
+            .validate_value(&Value::Integer(9_007_199_254_740_993))
+            .is_err());
+        let mixed_i64_float_minimum = schema(
+            OutputType::Number,
+            Some(serde_json::Number::from_f64(9_223_372_036_854_775_808.0).unwrap()),
+        );
+        assert!(mixed_i64_float_minimum
+            .validate_value(&Value::Integer(i64::MAX))
+            .is_err());
+
+        let fractional = schema(
+            OutputType::Integer,
+            Some(serde_json::Number::from_f64(0.5).unwrap()),
+        );
+        assert!(fractional.validate_value(&Value::Integer(0)).is_err());
+        assert!(fractional.validate_value(&Value::Integer(1)).is_ok());
+
+        let fractional_number = schema(
+            OutputType::Number,
+            Some(serde_json::Number::from_f64(0.5).unwrap()),
+        );
+        assert!(fractional_number
+            .validate_value(&Value::Number(serde_json::Number::from_f64(0.49).unwrap()))
+            .is_err());
+        assert!(fractional_number
+            .validate_value(&Value::Number(serde_json::Number::from_f64(0.5).unwrap()))
+            .is_ok());
+    }
+
+    #[test]
+    fn numeric_minimum_assignability_uses_effective_integer_domain_bounds() {
+        let unrestricted_integer = schema(OutputType::Integer, None);
+        let minimum_i64 = schema(
+            OutputType::Integer,
+            Some(serde_json::Number::from(i64::MIN)),
+        );
+        assert!(unrestricted_integer.is_assignable_to(&minimum_i64));
+
+        let fractional_integer_minimum = schema(
+            OutputType::Integer,
+            Some(serde_json::Number::from_f64(0.5).unwrap()),
+        );
+        let higher_fractional_integer_minimum = schema(
+            OutputType::Integer,
+            Some(serde_json::Number::from_f64(0.75).unwrap()),
+        );
+        assert!(fractional_integer_minimum.is_assignable_to(&higher_fractional_integer_minimum));
+
+        let larger_exact_number_minimum = schema(
+            OutputType::Number,
+            Some(serde_json::Number::from(9_007_199_254_740_993_u64)),
+        );
+        let smaller_exact_number_minimum = schema(
+            OutputType::Number,
+            Some(serde_json::Number::from(9_007_199_254_740_992_u64)),
+        );
+        assert!(larger_exact_number_minimum.is_assignable_to(&smaller_exact_number_minimum));
+        assert!(!smaller_exact_number_minimum.is_assignable_to(&larger_exact_number_minimum));
+    }
+}

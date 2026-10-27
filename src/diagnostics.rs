@@ -4539,6 +4539,30 @@ fn validate_call(
         }
     }
 
+    // Mirror model-helper extraction validation only when the effective argv
+    // template selects `extract` and maps a parameter directly after `--schema`.
+    // Direct process calls and references remain runtime-validated.
+    let schema_parameter = (!call.direct)
+        .then(|| manifest.execute_model_extract_schema_parameter())
+        .flatten();
+    if let Some(schema_parameter) = schema_parameter {
+        if let Some(Value::String(schema_text)) = call.parameters.get(schema_parameter) {
+            let validation = crate::model_schema::parse_unique_json(schema_text.as_bytes())
+                .and_then(|schema| crate::model_schema::validate_schema_definition(&schema));
+            if let Err(error) = validation {
+                diagnostics.push(Diagnostic::error(
+                    "applet.parameter.constraint",
+                    format!(
+                        "parameter {schema_parameter:?} of applet {:?} contains an invalid llm.extract schema: {error}",
+                        manifest.name
+                    ),
+                    parameter_value_span_at(source, line, schema_parameter, line_starts)
+                        .unwrap_or_else(|| line_starts.span(source, line)),
+                ));
+            }
+        }
+    }
+
     validate_json_pointer_literals(source, line, call, manifest, line_starts, diagnostics);
 
     let dispatches_wait_until = (manifest.execution_backend() == AppletBackend::InProcess
@@ -6132,6 +6156,163 @@ mod tests {
                 .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
             "json.keys validated a path parameter that its runtime implementation ignores"
         );
+    }
+
+    #[test]
+    fn llm_extract_literal_schemas_use_the_runtime_parser_and_validator() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let registry =
+            Registry::load_default(&manifest_dir, crate::manifest::ManifestCheck::Full).unwrap();
+        let source_for = |schema: &str| {
+            format!(
+                "run llm.extract with model \"gpt-6-luna\" and instruction \"x\" and schema {} as raw\n",
+                serde_json::to_string(schema).unwrap()
+            )
+        };
+
+        for schema in [
+            "{}",
+            "{",
+            r#"{"type":"object","type":"object","properties":{},"required":[],"additionalProperties":false}"#,
+            r#"{"type":"object","properties":{},"required":[],"additionalProperties":false,"pattern":".*"}"#,
+        ] {
+            let diagnostics = analyze_source(&source_for(schema), &registry);
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "applet.parameter.constraint")
+                .unwrap_or_else(|| {
+                    panic!("invalid extraction schema {schema:?} was accepted: {diagnostics:#?}")
+                });
+            assert!(
+                diagnostic.message.contains("schema") && diagnostic.message.contains("invalid"),
+                "schema diagnostic should identify the invalid schema: {diagnostic:#?}"
+            );
+        }
+
+        let supported =
+            r#"{"type":"object","properties":{},"required":[],"additionalProperties":false}"#;
+        assert!(analyze_source(&source_for(supported), &registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+
+        let dynamic = "use value \"{}\" as schema\nrun llm.extract with model \"gpt-6-luna\" and instruction \"x\" and schema schema as raw\n";
+        assert!(analyze_source(dynamic, &registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+    }
+
+    #[test]
+    fn llm_extract_schema_validation_follows_effective_dispatch_and_mapping() {
+        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("manifests")
+            .join("llm.extract.json");
+        let original_manifest: JsonValue =
+            serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+
+        // A same-name manifest using a different executable is not the model
+        // helper, even if its parameter happens to be called `schema`.
+        let mut custom_manifest = original_manifest.clone();
+        custom_manifest["binary"] = JsonValue::String("custom-model-helper".into());
+        let custom_registry = Registry::from_sources(&[custom_manifest.to_string()]).unwrap();
+        let source = "run llm.extract with model \"gpt-6-luna\" and instruction \"x\" and schema \"{}\" as raw\n";
+        assert!(analyze_source(source, &custom_registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+
+        // Preserve the name and helper binary but change the selected helper
+        // operation. The `schema` parameter is no longer an extraction schema.
+        let mut altered_operation = original_manifest.clone();
+        altered_operation["arguments"][0]["literal"] = JsonValue::String("ask".into());
+        let altered_registry = Registry::from_sources(&[altered_operation.to_string()]).unwrap();
+        assert!(analyze_source(source, &altered_registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+
+        // Likewise, a same-name `extract` manifest that passes the parameter
+        // under a different flag does not send it as `--schema`.
+        let mut altered_mapping = original_manifest.clone();
+        altered_mapping["arguments"][7]["literal"] = JsonValue::String("--fixture".into());
+        let altered_mapping_registry =
+            Registry::from_sources(&[altered_mapping.to_string()]).unwrap();
+        assert!(analyze_source(source, &altered_mapping_registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+
+        // Option values are consumed as argv tokens even when their text looks
+        // like another option. Here `--schema` is the literal value for
+        // `--model`, so the following schema parameter is positional and never
+        // reaches schema parsing.
+        let mut consumed_option = original_manifest.clone();
+        consumed_option["arguments"] = json!([
+            {"literal":"extract"},
+            {"literal":"--model"},
+            {"literal":"--schema"},
+            {"parameter":"schema"},
+            {"literal":"--instruction"},
+            {"parameter":"instruction"}
+        ]);
+        let consumed_option_registry =
+            Registry::from_sources(&[consumed_option.to_string()]).unwrap();
+        assert!(analyze_source(source, &consumed_option_registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+
+        // A bare token is interpreted as a flag and rejected before a later
+        // schema option can be reached.
+        let mut bare_token = original_manifest.clone();
+        bare_token["arguments"] = json!([
+            {"literal":"extract"},
+            {"literal":"not-an-option"},
+            {"literal":"--schema"},
+            {"parameter":"schema"}
+        ]);
+        let bare_token_registry = Registry::from_sources(&[bare_token.to_string()]).unwrap();
+        assert!(analyze_source(source, &bare_token_registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+
+        // A spread used as an ordinary option's value can emit extra tokens,
+        // making the helper fail before it reaches a later schema option.
+        let mut spread_value = original_manifest.clone();
+        spread_value["parameters"]["models"] =
+            json!({"type":"list","items":"string","required":true});
+        spread_value["arguments"] = json!([
+            {"literal":"extract"},
+            {"literal":"--model"},
+            {"spread":"models"},
+            {"literal":"--schema"},
+            {"parameter":"schema"},
+            {"literal":"--instruction"},
+            {"parameter":"instruction"}
+        ]);
+        let spread_registry = Registry::from_sources(&[spread_value.to_string()]).unwrap();
+        let spread_source = "run llm.extract with model \"gpt-6-luna\" and models [\"gpt-6-luna\", \"extra\"] and instruction \"x\" and schema \"{\" as raw\n";
+        assert!(analyze_source(spread_source, &spread_registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
+
+        // A differently named alias is still checked when its effective argv
+        // template selects `extract` and maps the literal to `--schema`.
+        let mut alias = original_manifest.clone();
+        alias["name"] = JsonValue::String("fixture.extract_alias".into());
+        let alias_registry = Registry::from_sources(&[alias.to_string()]).unwrap();
+        let alias_source = source.replace("llm.extract", "fixture.extract_alias");
+        assert!(analyze_source(&alias_source, &alias_registry)
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.code == "applet.parameter.constraint"
+                    && diagnostic.message.contains("invalid llm.extract schema")
+            }));
+
+        let default_manifest_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let default_registry =
+            Registry::load_default(&default_manifest_dir, crate::manifest::ManifestCheck::Full)
+                .unwrap();
+        let direct = "run \"llm.extract\" with model \"gpt-6-luna\" and instruction \"x\" and schema \"{}\" as raw\n";
+        assert!(analyze_source(direct, &default_registry)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "applet.parameter.constraint"));
     }
 
     #[test]

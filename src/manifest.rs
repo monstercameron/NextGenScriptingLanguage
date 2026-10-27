@@ -2008,6 +2008,90 @@ impl Manifest {
         }
     }
 
+    /// The model operation and schema parameter selected by a command
+    /// manifest that dispatches the model helper's extraction operation.
+    /// Both parts are derived from the effective argv template so aliases can
+    /// be checked while custom commands and other model operations stay opaque.
+    pub(crate) fn execute_model_extract_schema_parameter(&self) -> Option<&str> {
+        if self.execution_backend() != AppletBackend::Command || self.binary != "@execute-model" {
+            return None;
+        }
+        if !matches!(
+            self.arguments.first(),
+            Some(ArgumentNode::Literal { literal }) if literal == "extract"
+        ) {
+            return None;
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut arguments = self.arguments.iter().skip(1);
+        while let Some(argument) = arguments.next() {
+            match argument {
+                ArgumentNode::Literal { literal } if literal.starts_with("--") => {
+                    // The helper treats these as variable-length list options;
+                    // their token consumption is not a normal option/value pair.
+                    if matches!(literal.as_str(), "--labels" | "--levels") {
+                        return None;
+                    }
+                    if !matches!(
+                        literal.as_str(),
+                        "--provider"
+                            | "--api"
+                            | "--model"
+                            | "--question"
+                            | "--instruction"
+                            | "--criteria"
+                            | "--questions"
+                            | "--effort"
+                            | "--temperature"
+                            | "--minimum"
+                            | "--max-tokens"
+                            | "--timeout-ms"
+                            | "--max-bytes"
+                            | "--env-file"
+                            | "--endpoint"
+                            | "--api-key-env"
+                            | "--fixture"
+                            | "--schema"
+                    ) || !seen.insert(literal.as_str())
+                    {
+                        // Unknown and duplicate flags make the helper stop before
+                        // any later schema option can be consumed.
+                        return None;
+                    }
+                    // The model helper consumes the next argv token as the
+                    // value for every ordinary option. A literal `--schema`
+                    // in that position is data, not an option selector.
+                    let value = arguments.next()?;
+                    if !matches!(
+                        value,
+                        ArgumentNode::Literal { .. }
+                            | ArgumentNode::Parameter { .. }
+                            | ArgumentNode::PrefixedParameter { .. }
+                            | ArgumentNode::JsonParameter { .. }
+                    ) {
+                        // Spread, conditional, and aggregate nodes can emit a
+                        // variable number of tokens, shifting later flags.
+                        return None;
+                    }
+                    if literal == "--schema" {
+                        return match value {
+                            ArgumentNode::Parameter { parameter } => Some(parameter),
+                            _ => None,
+                        };
+                    }
+                }
+                // Every remaining token is interpreted as an option by the
+                // helper, so a bare token would fail before a later schema.
+                ArgumentNode::Literal { .. } | ArgumentNode::Parameter { .. } => return None,
+                // Variable-length or conditional template nodes make token
+                // positions uncertain, so leave them to runtime validation.
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// Check names, required parameters, and statically known types. Named
     /// results contain text; their string contents are checked after resolution.
     pub fn validate(&self, invocation: &Invocation) -> Result<()> {

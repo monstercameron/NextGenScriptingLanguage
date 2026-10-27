@@ -25,6 +25,7 @@ pub mod graph;
 pub mod home;
 pub mod inputs;
 pub mod manifest;
+pub(crate) mod model_schema;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "model")]
 pub mod models;

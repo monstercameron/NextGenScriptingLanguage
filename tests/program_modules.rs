@@ -49,6 +49,7 @@ fn record_output() -> OutputSchema {
         kind: OutputType::Record,
         encoding: OutputEncoding::Json,
         enum_values: None,
+        same_as_parameter: None,
         items: None,
         fields: BTreeMap::from([
             (

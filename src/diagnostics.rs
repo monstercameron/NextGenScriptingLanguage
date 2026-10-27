@@ -585,7 +585,7 @@ fn analyze_source_impl(
             let message = format!("{error:#}");
             let mut diagnostic =
                 classified_parse_error(source, &message, line_number, &line_starts);
-            let span = error
+            if let Some(span) = error
                 .downcast_ref::<parser::LocatedParseError>()
                 .and_then(parser::LocatedParseError::token_index)
                 .and_then(|index| token_ranges.get(index))
@@ -599,8 +599,11 @@ fn analyze_source_impl(
                         )
                     })
                 })
-                .unwrap_or_else(|| line_starts.span(source, line_number));
-            diagnostic.span = span;
+            {
+                // Preserve semantic classifier ranges when the parser has no
+                // concrete unexpected token. Replace only with a proven range.
+                diagnostic.span = span;
+            }
             let content_start = content_source_offset
                 .unwrap_or_else(|| line_starts.start(line_number) + statement.indent);
             if let Some(first) = content.split_whitespace().next() {

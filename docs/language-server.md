@@ -86,6 +86,7 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `applet.parameter.unknown` | resolve | the applet declares no parameter with this name |
 | `applet.parameter.type` | type | a literal value does not match the parameter's declared type |
 | `applet.parameter.required` | validate | a required parameter is missing from the call |
+| `applet.parameter.constraint` | validate | a literal parameter value violates a statically known applet constraint |
 | `applet.pipeline.incompatible` | type | a pipeline stage's declared output does not satisfy the next stage's input |
 | `data_flow_policy_not_configured` | policy | a capability policy is set without a data-flow policy, so remote egress and persistence are unprotected |
 | `check_failed` | validate | validation failed without a static diagnostic; the `causes` list explains why |

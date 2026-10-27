@@ -12,6 +12,7 @@ use crate::suggest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::net::IpAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -199,6 +200,13 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a required parameter is missing from the call",
         example: "run fixture.reader",
         typical_fix: "Supply a value for the required parameter.",
+    },
+    CodeInfo {
+        code: "applet.parameter.constraint",
+        family: "validate",
+        meaning: "a literal parameter value violates a statically known applet constraint",
+        example: "run wait.until with probe \"tcp_port_open\" and host \"8.8.8.8\" and port 443 and timeout_ms 0",
+        typical_fix: "Use a loopback IP address for the TCP port probe.",
     },
     CodeInfo {
         code: "applet.pipeline.incompatible",
@@ -2402,6 +2410,23 @@ fn validate_call(
                 parameter_value_span_at(source, line, name, line_starts)
                     .unwrap_or_else(|| line_starts.span(source, line)),
             ));
+        }
+    }
+
+    if manifest.name == "wait.until"
+        && matches!(call.parameters.get("probe"), Some(Value::String(probe)) if probe == "tcp_port_open")
+    {
+        if let Some(Value::String(host)) = call.parameters.get("host") {
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                if !ip.to_canonical().is_loopback() {
+                    diagnostics.push(Diagnostic::error(
+                        "applet.parameter.constraint",
+                        "parameter \"host\" of applet \"wait.until\" must be a loopback IP address for probe \"tcp_port_open\"",
+                        parameter_value_span_at(source, line, "host", line_starts)
+                            .unwrap_or_else(|| line_starts.span(source, line)),
+                    ));
+                }
+            }
         }
     }
 

@@ -3,10 +3,23 @@ use serde_json::Value;
 use std::{fs, path::Path, process::Command};
 
 fn execute(root: &Path, command: &str, source: &str, disk_manifests: bool) -> std::process::Output {
+    execute_with_json(root, command, source, disk_manifests, false)
+}
+
+fn execute_with_json(
+    root: &Path,
+    command: &str,
+    source: &str,
+    disk_manifests: bool,
+    json: bool,
+) -> std::process::Output {
     let program = root.join("wait.program");
     fs::write(&program, source).unwrap();
     let mut invocation = Command::new(env!("CARGO_BIN_EXE_execute"));
     invocation.arg(command).arg(&program).current_dir(root);
+    if json {
+        invocation.arg("--json");
+    }
     if disk_manifests {
         invocation
             .arg("--manifest-dir")
@@ -91,5 +104,74 @@ fn valid_probe_checks_and_runs_and_conditional_inputs_stay_runtime_validated() {
                 "run did not validate conditional {missing}; disk_manifests={disk_manifests}: {diagnostic}"
             );
         }
+    }
+}
+
+#[test]
+fn check_rejects_only_literal_non_loopback_ip_hosts_for_tcp_probe() {
+    let root = tempfile::tempdir().unwrap();
+    for disk_manifests in [false, true] {
+        let rejected = "run wait.until with probe \"tcp_port_open\" and host \"8.8.8.8\" and port 443 and timeout_ms 0\n";
+        let output = execute(root.path(), "check", rejected, disk_manifests);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "check accepted non-loopback IP");
+        assert!(
+            stderr.contains("loopback IP"),
+            "unexpected diagnostic: {stderr}"
+        );
+        let json_output = execute_with_json(root.path(), "check", rejected, disk_manifests, true);
+        let report: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == "applet.parameter.constraint"),
+            "missing stable constraint diagnostic: {report}"
+        );
+
+        // The TCP applet accepts IPv4 loopback throughout 127/8, IPv6 loopback,
+        // and IPv4-mapped loopback after canonicalization.
+        for host in ["127.0.0.1", "127.255.255.255", "::1", "::ffff:127.0.0.1"] {
+            let source = format!(
+                "run wait.until with probe \"tcp_port_open\" and host \"{host}\" and port 443 and timeout_ms 0\n"
+            );
+            let output = execute(root.path(), "check", &source, disk_manifests);
+            assert!(
+                output.status.success(),
+                "check rejected loopback IP {host}; disk_manifests={disk_manifests}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        // Names are not IP literals, so keep their validation to runtime. A
+        // referenced value is also dynamic from the static checker's perspective.
+        for source in [
+            "run wait.until with probe \"tcp_port_open\" and host \"localhost\" and port 443 and timeout_ms 0\n",
+            "use value \"8.8.8.8\" as address\nrun wait.until with probe \"tcp_port_open\" and host address and port 443 and timeout_ms 0\n",
+        ] {
+            let output = execute(root.path(), "check", source, disk_manifests);
+            assert!(
+                output.status.success(),
+                "check statically rejected a name or referenced host; disk_manifests={disk_manifests}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let dynamic_host = "use value \"8.8.8.8\" as address\nrun wait.until with probe \"tcp_port_open\" and host address and port 443 and timeout_ms 0\n";
+        let output = execute(root.path(), "run", dynamic_host, disk_manifests);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success() && stderr.contains("loopback address"),
+            "runtime did not retain TCP loopback validation; disk_manifests={disk_manifests}: {stderr}"
+        );
+
+        let other_probe = "run wait.until with probe \"file_exists\" and host \"8.8.8.8\" and path \".\" and timeout_ms 0\n";
+        let output = execute(root.path(), "check", other_probe, disk_manifests);
+        assert!(
+            output.status.success(),
+            "check applied TCP constraint to another probe; disk_manifests={disk_manifests}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

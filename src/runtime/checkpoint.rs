@@ -533,8 +533,14 @@ impl Journal {
         let requested_directory: PathBuf = options.directory.components().collect();
         let checkpoint_dir_existed = fs::symlink_metadata(&requested_directory).is_ok();
         let original = real_directory(&requested_directory, "checkpoint", !options.resume)?;
+        let mut recovering_fresh = false;
         if !options.resume && checkpoint_dir_existed {
-            refuse_nonempty_fresh_directory(&requested_directory)?;
+            if let Err(error) = refuse_nonempty_fresh_directory(&requested_directory) {
+                if !fresh_initialization_artifacts_only(&requested_directory, true)? {
+                    return Err(error);
+                }
+                recovering_fresh = true;
+            }
         }
         #[cfg(windows)]
         let original_identity = crate::platform::windows::directory_identity(&requested_directory)?;
@@ -556,22 +562,32 @@ impl Journal {
                 bail!("checkpoint directory changed while resolving its path");
             }
         }
-        // A directory this run created, or an empty one named for a fresh run, is made
-        // private. A resumed checkpoint keeps the permissions it was created with, and a
-        // non-empty directory was refused above, so no unrelated directory is changed.
-        if !options.resume || !checkpoint_dir_existed {
+        if !options.resume && !recovering_fresh {
             restrict_directory(&directory)?;
-        }
-        if !options.resume && !checkpoint_dir_existed {
-            if let Some(parent) = directory.parent() {
-                sync_directory(parent)?;
+            if !checkpoint_dir_existed {
+                if let Some(parent) = directory.parent() {
+                    sync_directory(parent)?;
+                }
             }
         }
 
         let lock = lock_directory(&directory)?;
-
+        let lock_acquired_at = std::time::SystemTime::now();
         let journal_path = directory.join("journal.json");
         let blobs_directory = directory.join("blobs");
+        if recovering_fresh {
+            // Only previously private, initialization-shaped directories can reach here.
+            // Recheck after locking, remove old atomic-write leftovers, then refuse if
+            // anything else remains. Never modify an unrelated nonempty directory.
+            if !fresh_initialization_artifacts_only(&directory, true)? {
+                bail!("checkpoint directory exists and is not empty; choose an absent or empty directory");
+            }
+            clean_checkpoint_temporaries(&directory, &blobs_directory, lock_acquired_at);
+            if !fresh_initialization_artifacts_only(&directory, false)? {
+                bail!("checkpoint directory exists and is not empty; choose an absent or empty directory");
+            }
+            restrict_directory(&directory)?;
+        }
         if options.resume {
             let (mut data, log) = read_journal_parts(&journal_path)?;
             // Only a legacy journal with an unkeyed digest may need a key created to
@@ -646,6 +662,9 @@ impl Journal {
             data.version = JOURNAL_VERSION;
             real_directory(&blobs_directory, "checkpoint blob", false)?;
             restrict_directory(&blobs_directory)?;
+            // A prior attempt may have installed a blob and failed its directory sync.
+            // Make any surviving entries durable before they can be referenced again.
+            sync_directory(&blobs_directory)?;
             let mut journal = Self {
                 directory,
                 blobs_directory,
@@ -690,6 +709,11 @@ impl Journal {
             // Element progress is authoritative only for the in-flight node, so the
             // log is read once here and handed to the runtime at that node.
             journal.load_elements()?;
+            clean_checkpoint_temporaries(
+                &journal.directory,
+                &journal.blobs_directory,
+                lock_acquired_at,
+            );
             Ok(journal)
         } else {
             if fs::symlink_metadata(&journal_path).is_ok() {
@@ -1236,14 +1260,28 @@ impl Journal {
             } else {
                 elements::element_line_limit(self.max_output_bytes)
             };
-            if collect_log_blob_refs(&self.directory.join(name), limit, &mut retained).is_err() {
+            if let Err(error) =
+                collect_log_blob_refs(&self.directory.join(name), limit, &mut retained)
+            {
+                eprintln!("warning: checkpoint blob collection skipped: {error:#}");
                 return;
             }
         }
-        let Ok(entries) = fs::read_dir(&self.blobs_directory) else {
-            return;
+        let entries = match fs::read_dir(&self.blobs_directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                eprintln!("warning: checkpoint blob collection skipped: {error}");
+                return;
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    eprintln!("warning: checkpoint blob collection skipped an entry: {error}");
+                    continue;
+                }
+            };
             let name = entry.file_name();
             let Some(name) = name.to_str() else {
                 continue;
@@ -2099,6 +2137,120 @@ fn load_blob(directory: &Path, reference: &BlobRef, limit: usize) -> Result<Vec<
     Ok(bytes)
 }
 
+fn checkpoint_temporary_name(name: &std::ffi::OsStr, blob_folder: bool) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let Some(base) = name.strip_prefix('.').and_then(|s| s.strip_suffix(".tmp")) else {
+        return false;
+    };
+    let mut parts = base.rsplitn(3, '-');
+    let (Some(counter), Some(pid), Some(stem)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !counter.is_empty()
+        && !pid.is_empty()
+        && counter.bytes().all(|b| b.is_ascii_digit())
+        && pid.bytes().all(|b| b.is_ascii_digit())
+        && if blob_folder {
+            stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit())
+        } else {
+            stem == "journal" || stem == COMPLETED_LOG
+        }
+}
+
+// An interrupted fresh initialization may leave the lock, the initial empty-output
+// blob, and recognized atomic-write files. Keep the general nonempty
+// directory refusal for every other case. On other platforms retain that refusal.
+#[cfg(unix)]
+fn fresh_initialization_artifacts_only(directory: &Path, allow_temps: bool) -> Result<bool> {
+    let metadata = fs::symlink_metadata(directory)?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != crate::platform::unix_ffi::effective_uid()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let kind = entry.file_type()?;
+        if name == "lock" && kind.is_file() {
+            continue;
+        }
+        if name == "blobs" && kind.is_dir() {
+            for blob in fs::read_dir(entry.path())? {
+                let blob = blob?;
+                let kind = blob.file_type()?;
+                let name = blob.file_name();
+                let initial_empty_blob = kind.is_file()
+                    && name == std::ffi::OsStr::new(&hex_digest(b""))
+                    && blob.metadata()?.len() == 0;
+                let temporary =
+                    allow_temps && kind.is_file() && checkpoint_temporary_name(&name, true);
+                if !initial_empty_blob && !temporary {
+                    return Ok(false);
+                }
+            }
+            continue;
+        }
+        if allow_temps && kind.is_file() && checkpoint_temporary_name(&name, false) {
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn fresh_initialization_artifacts_only(_directory: &Path, _allow_temps: bool) -> Result<bool> {
+    Ok(false)
+}
+
+/// Remove only our recognized atomic-write leftovers while holding the checkpoint lock.
+fn clean_checkpoint_temporaries(directory: &Path, blobs: &Path, acquired: std::time::SystemTime) {
+    for (folder, blob_folder) in [(directory, false), (blobs, true)] {
+        let entries = match fs::read_dir(folder) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && blob_folder => continue,
+            Err(error) => {
+                eprintln!("warning: checkpoint temporary cleanup skipped: {error}");
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    eprintln!("warning: checkpoint temporary cleanup skipped an entry: {error}");
+                    continue;
+                }
+            };
+            if !checkpoint_temporary_name(&entry.file_name(), blob_folder) {
+                continue;
+            }
+            let metadata = match fs::symlink_metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            if !metadata.file_type().is_file()
+                || metadata
+                    .modified()
+                    .map_or(true, |modified| modified > acquired)
+            {
+                continue;
+            }
+            if let Err(error) = fs::remove_file(entry.path()) {
+                eprintln!(
+                    "warning: checkpoint temporary cleanup failed for {}: {error}",
+                    entry.path().display()
+                );
+            }
+        }
+    }
+}
+
 fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Result<()> {
     atomic_write_with(directory, stem, suffix, bytes, |file, bytes| {
         file.write_all(bytes).and_then(|()| file.sync_all())
@@ -2199,6 +2351,88 @@ mod tests {
             fs::read(options.directory.join("keep.txt")).unwrap(),
             b"keep"
         );
+    }
+
+    #[test]
+    fn fresh_open_recovers_private_interrupted_initialization() {
+        let (_temp, options, cwd) = setup();
+        fs::create_dir(&options.directory).unwrap();
+        fs::set_permissions(&options.directory, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(options.directory.join("blobs")).unwrap();
+        let initial_blob = options.directory.join("blobs").join(hex_digest(b""));
+        fs::write(&initial_blob, b"").unwrap();
+        let stale_journal = options.directory.join(".journal-123-7.tmp");
+        let stale_blob = options
+            .directory
+            .join("blobs")
+            .join(format!(".{}-123-8.tmp", "a".repeat(64)));
+        fs::write(&stale_journal, b"incomplete").unwrap();
+        fs::write(&stale_blob, b"incomplete").unwrap();
+        let held = lock_directory(&options.directory).unwrap();
+        assert!(Journal::open(&options, &cwd, "finite", 1024).is_err());
+        assert!(stale_journal.exists());
+        assert!(stale_blob.exists());
+        drop(held);
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        assert!(!stale_journal.exists());
+        assert!(!stale_blob.exists());
+        assert!(initial_blob.is_file());
+        assert!(options.directory.join("journal.json").is_file());
+        drop(journal);
+    }
+
+    #[test]
+    fn fresh_open_does_not_clean_in_unrelated_nonempty_directory() {
+        let (_temp, options, cwd) = setup();
+        fs::create_dir(&options.directory).unwrap();
+        fs::set_permissions(&options.directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let stale = options.directory.join(".journal-123-7.tmp");
+        let unrelated = options.directory.join("keep.txt");
+        fs::write(&stale, b"keep too").unwrap();
+        fs::write(&unrelated, b"keep").unwrap();
+        assert!(Journal::open(&options, &cwd, "finite", 1024).is_err());
+        assert_eq!(fs::read(stale).unwrap(), b"keep too");
+        assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+        assert!(!options.directory.join("lock").exists());
+    }
+
+    #[test]
+    fn resume_removes_only_stale_checkpoint_temporaries_under_lock() {
+        let (_temp, mut options, cwd) = setup();
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        drop(journal);
+        let stale_journal = options.directory.join(".journal-123-7.tmp");
+        let stale_completed = options.directory.join(".completed.jsonl-123-8.tmp");
+        let stale_blob = options
+            .directory
+            .join("blobs")
+            .join(format!(".{}-123-9.tmp", "a".repeat(64)));
+        let unrelated = options.directory.join(".notes-123-7.tmp");
+        for path in [&stale_journal, &stale_completed, &stale_blob, &unrelated] {
+            fs::write(path, b"old").unwrap();
+        }
+        let future = options.directory.join(".journal-123-10.tmp");
+        let file = File::create(&future).unwrap();
+        file.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)),
+        )
+        .unwrap();
+        options.resume = true;
+        let held = lock_directory(&options.directory).unwrap();
+        assert!(Journal::open(&options, &cwd, "finite", 1024).is_err());
+        assert!(
+            stale_journal.exists(),
+            "cleanup must not run without the lock"
+        );
+        drop(held);
+        let resumed = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        assert!(future.exists(), "newer temporary must not be removed");
+        assert!(!stale_journal.exists());
+        assert!(!stale_completed.exists());
+        assert!(!stale_blob.exists());
+        assert_eq!(fs::read(unrelated).unwrap(), b"old");
+        drop(resumed);
     }
 
     #[test]

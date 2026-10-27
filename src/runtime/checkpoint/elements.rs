@@ -26,6 +26,20 @@ use std::collections::BTreeSet;
 
 const ELEMENT_LOG: &str = "elements.jsonl";
 
+// The directory entry must be durable before any begin record is relied on.
+fn open_synced_element_file(
+    directory: &Path,
+    sync: impl FnOnce(&Path) -> Result<()>,
+) -> Result<File> {
+    let path = directory.join(ELEMENT_LOG);
+    let file = open_regular(&path, "checkpoint element log", true)?;
+    restrict_file(&file)?;
+    // Also sync existing entries: a prior attempt may have created the file but
+    // failed before making its name durable.
+    sync(directory)?;
+    Ok(file)
+}
+
 /// The longest element-log line a run writes and resume reads back (#187). A commit
 /// holds its output and stderr inline as hex and a parallel element's value inline,
 /// so the bound scales with the output limit. Writing refuses a longer line, so a
@@ -73,6 +87,29 @@ mod lane_v3_tests {
         hash.update(b"\n");
         hash.update(serde_json::to_vec(item).unwrap());
         format!("{:x}", hash.finalize())
+    }
+
+    #[test]
+    fn element_log_entry_is_synced_before_begin_can_be_written() {
+        let (_temp, _options, mut journal) = journal();
+        let directory = journal.directory.clone();
+        let mut sync_called = false;
+        journal
+            .write_element_bytes_with_sync(&mut b"begin".to_vec(), true, |synced| {
+                assert_eq!(synced, directory);
+                assert_eq!(fs::metadata(synced.join(ELEMENT_LOG)).unwrap().len(), 0);
+                sync_called = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(sync_called);
+        assert_eq!(fs::read(directory.join(ELEMENT_LOG)).unwrap(), b"begin\n");
+        journal.elements_file = None;
+        let error = journal.write_element_bytes_with_sync(&mut b"another".to_vec(), true, |_| {
+            anyhow::bail!("sync failed")
+        });
+        assert!(error.is_err());
+        assert_eq!(fs::read(directory.join(ELEMENT_LOG)).unwrap(), b"begin\n");
     }
 
     #[test]
@@ -963,10 +1000,17 @@ impl Journal {
     }
 
     fn write_element_bytes(&mut self, line: &mut Vec<u8>, durable: bool) -> Result<()> {
+        self.write_element_bytes_with_sync(line, durable, sync_directory)
+    }
+
+    fn write_element_bytes_with_sync(
+        &mut self,
+        line: &mut Vec<u8>,
+        durable: bool,
+        sync: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<()> {
         if self.elements_file.is_none() {
-            let path = self.directory.join(ELEMENT_LOG);
-            let mut file = open_regular(&path, "checkpoint element log", true)?;
-            restrict_file(&file)?;
+            let mut file = open_synced_element_file(&self.directory, sync)?;
             // Bytes past the verified prefix, left by an interrupted append, go first.
             file.set_len(self.elements_bytes)
                 .context("truncating checkpoint element log")?;

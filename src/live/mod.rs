@@ -464,7 +464,12 @@ fn dispatch(
         ) {
             (Some(path), None) => Registry::load(Path::new(path)),
             (None, Some(path)) => Registry::load_catalog(Path::new(path)),
-            (None, None) => Registry::load_optional(&default_manifests),
+            (None, None) => {
+                if !default_manifests.is_dir() {
+                    bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
+                }
+                Registry::load_optional(&default_manifests)
+            }
             (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
         }?;
         let registry = if let Some(path) = opts.flags.get("--capability-policy") {

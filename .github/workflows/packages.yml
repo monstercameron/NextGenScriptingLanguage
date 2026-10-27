@@ -52,6 +52,16 @@ jobs:
           export SOURCE_DATE_EPOCH
           export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
           cargo build --locked --profile dist --features full --target '${{ matrix.target }}' --bins
+      - name: Verify detached release manifest discovery
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          python3 - <<'PYCODE'
+          import os, pathlib, subprocess
+          name = 'execute.exe' if os.name == 'nt' else 'execute'
+          binary = pathlib.Path('target') / os.environ['BUILD_TARGET'] / 'dist' / name
+          subprocess.run(['python3', 'tools/check_release_manifest_path.py', str(binary)], check=True)
+          PYCODE
       - name: Build archives and Linux packages
         env:
           BUILD_TARGET: ${{ matrix.target }}

@@ -172,5 +172,11 @@ jobs:
       - run: rustfmt --edition 2021 --check src/runtime/shared.rs
       - run: cargo clippy --locked --features full,test-fixtures --target ${{ matrix.target }} --all-targets -- -D warnings
       - run: cargo build --locked --target ${{ matrix.target }} --release --features full,test-fixtures --bins
+      - name: Install manifest fixture beside the release test binaries
+        run: |
+          $fixture = "target/${{ matrix.target }}/manifests"
+          if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
+          Copy-Item -Path manifests -Destination $fixture -Recurse
+
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test worker_backend_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --lib -- --test-threads=1

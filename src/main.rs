@@ -378,7 +378,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     #[cfg(feature = "live")]
     if arguments.first().is_some_and(|a| a == "live") {
         flow::security::install_panic_hook("live", None);
-        return flow::live::cli(&arguments[1..], default_manifest_dir(), workflow_path);
+        return flow::live::cli(&arguments[1..], default_manifest_dir()?, workflow_path);
     }
     #[cfg(not(feature = "live"))]
     if arguments
@@ -1843,7 +1843,7 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
     };
     // The host has already written the program's output and diagnostics. Exit with
     // the program's status, as plain run does; process::exit skips buffer drops.
-    let status = flow::live::host_run(&run, default_manifest_dir(), workflow_path)?;
+    let status = flow::live::host_run(&run, default_manifest_dir()?, workflow_path)?;
     if status != 0 {
         std::process::exit(status);
     }
@@ -2560,7 +2560,11 @@ fn load_registry(
             })
         }
         (None, None) => {
-            Registry::load_default_from_candidates(&default_manifest_candidates(), check)
+            let candidates = default_manifest_candidates();
+            if !candidates.iter().any(|path| path.is_dir()) {
+                bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
+            }
+            Registry::load_default_from_candidates(&candidates, check)
         }
         (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
     }
@@ -2649,33 +2653,20 @@ fn install_workflow_policy_state(
 }
 
 #[cfg(feature = "live")]
-fn default_manifest_dir() -> PathBuf {
-    // The working directory is never searched: any directory a script runs in
-    // could otherwise shadow bundled applets. Use --manifest-dir or
-    // --manifest-catalog to select other manifests explicitly.
-    if let Ok(executable) = env::current_exe() {
-        // macOS may report the launch symlink rather than its bundle target.
-        #[cfg(target_os = "macos")]
-        let executable = fs::canonicalize(&executable).unwrap_or(executable);
-        if let Some((sibling, system)) = manifest_candidates(&executable) {
-            if sibling.is_dir() {
-                return sibling;
-            }
-            if system.is_dir() {
-                return system;
-            }
-        }
-    }
-
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
+fn default_manifest_dir() -> Result<PathBuf> {
+    let candidates = default_manifest_candidates();
+    candidates
+        .iter()
+        .find(|path| path.is_dir())
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
+        .context("cannot determine installed manifest directories; pass --manifest-dir")
 }
 
-/// The default manifest directories in search order: next to the installed binary,
-/// the system share directory, then the source tree. The registry probes each once.
+/// The installed manifest directories, followed by the source tree only in debug builds.
 fn default_manifest_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::with_capacity(3);
     if let Ok(executable) = env::current_exe() {
-        // macOS may report the launch symlink rather than its bundle target.
         #[cfg(target_os = "macos")]
         let executable = fs::canonicalize(&executable).unwrap_or(executable);
         if let Some((sibling, system)) = manifest_candidates(&executable) {
@@ -2683,6 +2674,7 @@ fn default_manifest_candidates() -> Vec<PathBuf> {
             candidates.push(system);
         }
     }
+    #[cfg(debug_assertions)]
     candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"));
     candidates
 }
@@ -2740,7 +2732,7 @@ fn signal_status(status: &std::process::ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod startup_path_tests {
-    use super::{manifest_candidates, parse_os_arguments};
+    use super::{default_manifest_candidates, manifest_candidates, parse_os_arguments};
     use std::path::{Component, Path};
 
     #[test]
@@ -2753,6 +2745,13 @@ mod startup_path_tests {
             .components()
             .any(|part| part == Component::ParentDir));
         assert!(!system.components().any(|part| part == Component::ParentDir));
+    }
+
+    #[test]
+    fn source_manifest_fallback_is_only_available_in_debug_builds() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let candidates = default_manifest_candidates();
+        assert_eq!(candidates.contains(&source), cfg!(debug_assertions));
     }
 
     #[test]

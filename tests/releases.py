@@ -714,5 +714,17 @@ class SoakRunAssertions(unittest.TestCase):
         self.assertTrue(soak.run_peak_violations([(1, 1, 1)] * 3, self.LIMITS))
 
 
+class ReleaseManifestFallback(unittest.TestCase):
+    def test_checker_rejects_utf8_and_utf16_build_paths_before_execution(self):
+        import check_release_manifest_path
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binary = root / "execute"
+            for encoding in ("utf-8", "utf-16-le"):
+                binary.write_bytes(b"prefix" + str(root.resolve()).encode(encoding) + b"suffix")
+                with self.subTest(encoding=encoding), self.assertRaisesRegex(ValueError, "build root"):
+                    check_release_manifest_path.verify(binary, root)
+
+
 if __name__ == "__main__":
     unittest.main()

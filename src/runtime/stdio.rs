@@ -14,10 +14,10 @@ static ACTIVE_OUTPUT_TARGETS: Mutex<Vec<OutputTarget>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct OutputTarget {
-    device: u64,
-    inode: u64,
-    file_type: u32,
-    special_device: u64,
+    device: libc::dev_t,
+    inode: libc::ino_t,
+    file_type: libc::mode_t,
+    special_device: libc::dev_t,
 }
 
 struct WriterReservation(OutputTarget);
@@ -75,15 +75,15 @@ fn output_target_and_write_limit(fd: RawFd) -> Result<(OutputTarget, usize)> {
     }
     // SAFETY: fstat returned 0 above, so it initialized stat.
     let stat = unsafe { stat.assume_init() };
-    let file_type = (stat.st_mode & libc::S_IFMT) as u32;
+    let file_type = stat.st_mode & libc::S_IFMT;
     let target = OutputTarget {
-        device: stat.st_dev as u64,
-        inode: stat.st_ino as u64,
+        device: stat.st_dev,
+        inode: stat.st_ino,
         file_type,
-        special_device: stat.st_rdev as u64,
+        special_device: stat.st_rdev,
     };
-    let write_limit = if file_type == libc::S_IFIFO as u32 || file_type == libc::S_IFSOCK as u32 {
-        libc::PIPE_BUF as usize
+    let write_limit = if file_type == libc::S_IFIFO || file_type == libc::S_IFSOCK {
+        libc::PIPE_BUF
     } else {
         64 * 1024
     };

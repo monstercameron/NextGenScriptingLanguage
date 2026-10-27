@@ -3213,37 +3213,37 @@ mod policy_audit_tests {
         assert_eq!(report["audit_scope"], "policy-decisions-only");
     }
 
-    /// Restores a process environment variable when it goes out of scope, so
-    /// a test that must fail the ambient allowlist cannot leak into parallel
-    /// tests.
-    struct EnvGuard {
-        key: &'static str,
-        prior: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prior = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, prior }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.prior {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-
     /// A malformed ambient allowlist denies before any child exists, and that
     /// denial is persisted in a real run record. The raw value never reaches
     /// the record: the canary proves the audit names the denial without
     /// carrying the malformed material.
+    ///
+    /// The malformed value travels in an exact child test process only; the
+    /// parent never mutates its own process environment, so parallel tests
+    /// cannot observe the canary.
     #[test]
     fn malformed_allowlist_denial_is_persisted_to_the_run_record() {
+        const CHILD_SENTINEL: &str = "NGSL_MALFORMED_ALLOWLIST_CHILD";
+        const MALFORMED_ALLOWLIST: &str = "CANARY MALFORMED,ALLOWLIST";
+        if std::env::var_os(CHILD_SENTINEL).is_none() {
+            let exe = std::env::current_exe().expect("current test executable");
+            let output = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg(
+                    "record::policy_audit_tests::malformed_allowlist_denial_is_persisted_to_the_run_record",
+                )
+                .env(CHILD_SENTINEL, "1")
+                .env("EXECUTE_CHILD_ENV_ALLOW", MALFORMED_ALLOWLIST)
+                .output()
+                .expect("spawn exact child test process");
+            assert!(
+                output.status.success(),
+                "child test failed: stdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         let registry = crate::manifest::Registry::default();
         let recorder = Recorder::start(RecordStart {
@@ -3258,7 +3258,6 @@ mod policy_audit_tests {
         // The space makes the entry invalid; the loader-sensitive prefix
         // would also fail. Either way the parser reports a generic reason
         // without echoing the value.
-        let guard = EnvGuard::set("EXECUTE_CHILD_ENV_ALLOW", "CANARY MALFORMED,ALLOWLIST");
         let error =
             crate::capabilities::effective_environment(&registry, "audit.allowlist").unwrap_err();
         assert!(
@@ -3266,7 +3265,6 @@ mod policy_audit_tests {
             "{error:?}"
         );
         assert!(!error.to_string().contains("CANARY"), "{error:?}");
-        drop(guard);
         recorder
             .finish(&RunSummary {
                 ok: false,

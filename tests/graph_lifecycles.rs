@@ -4,9 +4,11 @@ use flow::ast::Value;
 use flow::contracts::{OutputType, ValueSchema};
 #[cfg(any(unix, feature = "remote"))]
 use flow::graph::{self, GraphRunOptions, GraphSession};
-use flow::graph::{GraphContext, GraphExecutor, GraphNode, NodeIo, PortValue, RuntimeGraphExecutor};
 #[cfg(feature = "remote")]
 use flow::graph::{EdgeSpec, GraphNodeKind, PortRef, PortSchema};
+use flow::graph::{
+    GraphContext, GraphExecutor, GraphNode, NodeIo, PortValue, RuntimeGraphExecutor,
+};
 use flow::manifest::Registry;
 #[cfg(any(unix, feature = "remote"))]
 use flow::runtime::RunOptions;
@@ -18,9 +20,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 #[cfg(any(unix, feature = "remote"))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn text_schema() -> ValueSchema {

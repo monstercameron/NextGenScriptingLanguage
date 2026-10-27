@@ -157,6 +157,10 @@ fn create_private_dir(path: &Path) -> Result<()> {
 /// Remove scope directories left by processes that no longer exist. Only directories
 /// that are real directories, not links, and owned by this user are touched.
 fn sweep_stale(temp: &Path) {
+    sweep_stale_with_owner_check(temp, scope_owner_alive);
+}
+
+fn sweep_stale_with_owner_check(temp: &Path, owner_is_alive: impl Fn(&str) -> bool) {
     let Ok(entries) = fs::read_dir(temp) else {
         return;
     };
@@ -185,7 +189,7 @@ fn sweep_stale(temp: &Path) {
         let Some(owner_text) = fs::read_to_string(&owner).ok() else {
             continue;
         };
-        if !scope_owner_alive(&owner_text) {
+        if !owner_is_alive(&owner_text) {
             let _ = fs::remove_dir_all(&path);
         }
     }
@@ -415,23 +419,31 @@ mod tests {
             fs::create_dir(dir).unwrap();
         }
         #[cfg(target_os = "linux")]
+        let (proc_root, pid_namespace, pid, start) = {
+            let proc_root = tempfile::tempdir().unwrap();
+            let pid_namespace = 20_005;
+            let pid = 42;
+            let start = 200;
+            write_test_pid_namespace(proc_root.path(), "self", pid_namespace);
+            write_test_pid_namespace(proc_root.path(), "1", pid_namespace);
+            write_test_pid_namespace(proc_root.path(), &pid.to_string(), pid_namespace);
+            write_test_stat(proc_root.path(), &pid.to_string(), start);
+            (proc_root, pid_namespace, pid, start)
+        };
+        #[cfg(target_os = "linux")]
         {
-            let proc_root = Path::new("/proc");
             let boot_id = system_boot_id().unwrap();
-            let pid_namespace = process_pid_namespace(proc_root, "self").unwrap();
-            let start = process_start_time(proc_root, "self").unwrap();
             fs::write(
                 dead.join(OWNER_FILE),
                 format!(
-                    "{boot_id}:{pid_namespace}:{}:{}",
-                    std::process::id(),
+                    "{boot_id}:{pid_namespace}:{pid}:{}",
                     start.saturating_add(1)
                 ),
             )
             .unwrap();
             fs::write(
                 live.join(OWNER_FILE),
-                format!("{boot_id}:{pid_namespace}:{}:{start}", std::process::id()),
+                format!("{boot_id}:{pid_namespace}:{pid}:{start}"),
             )
             .unwrap();
             // A missing /proc entry is ambiguous: the owner may be hidden by a
@@ -444,9 +456,8 @@ mod tests {
             fs::write(
                 other_namespace.join(OWNER_FILE),
                 format!(
-                    "{boot_id}:{}:{}:{start}",
+                    "{boot_id}:{}:{pid}:{start}",
                     pid_namespace.saturating_add(1),
-                    std::process::id()
                 ),
             )
             .unwrap();
@@ -469,6 +480,11 @@ mod tests {
             fs::write(malformed_boot.join(OWNER_FILE), "4000000000").unwrap();
             fs::write(legacy.join(OWNER_FILE), "4000000000").unwrap();
         }
+        #[cfg(target_os = "linux")]
+        sweep_stale_with_owner_check(temp.path(), |owner| {
+            scope_owner_alive_in_proc(owner, proc_root.path())
+        });
+        #[cfg(not(target_os = "linux"))]
         sweep_stale(temp.path());
         assert!(!dead.exists());
         assert!(live.exists());

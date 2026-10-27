@@ -285,6 +285,16 @@ fn the_first_scope_sweeps_directories_whose_owner_is_gone() {
         temp.path(),
     );
     assert_eq!(output.status.code(), Some(0));
+    #[cfg(target_os = "linux")]
+    if procfs_mount_matches_current_namespace() {
+        assert!(!dead.exists(), "stale scope was not swept");
+    } else {
+        assert!(
+            dead.exists(),
+            "scope with an untrustworthy procfs view was swept"
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
     assert!(!dead.exists(), "stale scope was not swept");
     assert!(live.exists(), "a live owner's scope was swept");
     assert!(unrelated.exists(), "an unrelated directory was swept");
@@ -300,7 +310,7 @@ fn the_first_scope_sweeps_directories_whose_owner_is_gone() {
 #[cfg(target_os = "linux")]
 fn owner_records() -> (String, String) {
     let pid = std::process::id();
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let stat = fs::read_to_string("/proc/self/stat").unwrap();
     let start: u64 = stat
         .rsplit_once(')')
         .unwrap()
@@ -333,6 +343,21 @@ fn owner_environment() -> (String, u64) {
         .parse()
         .unwrap();
     (boot_id, pid_namespace)
+}
+
+#[cfg(target_os = "linux")]
+fn procfs_mount_matches_current_namespace() -> bool {
+    fn namespace_for(pid: &str) -> Option<u64> {
+        let namespace = fs::read_link(format!("/proc/{pid}/ns/pid")).ok()?;
+        namespace
+            .to_str()?
+            .strip_prefix("pid:[")?
+            .strip_suffix(']')?
+            .parse()
+            .ok()
+    }
+
+    namespace_for("self").is_some_and(|current| namespace_for("1") == Some(current))
 }
 
 #[cfg(target_os = "linux")]

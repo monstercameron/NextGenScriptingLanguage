@@ -217,3 +217,15 @@ fn lazy_bundled_verification_refuses_a_manifest_replaced_by_a_symlink() {
     let error = format!("{:#}", registry.resolve("awk").unwrap_err());
     assert!(error.contains("differs from the bundled copy"), "{error}");
 }
+
+#[test]
+fn implicit_default_loader_rejects_regular_files_but_explicit_load_still_works() {
+    let temp = tempdir().unwrap();
+    let file = temp.path().join("manifest.json");
+    fs::write(&file, manifest("lane.file")).unwrap();
+    let error = Registry::load_default_directory_only(&file, flow::manifest::ManifestCheck::Lazy)
+        .err()
+        .expect("implicit defaults must be directories");
+    assert!(format!("{error:#}").contains("not a directory"));
+    assert!(Registry::load(&file).unwrap().resolve("lane.file").is_ok());
+}

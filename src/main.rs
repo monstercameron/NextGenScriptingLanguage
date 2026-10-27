@@ -1950,6 +1950,14 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             "commands": flow::discovery::inventory_commands()?
         }));
     }
+    if manifest_dir.is_none()
+        && manifest_catalog.is_none()
+        && !default_manifest_candidates()
+            .iter()
+            .any(|path| path.is_dir())
+    {
+        bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
+    }
     // Listing and matching read every manifest, so compare the whole directory first.
     let registry = load_registry(manifest_dir, manifest_catalog, ManifestCheck::Full)?;
     #[cfg(feature = "tooling")]
@@ -2560,11 +2568,13 @@ fn load_registry(
             })
         }
         (None, None) => {
-            let candidates = default_manifest_candidates();
-            if !candidates.iter().any(|path| path.is_dir()) {
-                bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
+            match default_manifest_candidates()
+                .into_iter()
+                .find(|path| path.is_dir())
+            {
+                Some(path) => Registry::load_default_directory_only(&path, check),
+                None => Ok(Registry::default()),
             }
-            Registry::load_default_from_candidates(&candidates, check)
         }
         (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
     }

@@ -834,6 +834,20 @@ impl Registry {
         }
     }
 
+    /// Load an implicitly discovered directory without accepting legacy files.
+    /// Explicit single-file sources remain available through `load`.
+    pub fn load_default_directory_only(path: &Path, check: ManifestCheck) -> Result<Self> {
+        let metadata = fs::metadata(path)
+            .with_context(|| format!("reading manifest directory {}", path.display()))?;
+        if !metadata.is_dir() {
+            bail!(
+                "default manifest path {} is not a directory",
+                path.display()
+            );
+        }
+        Self::load_default_directory(path, &metadata, check)
+    }
+
     fn load_default_directory(
         path: &Path,
         metadata: &fs::Metadata,

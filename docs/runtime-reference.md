@@ -524,9 +524,11 @@ directory; packed entries use the canonical catalog file as their origin, and
 relative program-module sources resolve from its parent directory. Service
 definitions store the canonical catalog path. Without either selector,
 discovery checks `manifests` beside the executable's `bin` directory, then
-`share/execute/manifests` there (the native package layout), then the development
-source location. The working directory is never searched, so a directory a script
-runs in cannot shadow bundled applets.
+`share/execute/manifests` there (the native package layout), then the development source location in debug builds. Release builds never search
+the build machine’s source tree. If no installed directory exists, use an explicit
+selector for named applets; quoted direct commands can run without a catalog. The
+working directory is never searched, so a directory a script runs in cannot shadow
+bundled applets.
 
 **Bundled manifest index.** The shipped manifests are also embedded in the binary as
 one deflate stream per manifest with a generated index (names, phrases, sizes and

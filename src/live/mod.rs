@@ -10,7 +10,7 @@ use crate::ipc::{UnixListener, UnixStream};
 use self::auth::{AgentAuthPolicy, AgentCredential, RequestAuth};
 use self::state::*;
 use crate::capabilities::CapabilityPolicy;
-use crate::manifest::Registry;
+use crate::manifest::{ManifestCheck, Registry};
 use crate::runtime::RunOptions;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value as Json};
@@ -464,11 +464,9 @@ fn dispatch(
         ) {
             (Some(path), None) => Registry::load(Path::new(path)),
             (None, Some(path)) => Registry::load_catalog(Path::new(path)),
+            (None, None) if !default_manifests.is_dir() => Ok(Registry::default()),
             (None, None) => {
-                if !default_manifests.is_dir() {
-                    bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
-                }
-                Registry::load_optional(&default_manifests)
+                Registry::load_default_directory_only(&default_manifests, ManifestCheck::Lazy)
             }
             (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
         }?;

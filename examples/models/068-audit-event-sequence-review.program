@@ -13,7 +13,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then awk with delimiter "\t" and program "NR == 1 { previous=$1; printf \"%s\\tseq=%d\\tgap=0\\t%s\\n\", $2, $1, $3; next } { gap=$1-previous-1; printf \"%s\\tseq=%d\\tgap=%d\\t%s\\n\", $2, $1, gap, $3; previous=$1 }" as evidence
 if live is true
-  then jev.classify with question "Do the sequence gaps or order in this local audit slice need an integrity follow-up?" and labels ["sequence-anomaly", "needs-human"] and minimum 80 and env_file env_file as class_raw
+  then jev.classify with question "Do the sequence gaps or order in this local audit slice need an integrity follow-up?" and labels ["sequence-anomaly", "needs-human"] and minimum 80 and env_file env_file as class_raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Do the sequence gaps or order in this local audit slice need an integrity follow-up?" and labels ["sequence-anomaly", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
 then parse json as classification
@@ -24,7 +24,7 @@ if accepted is true
   if label is "sequence-anomaly"
     then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
     if live is true
-      then llm.ask with model generator_model and instruction "Explain only the computed sequence gaps and supplied actions. Cite AUD-* event IDs and sequence numbers; list plausible collection checks without alleging tampering or attributing intent." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Explain only the computed sequence gaps and supplied actions. Cite AUD-* event IDs and sequence numbers; list plausible collection checks without alleging tampering or attributing intent." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Explain only the computed sequence gaps and supplied actions. Cite AUD-* event IDs and sequence numbers; list plausible collection checks without alleging tampering or attributing intent." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as draft_result

@@ -10,7 +10,7 @@ accept templates as text described as "Glob of templates to render"
 accept values_json as text described as "JSON object of template values"
 
 run path.join with parts [themes_root, theme_name] as theme_dir
-run fs.ensure_dir with path theme_dir as made_dir
+run fs.ensure_dir with path theme_dir as made_dir # execute-allow: lint.unused_binding intentional filesystem-result capture keeps the operation output off stdout
 run json.parse with text values_json as values
 run fs.glob with pattern templates as template_files
 for each template in template_files
@@ -18,7 +18,7 @@ for each template in template_files
   run text.strip_suffix with text file_name and suffix ".tpl" as output_name
   run path.join with parts [theme_dir, output_name] as output_path
   run text.render with template_path template and values values as rendered
-  run fs.ensure_file with path output_path and content rendered as written
-run fs.ensure_symlink with path current_link and target theme_dir as swap
+  run fs.ensure_file with path output_path and content rendered as written # execute-allow: lint.unused_binding intentional filesystem-result capture keeps the operation output off stdout
+run fs.ensure_symlink with path current_link and target theme_dir as swap # execute-allow: lint.unused_binding intentional symlink-result capture keeps the operation output off stdout
 run "hyprctl" with arguments ["reload"]
 run "printf" with arguments ["theme %s active\n", theme_name]

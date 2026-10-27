@@ -75,6 +75,53 @@ fn shell_command_arguments_after_the_script_remain_literal() {
 }
 
 #[test]
+fn awk_and_jq_program_arguments_are_not_treated_as_shell_expansions() {
+    for source in [
+        "run \"awk\" with arguments [\"{ print $i, $(i + 1) }\"]\n",
+        "run \"jq\" with arguments [\"-r\", \". as $draft | select(.name == $workflow)\"]\n",
+    ] {
+        let diagnostics = analyze_source(source, &Registry::default());
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"),
+            "{source}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
+fn awk_and_jq_data_arguments_remain_subject_to_expansion_lint() {
+    for source in [
+        "run \"awk\" with arguments [\"-v\", \"name\", \"$HOME\", \"{ print $name }\"]\n",
+        "run \"jq\" with arguments [\"--arg\", \"name\", \"$HOME\", \".name == $name\"]\n",
+    ] {
+        let diagnostics = analyze_source(source, &Registry::default());
+        let warnings = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1, "{source}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn jq_long_flags_and_repeated_awk_sources_skip_only_script_text() {
+    for source in [
+        "run \"jq\" with arguments [\"--stream\", \"--seq\", \"--tab\", \"--unbuffered\", \"--raw-output0\", \"--arg\", \"draft\", \"draft\", \". as $draft | select(.name == $workflow)\"]\n",
+        "run \"awk\" with arguments [\"-e\", \"{ print $i }\", \"--source\", \"{ print $(i + 1) }\"]\n",
+    ] {
+        let diagnostics = analyze_source(source, &Registry::default());
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"),
+            "{source}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
 fn shell_looking_later_arguments_are_not_treated_as_a_command_string() {
     for source in [
         "run \"sh\" with arguments [\"script.sh\", \"-c\", \"echo $HOME\"]\n",
@@ -108,6 +155,44 @@ fn safe_first_command_expansion_fix_declares_environment_and_formats_value() {
     assert!(!analyze_source(&repaired, &registry)
         .iter()
         .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
+fn braced_expansion_fix_reuses_a_declared_input() {
+    let source = "accept name as text\nrun \"printf\" with arguments [\"hello ${name}\\n\"]\n";
+    let registry = format_registry();
+    let diagnostics = analyze_source(source, &registry);
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("braced shell-like expansion warning");
+    let fix = warning
+        .fixes
+        .first()
+        .expect("declared input can be formatted safely");
+    let repaired = apply_fix(source, fix);
+    assert!(repaired.contains("accept name as text\n"));
+    assert!(!repaired.contains("from environment \"name\""));
+    assert!(repaired.contains("values {\"v0\": name}"));
+    assert!(repaired.contains("template \"hello {{v0}}\\n\""));
+    assert!(!analyze_source(&repaired, &registry)
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
+fn braced_expansion_fix_is_withheld_for_non_scalar_declared_inputs() {
+    for source in [
+        "accept name as json\nrun \"printf\" with arguments [\"${name}\"]\n",
+        "accept name as list of text\nrun \"printf\" with arguments [\"${name}\"]\n",
+    ] {
+        let diagnostics = analyze_source(source, &format_registry());
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+            .expect("literal expansion warning remains");
+        assert!(warning.fixes.is_empty(), "{source}: {warning:#?}");
+    }
 }
 
 #[test]
@@ -281,6 +366,137 @@ fn unused_bindings_and_inputs_warn_but_references_are_counted() {
         .iter()
         .any(|diagnostic| diagnostic.code == "lint.unused_binding"
             && diagnostic.message.contains("unused_result")));
+}
+
+#[test]
+fn unused_name_quick_fixes_only_add_behavior_neutral_suppression_comments() {
+    let source =
+        "accept unused_input as text\nrun \"printf\" with arguments [\"x\"] as unused_result\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    for (code, line) in [
+        ("lint.unused_input", "accept unused_input as text # execute-allow: lint.unused_input\n"),
+        (
+            "lint.unused_binding",
+            "run \"printf\" with arguments [\"x\"] as unused_result # execute-allow: lint.unused_binding\n",
+        ),
+    ] {
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .expect("unused-name warning");
+        let fix = warning.fixes.first().expect("safe suppression fix");
+        let repaired = apply_fix(source, fix);
+        assert!(repaired.contains(line), "{repaired:?}");
+        assert!(!analyze_source(&repaired, &Registry::default())
+            .iter()
+            .any(|diagnostic| diagnostic.code == code));
+    }
+}
+
+#[test]
+fn unused_intermediate_pipeline_binding_can_be_removed_without_changing_the_pipeline() {
+    let source = "run \"printf\" with arguments [\"x\"] as intermediate\nthen \"cat\"\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "lint.unused_binding" && diagnostic.message.contains("intermediate")
+        })
+        .expect("unused pipeline binding warning");
+    let fix = warning
+        .fixes
+        .first()
+        .expect("safe removal fix for an intermediate pipeline binding");
+    assert!(fix.message.contains("literal printf pipeline"));
+    let repaired = apply_fix(source, fix);
+    assert_eq!(
+        repaired,
+        "run \"printf\" with arguments [\"x\"]\nthen \"cat\"\n"
+    );
+    assert!(!analyze_source(&repaired, &Registry::default())
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.unused_binding"));
+}
+
+#[test]
+fn unused_sensitive_pipeline_binding_is_not_removed_by_quick_fix() {
+    let source = "run \"printf\" with arguments [\"x\"] as secret and keep secret\nthen \"cat\"\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "lint.unused_binding" && diagnostic.message.contains("secret")
+        })
+        .expect("unused sensitive binding warning");
+    assert!(
+        warning
+            .fixes
+            .iter()
+            .all(|fix| !fix.message.contains("intermediate pipeline")),
+        "{warning:#?}"
+    );
+}
+
+#[test]
+fn listener_applet_inputs_are_counted_as_reads() {
+    let source = "accept path as text\nlisten to \"tail\" with arguments [\"-F\", path]\nwhenever a line arrives as event\n  then \"cat\"\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lint.unused_input"),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn task_output_bindings_are_used_by_a_consumed_group_result() {
+    let source = "parallel at most 2 as results\n  run number.add with left 20 and right 22 as sum\n  run number.multiply with left 6 and right 7 as product\nthen encode results as json\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lint.unused_binding"),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn unused_pipeline_binding_fix_is_withheld_for_reference_derived_output() {
+    let source = "accept token as text from environment \"TOKEN\"\nrun \"printf\" with arguments [token] as intermediate\nthen \"cat\"\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "lint.unused_binding" && diagnostic.message.contains("intermediate")
+        })
+        .expect("unused binding warning");
+    assert!(
+        warning
+            .fixes
+            .iter()
+            .all(|fix| !fix.message.contains("intermediate pipeline")),
+        "{warning:#?}"
+    );
+}
+
+#[test]
+fn unused_pipeline_binding_fix_is_withheld_after_secret_pipeline_input() {
+    let source = "accept token as text from secret prompt \"Token?\"\nuse value token\nthen \"cat\" as intermediate\nthen \"cat\"\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "lint.unused_binding" && diagnostic.message.contains("intermediate")
+        })
+        .expect("unused binding warning");
+    assert!(
+        warning
+            .fixes
+            .iter()
+            .all(|fix| !fix.message.contains("literal printf pipeline")),
+        "{warning:#?}"
+    );
 }
 
 #[test]

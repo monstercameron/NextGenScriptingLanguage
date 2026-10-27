@@ -15,7 +15,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then "jq" with arguments ["-c", "-S", "--", ". as $d | ({survey_id,theme_counts:[$d.responses|group_by(.theme)[]|{theme:.[0].theme,count:length,excerpts:map({id,text})}]}) + {evidence_id:$d.evidence_id,checked_fact:$d.checked_fact,case_note:$d.case_note}"] as evidence
 if live is true
-  then jev.classify with question "Does the local evidence support a bounded surface minority themes in free-text survey responses draft?" and labels ["draft","human-review"] and minimum 80 and env_file env_file as class_raw
+  then jev.classify with question "Does the local evidence support a bounded surface minority themes in free-text survey responses draft?" and labels ["draft","human-review"] and minimum 80 and env_file env_file as class_raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Does the local evidence support a bounded surface minority themes in free-text survey responses draft?" and labels ["draft","human-review"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
 then parse json as decision
@@ -24,15 +24,15 @@ take integer at "/confidence_percent" from decision as confidence
 take boolean at "/accepted" from decision as accepted
 if accepted is true
   if label is "draft"
-    then "printf" with arguments ["%s", evidence] as bounded
+    then "printf" with arguments ["%s", evidence] as bounded # execute-allow: lint.unused_binding intentional evidence capture keeps model input off stdout
     if live is true
-      then llm.ask with model generator_model and instruction "Draft a concise review artifact from bounded local evidence. Cite the supplied source ID, include the checked fact verbatim, distinguish fact from interpretation, and make no external change." and env_file env_file as raw
+      then llm.ask with model generator_model and instruction "Draft a concise review artifact from bounded local evidence. Cite the supplied source ID, include the checked fact verbatim, distinguish fact from interpretation, and make no external change." and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Draft a concise review artifact from bounded local evidence. Cite the supplied source ID, include the checked fact verbatim, distinguish fact from interpretation, and make no external change." and fixture draft_fixture_path and env_file env_file as raw
     then parse json as generated
     take text at "/text" from generated as draft
     run "jq" with arguments ["-n", "-r", "--arg", "draft", draft, "--arg", "evidence_id", evidence_id, "--arg", "required_text", required_text, "--", "if ($draft|startswith(\"EVIDENCE:\")) and ($draft|contains($evidence_id)) and ($draft|contains($required_text)) then $draft else error(\"draft must cite evidence and preserve checked fact\") end"] as checked
-    run "jq" with arguments ["-n", "-c", "-S", "--arg", "workflow", "survey-minority-themes", "--arg", "status", "draft-for-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "draft", checked, "--arg", "action", "A human owner reviews the evidence-linked draft before acting.", "--", "{workflow:$workflow,status:$status,classification:$classification,confidence_percent:$confidence,evidence_excerpt:$evidence,proposed_analysis:$draft,action:$action}"] as report
+    run "jq" with arguments ["-n", "-c", "-S", "--arg", "workflow", "survey-minority-themes", "--arg", "status", "draft-for-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "draft", checked, "--arg", "action", "A human owner reviews the evidence-linked draft before acting.", "--", "{workflow:$workflow,status:$status,classification:$classification,confidence_percent:$confidence,evidence_excerpt:$evidence,proposed_analysis:$draft,action:$action}"] as report # execute-allow: lint.unused_binding intentional serialized report capture keeps review data off stdout before save
     then save to report_path
   otherwise
     run "jq" with arguments ["-n", "-c", "-S", "--arg", "workflow", "survey-minority-themes", "--arg", "status", "needs-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "reason", "Classifier selected human-review; no generation was requested.", "--arg", "action", "A reviewer determines whether any draft is appropriate.", "--", "{workflow:$workflow,status:$status,classification:$classification,confidence_percent:$confidence,evidence_excerpt:$evidence,proposed_analysis:null,reason:$reason,action:$action}"] as report

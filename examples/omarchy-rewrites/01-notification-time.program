@@ -6,7 +6,7 @@
 # Mapping: capture date even on ordinary failure, remove command-substitution
 # trailing LF bytes using jq, then pass the one literal summary argument.
 # jq performs only text normalization; notification control remains here.
-accept ignored_arguments as list of text from arguments
+accept ignored_arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 run "date" with arguments ["+%A %H:%M  ·  %d %B %Y  ·  Week %V"] and keep status as date_status
 then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as summary
 run "omarchy-notification-send" with arguments ["-g", "", "-u", "low", summary]

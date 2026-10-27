@@ -14,7 +14,7 @@ define a program named report_failure
 define a program named write_if_missing
   accept path as text
   accept content as text
-  run fs.write_atomic with path path and expected_content_hash "missing" and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+  run fs.write_atomic with path path and expected_content_hash "missing" and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status # execute-allow: lint.unused_binding intentional applet-result capture; status handling remains in the following branch
   if write_status is not 0
     run program report_failure with operation "atomic file creation" and path path and status write_status
 
@@ -24,13 +24,13 @@ define a program named save_text_atomic
   run fs.snapshot with path path as prior_snapshot and keep status as snapshot_status
   if snapshot_status is 0
     take text at "/value/content_hash" from prior_snapshot as expected_hash
-    run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+    run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status # execute-allow: lint.unused_binding intentional applet-result capture; status handling remains in the following branch
     if write_status is not 0
       run program report_failure with operation "atomic file update" and path path and status write_status
   otherwise
     take text at "/outcome" from prior_snapshot as outcome
     if outcome is "absence"
-      run fs.write_atomic with path path and expected_content_hash "missing" and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+      run fs.write_atomic with path path and expected_content_hash "missing" and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status # execute-allow: lint.unused_binding intentional applet-result capture; status handling remains in the following branch
       if write_status is not 0
         run program report_failure with operation "atomic file creation" and path path and status write_status
     otherwise
@@ -102,7 +102,7 @@ define a program named remove_file_cas
     if temporary_directory_status is 0
       run text.trim_final_lf with text temporary_directory_text as temporary_directory
       run text.concat with parts [temporary_directory, "/journal"] as journal
-      run fs.transaction with journal journal and operations operations as transaction_result and keep status as transaction_status
+      run fs.transaction with journal journal and operations operations as transaction_result and keep status as transaction_status # execute-allow: lint.unused_binding intentional transaction-output capture; its status controls the failure route
       if transaction_status is not 0
         run program report_failure with operation "empty obsolete registry removal (journal retained)" and path journal and status transaction_status
     otherwise
@@ -133,16 +133,16 @@ define a program named register_generated
         if obsolete_length_status is 0
           if remaining_obsolete is "0\n"
             if obsolete_link_json is not "null"
-              run fs.unlink_checked with path obsolete and expected_snapshot obsolete_snapshot_token as unlink_result and keep status as unlink_status
+              run fs.unlink_checked with path obsolete and expected_snapshot obsolete_snapshot_token as unlink_result and keep status as unlink_status # execute-allow: lint.unused_binding intentional unlink-output capture; its status controls the failure route
               if unlink_status is not 0
                 run program report_failure with operation "obsolete symlink unlink" and path obsolete and status unlink_status
             otherwise
               run program remove_file_cas with home home and path obsolete and expected_hash obsolete_hash
           otherwise
             if obsolete_link_json is not "null"
-              run fs.write_atomic with path obsolete and expected_content_hash obsolete_hash and symlink_policy "replace" and permissions_policy "preserve" and content clean_obsolete as obsolete_write and keep status as obsolete_write_status
+              run fs.write_atomic with path obsolete and expected_content_hash obsolete_hash and symlink_policy "replace" and permissions_policy "preserve" and content clean_obsolete as obsolete_write and keep status as obsolete_write_status # execute-allow: lint.unused_binding intentional filesystem-output capture; its status controls the failure route
             otherwise
-              run fs.write_atomic with path obsolete and expected_content_hash obsolete_hash and symlink_policy "preserve" and permissions_policy "preserve" and content clean_obsolete as obsolete_write and keep status as obsolete_write_status
+              run fs.write_atomic with path obsolete and expected_content_hash obsolete_hash and symlink_policy "preserve" and permissions_policy "preserve" and content clean_obsolete as obsolete_write and keep status as obsolete_write_status # execute-allow: lint.unused_binding intentional filesystem-output capture; its status controls the failure route
             if obsolete_write_status is not 0
               run program report_failure with operation "obsolete registry update" and path obsolete and status obsolete_write_status
         otherwise
@@ -184,7 +184,7 @@ define a program named register_generated
         run "printf" with arguments ["%s", compact_registry]
         then "jq" with arguments ["."] as new_registry and keep status as registry_format_status
         if registry_format_status is 0
-          run fs.write_atomic with path registry and expected_content_hash registry_hash and symlink_policy "preserve" and permissions_policy "preserve" and content new_registry as registry_write and keep status as registry_write_status
+          run fs.write_atomic with path registry and expected_content_hash registry_hash and symlink_policy "preserve" and permissions_policy "preserve" and content new_registry as registry_write and keep status as registry_write_status # execute-allow: lint.unused_binding intentional filesystem-output capture; its status controls the failure route
           if registry_write_status is not 0
             run program report_failure with operation "extension registry update" and path registry and status registry_write_status
         otherwise
@@ -206,7 +206,7 @@ define a program named install_generated
     run json.parse with text generated_content and keep status as parse_status
     if parse_status is 0
       run json.parse with text generated_content as generated_document
-      run program read_json_string_property with document generated_document and pointer "/type" and path generated as theme_type_source
+      run program read_json_string_property with document generated_document and pointer "/type" and path generated as theme_type_source # execute-allow: lint.unused_binding intentional pipeline capture for the following JSON parse
       then parse json as theme_type_value
       take text at "" from theme_type_value as theme_type
       run text.trim_final_lf with text theme_type as normalized_type
@@ -352,7 +352,7 @@ define a program named set_editor_theme
       run program report_failure with operation "editor presence check" and path editor and status present
 
 accept home as text from public environment "HOME"
-accept ignored_arguments as list of text from arguments
+accept ignored_arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 # Mapping allows safe fake Cursor execution; upstream hardcodes /usr/bin/cursor.
 accept cursor_command as text with default "/usr/bin/cursor"
 run "printf" with arguments ["%s/.local/state/omarchy/current/theme/vscode.json", home] as descriptor

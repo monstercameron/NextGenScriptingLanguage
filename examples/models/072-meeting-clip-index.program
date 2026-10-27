@@ -14,7 +14,7 @@ run cat with path source_path
 then awk with program "$0 ~ /MEET-[0-9]+/ { print }"
 then sort with flags ["-k1,1"] as evidence
 if live is true
-  then jev.classify with question "Which supplied transcript cues make useful timestamped review clips for the meeting index?" and labels ["clip-candidate", "needs-human"] and minimum 80 and env_file env_file as class_raw
+  then jev.classify with question "Which supplied transcript cues make useful timestamped review clips for the meeting index?" and labels ["clip-candidate", "needs-human"] and minimum 80 and env_file env_file as class_raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Which supplied transcript cues make useful timestamped review clips for the meeting index?" and labels ["clip-candidate", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
 then parse json as classification
@@ -25,7 +25,7 @@ if accepted is true
   if label is "clip-candidate"
     then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
     if live is true
-      then llm.ask with model generator_model and instruction "Propose a small timestamped clip index using only supplied MEET-* cues. Cite IDs and exact times, preserve speaker context, and flag privacy/consent review before any excerpt is shared." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Propose a small timestamped clip index using only supplied MEET-* cues. Cite IDs and exact times, preserve speaker context, and flag privacy/consent review before any excerpt is shared." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Propose a small timestamped clip index using only supplied MEET-* cues. Cite IDs and exact times, preserve speaker context, and flag privacy/consent review before any excerpt is shared." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as draft_result

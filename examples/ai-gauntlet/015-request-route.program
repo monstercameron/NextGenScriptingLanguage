@@ -10,32 +10,32 @@ accept schema_path as text with default "fixtures/015/schema.json"
 try
   read source_path
   if live is true
-    then jev.judge with question "Does the request explicitly name a file, a review-only action and a bounded duration?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+    then jev.judge with question "Does the request explicitly name a file, a review-only action and a bounded duration?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
   otherwise
     then jev.judge with question "Does the request explicitly name a file, a review-only action and a bounded duration?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
   then parse json as verdict
   take boolean at "/accepted" from verdict as accepted
-  take integer at "/confidence_percent" from verdict as confidence
+  take integer at "/confidence_percent" from verdict as confidence # execute-allow: lint.unused_binding intentional typed take validates the model confidence field
   take boolean at "/decision" from verdict as decision
   if accepted is true
     if decision is true
       read schema_path as schema_text
       read source_path
       if live is true
-        then llm.extract with model "gpt-6-luna" and instruction "Extract a review-only request. Route must be docs or code; action must be review; duration is integer minutes." and schema schema_text and timeout_ms 3000 and max_bytes 65536 as result_raw
+        then llm.extract with model "gpt-6-luna" and instruction "Extract a review-only request. Route must be docs or code; action must be review; duration is integer minutes." and schema schema_text and timeout_ms 3000 and max_bytes 65536 as result_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
       otherwise
         then llm.extract with model "gpt-6-luna" and instruction "Extract a review-only request. Route must be docs or code; action must be review; duration is integer minutes." and schema schema_text and timeout_ms 3000 and max_bytes 65536 and fixture result_fixture as result_raw
       then parse json as generated
       take json at "/value" from generated as content
-      take text at "/value/path" from generated as field_path
-      take text at "/value/route" from generated as field_route
-      take text at "/value/action" from generated as field_action
-      take integer at "/value/minutes" from generated as field_minutes
+      take text at "/value/path" from generated as field_path # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/route" from generated as field_route # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/action" from generated as field_action # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take integer at "/value/minutes" from generated as field_minutes # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
       run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"candidate-for-review"} and pointer "/result" and value content
     otherwise
       run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
   otherwise
     run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
-catch failure
+catch failure # execute-allow: lint.unused_binding intentional catch control binding; recovery uses the handler path rather than the error value
   run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
 then save to "out/015.json"

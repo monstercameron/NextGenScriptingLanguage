@@ -4,7 +4,7 @@
 # explicit follow-symlink policy and compare-and-swap. jq adapts compositor JSON
 # and checks the Bash-compatible workspace id spelling.
 accept home as text from public environment "HOME"
-accept ignored_arguments as list of text from arguments
+accept ignored_arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 
 define a program named report_file_failure
   accept path as text
@@ -17,7 +17,7 @@ define a program named save_workspace_state
   accept path as text
   accept content as text
   accept expected_hash as text
-  run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+  run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status # execute-allow: lint.unused_binding intentional applet-result capture; status handling remains in the following branch
   if write_status is not 0
     run program report_file_failure with path path and operation "workspace layout save" and status write_status
 
@@ -28,7 +28,7 @@ take text at "/id" from workspace as workspace_id
 take boolean at "/valid" from workspace as valid_id
 if valid_id is true
   run "hyprctl" with arguments ["activeworkspace", "-j"] and keep status as layout_status
-  then "jq" with arguments ["-sc", "{layout: (map(.tiledLayout | tostring) | join(\"\\n\") | sub(\"\\n+$\"; \"\"))}"] as layout_json and keep status as layout_parse_status
+  then "jq" with arguments ["-sc", "{layout: (map(.tiledLayout | tostring) | join(\"\\n\") | sub(\"\\n+$\"; \"\"))}"] as layout_json and keep status as layout_parse_status # execute-allow: lint.unused_binding intentional JSON pipeline capture while its status is checked separately
   if layout_parse_status is 0
     then parse json as layout_data
     take text at "/layout" from layout_data as current_layout

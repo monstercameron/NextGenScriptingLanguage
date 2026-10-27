@@ -13,7 +13,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then awk with delimiter "\t" and program "NR > 1 { printf \"%s\\tchars=%d\\tplaceholders=%s\\t%s\\n\", $1, length($4), $3, $4 }" as evidence
 if live is true
-  then jev.classify with question "Which interface messages may need a plain-language review while preserving placeholders and the stated length limit?" and labels ["plain-language-risk", "needs-human"] and minimum 80 and env_file env_file as class_raw
+  then jev.classify with question "Which interface messages may need a plain-language review while preserving placeholders and the stated length limit?" and labels ["plain-language-risk", "needs-human"] and minimum 80 and env_file env_file as class_raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Which interface messages may need a plain-language review while preserving placeholders and the stated length limit?" and labels ["plain-language-risk", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
 then parse json as classification
@@ -24,7 +24,7 @@ if accepted is true
   if label is "plain-language-risk"
     then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
     if live is true
-      then llm.ask with model generator_model and instruction "Draft a plain-language review for the supplied messages. Preserve each MSG-* identifier, every literal placeholder, the meaning, and the 80-character limit; list a candidate separately from the source text and cite the ID." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Draft a plain-language review for the supplied messages. Preserve each MSG-* identifier, every literal placeholder, the meaning, and the 80-character limit; list a candidate separately from the source text and cite the ID." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Draft a plain-language review for the supplied messages. Preserve each MSG-* identifier, every literal placeholder, the meaning, and the 80-character limit; list a candidate separately from the source text and cite the ID." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as draft_result

@@ -3,7 +3,7 @@
 # jq supplies text/regex/number operations; awk retains upstream percent parsing.
 # See fixture README for finite-output, redirection, arithmetic and save limits.
 accept action as text from argument 1 with default ""
-accept ignored_arguments as list of text from arguments
+accept ignored_arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 accept runtime_directory as text from public environment "XDG_RUNTIME_DIR" with default "/tmp"
 
 define a program named percent
@@ -45,7 +45,7 @@ define a program named save_debounce_timestamp
   accept path as text
   accept content as text
   accept expected_hash as text
-  run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+  run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status # execute-allow: lint.unused_binding intentional applet-result capture; status handling remains in the following branch
   if write_status is not 0
     run program report_file_failure with path path and operation "mute debounce save" and status write_status
 

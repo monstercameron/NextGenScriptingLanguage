@@ -13,7 +13,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then jq with flags ["-c", "-S"] and filter "[.findings|sort_by(.rule,.id)|group_by(.rule)[]|{rule:.[0].rule,count:length,ids:map(.id),locations:map(.location)}] | {scan:\"SCAN-44\",themes:.}" as evidence
 if live is true
-  then jev.classify with question "Do the finding records form repeatable rule-level themes suitable for a human triage plan?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw
+  then jev.classify with question "Do the finding records form repeatable rule-level themes suitable for a human triage plan?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Do the finding records form repeatable rule-level themes suitable for a human triage plan?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
 then parse json as decision
@@ -25,7 +25,7 @@ if accepted is true
     run cat with path source_path
     then jq with flags ["-c", "-S"] and filter "[.findings|sort_by(.rule,.id)|group_by(.rule)[]|{rule:.[0].rule,count:length,ids:map(.id),locations:map(.location)}] | {scan:\"SCAN-44\",themes:.}"
     if live is true
-      then llm.ask with model generator_model and instruction "Summarize SCAN-44 findings by exact rule group, retaining every finding ID and location. Suggest review order only; do not modify source." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Summarize SCAN-44 findings by exact rule group, retaining every finding ID and location. Suggest review order only; do not modify source." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Summarize SCAN-44 findings by exact rule group, retaining every finding ID and location. Suggest review order only; do not modify source." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as generated

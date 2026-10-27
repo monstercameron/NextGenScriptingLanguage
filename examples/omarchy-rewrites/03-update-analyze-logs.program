@@ -3,7 +3,7 @@
 # The upstream path is fixed; --input update_log=... permits an isolated log.
 # Upstream ignores positional arguments, so retain them without interpreting them.
 accept update_log as text with default "/tmp/omarchy-update.log"
-accept ignored_arguments as list of text from arguments
+accept ignored_arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 run "grep" with arguments ["-q", "Updating linux initcpios", update_log] and keep status as update_seen
 if update_seen is 0
   run "grep" with arguments ["-q", "Initcpio image generation successful", update_log] and keep status as generation_ok

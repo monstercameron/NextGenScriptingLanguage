@@ -15,16 +15,16 @@ read schema_path as schema
 run cat with path source_path
 then jq with flags ["-c", "-S"] and filter "{case,rules,evidence}" as evidence
 if live is true
-  then llm.extract with model generator_model and instruction "Return a structured matrix of each supplied policy rule and its directly linked evidence IDs. Leave rules with no link uncovered; do not decide compliance." and schema schema and env_file env_file as raw
+  then llm.extract with model generator_model and instruction "Return a structured matrix of each supplied policy rule and its directly linked evidence IDs. Leave rules with no link uncovered; do not decide compliance." and schema schema and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then llm.extract with model generator_model and instruction "Return a structured matrix of each supplied policy rule and its directly linked evidence IDs. Leave rules with no link uncovered; do not decide compliance." and schema schema and fixture extract_fixture_path and env_file env_file as raw
 then parse json as extracted
 take text at "/value/route" from extracted as route
 take text at "/value/evidence_id" from extracted as evidence_id
 take text at "/value/summary" from extracted as summary
-run jq with flags ["-n", "-e", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id] and filter "($evidence | contains($evidence_id))" as citation_check
+run jq with flags ["-n", "-e", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id] and filter "($evidence | contains($evidence_id))" as citation_check # execute-allow: lint.unused_binding intentional validation output capture; jq -e status enforces the citation check
 if route is "draft"
-  run jq with flags ["-n", "-c", "-S", "--arg", "artifact", "policy_evidence_map", "--arg", "status", "draft-for-human-review", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id, "--arg", "coverage", summary, "--arg", "action", "A reviewer verifies cited records before relying on this extraction."] and filter "{artifact:$artifact,status:$status,evidence_excerpt:$evidence,evidence_id:$evidence_id,coverage:$coverage,action:$action}" as report
+  run jq with flags ["-n", "-c", "-S", "--arg", "artifact", "policy_evidence_map", "--arg", "status", "draft-for-human-review", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id, "--arg", "coverage", summary, "--arg", "action", "A reviewer verifies cited records before relying on this extraction."] and filter "{artifact:$artifact,status:$status,evidence_excerpt:$evidence,evidence_id:$evidence_id,coverage:$coverage,action:$action}" as report # execute-allow: lint.unused_binding intentional serialized report capture keeps review data off stdout before save
 otherwise
   run jq with flags ["-n", "-c", "-S", "--arg", "artifact", "policy_evidence_map", "--arg", "status", "needs-human-review", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id, "--arg", "coverage", summary, "--arg", "action", "A reviewer verifies cited records before relying on this extraction."] and filter "{artifact:$artifact,status:$status,evidence_excerpt:$evidence,evidence_id:$evidence_id,coverage:$coverage,action:$action}" as report
 then save to report_path

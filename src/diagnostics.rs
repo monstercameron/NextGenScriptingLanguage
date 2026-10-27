@@ -1213,6 +1213,7 @@ fn collect_lint_diagnostics(
         line_starts,
         diagnostics,
         listener_binding,
+        program.trigger.as_ref(),
     );
     for definition in program.definitions.values() {
         collect_step_lints(source, &definition.steps, line_starts, diagnostics);
@@ -1223,6 +1224,7 @@ fn collect_lint_diagnostics(
             &definition.steps,
             line_starts,
             diagnostics,
+            None,
             None,
         );
     }
@@ -1291,9 +1293,16 @@ fn collect_lint_diagnostics(
             diagnostics.push(diagnostic);
         }
         if let Some(Value::List(arguments)) = call.parameters.get("arguments") {
+            let mini_language_arguments = call
+                .direct
+                .then(|| mini_language_program_arguments(&call.operation, arguments))
+                .flatten();
             for (index, argument) in arguments.iter().enumerate() {
                 if call.direct
-                    && shell_command_argument_index(&call.operation, arguments) == Some(index)
+                    && (shell_command_argument_index(&call.operation, arguments) == Some(index)
+                        || mini_language_arguments
+                            .as_ref()
+                            .is_some_and(|indices| indices.contains(&index)))
                 {
                     continue;
                 }
@@ -1517,6 +1526,175 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         .flatten()
 }
 
+fn mini_language_program_arguments(
+    executable: &str,
+    arguments: &[Value],
+) -> Option<BTreeSet<usize>> {
+    fn executable_name(value: &str) -> &str {
+        std::path::Path::new(value)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(value)
+    }
+    fn string_argument(arguments: &[Value], index: usize) -> Option<&str> {
+        match arguments.get(index)? {
+            Value::String(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    match executable_name(executable) {
+        "jq" => {
+            let mut index = 0;
+            while index < arguments.len() {
+                let Some(argument) = string_argument(arguments, index) else {
+                    return None;
+                };
+                if argument == "--" {
+                    return string_argument(arguments, index + 1)
+                        .map(|_| BTreeSet::from([index + 1]));
+                }
+                if !argument.starts_with('-') || argument == "-" {
+                    return Some(BTreeSet::from([index]));
+                }
+                if matches!(
+                    argument,
+                    "-n" | "--null-input"
+                        | "-r"
+                        | "--raw-output"
+                        | "-j"
+                        | "--join-output"
+                        | "-c"
+                        | "--compact-output"
+                        | "-C"
+                        | "--color-output"
+                        | "-M"
+                        | "--monochrome-output"
+                        | "-S"
+                        | "--sort-keys"
+                        | "-s"
+                        | "--slurp"
+                        | "--seq"
+                        | "--stream"
+                        | "--stream-errors"
+                        | "--tab"
+                        | "--unbuffered"
+                        | "--raw-output0"
+                        | "--run-tests"
+                        | "-R"
+                        | "--raw-input"
+                        | "-e"
+                        | "--exit-status"
+                        | "-a"
+                        | "--ascii-output"
+                ) {
+                    index += 1;
+                    continue;
+                }
+                if matches!(
+                    argument,
+                    "--arg" | "--argjson" | "--argfile" | "--rawfile" | "--slurpfile"
+                ) {
+                    arguments.get(index + 1)?;
+                    arguments.get(index + 2)?;
+                    index += 3;
+                    continue;
+                }
+                if matches!(argument, "--indent" | "-L") {
+                    arguments.get(index + 1)?;
+                    index += 2;
+                    continue;
+                }
+                if [
+                    "--arg=",
+                    "--argjson=",
+                    "--argfile=",
+                    "--rawfile=",
+                    "--slurpfile=",
+                    "--indent=",
+                    "--library-path=",
+                ]
+                .iter()
+                .any(|option| argument.starts_with(option))
+                {
+                    index += 1;
+                    continue;
+                }
+                // Unknown or script-file options make the filter position ambiguous.
+                return None;
+            }
+            None
+        }
+        "awk" | "gawk" | "mawk" | "nawk" => {
+            let mut index = 0;
+            let mut programs = BTreeSet::new();
+            let mut inline_program = false;
+            while index < arguments.len() {
+                let Some(argument) = string_argument(arguments, index) else {
+                    return inline_program.then_some(programs);
+                };
+                if argument == "--" {
+                    if inline_program {
+                        return Some(programs);
+                    }
+                    return string_argument(arguments, index + 1)
+                        .map(|_| BTreeSet::from([index + 1]));
+                }
+                if !argument.starts_with('-') || argument == "-" {
+                    if inline_program {
+                        return Some(programs);
+                    }
+                    return Some(BTreeSet::from([index]));
+                }
+                if matches!(argument, "-e" | "--source") {
+                    string_argument(arguments, index + 1)?;
+                    programs.insert(index + 1);
+                    inline_program = true;
+                    index += 2;
+                    continue;
+                }
+                if matches!(argument, "-f" | "--file") {
+                    // A file path is data, not an inline awk program.
+                    return None;
+                }
+                if matches!(
+                    argument,
+                    "-F" | "-v" | "-W" | "--assign" | "--field-separator"
+                ) {
+                    arguments.get(index + 1)?;
+                    index += 2;
+                    continue;
+                }
+                if argument.starts_with("--source=") {
+                    programs.insert(index);
+                    inline_program = true;
+                    index += 1;
+                    continue;
+                }
+                if argument.starts_with("--file=") {
+                    return None;
+                }
+                if argument.starts_with("--assign=")
+                    || argument.starts_with("--field-separator=")
+                    || argument.starts_with("-F")
+                    || argument.starts_with("-v")
+                    || argument.starts_with("-W")
+                {
+                    if argument.starts_with("--source=") {
+                        programs.insert(index);
+                        inline_program = true;
+                    }
+                    index += 1;
+                    continue;
+                }
+                return None;
+            }
+            inline_program.then_some(programs)
+        }
+        _ => None,
+    }
+}
+
 fn shell_expansion_argument_fix(
     source: &str,
     program: &Program,
@@ -1544,6 +1722,15 @@ fn shell_expansion_argument_fix(
         return None;
     }
     let (template, variables) = shell_variable_template(value)?;
+    if variables.iter().any(|variable| {
+        program
+            .inputs
+            .iter()
+            .find(|input| input.name == *variable)
+            .is_some_and(|input| !format_input_is_scalar(input.kind))
+    }) {
+        return None;
+    }
     let argument_span =
         parameter_list_item_span_at(source, line, "arguments", argument_index, line_starts)?;
     let insert_at = line_starts.start(line);
@@ -1556,15 +1743,16 @@ fn shell_expansion_argument_fix(
         let binding = variable_bindings
             .entry(variable.clone())
             .or_insert_with(|| {
-                fresh_binding_name(
-                    source,
-                    &format!("execute_{}", variable.to_ascii_lowercase()),
-                )
+                if program.inputs.iter().any(|input| input.name == *variable) {
+                    variable.clone()
+                } else {
+                    fresh_binding_name(
+                        source,
+                        &format!("execute_{}", variable.to_ascii_lowercase()),
+                    )
+                }
             });
-        if !declarations
-            .iter()
-            .any(|decl: &String| decl.contains(binding.as_str()))
-        {
+        if !program.inputs.iter().any(|input| input.name == *variable) {
             declarations.push(format!(
                 "accept {binding} as text from environment {} with default \"\"\n",
                 serde_json::to_string(variable).ok()?
@@ -1815,6 +2003,15 @@ fn shell_expansion_value_fix(
         return None;
     }
     let (template, variables) = shell_variable_template(value)?;
+    if variables.iter().any(|variable| {
+        program
+            .inputs
+            .iter()
+            .find(|input| input.name == *variable)
+            .is_some_and(|input| !format_input_is_scalar(input.kind))
+    }) {
+        return None;
+    }
     let span = match item_index {
         Some(index) => parameter_list_item_span_at(source, line, parameter, index, line_starts)?,
         None => parameter_value_span_at(source, line, parameter, line_starts)?,
@@ -1829,15 +2026,16 @@ fn shell_expansion_value_fix(
         let binding = variable_bindings
             .entry(variable.clone())
             .or_insert_with(|| {
-                fresh_binding_name(
-                    source,
-                    &format!("execute_{}", variable.to_ascii_lowercase()),
-                )
+                if program.inputs.iter().any(|input| input.name == *variable) {
+                    variable.clone()
+                } else {
+                    fresh_binding_name(
+                        source,
+                        &format!("execute_{}", variable.to_ascii_lowercase()),
+                    )
+                }
             });
-        if !declarations
-            .iter()
-            .any(|decl: &String| decl.contains(binding.as_str()))
-        {
+        if !program.inputs.iter().any(|input| input.name == *variable) {
             declarations.push(format!(
                 "accept {binding} as text from environment {} with default \"\"\n",
                 serde_json::to_string(variable).ok()?
@@ -1866,6 +2064,17 @@ fn shell_expansion_value_fix(
     })
 }
 
+fn format_input_is_scalar(kind: crate::ast::InputType) -> bool {
+    matches!(
+        kind,
+        crate::ast::InputType::Text
+            | crate::ast::InputType::Integer
+            | crate::ast::InputType::UnsignedInteger
+            | crate::ast::InputType::Usize
+            | crate::ast::InputType::Boolean
+    )
+}
+
 fn collect_unused_names(
     source: &str,
     inputs: &[crate::ast::InputDeclaration],
@@ -1873,9 +2082,37 @@ fn collect_unused_names(
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
     implicit_listener_record: Option<&str>,
+    trigger: Option<&crate::ast::Trigger>,
 ) {
     let mut reads = BTreeSet::new();
     collect_step_reads(steps, &mut reads);
+    if let Some(crate::ast::Trigger::Listen {
+        source: crate::ast::ListenSource::Applet(invocation),
+        ..
+    }) = trigger
+    {
+        fn collect_value_reads(value: &Value, reads: &mut BTreeSet<String>) {
+            match value {
+                Value::Reference(name) => {
+                    reads.insert(name.clone());
+                }
+                Value::List(values) => {
+                    for value in values {
+                        collect_value_reads(value, reads);
+                    }
+                }
+                Value::Record(values) => {
+                    for value in values.values() {
+                        collect_value_reads(value, reads);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for parameter in invocation.parameters.values() {
+            collect_value_reads(parameter, &mut reads);
+        }
+    }
     for input in inputs {
         if implicit_listener_record != Some(input.name.as_str()) && !reads.contains(&input.name) {
             diagnostics.push(Diagnostic {
@@ -1883,7 +2120,12 @@ fn collect_unused_names(
                 code: "lint.unused_input".into(),
                 message: format!("input {:?} is declared but never read", input.name),
                 span: binding_span(source, line_starts, input.line, &input.name),
-                fixes: Vec::new(),
+                fixes: vec![allow_warning_fix(
+                    source,
+                    line_starts,
+                    input.line,
+                    "lint.unused_input",
+                )],
                 related: Vec::new(),
             });
         }
@@ -1892,16 +2134,135 @@ fn collect_unused_names(
     collect_step_bindings(steps, &mut bindings);
     for (name, line) in bindings {
         if implicit_listener_record != Some(name.as_str()) && !reads.contains(&name) {
+            let mut fixes = unused_pipeline_binding_fix(source, steps, line_starts, line, &name)
+                .into_iter()
+                .collect::<Vec<_>>();
+            fixes.push(allow_warning_fix(
+                source,
+                line_starts,
+                line,
+                "lint.unused_binding",
+            ));
             diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Warning,
                 code: "lint.unused_binding".into(),
                 message: format!("binding {name:?} is never read"),
                 span: binding_span(source, line_starts, line, &name),
-                fixes: Vec::new(),
+                fixes,
                 related: Vec::new(),
             });
         }
     }
+}
+
+fn allow_warning_fix(
+    source: &str,
+    line_starts: &LineStarts,
+    line: usize,
+    code: &str,
+) -> SuggestedFix {
+    let line_span = line_starts.span(source, line);
+    let line_text = &source[line_span.start_byte..line_span.end_byte];
+    let mut in_string = false;
+    let mut escaped = false;
+    let comment_offset = line_text.bytes().enumerate().find_map(|(index, byte)| {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            None
+        } else if byte == b'"' {
+            in_string = true;
+            None
+        } else if byte == b'#' {
+            Some(index)
+        } else {
+            None
+        }
+    });
+    let insert_at = comment_offset.map_or(line_span.end_byte, |offset| {
+        line_span.start_byte + offset + 1
+    });
+    let replacement = if comment_offset.is_some() {
+        format!(" execute-allow: {code} ")
+    } else {
+        format!(" # execute-allow: {code}")
+    };
+    let span = line_starts.span_at(source, insert_at, insert_at, SpanPrecision::Token);
+    SuggestedFix {
+        message: "mark this unused name as intentional".into(),
+        edits: vec![TextEdit { span, replacement }],
+    }
+}
+
+fn unused_pipeline_binding_fix(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    line: usize,
+    name: &str,
+) -> Option<SuggestedFix> {
+    let (index, call, connection) = steps.iter().enumerate().find_map(|(index, step)| {
+        if step.line != line {
+            return None;
+        }
+        match &step.kind {
+            StepKind::Invoke { call, connection } if call.binding.as_deref() == Some(name) => {
+                Some((index, call, connection))
+            }
+            _ => None,
+        }
+    })?;
+    // Dropping a binding is behavior-neutral only when a later step consumes
+    // this command's stdout as pipeline input. Otherwise the binding changes
+    // the normal implicit-stdout behavior of the command.
+    fn contains_reference(value: &Value) -> bool {
+        match value {
+            Value::Reference(_) => true,
+            Value::List(values) => values.iter().any(contains_reference),
+            Value::Record(values) => values.values().any(contains_reference),
+            _ => false,
+        }
+    }
+    let literal_printf = call.direct
+        && call.operation == "printf"
+        && call.parameters.len() == 1
+        && matches!(
+            call.parameters.get("arguments"),
+            Some(Value::List(arguments))
+                if arguments.iter().all(|argument| matches!(argument, Value::String(_)))
+        );
+    if index != 0
+        || *connection != Connection::Start
+        || !literal_printf
+        || call.sensitive_binding
+        || call.marks_sensitive_output()
+        || call.parameters.values().any(contains_reference)
+        || !crate::ast::has_stdout_consumer(steps, index + 1)
+    {
+        return None;
+    }
+    let words = line_words_from_start(source, line_starts.start(line));
+    let words = words
+        .windows(2)
+        .filter(|pair| !pair[0].3 && !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name)
+        .last()?;
+    let as_word = &words[0];
+    let name_word = &words[1];
+    let mut start = as_word.1;
+    while start > line_starts.start(line) && source.as_bytes()[start - 1] == b' ' {
+        start -= 1;
+    }
+    let span = line_starts.span_at(source, start, name_word.2, SpanPrecision::Token);
+    Some(SuggestedFix::replace(
+        "remove the unused binding from this literal printf pipeline stage",
+        span,
+        "",
+    ))
 }
 
 fn binding_span(source: &str, line_starts: &LineStarts, line: usize, name: &str) -> SourceSpan {
@@ -2121,6 +2482,16 @@ fn collect_step_reads(steps: &[Step], reads: &mut BTreeSet<String>) {
         }
         for item in values {
             value(item, reads);
+        }
+    }
+    // A task group's collected result contains each task invocation's named
+    // output. Those task-local names are reads when the group result itself is
+    // consumed, even though the names do not appear elsewhere in source.
+    for step in steps {
+        if let StepKind::TaskGroup { binding, tasks, .. } = &step.kind {
+            if reads.contains(binding) {
+                reads.extend(tasks.iter().filter_map(|task| task.binding.clone()));
+            }
         }
     }
 }

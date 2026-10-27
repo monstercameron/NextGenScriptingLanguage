@@ -20,7 +20,7 @@ then jq with filter ". as $s | select(.source_id == $source_id) | {question:.que
 then parse json as classifier_context
 take integer at "/context_count" from classifier_context as source_context_count
 if live is true
-  then jev.classify with question "Propose curator-approved themes while retaining low-signal and contrasting transcript spans." and labels ["theme_with_counterexample", "uncoded_span"] and minimum 75 and env_file env_file_path as raw
+  then jev.classify with question "Propose curator-approved themes while retaining low-signal and contrasting transcript spans." and labels ["theme_with_counterexample", "uncoded_span"] and minimum 75 and env_file env_file_path as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Propose curator-approved themes while retaining low-signal and contrasting transcript spans." and labels ["theme_with_counterexample", "uncoded_span"] and minimum 75 and fixture classifier_fixture_path and env_file env_file_path as raw
 then parse json as classification
@@ -33,7 +33,7 @@ if accepted is true
     run cat with path source_path
     then jq with filter ". as $s | select(.source_id == $source_id) | {question:.question,scope:.scope,source_id:.source_id,source_ref:.source_ref,context_count:(.oral_history_spans|length),facts:.facts,evidence:(.oral_history_spans|map(select(.kind == \"theme_with_counterexample\"))|sort_by(.timestamp))}" and flags ["-c", "-S", "--arg", "source_id", source_id]
     if live is true
-      then llm.extract with model generator_model and instruction "Index oral-history themes with timestamps and counterexamples. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set span_id to a concise value grounded in the supplied facts." and schema schema and env_file env_file_path as generated_raw
+      then llm.extract with model generator_model and instruction "Index oral-history themes with timestamps and counterexamples. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set span_id to a concise value grounded in the supplied facts." and schema schema and env_file env_file_path as generated_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.extract with model generator_model and instruction "Index oral-history themes with timestamps and counterexamples. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set span_id to a concise value grounded in the supplied facts." and schema schema and fixture draft_fixture_path and env_file env_file_path as generated_raw
     then parse json as generated

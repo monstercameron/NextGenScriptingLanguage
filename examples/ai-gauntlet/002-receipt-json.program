@@ -10,32 +10,32 @@ accept schema_path as text with default "fixtures/002/schema.json"
 try
   read source_path
   if live is true
-    then jev.judge with question "Does this receipt explicitly provide a customer name, ISO date, USD amount and currency?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+    then jev.judge with question "Does this receipt explicitly provide a customer name, ISO date, USD amount and currency?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
   otherwise
     then jev.judge with question "Does this receipt explicitly provide a customer name, ISO date, USD amount and currency?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
   then parse json as verdict
   take boolean at "/accepted" from verdict as accepted
-  take integer at "/confidence_percent" from verdict as confidence
+  take integer at "/confidence_percent" from verdict as confidence # execute-allow: lint.unused_binding intentional typed take validates the model confidence field
   take boolean at "/decision" from verdict as decision
   if accepted is true
     if decision is true
       read schema_path as schema_text
       read source_path
       if live is true
-        then llm.extract with model "gpt-6-luna" and instruction "Extract the customer name, date, currency and amount in integer cents, using only the receipt." and schema schema_text and timeout_ms 3000 and max_bytes 65536 as result_raw
+        then llm.extract with model "gpt-6-luna" and instruction "Extract the customer name, date, currency and amount in integer cents, using only the receipt." and schema schema_text and timeout_ms 3000 and max_bytes 65536 as result_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
       otherwise
         then llm.extract with model "gpt-6-luna" and instruction "Extract the customer name, date, currency and amount in integer cents, using only the receipt." and schema schema_text and timeout_ms 3000 and max_bytes 65536 and fixture result_fixture as result_raw
       then parse json as generated
       take json at "/value" from generated as content
-      take text at "/value/name" from generated as field_name
-      take text at "/value/date" from generated as field_date
-      take text at "/value/currency" from generated as field_currency
-      take integer at "/value/amount_cents" from generated as field_amount_cents
+      take text at "/value/name" from generated as field_name # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/date" from generated as field_date # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/currency" from generated as field_currency # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take integer at "/value/amount_cents" from generated as field_amount_cents # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
       run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"candidate-for-review"} and pointer "/result" and value content
     otherwise
       run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
   otherwise
     run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
-catch failure
+catch failure # execute-allow: lint.unused_binding intentional catch control binding; recovery uses the handler path rather than the error value
   run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
 then save to "out/002.json"

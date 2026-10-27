@@ -13,7 +13,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then jq with flags ["-c", "-S"] and filter "{bundle,failures:[.failures[]|{id,test,seed,error}]}" as evidence
 if live is true
-  then jev.classify with question "Do the recorded failures share enough exact test and error evidence to propose one reproduction sequence?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw
+  then jev.classify with question "Do the recorded failures share enough exact test and error evidence to propose one reproduction sequence?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Do the recorded failures share enough exact test and error evidence to propose one reproduction sequence?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
 then parse json as decision
@@ -25,7 +25,7 @@ if accepted is true
     run cat with path source_path
     then jq with flags ["-c", "-S"] and filter "{bundle,failures:[.failures[]|{id,test,seed,error}]}"
     if live is true
-      then llm.ask with model generator_model and instruction "Prepare a reproduction plan for TEST-B-5 from the recorded test names, seeds and errors. Do not claim the failure has been reproduced." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Prepare a reproduction plan for TEST-B-5 from the recorded test names, seeds and errors. Do not claim the failure has been reproduced." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Prepare a reproduction plan for TEST-B-5 from the recorded test names, seeds and errors. Do not claim the failure has been reproduced." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as generated

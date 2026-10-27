@@ -1,4 +1,4 @@
 #!/usr/bin/env -S execute --
 # Interface port of Omarchy v4.0.4; see README.md for compatibility limits.
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 run "omarchy-webapp-remove" with arguments ["Xbox Cloud Gaming"]

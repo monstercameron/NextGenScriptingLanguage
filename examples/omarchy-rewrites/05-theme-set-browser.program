@@ -22,7 +22,7 @@ define a program named refresh_browser
     run "printf" with arguments ["0"]
 
 accept home as text from public environment "HOME"
-accept ignored_arguments as list of text from arguments
+accept ignored_arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 # Optional explicit path mapping; empty means HOME/.local/state/omarchy/current/theme/chromium.theme.
 accept theme_file as text with default ""
 if theme_file is ""
@@ -56,14 +56,14 @@ otherwise
 # Captured policy stdout is explicitly emitted, on success and failure.
 run "omarchy-theme-set-browser-policy" with arguments [color] as policy_output and keep status as policy_status
 run "printf" with arguments ["%s", policy_output]
-run program refresh_browser with process "chromium" and command "chromium" as chromium_status
+run program refresh_browser with process "chromium" and command "chromium" as chromium_status # execute-allow: lint.unused_binding intentional helper-output capture keeps refresh details off stdout
 run program refresh_browser with process "chrome" and command "google-chrome-stable" as chrome_status
 # The Bash helper succeeds for absent/stopped Chrome, so fallback occurs only after an actual failed refresh.
 if chrome_status is not "0"
-  run program refresh_browser with process "chrome" and command "google-chrome" as chrome_fallback_status
-run program refresh_browser with process "msedge" and command "microsoft-edge-stable" as edge_status
-run program refresh_browser with process "brave" and command "brave" as brave_status
-run program refresh_browser with process "/opt/brave-origin-bin/" and command "brave-origin" and match_flag "-f" as brave_origin_status
+  run program refresh_browser with process "chrome" and command "google-chrome" as chrome_fallback_status # execute-allow: lint.unused_binding intentional helper-output capture keeps refresh details off stdout
+run program refresh_browser with process "msedge" and command "microsoft-edge-stable" as edge_status # execute-allow: lint.unused_binding intentional helper-output capture keeps refresh details off stdout
+run program refresh_browser with process "brave" and command "brave" as brave_status # execute-allow: lint.unused_binding intentional helper-output capture keeps refresh details off stdout
+run program refresh_browser with process "/opt/brave-origin-bin/" and command "brave-origin" and match_flag "-f" as brave_origin_status # execute-allow: lint.unused_binding intentional helper-output capture keeps refresh details off stdout
 if policy_status is not 0
   # Normalize every policy error to 1 after all refreshes, matching Bash's failed=1.
   # The policy utility's stdout was written above and is kept on failure, as in Bash.

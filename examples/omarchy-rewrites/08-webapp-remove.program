@@ -72,4 +72,4 @@ run "rm" with arguments ["-f", normalized_icon, named_icon, old_icon]
 # The bound database output stays internal, matching Bash redirection to /dev/null.
 if notify is not "false"
   run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name]
-run "update-desktop-database" with arguments [desktop_dir] as database_output and discard stderr
+run "update-desktop-database" with arguments [desktop_dir] as database_output and discard stderr # execute-allow: check.bound_output_withheld intentional final bound output; upstream redirects this output to /dev/null; execute-allow: lint.unused_binding intentional final command-output capture preserves the script’s quiet result

@@ -13,7 +13,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then grep with flags ["-E"] and pattern "^# LOC-|^msgid |^msgstr " as evidence
 if live is true
-  then jev.classify with question "Which supplied translation entries need a human placeholder or plural-form review?" and labels ["placeholder-risk", "needs-human"] and minimum 80 and env_file env_file as class_raw
+  then jev.classify with question "Which supplied translation entries need a human placeholder or plural-form review?" and labels ["placeholder-risk", "needs-human"] and minimum 80 and env_file env_file as class_raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Which supplied translation entries need a human placeholder or plural-form review?" and labels ["placeholder-risk", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
 then parse json as classification
@@ -24,7 +24,7 @@ if accepted is true
   if label is "placeholder-risk"
     then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
     if live is true
-      then llm.ask with model generator_model and instruction "Review the msgid/msgstr pairs for likely placeholder or plural risks using only the supplied excerpt. Cite LOC-* IDs, quote only relevant tokens, and ask a native-language reviewer to decide; do not claim a translation is correct." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Review the msgid/msgstr pairs for likely placeholder or plural risks using only the supplied excerpt. Cite LOC-* IDs, quote only relevant tokens, and ask a native-language reviewer to decide; do not claim a translation is correct." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Review the msgid/msgstr pairs for likely placeholder or plural risks using only the supplied excerpt. Cite LOC-* IDs, quote only relevant tokens, and ask a native-language reviewer to decide; do not claim a translation is correct." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as draft_result

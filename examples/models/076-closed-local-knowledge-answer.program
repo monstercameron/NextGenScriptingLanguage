@@ -24,7 +24,7 @@ if domain_preflight is "version-scoped-reference-check=pass"
   then parse json as classifier_context
   take integer at "/context_count" from classifier_context as source_context_count
   if live is true
-    then jev.classify with question "Route to a version-scoped local FAQ or runbook answer, or no scoped source." and labels ["answerable", "no_scoped_source"] and minimum 75 and env_file env_file_path as raw
+    then jev.classify with question "Route to a version-scoped local FAQ or runbook answer, or no scoped source." and labels ["answerable", "no_scoped_source"] and minimum 75 and env_file env_file_path as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
   otherwise
     then jev.classify with question "Route to a version-scoped local FAQ or runbook answer, or no scoped source." and labels ["answerable", "no_scoped_source"] and minimum 75 and fixture classifier_fixture_path and env_file env_file_path as raw
   then parse json as classification
@@ -37,7 +37,7 @@ if domain_preflight is "version-scoped-reference-check=pass"
       run cat with path source_path
       then jq with filter ". as $s | select(.source_id == $source_id) | {question:.question,scope:.scope,source_id:.source_id,source_ref:.source_ref,context_count:(.knowledge_passages|length),facts:.facts,evidence:(.knowledge_passages|map(select(.kind == \"answerable\"))|sort_by(.document_id))}" and flags ["-c", "-S", "--arg", "source_id", source_id]
       if live is true
-        then llm.extract with model generator_model and instruction "Answer a troubleshooting question from a closed local knowledge set. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set version_scope to a concise value grounded in the supplied facts." and schema schema and env_file env_file_path as generated_raw
+        then llm.extract with model generator_model and instruction "Answer a troubleshooting question from a closed local knowledge set. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set version_scope to a concise value grounded in the supplied facts." and schema schema and env_file env_file_path as generated_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
       otherwise
         then llm.extract with model generator_model and instruction "Answer a troubleshooting question from a closed local knowledge set. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set version_scope to a concise value grounded in the supplied facts." and schema schema and fixture draft_fixture_path and env_file env_file_path as generated_raw
       then parse json as generated

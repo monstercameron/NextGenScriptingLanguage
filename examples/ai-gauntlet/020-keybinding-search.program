@@ -8,12 +8,12 @@ accept live as boolean with default false
 try
   read source_path
   if live is true
-    then jev.classify with question "Which supplied binding ID best matches the request? Use unknown for ambiguity." and labels ["definition","references","unknown"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+    then jev.classify with question "Which supplied binding ID best matches the request? Use unknown for ambiguity." and labels ["definition","references","unknown"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
   otherwise
     then jev.classify with question "Which supplied binding ID best matches the request? Use unknown for ambiguity." and labels ["definition","references","unknown"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
   then parse json as verdict
   take boolean at "/accepted" from verdict as accepted
-  take integer at "/confidence_percent" from verdict as confidence
+  take integer at "/confidence_percent" from verdict as confidence # execute-allow: lint.unused_binding intentional typed take validates the model confidence field
   take text at "/label" from verdict as label
   if accepted is true
     if label is "definition"
@@ -22,6 +22,6 @@ try
       run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
   otherwise
     run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
-catch failure
+catch failure # execute-allow: lint.unused_binding intentional catch control binding; recovery uses the handler path rather than the error value
   run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
 then save to "out/020.json"

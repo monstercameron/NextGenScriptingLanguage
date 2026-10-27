@@ -6,5 +6,5 @@ accept threshold as text
 accept output_path as text
 every 1 second
   run cat with path input_path
-  then jq with flags ["-c", "--argjson", "threshold", threshold] and filter ".jobs | map(select(.pending and .age_minutes >= $threshold)) | {overdue:length, jobs:.}" as report
+  then jq with flags ["-c", "--argjson", "threshold", threshold] and filter ".jobs | map(select(.pending and .age_minutes >= $threshold)) | {overdue:length, jobs:.}" as report # execute-allow: lint.unused_binding intentional serialized report capture keeps review data off stdout before save
   then save to output_path

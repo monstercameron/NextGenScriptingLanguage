@@ -14,7 +14,7 @@ run cat with path source_path
 then awk with delimiter "|" and program "$4 != \"focus-moved\" { print $1 \"\\t\" $2 \"\\t\" $3 \"\\t\" $4 }"
 then sort with flags ["-k2,2", "-k1,1"] as evidence
 if live is true
-  then jev.classify with question "Which keyboard scenarios show repeatable focus or activation barriers in these logged events?" and labels ["keyboard-barrier", "needs-human"] and minimum 80 and env_file env_file as class_raw
+  then jev.classify with question "Which keyboard scenarios show repeatable focus or activation barriers in these logged events?" and labels ["keyboard-barrier", "needs-human"] and minimum 80 and env_file env_file as class_raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Which keyboard scenarios show repeatable focus or activation barriers in these logged events?" and labels ["keyboard-barrier", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
 then parse json as classification
@@ -25,7 +25,7 @@ if accepted is true
   if label is "keyboard-barrier"
     then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
     if live is true
-      then llm.ask with model generator_model and instruction "Cluster the failed events by scenario, key, and target. Draft a minimal reproduction checklist citing KBT-* IDs; separate logged behavior from hypotheses and include no automatic remediation." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Cluster the failed events by scenario, key, and target. Draft a minimal reproduction checklist citing KBT-* IDs; separate logged behavior from hypotheses and include no automatic remediation." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Cluster the failed events by scenario, key, and target. Draft a minimal reproduction checklist citing KBT-* IDs; separate logged behavior from hypotheses and include no automatic remediation." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as draft_result

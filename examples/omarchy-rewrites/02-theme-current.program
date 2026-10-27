@@ -2,7 +2,7 @@
 # HOME maps to home; upstream ignores positional arguments, which are accepted here.
 # Uses the host sed dialect, including upstream's GNU-specific \u replacement.
 accept home as text from public environment "HOME" with default ""
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 run "printf" with arguments ["%s/.local/state/omarchy/current/theme.name", home] as theme_path
 run "test" with arguments ["-f", theme_path] and keep status as theme_status
 if theme_status is 0

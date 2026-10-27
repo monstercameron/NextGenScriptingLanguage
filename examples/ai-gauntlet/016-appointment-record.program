@@ -10,33 +10,33 @@ accept schema_path as text with default "fixtures/016/schema.json"
 try
   read source_path
   if live is true
-    then jev.judge with question "Are a participant, place, explicit date, time and time zone all present?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+    then jev.judge with question "Are a participant, place, explicit date, time and time zone all present?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
   otherwise
     then jev.judge with question "Are a participant, place, explicit date, time and time zone all present?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
   then parse json as verdict
   take boolean at "/accepted" from verdict as accepted
-  take integer at "/confidence_percent" from verdict as confidence
+  take integer at "/confidence_percent" from verdict as confidence # execute-allow: lint.unused_binding intentional typed take validates the model confidence field
   take boolean at "/decision" from verdict as decision
   if accepted is true
     if decision is true
       read schema_path as schema_text
       read source_path
       if live is true
-        then llm.extract with model "gpt-6-luna" and instruction "Extract only the explicitly stated appointment fields; do not schedule or resolve ambiguous dates." and schema schema_text and timeout_ms 3000 and max_bytes 65536 as result_raw
+        then llm.extract with model "gpt-6-luna" and instruction "Extract only the explicitly stated appointment fields; do not schedule or resolve ambiguous dates." and schema schema_text and timeout_ms 3000 and max_bytes 65536 as result_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
       otherwise
         then llm.extract with model "gpt-6-luna" and instruction "Extract only the explicitly stated appointment fields; do not schedule or resolve ambiguous dates." and schema schema_text and timeout_ms 3000 and max_bytes 65536 and fixture result_fixture as result_raw
       then parse json as generated
       take json at "/value" from generated as content
-      take text at "/value/person" from generated as field_person
-      take text at "/value/place" from generated as field_place
-      take text at "/value/date" from generated as field_date
-      take text at "/value/time" from generated as field_time
-      take text at "/value/zone" from generated as field_zone
+      take text at "/value/person" from generated as field_person # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/place" from generated as field_place # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/date" from generated as field_date # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/time" from generated as field_time # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
+      take text at "/value/zone" from generated as field_zone # execute-allow: lint.unused_binding intentional typed take validates a required extracted field
       run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"candidate-for-review"} and pointer "/result" and value content
     otherwise
       run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
   otherwise
     run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
-catch failure
+catch failure # execute-allow: lint.unused_binding intentional catch control binding; recovery uses the handler path rather than the error value
   run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
 then save to "out/016.json"

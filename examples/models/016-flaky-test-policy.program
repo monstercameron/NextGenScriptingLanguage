@@ -13,23 +13,23 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then jq with flags ["-c", "-S"] and filter ". as $d | {test:$d.test,run_count:($d.runs|length),passes:([$d.runs[]|select(.result==\"pass\")]|length),failures:([$d.runs[]|select(.result==\"fail\")]|length),runs:[$d.runs[]|{run,result,seed}]}" as evidence
 if live is true
-  then jev.score with question "How strong is the local evidence for inconsistent outcomes across repeated runs of this exact test?" and levels ["low", "medium", "high"] and minimum 80 and env_file env_file as raw
+  then jev.score with question "How strong is the local evidence for inconsistent outcomes across repeated runs of this exact test?" and levels ["low", "medium", "high"] and minimum 80 and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.score with question "How strong is the local evidence for inconsistent outcomes across repeated runs of this exact test?" and levels ["low", "medium", "high"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
 then parse json as decision
-take json at "/score" from decision as score_value
-then encode score_value as json
-then "jq" with arguments ["-c", ". >= 1"] as score_gate_text
-then parse json as score_gate
-take boolean at "" from score_gate as high_score
 take boolean at "/accepted" from decision as accepted
 take integer at "/confidence_percent" from decision as confidence
 if accepted is true
+  take json at "/score" from decision as score_value
+  then encode score_value as json
+  then "jq" with arguments ["-c", ". >= 1"] as score_gate_text # execute-allow: lint.unused_binding intentional score-gate pipeline capture for the following JSON parse
+  then parse json as score_gate
+  take boolean at "" from score_gate as high_score
   if high_score is true
     run cat with path source_path
     then jq with flags ["-c", "-S"] and filter ". as $d | {test:$d.test,run_count:($d.runs|length),passes:([$d.runs[]|select(.result==\"pass\")]|length),failures:([$d.runs[]|select(.result==\"fail\")]|length),runs:[$d.runs[]|{run,result,seed}]}"
     if live is true
-      then llm.ask with model generator_model and instruction "Draft a rerun-policy review for TEST-9 from the listed runs. Preserve the observed pass/fail counts and require a human decision before changing CI policy." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Draft a rerun-policy review for TEST-9 from the listed runs. Preserve the observed pass/fail counts and require a human decision before changing CI policy." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Draft a rerun-policy review for TEST-9 from the listed runs. Preserve the observed pass/fail counts and require a human decision before changing CI policy." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as generated

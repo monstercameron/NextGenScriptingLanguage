@@ -14,7 +14,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run "test" with arguments ["!", reference_path, "-ef", report_path]
 run comm with flags ["-23"] and files [source_path, reference_path] as evidence
 if live is true
-  then jev.judge with question "Does the documentation contain a command option missing from the captured help output?" and minimum 80 and env_file env_file as raw
+  then jev.judge with question "Does the documentation contain a command option missing from the captured help output?" and minimum 80 and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.judge with question "Does the documentation contain a command option missing from the captured help output?" and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
 then parse json as decision
@@ -25,7 +25,7 @@ if accepted is true
   if verdict is true
     run comm with flags ["-23"] and files [source_path, reference_path]
     if live is true
-      then llm.ask with model generator_model and instruction "Draft a documentation review note listing only options present in the docs fixture but absent from the captured help fixture. Do not claim the flag has been removed from every version." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Draft a documentation review note listing only options present in the docs fixture but absent from the captured help fixture. Do not claim the flag has been removed from every version." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Draft a documentation review note listing only options present in the docs fixture but absent from the captured help fixture. Do not claim the flag has been removed from every version." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as generated

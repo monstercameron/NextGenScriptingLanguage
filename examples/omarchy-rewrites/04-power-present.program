@@ -2,7 +2,7 @@
 # Source and MIT license: ../../tests/fixtures/omarchy-rewrites/04-power-present/README.md
 # Run against an owned fixture with --input power_supply_path=/absolute/fake/root.
 accept power_supply_path as text from public environment "OMARCHY_POWER_SUPPLY_PATH" with default "/sys/class/power_supply"
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 
 # Bash's ${VAR:-default} also defaults an explicitly empty environment value.
 run "printf" with arguments ["%s", power_supply_path]

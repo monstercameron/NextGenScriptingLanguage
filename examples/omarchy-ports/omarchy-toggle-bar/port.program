@@ -2,7 +2,7 @@
 # Port of bin/omarchy-toggle-bar (see original.sh). The shell nudge's status is the
 # script's exit status, as the original's last command.
 execute 1
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 accept requested as text from argument 1 with default ""
 run text.default_if_empty with text requested and default "toggle" as mode
 run "omarchy-toggle" with arguments ["bar-off", mode] and keep status as toggle_status

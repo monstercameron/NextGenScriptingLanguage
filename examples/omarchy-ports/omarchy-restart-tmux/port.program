@@ -2,7 +2,7 @@
 # Port of bin/omarchy-restart-tmux (see original.sh). Reloads the tmux configuration only
 # when a tmux server is running; with no server the script exits 0.
 execute 1
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 accept home_dir as text from public environment "HOME" with default ""
 if run "tmux" with arguments ["has-session"] succeeds
   run text.concat with parts [home_dir, "/.config/tmux/tmux.conf"] as tmux_conf

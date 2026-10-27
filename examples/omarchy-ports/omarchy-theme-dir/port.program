@@ -1,7 +1,7 @@
 #!/usr/bin/env -S execute --
 # Port of bin/omarchy-theme-dir (see original.sh). Prefers a user-installed theme copy.
 execute 1
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 accept theme_arg as text from argument 1 with default ""
 accept home_dir as text from public environment "HOME" with default ""
 accept omarchy_path as text from public environment "OMARCHY_PATH" with default ""

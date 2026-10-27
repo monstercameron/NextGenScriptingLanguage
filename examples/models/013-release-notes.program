@@ -13,7 +13,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run cat with path source_path
 then jq with flags ["-c", "-S"] and filter ". as $d | {release:$d.release,public_candidates:[$d.commits[]|select(.merged==true and .audience==\"user\")|{id,area,summary}]}" as evidence
 if live is true
-  then jev.classify with question "Are any merged user-facing changes available as candidates for release notes?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw
+  then jev.classify with question "Are any merged user-facing changes available as candidates for release notes?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Are any merged user-facing changes available as candidates for release notes?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
 then parse json as decision
@@ -25,7 +25,7 @@ if accepted is true
     run cat with path source_path
     then jq with flags ["-c", "-S"] and filter ". as $d | {release:$d.release,public_candidates:[$d.commits[]|select(.merged==true and .audience==\"user\")|{id,area,summary}]}"
     if live is true
-      then llm.ask with model generator_model and instruction "Draft concise release-note candidates for v2.4.0 from merged user-facing changes only. Preserve change IDs and omit internal or unmerged work." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Draft concise release-note candidates for v2.4.0 from merged user-facing changes only. Preserve change IDs and omit internal or unmerged work." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Draft concise release-note candidates for v2.4.0 from merged user-facing changes only. Preserve change IDs and omit internal or unmerged work." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as generated

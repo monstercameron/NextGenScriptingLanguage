@@ -1,7 +1,7 @@
 #!/usr/bin/env -S execute --
 # Port of bin/omarchy-toggle-enabled (see original.sh). Exit 0 when the flag file exists.
 execute 1
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 accept name_arg as text from argument 1 with default ""
 accept home_dir as text from public environment "HOME" with default ""
 run text.concat with parts [home_dir, "/.local/state/omarchy/toggles/", name_arg] as flag_path

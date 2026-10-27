@@ -9,18 +9,18 @@ accept result_fixture as text with default "fixtures/014/result.json"
 try
   read source_path
   if live is true
-    then jev.judge with question "Do these journal lines explicitly show the final state of the library scan?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+    then jev.judge with question "Do these journal lines explicitly show the final state of the library scan?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
   otherwise
     then jev.judge with question "Do these journal lines explicitly show the final state of the library scan?" and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
   then parse json as verdict
   take boolean at "/accepted" from verdict as accepted
-  take integer at "/confidence_percent" from verdict as confidence
+  take integer at "/confidence_percent" from verdict as confidence # execute-allow: lint.unused_binding intentional typed take validates the model confidence field
   take boolean at "/decision" from verdict as decision
   if accepted is true
     if decision is true
       read source_path
       if live is true
-        then llm.ask with model "gpt-6-luna" and instruction "Produce one status line grounded only in the supplied journal; preserve counts and do not infer system health." and timeout_ms 3000 and max_bytes 65536 as result_raw
+        then llm.ask with model "gpt-6-luna" and instruction "Produce one status line grounded only in the supplied journal; preserve counts and do not infer system health." and timeout_ms 3000 and max_bytes 65536 as result_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
       otherwise
         then llm.ask with model "gpt-6-luna" and instruction "Produce one status line grounded only in the supplied journal; preserve counts and do not infer system health." and timeout_ms 3000 and max_bytes 65536 and fixture result_fixture as result_raw
       then parse json as generated
@@ -33,6 +33,6 @@ try
       run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
   otherwise
     run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
-catch failure
+catch failure # execute-allow: lint.unused_binding intentional catch control binding; recovery uses the handler path rather than the error value
   run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
 then save to "out/014.json"

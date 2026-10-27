@@ -24,7 +24,7 @@ accept templates as text
 accept values_json as text
 
 run path.join with parts [theme_root, theme_name] as theme_dir
-run fs.ensure_dir with path theme_dir as made_dir
+run fs.ensure_dir with path theme_dir as made_dir # execute-allow: lint.unused_binding intentional filesystem-result capture keeps the operation output off stdout
 run json.parse with text values_json as values
 run fs.glob with pattern templates as template_files
 for each template in template_files
@@ -32,13 +32,13 @@ for each template in template_files
   run text.strip_suffix with text file_name and suffix ".tpl" as output_name
   run path.join with parts [theme_dir, output_name] as output_path
   run text.render with template_path template and values values as rendered
-  run fs.ensure_file with path output_path and content rendered as written
+  run fs.ensure_file with path output_path and content rendered as written # execute-allow: lint.unused_binding intentional filesystem-result capture keeps the operation output off stdout
 
 run fs.ensure_symlink with path current_link and target theme_dir as swap
 take text at "/previous" from swap as previous
 run "hyprctl" with arguments ["reload"] and keep status as reload_status
 if reload_status is not 0
-  run fs.ensure_symlink with path current_link and target previous as rollback
+  run fs.ensure_symlink with path current_link and target previous as rollback # execute-allow: lint.unused_binding intentional rollback-result capture keeps the operation output off stdout
   run "printf" with arguments ["reload failed; restored the previous theme\n"]
   run "false"
 run "printf" with arguments ["theme %s active\n", theme_name]

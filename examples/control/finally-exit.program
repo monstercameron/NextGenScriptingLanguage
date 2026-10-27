@@ -2,7 +2,7 @@
 try
   run printf with message "working"
   exit with status 3
-catch failure
+catch failure # execute-allow: lint.unused_binding intentional catch control binding; recovery uses the handler path rather than the error value
   run printf with message "not reached"
 finally
   run printf with message "cleanup done"

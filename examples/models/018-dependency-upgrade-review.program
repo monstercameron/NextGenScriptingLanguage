@@ -14,7 +14,7 @@ run "test" with arguments ["!", source_path, "-ef", report_path]
 run "test" with arguments ["!", reference_path, "-ef", report_path]
 run join with flags ["-t", "\t"] and files [source_path, reference_path] as evidence
 if live is true
-  then jev.classify with question "Do local usage records connect an advisory package/version to a runtime source path?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw
+  then jev.classify with question "Do local usage records connect an advisory package/version to a runtime source path?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
 otherwise
   then jev.classify with question "Do local usage records connect an advisory package/version to a runtime source path?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
 then parse json as decision
@@ -25,7 +25,7 @@ if accepted is true
   if label is "evidence-ready"
     run join with flags ["-t", "\t"] and files [source_path, reference_path]
     if live is true
-      then llm.ask with model generator_model and instruction "Draft a dependency-upgrade review from exact advisory/package/version joins. Separate package usage evidence from any claim that an upgrade is safe." and env_file env_file as draft_raw
+      then llm.ask with model generator_model and instruction "Draft a dependency-upgrade review from exact advisory/package/version joins. Separate package usage evidence from any claim that an upgrade is safe." and env_file env_file as draft_raw # execute-allow: lint.unused_binding intentional generated-text capture for review validation and downstream parsing
     otherwise
       then llm.ask with model generator_model and instruction "Draft a dependency-upgrade review from exact advisory/package/version joins. Separate package usage evidence from any claim that an upgrade is safe." and fixture draft_fixture_path and env_file env_file as draft_raw
     then parse json as generated

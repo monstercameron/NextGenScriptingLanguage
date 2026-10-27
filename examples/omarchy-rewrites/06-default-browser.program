@@ -21,7 +21,7 @@ define a program named set_browser
     run "false"
 
 use value "" as supplied
-for each argument in supplied_arguments
+for each argument in supplied_arguments # execute-allow: lint.unused_binding intentional loop counts supplied arguments without using their contents
   use value "yes" as supplied
 if supplied is ""
   run "env" with arguments ["-u", "BROWSER", "xdg-settings", "get", "default-web-browser"] and keep status as query_status

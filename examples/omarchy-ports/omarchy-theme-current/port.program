@@ -1,7 +1,7 @@
 #!/usr/bin/env -S execute --
 # Port of bin/omarchy-theme-current (see original.sh). Title-cases the theme name.
 execute 1
-accept arguments as list of text from arguments
+accept arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
 accept home_dir as text from public environment "HOME" with default ""
 run text.concat with parts [home_dir, "/.local/state/omarchy/current/theme.name"] as name_path
 if run "test" with arguments ["-f", name_path] succeeds

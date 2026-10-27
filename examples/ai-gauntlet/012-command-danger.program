@@ -9,20 +9,20 @@ accept confirmed as boolean with default false
 try
   read source_path
   if live is true
-    then jev.score with question "Rate command danger: low is read-only pwd; medium changes files; high deletes data, expands a shell, or changes privileges." and levels ["low","medium","high"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+    then jev.score with question "Rate command danger: low is read-only pwd; medium changes files; high deletes data, expands a shell, or changes privileges." and levels ["low","medium","high"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw # execute-allow: lint.unused_binding intentional model-result capture for acceptance analysis and downstream parsing
   otherwise
     then jev.score with question "Rate command danger: low is read-only pwd; medium changes files; high deletes data, expands a shell, or changes privileges." and levels ["low","medium","high"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
   then parse json as verdict
   take boolean at "/accepted" from verdict as accepted
-  take integer at "/confidence_percent" from verdict as confidence
-  take json at "/score" from verdict as score_value
-  run number.compare with left score_value and right 1 as score_order
+  take integer at "/confidence_percent" from verdict as confidence # execute-allow: lint.unused_binding intentional typed take validates the model confidence field
   if accepted is true
+    take json at "/score" from verdict as score_value
+    run number.compare with left score_value and right 1 as score_order
     if score_order is -1
       read source_path as requested
       if requested is "pwd"
         if confirmed is true
-          run "pwd" with arguments [] as diagnostic
+          run "pwd" with arguments [] as diagnostic # execute-allow: lint.unused_binding intentional command-output capture keeps the final report as the program output
           run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"executed-allowlisted-command"} and pointer "/result" and value "pwd"
         otherwise
           run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"awaiting-confirmation"} and pointer "/result" and value "pwd"
@@ -32,6 +32,6 @@ try
       run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
   otherwise
     run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
-catch failure
+catch failure # execute-allow: lint.unused_binding intentional catch control binding; recovery uses the handler path rather than the error value
   run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
 then save to "out/012.json"

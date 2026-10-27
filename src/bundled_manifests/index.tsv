@@ -187,22 +187,22 @@ jev.score.json	3434	jev.score		78588	705
 join.json	528	join		79293	230
 jq.json	529	jq		79523	245
 jq.ps.json	993	jq.ps		79768	480
-llm.ask.json	4157	llm.ask		80248	724
-llm.extract.json	4318	llm.extract		80972	746
-ls.json	546	ls		81718	217
-mkdir.json	553	mkdir		81935	242
-omarchy.browser-refresh.json	1052	omarchy.browser-refresh		82177	416
-omarchy.editor-install.json	1109	omarchy.editor-install		82593	408
-omarchy.editor-list.json	1057	omarchy.editor-list		83001	421
-paste.json	531	paste		83422	230
-printf.json	345	printf	print	83652	183
-ps.json	358	ps		83835	191
-pwd.json	129	pwd		84026	100
-sed.json	512	sed		84126	235
-sort.json	367	sort		84361	191
-tail.follow.json	476	tail.follow	follow file	84552	216
-tail.json	599	tail		84768	240
-tr.json	627	tr		85008	248
-uniq.json	367	uniq		85256	192
-upper.json	300	upper	uppercase	85448	169
-wc.json	383	wc		85617	203
+llm.ask.json	4351	llm.ask		80248	783
+llm.extract.json	4512	llm.extract		81031	807
+ls.json	546	ls		81838	217
+mkdir.json	553	mkdir		82055	242
+omarchy.browser-refresh.json	1052	omarchy.browser-refresh		82297	416
+omarchy.editor-install.json	1109	omarchy.editor-install		82713	408
+omarchy.editor-list.json	1057	omarchy.editor-list		83121	421
+paste.json	531	paste		83542	230
+printf.json	345	printf	print	83772	183
+ps.json	358	ps		83955	191
+pwd.json	129	pwd		84146	100
+sed.json	512	sed		84246	235
+sort.json	367	sort		84481	191
+tail.follow.json	476	tail.follow	follow file	84672	216
+tail.json	599	tail		84888	240
+tr.json	627	tr		85128	248
+uniq.json	367	uniq		85376	192
+upper.json	300	upper	uppercase	85568	169
+wc.json	383	wc		85737	203

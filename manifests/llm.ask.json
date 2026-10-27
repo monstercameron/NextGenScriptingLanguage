@@ -21,10 +21,22 @@
       "type": "string"
     },
     "api": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "responses",
+        "chat_completions"
+      ]
     },
     "effort": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     "temperature": {
       "type": "json"

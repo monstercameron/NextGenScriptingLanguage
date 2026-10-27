@@ -422,24 +422,48 @@ impl SecretRedactor {
         if secret.len() > MAX_REDACTION_SECRET_BYTES_EACH {
             return Err(PolicyError::RedactionLimitExceeded);
         }
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.values.iter().any(|registered| registered.0 == secret) {
-            return Ok(());
+        let fresh = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.values.iter().any(|registered| registered.0 == secret) {
+                None
+            } else {
+                if state.values.len() >= MAX_REDACTION_SECRETS
+                    || state.total_bytes.saturating_add(secret.len())
+                        > MAX_REDACTION_SECRET_BYTES
+                {
+                    return Err(PolicyError::RedactionLimitExceeded);
+                }
+                state.values.push(SecretBytes(secret.to_vec()));
+                state
+                    .values
+                    .sort_by_key(|secret| std::cmp::Reverse(secret.0.len()));
+                state.total_bytes += secret.len();
+                Some(secret.to_vec())
+            }
+        };
+        // Mask after releasing the registry lock: under GitHub Actions
+        // hardening the runner must learn each secret before any later log
+        // line can echo it. Emission is best-effort and never fails the run.
+        if let Some(secret) = fresh {
+            crate::github_actions::emit_mask_for_bytes(&secret);
         }
-        if state.values.len() >= MAX_REDACTION_SECRETS
-            || state.total_bytes.saturating_add(secret.len()) > MAX_REDACTION_SECRET_BYTES
-        {
-            return Err(PolicyError::RedactionLimitExceeded);
-        }
-        state.values.push(SecretBytes(secret.to_vec()));
-        state
-            .values
-            .sort_by_key(|secret| std::cmp::Reverse(secret.0.len()));
-        state.total_bytes += secret.len();
         Ok(())
+    }
+
+    /// Snapshot the registered secret bytes, oldest registration last after the
+    /// length-ordered sort. Used to render `::add-mask::` lines and for tests;
+    /// never logged or formatted (see the `Debug` impl above).
+    pub fn snapshot_secrets(&self) -> Vec<Vec<u8>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values
+            .iter()
+            .map(|secret| secret.0.clone())
+            .collect()
     }
 
     /// Replace exact registered byte sequences in an emitted byte string.

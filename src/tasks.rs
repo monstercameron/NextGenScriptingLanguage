@@ -8,6 +8,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use std::any::Any;
+use std::collections::BTreeMap;
 #[cfg(debug_assertions)]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -107,7 +108,7 @@ pub struct TaskScope {
     cancelled: Arc<AtomicBool>,
     active: Arc<AtomicUsize>,
     next_id: usize,
-    workers: Vec<Worker>,
+    workers: BTreeMap<usize, Worker>,
 }
 
 impl TaskScope {
@@ -131,7 +132,7 @@ impl TaskScope {
             cancelled,
             active: Arc::new(AtomicUsize::new(0)),
             next_id: 0,
-            workers: Vec::new(),
+            workers: BTreeMap::new(),
         })
     }
 
@@ -227,7 +228,7 @@ impl TaskScope {
                 return Err(error.into());
             }
         };
-        self.workers.push(Worker { join: Some(thread) });
+        self.workers.insert(id, Worker { join: Some(thread) });
         Ok(TaskHandle::with_finished(id, receiver, finished))
     }
 
@@ -277,7 +278,7 @@ impl TaskScope {
     }
 
     fn reap(&mut self, id: usize) -> Result<()> {
-        let Some(worker) = self.workers.get_mut(id) else {
+        let Some(mut worker) = self.workers.remove(&id) else {
             return Ok(());
         };
         if let Some(thread) = worker.join.take() {
@@ -291,7 +292,7 @@ impl TaskScope {
 
     fn join_workers(&mut self) -> Result<()> {
         let mut first_error = None;
-        for worker in &mut self.workers {
+        for (_, mut worker) in std::mem::take(&mut self.workers) {
             if let Some(thread) = worker.join.take() {
                 if let Err(payload) = thread.join() {
                     first_error.get_or_insert_with(|| {
@@ -325,4 +326,20 @@ fn task_panic(payload: Box<dyn Any + Send>) -> anyhow::Error {
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("non-string panic payload");
     anyhow!("task worker panicked: {message}")
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn joined_workers_do_not_accumulate() -> Result<()> {
+        let mut scope = TaskScope::new(2, None)?;
+        for _ in 0..1_000 {
+            let handle = scope.spawn(|_| Ok(()))?;
+            scope.join(handle)?;
+            assert!(scope.workers.is_empty());
+        }
+        Ok(())
+    }
 }

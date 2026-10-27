@@ -215,8 +215,7 @@ awaited or cancelled before normal scope exit, even if its process already
 finished; inspection alone does not resolve ownership. An explicit reusable
 program `return`, an error unwind, or runtime cancellation cancels and reaps
 still-owned jobs before leaving that scope. Names are unique within a scope.
-To keep resource use bounded, a finite run can create at most 32 named jobs
-total, with at most 16 active jobs and 16 pipeline stages per job. Each job's
+To keep resource use bounded, a finite run retains at most 32 named job records at once, with at most 16 active jobs and 16 pipeline stages per job. A resolved record is released after its last possible later use in the source; repeated awaits and later inspections remain available when the source references them. Sequential jobs can therefore exceed 32 over the run. Each job's
 captured stdout is limited by
 `--max-output-bytes`; all captured job stdout retained during the run shares the
 same aggregate byte limit. Exceeding either limit stops and reaps the job and

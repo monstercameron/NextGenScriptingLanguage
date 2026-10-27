@@ -210,7 +210,7 @@ fn run_wide_job_output_obeys_the_retention_cap() -> anyhow::Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn finite_module_called_from_finally_shares_the_run_handle_budget() -> anyhow::Result<()> {
+fn finite_module_called_from_finally_after_retired_jobs_succeeds() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let catalog = directory.path().join("applets");
     write_job_module(&catalog, "test.cleanup", "cleanup");
@@ -222,14 +222,11 @@ fn finite_module_called_from_finally_shares_the_run_handle_budget() -> anyhow::R
     }
     source.push_str("try\n  run \"true\"\nfinally\n  run test.cleanup\n");
     let program = parser::parse(&source)?;
-    let error = runtime::run(
+    runtime::run(
         &program,
         &Registry::load(&catalog)?,
         &options(directory.path(), 1024),
-    )
-    .err()
-    .expect("finally's imported module must share the enclosing job budget");
-    assert!(format!("{error:#}").contains("job handle limit (32)"));
+    )?;
     Ok(())
 }
 
@@ -329,7 +326,7 @@ fn nested_finite_program_shares_the_active_job_cap_before_effects() -> anyhow::R
 
 #[cfg(unix)]
 #[test]
-fn nested_finite_program_shares_the_created_handle_cap() -> anyhow::Result<()> {
+fn nested_finite_program_starts_after_prior_jobs_are_retired() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let child_effect = directory.path().join("nested-child-started");
     let mut source = format!(
@@ -344,18 +341,12 @@ fn nested_finite_program_shares_the_created_handle_cap() -> anyhow::Result<()> {
     source.push_str("run program nested\n");
 
     let program = parser::parse(&source)?;
-    let error = runtime::run(
+    runtime::run(
         &program,
         &Registry::default(),
         &options(directory.path(), 1024),
-    )
-    .err()
-    .expect("nested call must share the root run's created-handle cap");
-    assert!(format!("{error:#}").contains("job handle limit (32)"));
-    assert!(
-        !child_effect.exists(),
-        "a nested job beyond the handle limit must not start"
-    );
+    )?;
+    assert!(child_effect.exists());
     Ok(())
 }
 
@@ -660,6 +651,249 @@ fn native_windows_fixture_runs_as_an_owned_background_job() -> anyhow::Result<()
         serde_json::from_slice::<Json>(&result.output)?,
         json!("done")
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn sequential_jobs_exceed_the_old_lifetime_limit() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut source = String::new();
+    for index in 0..100 {
+        source.push_str(&format!(
+            "spawn as job{index}\n  run \"true\"\nawait job{index}\n"
+        ));
+    }
+    let program = parser::parse(&source)?;
+    runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024),
+    )?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_records_still_have_a_run_wide_bound() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut source = String::new();
+    for index in 0..33 {
+        source.push_str(&format!(
+            "spawn as job{index}\n  run \"true\"\nawait job{index}\n"
+        ));
+    }
+    for index in 0..33 {
+        source.push_str(&format!("inspect job{index} as snapshot{index}\n"));
+    }
+    let program = parser::parse(&source)?;
+    let error = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024),
+    )
+    .err()
+    .expect("retained record budget must be enforced");
+    assert!(format!("{error:#}").contains("retained background job handle limit (32)"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "long-running 10,000-process acceptance test"]
+fn ten_thousand_sequential_jobs_complete() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut source = String::new();
+    for index in 0..10_000 {
+        source.push_str(&format!(
+            "spawn as job{index}\n  run \"true\"\nawait job{index}\n"
+        ));
+    }
+    let program = parser::parse(&source)?;
+    let mut options = options(directory.path(), 1024);
+    options.total_timeout = Some(Duration::from_secs(600));
+    let result = runtime::run(&program, &Registry::default(), &options)?;
+    assert_eq!(result.launched_processes, 10_000);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_record_limit_is_shared_with_nested_programs() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let marker = directory.path().join("nested-started");
+    let mut source = format!("define a program named nested\n  spawn as child\n    run \"touch\" with arguments [{}]\n  await child\n", quote(&marker.to_string_lossy()));
+    for index in 0..32 {
+        source.push_str(&format!(
+            "spawn as job{index}\n  run \"true\"\nawait job{index}\n"
+        ));
+    }
+    source.push_str("run program nested\n");
+    for index in 0..32 {
+        source.push_str(&format!("inspect job{index} as snapshot{index}\n"));
+    }
+    let program = parser::parse(&source)?;
+    let error = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024),
+    )
+    .err()
+    .expect("the nested job must respect the enclosing record budget");
+    assert!(format!("{error:#}").contains("retained background job handle limit (32)"));
+    assert!(!marker.exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn nested_calls_keep_same_named_handles_in_their_own_frames() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = r#"define a program named inner
+  spawn as shared
+    run "printf" with arguments ["inner"]
+  await shared
+  inspect shared as inner_state
+  then encode inner_state as json
+  then save to "inner.json"
+define a program named middle
+  spawn as shared
+    run "printf" with arguments ["middle"]
+  await shared
+  run program inner
+  inspect shared as middle_state
+  then encode middle_state as json
+  then save to "middle.json"
+  await shared
+spawn as shared
+  run "printf" with arguments ["root"]
+await shared
+run program middle
+inspect shared as root_state
+then encode root_state as json
+then save to "root.json"
+await shared
+"#;
+    let program = parser::parse(source)?;
+    // Calls execute their inlined bodies in the same step array as the caller.
+    assert!(program
+        .steps
+        .iter()
+        .any(|step| matches!(&step.kind, StepKind::CallProgram { .. })));
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+    assert_eq!(result.output, b"root");
+    for name in ["inner", "middle", "root"] {
+        let snapshot: Json = serde_json::from_slice(&std::fs::read(
+            directory.path().join(format!("{name}.json")),
+        )?)?;
+        assert_eq!(snapshot["state"], "completed", "{name}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn conditional_job_operations_keep_later_inspection_and_await_available() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    for matched in [true, false] {
+        let source = format!(
+            r#"spawn as first
+  run "printf" with arguments ["first"]
+await first
+if {matched} is true
+  inspect first as yes_state
+otherwise
+  inspect first as no_state
+inspect first as after_state
+then encode after_state as json
+then save to "state.json"
+await first
+"#
+        );
+        let program = parser::parse(&source)?;
+        let result = runtime::run(
+            &program,
+            &Registry::default(),
+            &options(directory.path(), 1024 * 1024),
+        )?;
+        assert_eq!(result.output, b"first", "branch {matched}");
+        let snapshot: Json =
+            serde_json::from_slice(&std::fs::read(directory.path().join("state.json"))?)?;
+        assert_eq!(snapshot["state"], "completed", "branch {matched}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn module_uses_its_own_step_indices_and_preserves_caller_handle() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let catalog = directory.path().join("applets");
+    write_job_module(&catalog, "test.scope", "unused");
+    std::fs::write(
+        catalog.join("test_scope.program"),
+        r#"define a program named entry
+  spawn as shared
+    run "printf" with arguments ["module"]
+  await shared
+  inspect shared as module_state
+  then encode module_state as json
+  then save to "module.json"
+  await shared
+  then encode "ok" as json
+"#,
+    )?;
+    let program = parser::parse(
+        r#"spawn as shared
+  run "printf" with arguments ["caller"]
+await shared
+run test.scope
+inspect shared as caller_state
+then encode caller_state as json
+then save to "caller.json"
+await shared
+"#,
+    )?;
+    let result = runtime::run(
+        &program,
+        &Registry::load(&catalog)?,
+        &options(directory.path(), 1024 * 1024),
+    )?;
+    assert_eq!(result.output, b"caller");
+    for name in ["module", "caller"] {
+        let snapshot: Json = serde_json::from_slice(&std::fs::read(
+            directory.path().join(format!("{name}.json")),
+        )?)?;
+        assert_eq!(snapshot["state"], "completed", "{name}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn repeated_reusable_call_uses_fresh_job_scope_at_same_step_indices() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = r#"define a program named worker
+  spawn as shared
+    run "printf" with arguments ["child"]
+  await shared
+  inspect shared as state
+  await shared
+repeat 3 times
+  run program worker
+"#;
+    let program = parser::parse(source)?;
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+    assert_eq!(result.launched_processes, 3);
+    assert_eq!(result.output, b"child");
     Ok(())
 }
 

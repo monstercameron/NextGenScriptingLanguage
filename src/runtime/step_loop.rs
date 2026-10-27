@@ -3,6 +3,23 @@
 
 use super::*;
 
+// Precompute each name's last possible source-level use once. Job operations
+// cannot occur directly in loops; repeated calls have fresh job scopes. Names in
+// nested scopes can only delay cleanup.
+fn job_last_uses(steps: &[crate::ast::Step]) -> BTreeMap<&str, usize> {
+    let mut last = BTreeMap::new();
+    for (index, step) in steps.iter().enumerate() {
+        let name = match &step.kind {
+            StepKind::InspectJob { name, .. }
+            | StepKind::AwaitJob { name, .. }
+            | StepKind::CancelJob { name } => name,
+            _ => continue,
+        };
+        last.insert(name.as_str(), index);
+    }
+    last
+}
+
 /// Sync the directory entry after a checkpointed file write where the platform
 /// supports opening directories as ordinary files. Windows requires backup
 /// semantics flags to open a directory; the file itself is synced by its writer.
@@ -180,6 +197,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         bail!("finite-scope background job handles are unsupported in this execution lifetime, including imported program modules");
     }
     let mut job_supervisor = jobs::Supervisor::new(signals, options.max_output_bytes)?;
+    let last_job_uses = job_last_uses(&program.steps);
     let mut sensitivity_floor = workflow_sensitivity_floor(
         program,
         registry,
@@ -1144,6 +1162,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         signals,
                         || serde_json::json!({"event":"job_inspect","line":step.line,"job":name,"output_bytes":bytes.len()}),
                     )?;
+                    if last_job_uses.get(name.as_str()) == Some(&index) {
+                        job_supervisor.retire_resolved(scope, name);
+                    }
                 }
                 StepKind::AwaitJob {
                     name,
@@ -1222,6 +1243,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         signals,
                         || serde_json::json!({"event":"job_await","line":step.line,"job":name,"status":status}),
                     )?;
+                    if last_job_uses.get(name.as_str()) == Some(&index) {
+                        job_supervisor.retire_resolved(scope, name);
+                    }
                 }
                 StepKind::CancelJob { name } => {
                     let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
@@ -1233,6 +1257,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         signals,
                         || serde_json::json!({"event":"job_cancel","line":step.line,"job":name}),
                     )?;
+                    if last_job_uses.get(name.as_str()) == Some(&index) {
+                        job_supervisor.retire_resolved(scope, name);
+                    }
                 }
                 // A replayed run leaves files alone; the pipeline value still flows.
                 StepKind::Append { .. } | StepKind::Save { .. } | StepKind::Redirect { .. }

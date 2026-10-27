@@ -1,8 +1,8 @@
 //! Scope-owned native pipeline jobs for finite workflow executions.
 //!
-//! A job handle remains in this table until its lexical owner exits. Workers
-//! use the ordinary native pipeline supervisor; this module owns only their
-//! lifetime and the explicit source-level handle operations.
+//! A resolved job remains in this table until its last possible source-level use
+//! or its lexical owner exits. Workers use the ordinary native pipeline supervisor;
+//! this module owns their lifetime and the explicit source-level handle operations.
 
 use super::*;
 use crate::ast::{JobStage, Value};
@@ -32,7 +32,7 @@ pub(super) struct JobEnv<'a> {
 #[derive(Default)]
 struct BudgetCounts {
     active_jobs: usize,
-    created_handles: usize,
+    retained_handles: usize,
 }
 
 /// Shared by every lexical finite scope in one runtime run. Handles remain in
@@ -53,7 +53,7 @@ impl RunBudget {
         }
     }
 
-    fn reserve(self: &Arc<Self>) -> Result<ActiveJobPermit> {
+    fn reserve(self: &Arc<Self>) -> Result<(ActiveJobPermit, HandlePermit)> {
         let mut counts = self
             .counts
             .lock()
@@ -64,21 +64,20 @@ impl RunBudget {
                 execution_result::ExecutionKind::CapacityError,
             ));
         }
-        if counts.created_handles >= MAX_JOB_HANDLES {
+        if counts.retained_handles >= MAX_JOB_HANDLES {
             return Err(not_started_failure(
-                format!("finite run background job handle limit ({MAX_JOB_HANDLES}) reached"),
+                format!(
+                    "finite run retained background job handle limit ({MAX_JOB_HANDLES}) reached"
+                ),
                 execution_result::ExecutionKind::CapacityError,
             ));
         }
         counts.active_jobs += 1;
-        counts.created_handles += 1;
-        Ok(ActiveJobPermit(Arc::clone(self)))
-    }
-
-    fn rollback_created_handle(&self) {
-        if let Ok(mut counts) = self.counts.lock() {
-            counts.created_handles = counts.created_handles.saturating_sub(1);
-        }
+        counts.retained_handles += 1;
+        Ok((
+            ActiveJobPermit(Arc::clone(self)),
+            HandlePermit(Arc::clone(self)),
+        ))
     }
 
     fn retained_stdout(&self) -> Arc<AtomicUsize> {
@@ -96,6 +95,17 @@ impl Drop for ActiveJobPermit {
     fn drop(&mut self) {
         if let Ok(mut counts) = self.0.counts.lock() {
             counts.active_jobs = counts.active_jobs.saturating_sub(1);
+        }
+    }
+}
+
+// A permit belongs to the retained record, including after the worker exits.
+struct HandlePermit(Arc<RunBudget>);
+
+impl Drop for HandlePermit {
+    fn drop(&mut self) {
+        if let Ok(mut counts) = self.0.counts.lock() {
+            counts.retained_handles = counts.retained_handles.saturating_sub(1);
         }
     }
 }
@@ -238,6 +248,7 @@ struct Job {
     cancelled: Arc<std::sync::atomic::AtomicBool>,
     terminal: Option<execution_result::ExecutionResult>,
     resolved: bool,
+    _permit: HandlePermit,
 }
 
 /// The caller gets this error only when `spawn` could not reach its all-stages
@@ -400,9 +411,9 @@ impl Supervisor {
         )
         .with_context(|| format!("preflighting background job {name:?}"))?;
 
-        // Reserve run-wide active and created-handle capacity only after the
+        // Reserve run-wide active and retained-handle capacity only after the
         // complete pipeline has passed preflight and before its first effect.
-        let admission = self.budget.reserve()?;
+        let (admission, handle_permit) = self.budget.reserve()?;
 
         let stage_results = Arc::new(Mutex::new(vec![None; stages.len()]));
         let snapshot = Arc::new(Mutex::new(JobSnapshot::new(
@@ -529,7 +540,6 @@ impl Supervisor {
         let handle = match worker {
             Ok(handle) => handle,
             Err(error) => {
-                self.budget.rollback_created_handle();
                 return Err(error).context("starting background job worker");
             }
         };
@@ -541,6 +551,7 @@ impl Supervisor {
                 cancelled: job_cancelled,
                 terminal: None,
                 resolved: false,
+                _permit: handle_permit,
             },
         );
 
@@ -673,6 +684,14 @@ impl Supervisor {
             self.jobs.get_mut(&key).expect("job exists").resolved = true;
         }
         Ok(())
+    }
+
+    /// Discard a resolved record after its final possible source-level use.
+    pub(super) fn retire_resolved(&mut self, scope: usize, name: &str) {
+        let key = (scope, name.to_owned());
+        if self.jobs.get(&key).is_some_and(|job| job.resolved) {
+            self.jobs.remove(&key);
+        }
     }
 
     /// A normal lexical exit requires explicit observation through await or
@@ -948,6 +967,20 @@ mod tests {
     use super::*;
     use crate::ast::StepKind;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn released_job_permits_do_not_accumulate() -> Result<()> {
+        let budget = Arc::new(RunBudget::new(1024));
+        for _ in 0..10_000 {
+            let (active, handle) = budget.reserve()?;
+            drop(active);
+            drop(handle);
+            let counts = budget.counts.lock().unwrap();
+            assert_eq!(counts.active_jobs, 0);
+            assert_eq!(counts.retained_handles, 0);
+        }
+        Ok(())
+    }
 
     #[test]
     fn a_finished_process_still_requires_explicit_handle_resolution() -> Result<()> {

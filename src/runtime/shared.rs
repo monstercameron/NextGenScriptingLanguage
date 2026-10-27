@@ -2652,10 +2652,26 @@ mod binding_type_tests {
                 panic!("expected the fixture list invocation");
             };
             let manifest = registry.resolve_call(call).unwrap();
+            let item_kind = match expected {
+                InputType::JsonList => InputType::Json,
+                InputType::TextList => InputType::Text,
+                _ => unreachable!("fixture only produces text or JSON lists"),
+            };
+            let mut output_types = BTreeMap::new();
+            output_types.insert("bound".into(), expected);
             assert_eq!(
                 polymorphic_output_kind(manifest, call, &BTreeMap::new()),
                 Some(expected),
                 "unexpected output type for list items {values}"
+            );
+            assert_eq!(
+                crate::runtime::loops::element_type(
+                    &Value::Reference("bound".into()),
+                    &output_types,
+                )
+                .unwrap(),
+                item_kind,
+                "wrong loop element type for applet list items {values}"
             );
         }
     }

@@ -17,6 +17,12 @@ fn main() {
         "write" => {
             std::io::stdout().write_all(args[1].as_bytes()).unwrap();
         }
+        "invalid-utf8" => {
+            // Raw bytes for the Windows console replacement contract: 0xFF is
+            // not valid UTF-8, so a console must show U+FFFD while a pipe keeps
+            // the exact bytes.
+            std::io::stdout().write_all(&[0xFF, 0x41]).unwrap();
+        }
         "repeat-byte" => {
             let mut remaining: usize = args[1].parse().unwrap();
             let bytes = [b'x'; 4096];

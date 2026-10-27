@@ -85,6 +85,23 @@ fn complete_calls_work_with_explicit_text_and_pipeline_input() {
 }
 
 #[test]
+fn display_width_padding_runs_through_the_manifest_contract() {
+    let root = tempfile::tempdir().unwrap();
+    let source = "run text.pad with text \"界\" and width 2 and display_width true\n";
+    for command in ["check", "run"] {
+        let result = execute(root.path(), command, source, true);
+        assert!(
+            result.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        if command == "run" {
+            assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "界");
+        }
+    }
+}
+
+#[test]
 fn required_parameters_can_be_present_with_empty_or_zero_values() {
     let cases = [
         (

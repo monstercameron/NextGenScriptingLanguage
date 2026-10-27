@@ -374,6 +374,62 @@ fn text_and_list_shaping_are_utf8_aware() {
 }
 
 #[test]
+fn text_pad_can_use_terminal_display_width() {
+    assert_eq!(
+        run(
+            "text.pad",
+            json!({"text":"界","width":3,"display_width":true})
+        )
+        .unwrap(),
+        json!("界 ")
+    );
+    assert_eq!(
+        run(
+            "text.pad",
+            json!({"text":"界","width":3,"display_width":true,"side":"left"})
+        )
+        .unwrap(),
+        json!(" 界")
+    );
+    assert_eq!(
+        run(
+            "text.pad",
+            json!({"text":"x","width":4,"display_width":true,"fill":"界"})
+        )
+        .unwrap(),
+        json!("x界 ")
+    );
+    assert_eq!(
+        run(
+            "text.pad",
+            json!({"text":"🙂","width":3,"display_width":true,"fill":"."})
+        )
+        .unwrap(),
+        json!("🙂.")
+    );
+    assert!(run(
+        "text.pad",
+        json!({"text":"x","width":3,"display_width":true,"fill":"\u{301}"})
+    )
+    .is_err());
+
+    assert_eq!(
+        run("text.pad", json!({"text":"界","width":3})).unwrap(),
+        json!("界  ")
+    );
+    // Padding never truncates the input when it already meets or exceeds the
+    // requested display width.
+    assert_eq!(
+        run(
+            "text.pad",
+            json!({"text":"界ab","width":2,"display_width":true})
+        )
+        .unwrap(),
+        json!("界ab")
+    );
+}
+
+#[test]
 fn list_shaping_covers_ranges_slices_and_sequences() {
     assert_eq!(
         run("list.range", json!({"start":1,"stop":5})).unwrap(),

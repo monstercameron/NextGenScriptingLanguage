@@ -2,6 +2,7 @@ use super::{
     checkpoint_work, invalid, optional_string, required_string, AppletError, ExecutionContext,
 };
 use serde_json::{Map, Value};
+use unicode_width::UnicodeWidthStr;
 
 const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MATCHES: usize = 100_000;
@@ -399,17 +400,15 @@ pub(super) fn shape(
             Ok(Value::String(chars[start..end].iter().collect()))
         }
         "text.pad" => {
-            if args
+            let display_width = args
                 .get("display_width")
-                .is_some_and(|value| !value.is_boolean())
-            {
-                return Err(invalid("args.display_width must be a boolean"));
-            }
-            if args.get("display_width").and_then(Value::as_bool) == Some(true) {
-                return Err(invalid(
-                    "display-width padding is not available in this build",
-                ));
-            }
+                .map(|value| {
+                    value
+                        .as_bool()
+                        .ok_or_else(|| invalid("args.display_width must be a boolean"))
+                })
+                .transpose()?
+                .unwrap_or(false);
             let width = args
                 .get("width")
                 .and_then(Value::as_u64)
@@ -417,6 +416,39 @@ pub(super) fn shape(
                 as usize;
             let side = optional_string(args, "side", "right")?;
             let fill = optional_string(args, "fill", " ")?;
+            if fill.is_empty() {
+                return Err(invalid("args.fill cannot be empty"));
+            }
+            if display_width {
+                let padding_width = width.saturating_sub(UnicodeWidthStr::width(text));
+                let fill_width = UnicodeWidthStr::width(fill);
+                if padding_width > 0 && fill_width == 0 {
+                    return Err(invalid("args.fill must have positive display width"));
+                }
+                let mut padding = String::new();
+                if fill_width > 0 {
+                    let full_fills = padding_width / fill_width;
+                    let remainder = padding_width % fill_width;
+                    if full_fills
+                        .checked_mul(fill.len())
+                        .and_then(|bytes| bytes.checked_add(remainder))
+                        .and_then(|bytes| bytes.checked_add(text.len()))
+                        .is_none_or(|bytes| bytes > MAX_TEXT_BYTES)
+                    {
+                        return Err(invalid("text.pad output exceeds the text limit"));
+                    }
+                    for _ in 0..full_fills {
+                        padding.push_str(fill);
+                    }
+                    padding.extend(std::iter::repeat_n(' ', remainder));
+                }
+                let value = match side {
+                    "left" => format!("{padding}{text}"),
+                    "right" => format!("{text}{padding}"),
+                    _ => return Err(invalid("side must be left or right")),
+                };
+                return text_output(value);
+            }
             let fill_chars = fill.chars().collect::<Vec<_>>();
             if fill_chars.is_empty() {
                 return Err(invalid("args.fill cannot be empty"));

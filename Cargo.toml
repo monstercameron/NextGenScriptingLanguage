@@ -21,6 +21,7 @@ memchr = "2.8.3"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
+unicode-width = "0.2"
 url = { version = "2.5.8", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -30,7 +31,6 @@ signal-hook = "0.3"
 chrono = "0.4"
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
-unicode-width = { version = "0.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
@@ -55,7 +55,7 @@ module-tools = []
 # What-if planning, explain effect gates, and standalone checkpoint inspection.
 agent-advisory = []
 # The terminal UI shows live session state, so it implies the live control plane.
-tui = ["screens", "live", "dep:ratatui", "dep:crossterm", "dep:unicode-width"]
+tui = ["screens", "live", "dep:ratatui", "dep:crossterm"]
 # The live control endpoint, `run --control`, and `attach`.
 live = ["screens"]
 # The language server behind `execute lsp`: editor completions, hovers, and diagnostics.

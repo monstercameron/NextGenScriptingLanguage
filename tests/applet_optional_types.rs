@@ -12,6 +12,7 @@ fn cases() -> Vec<(&'static str, Value, &'static str)> {
         ("time.format", json!({"epoch":0,"format":"%H:%M"}), "zone"),
         ("text.pad", json!({"text":"x","width":3}), "side"),
         ("text.pad", json!({"text":"x","width":3}), "fill"),
+        ("text.pad", json!({"text":"x","width":3}), "display_width"),
         (
             "text.truncate",
             json!({"text":"abcd","width":2}),

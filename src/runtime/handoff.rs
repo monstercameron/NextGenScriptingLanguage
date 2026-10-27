@@ -363,12 +363,9 @@ mod tests {
     fn hand_over_refuses_to_start_when_already_cancelled() {
         use std::sync::{atomic::AtomicBool, Arc};
         let cancelled = Arc::new(AtomicBool::new(true));
-        let signals = crate::runtime::Signals::with_cancellation_and_deadline(
-            cancelled,
-            false,
-            None,
-        )
-        .unwrap();
+        let signals =
+            crate::runtime::Signals::with_cancellation_and_deadline(cancelled, false, None)
+                .unwrap();
         // The command is never spawned: the pre-spawn budget check refuses it.
         let command = std::process::Command::new("execute-no-such-program-for-handoff");
         let error = hand_over(command, &signals).unwrap_err();
@@ -436,10 +433,7 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 continue;
             }
-            panic!(
-                "the tasklist probe for PID {pid} failed: {}",
-                stderr.trim()
-            );
+            panic!("the tasklist probe for PID {pid} failed: {}", stderr.trim());
         }
         unreachable!("the tasklist probe retry loop must return or panic");
     }
@@ -492,7 +486,11 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn budget_fixture_script_with_sleep(parent: &Path, descendant: &Path, sleep_secs: u64) -> String {
+    fn budget_fixture_script_with_sleep(
+        parent: &Path,
+        descendant: &Path,
+        sleep_secs: u64,
+    ) -> String {
         let powershell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
         let parent_forward = parent.to_str().unwrap().replace('\\', "/");
         let descendant_forward = descendant.to_str().unwrap().replace('\\', "/");
@@ -545,14 +543,12 @@ mod tests {
                 stop.store(true, Ordering::Release);
             });
         }
-        let signals = crate::runtime::Signals::with_cancellation_and_deadline(
-            cancelled,
-            false,
-            None,
-        )
-        .unwrap();
-        let mut command =
-            std::process::Command::new(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
+        let signals =
+            crate::runtime::Signals::with_cancellation_and_deadline(cancelled, false, None)
+                .unwrap();
+        let mut command = std::process::Command::new(
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        );
         command.args(["-NoProfile", "-NonInteractive", "-Command", script.as_str()]);
         let started = Instant::now();
         let error = hand_over(command, &signals).unwrap_err();
@@ -623,8 +619,7 @@ mod tests {
         // slow/emulated ARM runner, while the deadline still fires long
         // before the sleep would end, so an early return proves the deadline
         // path rather than natural exit.
-        let script =
-            budget_fixture_script_with_sleep(&parent_pid_file, &descendant_pid_file, 120);
+        let script = budget_fixture_script_with_sleep(&parent_pid_file, &descendant_pid_file, 120);
         let ready = Arc::new(AtomicBool::new(false));
         {
             let ready = Arc::clone(&ready);
@@ -655,8 +650,9 @@ mod tests {
             Some(Instant::now() + Duration::from_secs(30)),
         )
         .unwrap();
-        let mut command =
-            std::process::Command::new(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
+        let mut command = std::process::Command::new(
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        );
         command.args(["-NoProfile", "-NonInteractive", "-Command", script.as_str()]);
         let started = Instant::now();
         let error = hand_over(command, &signals).unwrap_err();

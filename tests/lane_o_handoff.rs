@@ -278,10 +278,7 @@ fn probe_pid(pid: u32) -> Option<String> {
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
-        panic!(
-            "the tasklist probe for PID {pid} failed: {}",
-            stderr.trim()
-        );
+        panic!("the tasklist probe for PID {pid} failed: {}", stderr.trim());
     }
     unreachable!("the tasklist probe retry loop must return or panic");
 }
@@ -355,7 +352,10 @@ fn hand_over_kill_ends_the_handed_over_child() {
     // proves the job ended them only if they demonstrably existed first.
     let pid_by = Instant::now() + Duration::from_secs(20);
     let (child_pid, descendant_pid) = loop {
-        let pair = (read_pid_file(&pid_file), read_pid_file(&descendant_pid_file));
+        let pair = (
+            read_pid_file(&pid_file),
+            read_pid_file(&descendant_pid_file),
+        );
         if let (Some(child), Some(descendant)) = pair {
             if our_pid_is_running(child) && our_pid_is_running(descendant) {
                 break (child, descendant);

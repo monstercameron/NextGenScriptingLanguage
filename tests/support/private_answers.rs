@@ -8,9 +8,31 @@ pub fn make_private(path: &Path) {
     }
     #[cfg(windows)]
     {
-        let who = std::process::Command::new("whoami").output().unwrap();
+        let who = std::process::Command::new("whoami")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .unwrap();
         assert!(who.status.success());
-        let principal = String::from_utf8(who.stdout).unwrap().trim().to_owned();
+        let identity = String::from_utf8(who.stdout).unwrap();
+        let sid = identity
+            .lines()
+            .next()
+            .and_then(|line| line.rsplit(',').next())
+            .map(|value| value.trim().trim_matches('"'))
+            .filter(|value| value.starts_with("S-1-"))
+            .expect("whoami /user must return the current user's SID");
+        let principal = format!("*{sid}");
+        let reset = std::process::Command::new("icacls")
+            .arg(path)
+            .arg("/reset")
+            .output()
+            .unwrap();
+        assert!(
+            reset.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&reset.stdout),
+            String::from_utf8_lossy(&reset.stderr)
+        );
         let owner = std::process::Command::new("icacls")
             .arg(path)
             .arg("/setowner")

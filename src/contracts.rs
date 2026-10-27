@@ -1204,6 +1204,27 @@ fn compare_numbers(
     }
 }
 
+/// Compare a validated manifest numeric value with a JSON Schema bound.
+/// Integer values use exact integer comparisons, including above 2^53.
+pub(crate) fn compare_numeric_value_to_number(
+    value: &Value,
+    bound: &serde_json::Number,
+) -> Option<std::cmp::Ordering> {
+    match value {
+        Value::Integer(value) => compare_integer_to_number(i128::from(*value), bound),
+        Value::Number(value) => compare_numbers(value, bound),
+        _ => None,
+    }
+}
+
+/// Compare two finite JSON numbers with the same semantics as `ValueSchema`.
+pub(crate) fn compare_json_numbers(
+    left: &serde_json::Number,
+    right: &serde_json::Number,
+) -> Option<std::cmp::Ordering> {
+    compare_numbers(left, right)
+}
+
 fn integer_number(number: &serde_json::Number) -> Option<i128> {
     number
         .as_i64()

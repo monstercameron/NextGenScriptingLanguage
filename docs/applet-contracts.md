@@ -171,6 +171,13 @@ lifecycle and raw output. A v1 contract defaults to `backend: "command"` and
 the one-shot lifecycle. Unknown contract keys and unsupported versions are
 errors during catalog validation.
 
+Manifest parameters may use `"type":"number"` for any JSON number, including
+fractional values, `"type":"integer"` for signed 64-bit integers, or
+`"type":"unsigned_integer"` for nonnegative platform-sized integers. These
+numeric parameter types may declare inclusive `minimum` and `maximum` bounds;
+they appear in the parameter JSON Schema and are checked again after dynamic
+references resolve. Numeric bounds on other parameter types are rejected.
+
 | Contract type | Wire form and validation |
 | --- | --- |
 | `bytes` | Raw bytes only. It has no typed binding. |

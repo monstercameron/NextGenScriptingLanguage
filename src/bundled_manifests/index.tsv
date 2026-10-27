@@ -181,28 +181,28 @@ git.commit.json	701	git.commit	commit changes	80046	271
 grep.json	515	grep		80317	232
 head.json	347	head		80549	186
 jev.ask.json	1867	jev.ask		80735	466
-jev.classify.json	4559	jev.classify		81201	892
-jev.judge.json	3341	jev.judge		82093	685
-jev.score.json	3528	jev.score		82778	724
-join.json	528	join		83502	230
-jq.json	529	jq		83732	245
-jq.ps.json	993	jq.ps		83977	480
-llm.ask.json	4445	llm.ask		84457	805
-llm.extract.json	4606	llm.extract		85262	829
-ls.json	546	ls		86091	217
-mkdir.json	553	mkdir		86308	242
-omarchy.browser-refresh.json	1052	omarchy.browser-refresh		86550	416
-omarchy.editor-install.json	1109	omarchy.editor-install		86966	408
-omarchy.editor-list.json	1057	omarchy.editor-list		87374	421
-paste.json	531	paste		87795	230
-printf.json	345	printf	print	88025	183
-ps.json	358	ps		88208	191
-pwd.json	129	pwd		88399	100
-sed.json	512	sed		88499	235
-sort.json	367	sort		88734	191
-tail.follow.json	476	tail.follow	follow file	88925	216
-tail.json	599	tail		89141	240
-tr.json	627	tr		89381	248
-uniq.json	367	uniq		89629	192
-upper.json	300	upper	uppercase	89821	169
-wc.json	383	wc		89990	203
+jev.classify.json	4693	jev.classify		81201	928
+jev.judge.json	3475	jev.judge		82129	723
+jev.score.json	3662	jev.score		82852	762
+join.json	528	join		83614	230
+jq.json	529	jq		83844	245
+jq.ps.json	993	jq.ps		84089	480
+llm.ask.json	4623	llm.ask		84569	853
+llm.extract.json	4784	llm.extract		85422	878
+ls.json	546	ls		86300	217
+mkdir.json	553	mkdir		86517	242
+omarchy.browser-refresh.json	1052	omarchy.browser-refresh		86759	416
+omarchy.editor-install.json	1109	omarchy.editor-install		87175	408
+omarchy.editor-list.json	1057	omarchy.editor-list		87583	421
+paste.json	531	paste		88004	230
+printf.json	345	printf	print	88234	183
+ps.json	358	ps		88417	191
+pwd.json	129	pwd		88608	100
+sed.json	512	sed		88708	235
+sort.json	367	sort		88943	191
+tail.follow.json	476	tail.follow	follow file	89134	216
+tail.json	599	tail		89350	240
+tr.json	627	tr		89590	248
+uniq.json	367	uniq		89838	192
+upper.json	300	upper	uppercase	90030	169
+wc.json	383	wc		90199	203

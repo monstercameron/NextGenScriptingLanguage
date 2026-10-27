@@ -24,13 +24,19 @@
       "nonempty": true
     },
     "minimum": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
     },
     "max_bytes": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16777216
     },
     "timeout_ms": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300000
     },
     "env_file": {
       "type": "string"

@@ -189,9 +189,10 @@ values are stored as decimals, so write `1.0` in a fixture rather than `1`.
 
 ## Limits, credentials, and offline fixtures
 
-The manifests expose `timeout_ms`, `max_bytes`, and optional `fixture` for each
-operation; Jev operations also accept `minimum` and optional `model`. OpenAI
-operations accept `max_tokens` and require an explicit `model`. `llm.ask` and
+The manifests expose `timeout_ms` (1–300,000), `max_bytes` (1–16,777,216), and
+optional `fixture` for each operation; Jev operations also accept `minimum`
+(0–100) and optional `model`. OpenAI operations accept `max_tokens`
+(1–65,536) and require an explicit `model`. `llm.ask` and
 `llm.extract` also accept `endpoint`, `api`, `effort`, and `temperature`; see
 the next section. `timeout_ms`
 bounds the helper's HTTP request. The runtime's `--command-timeout-ms` bounds the

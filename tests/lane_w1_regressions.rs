@@ -12,7 +12,7 @@ fn output(work: &Path, args: &[&str]) -> Output {
     execute().current_dir(work).args(args).output().unwrap()
 }
 
-#[cfg(any(windows, feature = "tooling", feature = "module-tools"))]
+#[cfg(any(feature = "tooling", feature = "module-tools"))]
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }

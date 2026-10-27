@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::Path;
 
 use crate::ast::Value;
@@ -60,7 +60,7 @@ impl ResolutionDecision {
 }
 
 /// One operator resolution, as stored in `resolutions.jsonl`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResolutionRecord {
     pub(crate) version: u32,
@@ -379,7 +379,7 @@ fn json_to_value(json: &serde_json::Value) -> Value {
             if let Some(int) = value.as_i64() {
                 Value::Integer(int)
             } else {
-                Value::Number(value.to_string())
+                Value::Number(value.clone())
             }
         }
         serde_json::Value::String(value) => Value::String(value.clone()),

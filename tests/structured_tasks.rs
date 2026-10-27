@@ -498,9 +498,9 @@ fn parallel_for_each_fan_out_far_beyond_the_limit_runs_every_element() -> Result
     Ok(())
 }
 
-/// Issue #553: every element currently receives its own copy of the run
-/// options, so a group must still succeed when the run carries inputs. A
-/// future change that shares inputs through `Arc` must keep this behavior.
+/// Issue #553: elements share the run options through `Arc` instead of each
+/// receiving a copy, so a group must still succeed when the run carries
+/// inputs. This pins that shared-inputs behavior against regressions.
 #[test]
 fn parallel_for_each_with_run_inputs_present_runs_every_element() -> Result<()> {
     let directory = tempfile::tempdir()?;

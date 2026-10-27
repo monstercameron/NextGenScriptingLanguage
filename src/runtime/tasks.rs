@@ -935,6 +935,24 @@ pub(super) fn run_each(
     // Native element output is charged against one shared budget as it arrives, so
     // an element that would cross the aggregate limit stops then, not at completion.
     let group_budget = Arc::new(std::sync::atomic::AtomicUsize::new(total_output_bytes));
+    // `RunOptions` owns its run-input map, so cloning it per element copies
+    // every input once per element. Element workers never read those inputs:
+    // a nested invocation resolves its own parameters (moved above) and
+    // program-module children derive their inputs from them, while run inputs
+    // are consumed once by top-level run setup. The only per-element
+    // adjustments are the output cap and the deadline-derived timeout, so
+    // share one `Arc` per output variant instead of cloning the inputs per
+    // element. A run with an outer deadline still builds a per-element copy
+    // below so its timeout stays exact.
+    let shared_options: Arc<RunOptions> = Arc::new(options.clone());
+    let shared_capped_options: Option<Arc<RunOptions>> =
+        if per_task_output_limit < options.max_output_bytes {
+            let mut capped = options.clone();
+            capped.max_output_bytes = per_task_output_limit;
+            Some(Arc::new(capped))
+        } else {
+            None
+        };
     let mut next = 0usize;
     let mut active = 0usize;
     let mut stopped: Option<(usize, String)> = None;
@@ -969,28 +987,43 @@ pub(super) fn run_each(
             let applet = std::mem::take(&mut prepared[index].applet);
             let parameters = std::mem::take(&mut prepared[index].parameters);
             let native_command = prepared[index].native_command;
+            // `Registry` is internally `Arc`-backed, so this is a refcount
+            // bump; the context clone bumps a few small `Arc` vectors while
+            // each worker still needs its own mutable context below.
             let registry = registry.clone();
             let mut context = context.clone();
             let environment = environment.clone();
             context.group_output_budget = Some((Arc::clone(&group_budget), max_output_bytes));
             let inherited_cancelled = context.outer_cancelled.clone();
             let parent_cancelled = Arc::clone(&cancelled);
-            let mut task_options = options.clone();
-            // Native stdout and retained stderr share the incremental group
-            // budget, so an individual element can use the available budget.
-            // Other backends retain their conservative per-worker cap.
-            if !native_command {
-                task_options.max_output_bytes =
-                    task_options.max_output_bytes.min(per_task_output_limit);
-            }
-            if let Some(deadline) = outer_deadline {
+            // Share the run inputs through `Arc`: without an outer deadline
+            // the options are identical for every element of a backend kind,
+            // so move a refcount bump of a prebuilt variant into the worker
+            // instead of copying the input map per element. Native stdout and
+            // retained stderr share the incremental group budget, so a native
+            // element can use the available budget while other backends retain
+            // their conservative per-worker cap.
+            let element_options: Arc<RunOptions> = if let Some(deadline) = outer_deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                task_options.total_timeout = Some(
-                    task_options
+                let mut owned = (*shared_options).clone();
+                if !native_command {
+                    owned.max_output_bytes = owned.max_output_bytes.min(per_task_output_limit);
+                }
+                owned.total_timeout = Some(
+                    owned
                         .total_timeout
                         .map_or(remaining, |duration| duration.min(remaining)),
                 );
-            }
+                Arc::new(owned)
+            } else if !native_command {
+                if let Some(capped) = shared_capped_options.as_ref() {
+                    Arc::clone(capped)
+                } else {
+                    Arc::clone(&shared_options)
+                }
+            } else {
+                Arc::clone(&shared_options)
+            };
             let sender = sender.clone();
             let spawned = scope.spawn(move |token| {
                 let _output_scope = super::OutputScopeGuard::enter(super::OutputScope::TaskGroup);
@@ -1009,7 +1042,7 @@ pub(super) fn run_each(
                             direct,
                             parameters,
                             input: Vec::new(),
-                            options: &task_options,
+                            options: &*element_options,
                         },
                         token.cancellation_flag(),
                         context,

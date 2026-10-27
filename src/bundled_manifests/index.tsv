@@ -26,183 +26,183 @@ core.fs_glob.json	1549	fs.glob	fs glob	9738	509
 core.fs_read.json	1106	fs.read		10247	411
 core.fs_snapshot.json	1118	fs.snapshot		10658	414
 core.fs_test.json	1608	fs.test	fs test	11072	492
-core.fs_transaction.json	1871	fs.transaction		11564	577
-core.fs_transaction_recover.json	1959	fs.transaction.recover		12141	622
-core.fs_unlink_checked.json	1970	fs.unlink_checked		12763	613
-core.fs_write_atomic.json	2803	fs.write_atomic		13376	737
-core.hash_sha256.json	1165	hash.sha256	hash sha256	14113	406
-core.hash_sha512.json	1165	hash.sha512	hash sha512	14519	404
-core.hypr_activewindow.json	780	hypr.activewindow		14923	344
-core.hypr_clients.json	814	hypr.clients		15267	351
-core.hypr_dispatch.json	1904	hypr.dispatch		15618	662
-core.hypr_dispatch_exec.json	1396	hypr.dispatch_exec		16280	520
-core.hypr_monitors.json	817	hypr.monitors		16800	354
-core.hypr_socket2.json	925	hypr.socket2		17154	399
-core.hypr_workspaces.json	823	hypr.workspaces		17553	355
-core.ini_parse.json	1134	ini.parse	ini parse	17908	389
-core.ini_stringify.json	1220	ini.stringify	ini stringify	18297	427
-core.json_concat.json	1453	json.concat	json concat	18724	411
-core.json_delete.json	1228	json.delete	json delete	19135	418
-core.json_entries.json	1222	json.entries	json entries	19553	407
-core.json_filter.json	1654	json.filter	json filterfilter json records	19960	458
-core.json_first.json	1189	json.first	json first	20418	401
-core.json_get.json	1850	json.get	get JSON valueuse JSON fallback	20819	501
-core.json_group_by.json	1334	json.group_by	json group_by	21320	454
-core.json_has.json	1206	json.has	json has	21774	411
-core.json_keys.json	1210	json.keys	json keys	22185	406
-core.json_last.json	1185	json.last	json last	22591	401
-core.json_length.json	1224	json.length	json length	22992	415
-core.json_map.json	1887	json.map	map JSON valuesselect JSON fields	23407	518
-core.json_merge.json	1605	json.merge	json merge	23925	470
-core.json_omit.json	1490	json.omit	json omit	24395	471
-core.json_parse.json	1136	json.parse	json parse	24866	387
-core.json_pick.json	1490	json.pick	json pick	25253	473
-core.json_rename_keys.json	1631	json.rename_keys	json rename_keys	25726	464
-core.json_set.json	1499	json.set	json set	26190	413
-core.json_sort_by.json	1425	json.sort_by	json sort_by	26603	447
-core.json_stringify.json	1025	json.stringify	json stringify	27050	373
-core.json_sum.json	1013	json.sum	json sum	27423	381
-core.json_unique_by.json	1327	json.unique_by	json unique_by	27804	451
-core.json_values.json	1309	json.values	json values	28255	426
-core.jsonc_edit_content.json	1863	jsonc.edit_content	jsonc edit_content	28681	479
-core.jsonc_remove.json	2186	jsonc.remove		29160	642
-core.jsonc_set.json	2244	jsonc.set		29802	645
-core.list_chunk.json	1393	list.chunk	list chunkitems chunk	30447	421
-core.list_concat.json	1277	list.concat	list concatitems concat	30868	407
-core.list_count.json	2125	list.count	count itemscount valuescount list	31275	493
-core.list_enumerate.json	1219	list.enumerate	list enumerateitems enumerate	31768	400
-core.list_first.json	1083	list.first	list firstitems first	32168	383
-core.list_flatten.json	1381	list.flatten	list flattenitems flatten	32551	420
-core.list_group.json	1920	list.group	group recordscount by key	32971	492
-core.list_last.json	1078	list.last	list lastitems last	33463	383
-core.list_max.json	2135	list.max	maximum valuelargest number	33846	517
-core.list_min.json	2136	list.min	minimum valuesmallest number	34363	518
-core.list_range.json	1502	list.range	list rangestart range	34881	421
-core.list_rest.json	1194	list.rest	list restitems rest	35302	394
-core.list_reverse.json	1209	list.reverse	list reverseitems reverse	35696	398
-core.list_slice.json	2197	list.slice	list sliceitems slice	36094	563
-core.list_sort.json	1951	list.sort	sort listorder records	36657	504
-core.list_sum.json	2102	list.sum	sum valuesadd list numbers	37161	502
-core.list_top.json	1925	list.top	top valueslargest records	37663	500
-core.list_unique.json	2262	list.unique	deduplicate listunique values	38163	520
-core.list_zip.json	1443	list.zip	list zipleft zip	38683	413
-core.menu_fuzzel.json	1791	menu.fuzzel		39096	536
-core.menu_gum_choose.json	2000	menu.gum_choose		39632	561
-core.menu_gum_confirm.json	1666	menu.gum_confirm		40193	538
-core.menu_gum_input.json	2354	menu.gum_input		40731	581
-core.menu_walker.json	1445	menu.walker		41312	506
-core.notify_dismiss.json	1481	notify.dismiss		41818	475
-core.notify_restore.json	688	notify.restore		42293	307
-core.notify_send.json	4908	notify.send		42600	817
-core.number_abs.json	1020	number.abs	number absvalue abs	43417	360
-core.number_add.json	1233	number.add	number addadd numberssum numbers	43777	399
-core.number_ceil.json	1025	number.ceil	number ceilvalue ceil	44176	361
-core.number_clamp.json	1406	number.clamp	number clampvalue clamp	44537	393
-core.number_compare.json	1225	number.compare	number compare	44930	397
-core.number_divide.json	1219	number.divide	number divide	45327	389
-core.number_divmod.json	1220	number.divmod	number divmodleft divmod	45716	393
-core.number_floor.json	1030	number.floor	number floorvalue floor	46109	363
-core.number_format.json	1987	number.format	number formatvalue format	46472	550
-core.number_format_size.json	1956	number.format_size	number format_sizevalue format_size	47022	567
-core.number_int_divide.json	1246	number.int_divide	number int_divideleft int_divide	47589	400
-core.number_max.json	1021	number.max	number maxvalues max	47989	370
-core.number_min.json	1021	number.min	number minvalues min	48359	370
-core.number_modulo.json	1226	number.modulo	number moduloleft modulo	48729	397
-core.number_multiply.json	1227	number.multiply	number multiply	49126	391
-core.number_parse_integer.json	1965	number.parse_integer	number parse_integer	49517	561
-core.number_parse_integer_result.json	2289	number.parse_integer.result	number parse_integer result	50078	649
-core.number_round.json	1204	number.round	number roundvalue round	50727	392
-core.number_sign.json	1025	number.sign	number signvalue sign	51119	362
-core.number_subtract.json	1227	number.subtract	number subtract	51481	390
-core.number_to_text.json	1050	number.to_text	number to_text	51871	387
-core.number_trunc.json	1030	number.trunc	number truncvalue trunc	52258	363
-core.osd_brightness.json	1118	osd.brightness		52621	427
-core.osd_caps.json	681	osd.caps		53048	314
-core.osd_volume.json	1165	osd.volume		53362	442
-core.package_check_updates.json	857	package.check_updates		53804	358
-core.package_install.json	1215	package.install		54162	440
-core.package_install_aur.json	1176	package.install_aur		54602	437
-core.package_query.json	1200	package.query		55039	440
-core.path_basename.json	1189	path.basename	path basename	55479	401
-core.path_dirname.json	1015	path.dirname	path dirname	55880	377
-core.path_join.json	1097	path.join	path join	56257	393
-core.path_remove_suffix.json	1235	path.remove_suffix	path remove_suffix	56650	399
-core.systemd_user_disable.json	1088	systemd.user.disable		57049	417
-core.systemd_user_enable.json	1085	systemd.user.enable		57466	418
-core.systemd_user_is_active.json	1342	systemd.user.is_active		57884	481
-core.systemd_user_restart.json	1088	systemd.user.restart		58365	417
-core.systemd_user_start.json	1082	systemd.user.start		58782	416
-core.systemd_user_stop.json	1079	systemd.user.stop		59198	417
-core.text_concat.json	1283	text.concat	text concat	59615	415
-core.text_contains_any.json	1288	text.contains_any	find any text	60030	428
-core.text_count_lines_by.json	2164	text.count_lines_by	count lines by fieldgroup lines by key	60458	633
-core.text_default_if_empty.json	1404	text.default_if_empty	text default_if_emptydefault empty text	61091	427
-core.text_ends_with.json	1191	text.ends_with	check text ending	61518	404
-core.text_format.json	2017	text.format	format templateescape textbuild safe text	61922	566
-core.text_join.json	1301	text.join	text joinjoin textconcatenate text	62488	425
-core.text_length.json	1298	text.length	count text characters	62913	429
-core.text_lines.json	1254	text.lines	text lines	63342	409
-core.text_lower.json	1160	text.lower	text lowerlowercase text	63751	390
-core.text_matches.json	2028	text.matches	text matches	64141	523
-core.text_pad.json	2180	text.pad	pad text to width	64664	581
-core.text_render.json	2241	text.render	text renderrender templatefill template	65245	617
-core.text_repeat.json	1172	text.repeat	repeat text	65862	395
-core.text_replace.json	1776	text.replace	text replacereplace text	66257	494
-core.text_split.json	2412	text.split	text split	66751	583
-core.text_starts_with.json	1197	text.starts_with	check text prefix	67334	405
-core.text_strip_prefix.json	1386	text.strip_prefix	text strip_prefixremove text prefix	67739	419
-core.text_strip_suffix.json	1386	text.strip_suffix	text strip_suffixremove text suffix	68158	421
-core.text_substring.json	2305	text.substring	take text substring	68579	595
-core.text_trim.json	1534	text.trim	text trimtrim whitespacetrim surrounding whitespace	69174	448
-core.text_trim_final_lf.json	1191	text.trim_final_lf	text trim_final_lf	69622	401
-core.text_truncate.json	1353	text.truncate	shorten text	70023	412
-core.text_upper.json	1160	text.upper	text upperuppercase text	70435	390
-core.time_add.json	1649	time.add	time add	70825	470
-core.time_diff.json	1647	time.diff	time diff	71295	482
-core.time_format.json	1426	time.format	time format	71777	420
-core.time_now.json	1034	time.now	time now	72197	386
-core.time_parse.json	1231	time.parse	time parse	72583	404
-core.time_sleep.json	2143	time.sleep	time sleep	72987	550
-core.toml_parse.json	1138	toml.parse	toml parse	73537	390
-core.toml_stringify.json	1224	toml.stringify	toml stringify	73927	426
-core.wait_until.json	4935	wait.until	wait until	74353	822
-core.yaml_parse.json	1153	yaml.parse	yaml parseparse yamlread yaml	75175	401
-core.yaml_stringify.json	1027	yaml.stringify	yaml stringify	75576	379
-count.lines.json	265	count.lines	count lines	75955	164
-cut.json	497	cut		76119	206
-desktop.clock_format.json	1449	desktop.clock_format		76325	487
-desktop.clock_local.json	1170	desktop.clock_local		76812	438
-desktop.clock_remote.json	1213	desktop.clock_remote		77250	438
-desktop.fixture_sync.json	1769	desktop.fixture_sync		77688	528
-desktop.quickshell.json	599	desktop.quickshell		78216	283
-false.json	166	false	fail	78499	117
-gh.repo.json	546	gh.repo		78616	249
-git.commit.json	701	git.commit	commit changes	78865	271
-grep.json	515	grep		79136	232
-head.json	347	head		79368	186
-jev.ask.json	1867	jev.ask		79554	466
-jev.classify.json	4559	jev.classify		80020	892
-jev.judge.json	3341	jev.judge		80912	685
-jev.score.json	3528	jev.score		81597	724
-join.json	528	join		82321	230
-jq.json	529	jq		82551	245
-jq.ps.json	993	jq.ps		82796	480
-llm.ask.json	4445	llm.ask		83276	805
-llm.extract.json	4606	llm.extract		84081	829
-ls.json	546	ls		84910	217
-mkdir.json	553	mkdir		85127	242
-omarchy.browser-refresh.json	1052	omarchy.browser-refresh		85369	416
-omarchy.editor-install.json	1109	omarchy.editor-install		85785	408
-omarchy.editor-list.json	1057	omarchy.editor-list		86193	421
-paste.json	531	paste		86614	230
-printf.json	345	printf	print	86844	183
-ps.json	358	ps		87027	191
-pwd.json	129	pwd		87218	100
-sed.json	512	sed		87318	235
-sort.json	367	sort		87553	191
-tail.follow.json	476	tail.follow	follow file	87744	216
-tail.json	599	tail		87960	240
-tr.json	627	tr		88200	248
-uniq.json	367	uniq		88448	192
-upper.json	300	upper	uppercase	88640	169
-wc.json	383	wc		88809	203
+core.fs_transaction.json	2814	fs.transaction		11564	747
+core.fs_transaction_recover.json	1959	fs.transaction.recover		12311	622
+core.fs_unlink_checked.json	1970	fs.unlink_checked		12933	613
+core.fs_write_atomic.json	2803	fs.write_atomic		13546	737
+core.hash_sha256.json	1165	hash.sha256	hash sha256	14283	406
+core.hash_sha512.json	1165	hash.sha512	hash sha512	14689	404
+core.hypr_activewindow.json	780	hypr.activewindow		15093	344
+core.hypr_clients.json	814	hypr.clients		15437	351
+core.hypr_dispatch.json	1904	hypr.dispatch		15788	662
+core.hypr_dispatch_exec.json	1396	hypr.dispatch_exec		16450	520
+core.hypr_monitors.json	817	hypr.monitors		16970	354
+core.hypr_socket2.json	925	hypr.socket2		17324	399
+core.hypr_workspaces.json	823	hypr.workspaces		17723	355
+core.ini_parse.json	1134	ini.parse	ini parse	18078	389
+core.ini_stringify.json	1220	ini.stringify	ini stringify	18467	427
+core.json_concat.json	1453	json.concat	json concat	18894	411
+core.json_delete.json	1228	json.delete	json delete	19305	418
+core.json_entries.json	1222	json.entries	json entries	19723	407
+core.json_filter.json	2887	json.filter	json filterfilter json records	20130	634
+core.json_first.json	1189	json.first	json first	20764	401
+core.json_get.json	1850	json.get	get JSON valueuse JSON fallback	21165	501
+core.json_group_by.json	1334	json.group_by	json group_by	21666	454
+core.json_has.json	1206	json.has	json has	22120	411
+core.json_keys.json	1210	json.keys	json keys	22531	406
+core.json_last.json	1185	json.last	json last	22937	401
+core.json_length.json	1224	json.length	json length	23338	415
+core.json_map.json	1887	json.map	map JSON valuesselect JSON fields	23753	518
+core.json_merge.json	1605	json.merge	json merge	24271	470
+core.json_omit.json	1490	json.omit	json omit	24741	471
+core.json_parse.json	1136	json.parse	json parse	25212	387
+core.json_pick.json	1490	json.pick	json pick	25599	473
+core.json_rename_keys.json	1631	json.rename_keys	json rename_keys	26072	464
+core.json_set.json	1499	json.set	json set	26536	413
+core.json_sort_by.json	1425	json.sort_by	json sort_by	26949	447
+core.json_stringify.json	1025	json.stringify	json stringify	27396	373
+core.json_sum.json	1013	json.sum	json sum	27769	381
+core.json_unique_by.json	1327	json.unique_by	json unique_by	28150	451
+core.json_values.json	1309	json.values	json values	28601	426
+core.jsonc_edit_content.json	1863	jsonc.edit_content	jsonc edit_content	29027	479
+core.jsonc_remove.json	2186	jsonc.remove		29506	642
+core.jsonc_set.json	2244	jsonc.set		30148	645
+core.list_chunk.json	1393	list.chunk	list chunkitems chunk	30793	421
+core.list_concat.json	1277	list.concat	list concatitems concat	31214	407
+core.list_count.json	2125	list.count	count itemscount valuescount list	31621	493
+core.list_enumerate.json	1219	list.enumerate	list enumerateitems enumerate	32114	400
+core.list_first.json	1083	list.first	list firstitems first	32514	383
+core.list_flatten.json	1381	list.flatten	list flattenitems flatten	32897	420
+core.list_group.json	1920	list.group	group recordscount by key	33317	492
+core.list_last.json	1078	list.last	list lastitems last	33809	383
+core.list_max.json	2135	list.max	maximum valuelargest number	34192	517
+core.list_min.json	2136	list.min	minimum valuesmallest number	34709	518
+core.list_range.json	1502	list.range	list rangestart range	35227	421
+core.list_rest.json	1194	list.rest	list restitems rest	35648	394
+core.list_reverse.json	1209	list.reverse	list reverseitems reverse	36042	398
+core.list_slice.json	2197	list.slice	list sliceitems slice	36440	563
+core.list_sort.json	1951	list.sort	sort listorder records	37003	504
+core.list_sum.json	2102	list.sum	sum valuesadd list numbers	37507	502
+core.list_top.json	1925	list.top	top valueslargest records	38009	500
+core.list_unique.json	2262	list.unique	deduplicate listunique values	38509	520
+core.list_zip.json	1443	list.zip	list zipleft zip	39029	413
+core.menu_fuzzel.json	1791	menu.fuzzel		39442	536
+core.menu_gum_choose.json	2000	menu.gum_choose		39978	561
+core.menu_gum_confirm.json	1666	menu.gum_confirm		40539	538
+core.menu_gum_input.json	2354	menu.gum_input		41077	581
+core.menu_walker.json	1445	menu.walker		41658	506
+core.notify_dismiss.json	1481	notify.dismiss		42164	475
+core.notify_restore.json	688	notify.restore		42639	307
+core.notify_send.json	4908	notify.send		42946	817
+core.number_abs.json	1020	number.abs	number absvalue abs	43763	360
+core.number_add.json	1233	number.add	number addadd numberssum numbers	44123	399
+core.number_ceil.json	1025	number.ceil	number ceilvalue ceil	44522	361
+core.number_clamp.json	1406	number.clamp	number clampvalue clamp	44883	393
+core.number_compare.json	1225	number.compare	number compare	45276	397
+core.number_divide.json	1219	number.divide	number divide	45673	389
+core.number_divmod.json	1220	number.divmod	number divmodleft divmod	46062	393
+core.number_floor.json	1030	number.floor	number floorvalue floor	46455	363
+core.number_format.json	1987	number.format	number formatvalue format	46818	550
+core.number_format_size.json	1956	number.format_size	number format_sizevalue format_size	47368	567
+core.number_int_divide.json	1246	number.int_divide	number int_divideleft int_divide	47935	400
+core.number_max.json	1021	number.max	number maxvalues max	48335	370
+core.number_min.json	1021	number.min	number minvalues min	48705	370
+core.number_modulo.json	1226	number.modulo	number moduloleft modulo	49075	397
+core.number_multiply.json	1227	number.multiply	number multiply	49472	391
+core.number_parse_integer.json	1965	number.parse_integer	number parse_integer	49863	561
+core.number_parse_integer_result.json	2289	number.parse_integer.result	number parse_integer result	50424	649
+core.number_round.json	1204	number.round	number roundvalue round	51073	392
+core.number_sign.json	1025	number.sign	number signvalue sign	51465	362
+core.number_subtract.json	1227	number.subtract	number subtract	51827	390
+core.number_to_text.json	1050	number.to_text	number to_text	52217	387
+core.number_trunc.json	1030	number.trunc	number truncvalue trunc	52604	363
+core.osd_brightness.json	1118	osd.brightness		52967	427
+core.osd_caps.json	681	osd.caps		53394	314
+core.osd_volume.json	1165	osd.volume		53708	442
+core.package_check_updates.json	857	package.check_updates		54150	358
+core.package_install.json	1215	package.install		54508	440
+core.package_install_aur.json	1176	package.install_aur		54948	437
+core.package_query.json	1200	package.query		55385	440
+core.path_basename.json	1189	path.basename	path basename	55825	401
+core.path_dirname.json	1015	path.dirname	path dirname	56226	377
+core.path_join.json	1097	path.join	path join	56603	393
+core.path_remove_suffix.json	1235	path.remove_suffix	path remove_suffix	56996	399
+core.systemd_user_disable.json	1088	systemd.user.disable		57395	417
+core.systemd_user_enable.json	1085	systemd.user.enable		57812	418
+core.systemd_user_is_active.json	1342	systemd.user.is_active		58230	481
+core.systemd_user_restart.json	1088	systemd.user.restart		58711	417
+core.systemd_user_start.json	1082	systemd.user.start		59128	416
+core.systemd_user_stop.json	1079	systemd.user.stop		59544	417
+core.text_concat.json	1283	text.concat	text concat	59961	415
+core.text_contains_any.json	1288	text.contains_any	find any text	60376	428
+core.text_count_lines_by.json	2164	text.count_lines_by	count lines by fieldgroup lines by key	60804	633
+core.text_default_if_empty.json	1404	text.default_if_empty	text default_if_emptydefault empty text	61437	427
+core.text_ends_with.json	1191	text.ends_with	check text ending	61864	404
+core.text_format.json	2017	text.format	format templateescape textbuild safe text	62268	566
+core.text_join.json	1301	text.join	text joinjoin textconcatenate text	62834	425
+core.text_length.json	1298	text.length	count text characters	63259	429
+core.text_lines.json	1254	text.lines	text lines	63688	409
+core.text_lower.json	1160	text.lower	text lowerlowercase text	64097	390
+core.text_matches.json	2028	text.matches	text matches	64487	523
+core.text_pad.json	2180	text.pad	pad text to width	65010	581
+core.text_render.json	2241	text.render	text renderrender templatefill template	65591	617
+core.text_repeat.json	1172	text.repeat	repeat text	66208	395
+core.text_replace.json	1776	text.replace	text replacereplace text	66603	494
+core.text_split.json	2412	text.split	text split	67097	583
+core.text_starts_with.json	1197	text.starts_with	check text prefix	67680	405
+core.text_strip_prefix.json	1386	text.strip_prefix	text strip_prefixremove text prefix	68085	419
+core.text_strip_suffix.json	1386	text.strip_suffix	text strip_suffixremove text suffix	68504	421
+core.text_substring.json	2305	text.substring	take text substring	68925	595
+core.text_trim.json	1534	text.trim	text trimtrim whitespacetrim surrounding whitespace	69520	448
+core.text_trim_final_lf.json	1191	text.trim_final_lf	text trim_final_lf	69968	401
+core.text_truncate.json	1353	text.truncate	shorten text	70369	412
+core.text_upper.json	1160	text.upper	text upperuppercase text	70781	390
+core.time_add.json	1649	time.add	time add	71171	470
+core.time_diff.json	1647	time.diff	time diff	71641	482
+core.time_format.json	1426	time.format	time format	72123	420
+core.time_now.json	1034	time.now	time now	72543	386
+core.time_parse.json	1231	time.parse	time parse	72929	404
+core.time_sleep.json	2143	time.sleep	time sleep	73333	550
+core.toml_parse.json	1138	toml.parse	toml parse	73883	390
+core.toml_stringify.json	1224	toml.stringify	toml stringify	74273	426
+core.wait_until.json	4935	wait.until	wait until	74699	822
+core.yaml_parse.json	1153	yaml.parse	yaml parseparse yamlread yaml	75521	401
+core.yaml_stringify.json	1027	yaml.stringify	yaml stringify	75922	379
+count.lines.json	265	count.lines	count lines	76301	164
+cut.json	497	cut		76465	206
+desktop.clock_format.json	1449	desktop.clock_format		76671	487
+desktop.clock_local.json	1170	desktop.clock_local		77158	438
+desktop.clock_remote.json	1213	desktop.clock_remote		77596	438
+desktop.fixture_sync.json	1769	desktop.fixture_sync		78034	528
+desktop.quickshell.json	599	desktop.quickshell		78562	283
+false.json	166	false	fail	78845	117
+gh.repo.json	546	gh.repo		78962	249
+git.commit.json	701	git.commit	commit changes	79211	271
+grep.json	515	grep		79482	232
+head.json	347	head		79714	186
+jev.ask.json	1867	jev.ask		79900	466
+jev.classify.json	4559	jev.classify		80366	892
+jev.judge.json	3341	jev.judge		81258	685
+jev.score.json	3528	jev.score		81943	724
+join.json	528	join		82667	230
+jq.json	529	jq		82897	245
+jq.ps.json	993	jq.ps		83142	480
+llm.ask.json	4445	llm.ask		83622	805
+llm.extract.json	4606	llm.extract		84427	829
+ls.json	546	ls		85256	217
+mkdir.json	553	mkdir		85473	242
+omarchy.browser-refresh.json	1052	omarchy.browser-refresh		85715	416
+omarchy.editor-install.json	1109	omarchy.editor-install		86131	408
+omarchy.editor-list.json	1057	omarchy.editor-list		86539	421
+paste.json	531	paste		86960	230
+printf.json	345	printf	print	87190	183
+ps.json	358	ps		87373	191
+pwd.json	129	pwd		87564	100
+sed.json	512	sed		87664	235
+sort.json	367	sort		87899	191
+tail.follow.json	476	tail.follow	follow file	88090	216
+tail.json	599	tail		88306	240
+tr.json	627	tr		88546	248
+uniq.json	367	uniq		88794	192
+upper.json	300	upper	uppercase	88986	169
+wc.json	383	wc		89155	203

@@ -63,16 +63,29 @@ records their calls.
 
 ```sh
 export PATH="$PWD/examples/demo/fixtures/bin:$PATH" DEMO_LOG=/tmp/demo.log
-DEMO_INPUTS="--input theme_name=dark --input themes_root=/tmp/demo/themes \
-  --input current_link=/tmp/demo/current/theme \
-  --input templates=$PWD/examples/demo/templates/*.tpl \
-  --input values_json={\"background\":\"#1e1e2e\",\"foreground\":\"#cdd6f4\"}"
+demo_root=$(mktemp -d "${TMPDIR:-/tmp}/execute-demo-manual.XXXXXX")
+mkdir -p "$demo_root/themes" "$demo_root/current"
+program="$demo_root/theme-refresh.program"
+cp examples/demo/theme-refresh.program "$program"
+templates="$PWD/examples/demo/templates/*.tpl"
+values_json='{"background":"#1e1e2e","foreground":"#cdd6f4"}'
 
-execute check examples/demo/theme-refresh.program $DEMO_INPUTS
-execute run examples/demo/theme-refresh.program $DEMO_INPUTS --what-if
-execute run examples/demo/theme-refresh.program $DEMO_INPUTS --confirm FINGERPRINT --checkpoint /tmp/demo/state
-execute repair /tmp/demo/state --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
-execute resume examples/demo/theme-refresh.program $DEMO_INPUTS --checkpoint /tmp/demo/state --retry-uncertain
+# This function uses POSIX shell argument passing, so each input remains one
+# argument in sh, Bash and zsh. The quoted glob is passed literally to fs.glob.
+with_demo_inputs() {
+  "$@" \
+    --input theme_name=dark \
+    --input "themes_root=$demo_root/themes" \
+    --input "current_link=$demo_root/current/theme" \
+    --input "templates=$templates" \
+    --input "values_json=$values_json"
+}
+
+with_demo_inputs execute check "$program"
+with_demo_inputs execute run "$program" --what-if
+with_demo_inputs execute run "$program" --confirm FINGERPRINT --checkpoint "$demo_root/state"
+execute repair "$demo_root/state" --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
+with_demo_inputs execute resume "$program" --checkpoint "$demo_root/state" --retry-uncertain
 ```
 
 The line number in the repair is the `run "hyprctl"` line of the program. The walkthrough

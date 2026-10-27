@@ -494,3 +494,61 @@ fn stringifier_observes_cooperative_cancellation_inside_unicode_fields() {
             .unwrap_err();
     assert_eq!(error.kind, AppletErrorKind::Cancelled);
 }
+
+#[test]
+fn final_blank_line_is_consistent_for_lf_crlf_and_mixed_separators() {
+    for input in [
+        &b"a,b\n1,2\n\n"[..],
+        &b"a,b\r\n1,2\r\n\r\n"[..],
+        &b"a,b\n1,2\r\n\n"[..],
+        &b"a,b\r\n1,2\n\r\n"[..],
+    ] {
+        assert_eq!(
+            run("csv.parse", json!({}), input).unwrap(),
+            json!({"headers":["a","b"],"rows":[["1","2"]]})
+        );
+        assert_eq!(
+            run("csv.parse", json!({"has_headers":false}), input).unwrap(),
+            json!({"headers":[],"rows":[["a","b"],["1","2"]]})
+        );
+    }
+    for ending in ["\n", "\r\n"] {
+        for quoted in [false, true] {
+            let field = if quoted { "\"x\ty\"" } else { "x\ty" };
+            let input = format!("a,b{ending}1,{field}{ending}{ending}");
+            assert_eq!(
+                run("csv.parse", json!({}), input.as_bytes()).unwrap(),
+                json!({"headers":["a","b"],"rows":[["1","x\ty"]]})
+            );
+        }
+        let quoted = format!("name{ending}\"\"{ending}");
+        assert_eq!(
+            run("csv.parse", json!({}), quoted.as_bytes()).unwrap(),
+            json!({"headers":["name"],"rows":[[""]]})
+        );
+        let quoted_before_blank = format!("name{ending}\"\"{ending}{ending}");
+        assert_eq!(
+            run("csv.parse", json!({}), quoted_before_blank.as_bytes()).unwrap(),
+            json!({"headers":["name"],"rows":[[""]]})
+        );
+        let interior = format!("name{ending}{ending}x{ending}{ending}");
+        assert_eq!(
+            run("csv.parse", json!({}), interior.as_bytes()).unwrap(),
+            json!({"headers":["name"],"rows":[[""],["x"]]})
+        );
+        let two_blank = format!("name{ending}{ending}{ending}");
+        assert_eq!(
+            run("csv.parse", json!({}), two_blank.as_bytes()).unwrap(),
+            json!({"headers":["name"],"rows":[[""]]})
+        );
+    }
+}
+
+#[test]
+fn ignored_final_blank_line_does_not_consume_row_limit() {
+    for ending in ["\n", "\r\n"] {
+        let input = format!("{}{}", format!("x{ending}").repeat(100_000), ending);
+        let table = run("csv.parse", json!({"has_headers":false}), input.as_bytes()).unwrap();
+        assert_eq!(table["rows"].as_array().unwrap().len(), 100_000);
+    }
+}

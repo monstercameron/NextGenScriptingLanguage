@@ -26,7 +26,9 @@ must have the same width, and header names must be unique. With
 `has_headers: false`, `headers` is empty and all records are rows with a
 consistent width. A single leading UTF-8 byte-order mark is stripped before
 parsing. Empty input has no records; a blank record or an explicitly quoted
-empty field has one empty cell. One trailing blank record is ignored. A final
+empty field has one empty cell. One unquoted, physically blank trailing record
+after another record is ignored, for LF and CRLF alike. A quoted empty record
+is preserved, as is a single blank record on its own. A final
 record terminator does not add another row. TAB is ordinary cell content; other
 unsupported ASCII control characters fail.
 

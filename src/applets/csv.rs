@@ -41,9 +41,6 @@ pub(super) fn parse(
     };
 
     let mut records = read_records(text, has_headers, context)?;
-    if text.ends_with(b"\n\n") && records.last().is_some_and(|row| row == &[String::new()]) {
-        records.pop();
-    }
     let headers = if has_headers && !records.is_empty() {
         records.remove(0)
     } else {
@@ -212,6 +209,15 @@ fn read_records(
         checkpoint_work(context, work)?;
         work = work.saturating_add(1);
         let byte = text[index];
+        // Ignore one physically blank final record only after another record.
+        // Detect it before counting cells or rows, and before losing the
+        // distinction between an empty line and an explicitly quoted field.
+        if state == FieldState::StartOfRecord
+            && !records.is_empty()
+            && (&text[index..] == b"\n" || &text[index..] == b"\r\n")
+        {
+            break;
+        }
         match state {
             FieldState::StartOfRecord | FieldState::StartOfField => match byte {
                 b'"' => state = FieldState::Quoted,

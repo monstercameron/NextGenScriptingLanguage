@@ -15,3 +15,18 @@ paths = [
   '''^benchmarks/''',
   '''^docs/(utility-validation|validation-v[0-9.]+)\.json$''',
 ]
+
+# This immutable commit adds synthetic credential-shaped values to tests that
+# exercise secret redaction. Bind each exception to both that exact commit and the
+# exact test file; do not suppress future findings elsewhere in these paths.
+[[allowlists]]
+description = "Synthetic API-key fixture in the historical agent what-if test"
+condition = "AND"
+commits = ["bc9239987b4af26bcce685ccfa5062725ee47c67"]
+paths = ['''^tests/agent_what_if\.rs$''']
+
+[[allowlists]]
+description = "Synthetic API-key fixtures in historical explain JSON tests"
+condition = "AND"
+commits = ["bc9239987b4af26bcce685ccfa5062725ee47c67"]
+paths = ['''^tests/agent_explain_json\.rs$''']

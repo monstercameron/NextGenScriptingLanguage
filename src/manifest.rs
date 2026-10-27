@@ -2112,6 +2112,10 @@ fn validate_value(
     }
     if let (ParameterType::List, Value::List(items)) = (spec.kind, value) {
         let item_type = spec.item_type.expect("list schema validated");
+        if allow_reference_items && item_type == ParameterType::Json {
+            validate_json_references(value, bindings)
+                .with_context(|| format!("validating JSON list parameter {name:?}"))?;
+        }
         let mut contains_nul = false;
         for item in items {
             if !(is_scalar_type(item, item_type)
@@ -3693,6 +3697,40 @@ mod tests {
             Some(ParameterType::Json),
             InputType::Bytes
         ));
+    }
+
+    #[test]
+    fn json_list_parameters_reject_nested_bytes_without_a_port_schema() {
+        let manifest = parse_manifest(
+            r#"{"name":"custom.list","binary":"tool","parameters":{"items":{"type":"list","items":"json","required":true}},"arguments":[]}"#,
+        )
+        .unwrap();
+        assert!(manifest.contract.is_none());
+        let invocation = Invocation {
+            operation: "custom.list".into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([(
+                "items".into(),
+                Value::List(vec![Value::Record(BTreeMap::from([(
+                    "nested".into(),
+                    Value::Reference("raw".into()),
+                )]))]),
+            )]),
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        };
+        let bytes = BTreeMap::from([("raw".into(), InputType::Bytes)]);
+        let error = manifest
+            .validate_with_types(&invocation, &bytes)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("raw bytes reference \"raw\""));
+
+        let text = BTreeMap::from([("raw".into(), InputType::Text)]);
+        assert!(manifest.validate_with_types(&invocation, &text).is_ok());
     }
 
     #[test]

@@ -3,10 +3,12 @@
 
 This is a diagnostic companion to check_latency.py. It measures the same four
 workloads, but alternates baseline/current processes on one runner and reports
-paired deltas. It never enforces or changes the Linux latency budgets.
+paired deltas. Each side may receive a separate manifest directory. It never
+enforces or changes the Linux latency budgets.
 Python 3.9+, standard library only.
 """
 import argparse
+import hashlib
 import json
 import statistics
 import sys
@@ -23,7 +25,16 @@ def run_checked(binary, arguments, runner, label):
     return elapsed, rss
 
 
-def paired_samples(baseline, candidate, arguments, runs, warmup, runner=run_once):
+def paired_samples(
+    baseline,
+    candidate,
+    arguments,
+    runs,
+    warmup,
+    runner=run_once,
+    baseline_arguments=None,
+    candidate_arguments=None,
+):
     """Return baseline/current samples and RSS values from balanced AB/BA pairs."""
     if runs < 1:
         raise ValueError("runs must be at least 1")
@@ -32,6 +43,10 @@ def paired_samples(baseline, candidate, arguments, runs, warmup, runner=run_once
 
     samples = {"baseline": [], "candidate": []}
     rss = {"baseline": [], "candidate": []}
+    arguments_by_side = {
+        "baseline": arguments if baseline_arguments is None else baseline_arguments,
+        "candidate": arguments if candidate_arguments is None else candidate_arguments,
+    }
 
     def run_pair(index, measured):
         order = (
@@ -41,7 +56,9 @@ def paired_samples(baseline, candidate, arguments, runs, warmup, runner=run_once
         )
         for name in order:
             binary = baseline if name == "baseline" else candidate
-            elapsed, peak = run_checked(binary, arguments, runner, name)
+            elapsed, peak = run_checked(
+                binary, arguments_by_side[name], runner, name
+            )
             if measured:
                 samples[name].append(elapsed)
                 if peak is not None:
@@ -75,13 +92,47 @@ def summarize_pairs(samples, rss):
     }
 
 
-def main(argv=None):
+def manifest_tree_metadata(directory):
+    """Fingerprint direct JSON manifest files, matching directory loader scope."""
+    directory = Path(directory)
+    if not directory.is_dir():
+        raise ValueError(f"manifest directory {directory} does not exist")
+    files = sorted(
+        (
+            path
+            for path in directory.iterdir()
+            if path.suffix == ".json" and path.is_file()
+        ),
+        key=lambda path: path.name,
+    )
+    if not files:
+        raise ValueError(f"manifest directory {directory} has no JSON files")
+
+    tree_digest = hashlib.sha256()
+    total_bytes = 0
+    for path in files:
+        content = path.read_bytes()
+        total_bytes += len(content)
+        tree_digest.update(path.name.encode("utf-8"))
+        tree_digest.update(b"\0")
+        tree_digest.update(hashlib.sha256(content).digest())
+    return {
+        "path": str(directory.resolve()),
+        "json_files": len(files),
+        "bytes": total_bytes,
+        "sha256": tree_digest.hexdigest(),
+    }
+
+
+def main(argv=None, runner=run_once):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--baseline-label", default="baseline")
     parser.add_argument("--candidate-label", default="candidate")
     parser.add_argument("--manifest-dir", type=Path, default=Path("manifests"))
+    parser.add_argument("--baseline-manifest-dir", type=Path)
+    parser.add_argument("--candidate-manifest-dir", type=Path)
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--only", action="append", choices=[key for key, _ in LABELS])
@@ -96,6 +147,15 @@ def main(argv=None):
         print("error: --runs must be positive and --warmup cannot be negative", file=sys.stderr)
         return 1
 
+    baseline_manifest_dir = args.baseline_manifest_dir or args.manifest_dir
+    candidate_manifest_dir = args.candidate_manifest_dir or args.manifest_dir
+    try:
+        baseline_manifest_metadata = manifest_tree_metadata(baseline_manifest_dir)
+        candidate_manifest_metadata = manifest_tree_metadata(candidate_manifest_dir)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
     selected = set(args.only or [key for key, _ in LABELS])
     results = {}
     with tempfile.TemporaryDirectory(prefix="execute-paired-latency-") as directory:
@@ -106,15 +166,27 @@ def main(argv=None):
         }
         for path, source in programs.values():
             path.write_text(source, encoding="utf-8")
-        plans = {"version": ["--version"]}
+        plans = {"version": (["--version"], ["--version"])}
         for key, (path, _) in programs.items():
-            plans[key] = ["run", str(path), "--manifest-dir", str(args.manifest_dir)]
+            prefix = ["run", str(path), "--manifest-dir"]
+            plans[key] = (
+                [*prefix, str(baseline_manifest_dir)],
+                [*prefix, str(candidate_manifest_dir)],
+            )
         for key, label in LABELS:
             if key not in selected:
                 continue
             runs = args.runs if key != "hot_loop" else max(3, args.runs // 4)
+            baseline_arguments, candidate_arguments = plans[key]
             samples, rss = paired_samples(
-                args.baseline, args.candidate, plans[key], runs, args.warmup
+                args.baseline,
+                args.candidate,
+                [],
+                runs,
+                args.warmup,
+                runner=runner,
+                baseline_arguments=baseline_arguments,
+                candidate_arguments=candidate_arguments,
             )
             results[key] = summarize_pairs(samples, rss)
             result = results[key]
@@ -136,7 +208,13 @@ def main(argv=None):
                 {
                     "baseline": {"label": args.baseline_label, "binary": str(args.baseline)},
                     "candidate": {"label": args.candidate_label, "binary": str(args.candidate)},
-                    "manifest_dir": str(args.manifest_dir.resolve()),
+                    "manifest_dir": (
+                        str(baseline_manifest_dir.resolve())
+                        if baseline_manifest_dir.resolve() == candidate_manifest_dir.resolve()
+                        else None
+                    ),
+                    "baseline_manifest_dir": baseline_manifest_metadata,
+                    "candidate_manifest_dir": candidate_manifest_metadata,
                     "runs": args.runs,
                     "warmup_pairs": args.warmup,
                     "results": results,

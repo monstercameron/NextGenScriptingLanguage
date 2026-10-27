@@ -37,6 +37,7 @@ jobs:
           anchor_bin="$RUNNER_TEMP/execute-anchor"
           candidate_bin="$RUNNER_TEMP/execute-candidate"
           shared_manifests="$RUNNER_TEMP/latency-shared-manifests"
+          historical_catalog_root="$RUNNER_TEMP/latency-anchor-full-catalog"
           mkdir -p "$shared_manifests"
 
           git fetch --no-tags --depth=1 origin "$ANCHOR_SHA"
@@ -83,6 +84,60 @@ jobs:
             --candidate-label "$GITHUB_SHA" \
             --manifest-dir "$shared_manifests" \
             --json-out "$RUNNER_TEMP/latency-anchor-paired.json"
+
+          # Compare catalog content separately from runtime code: the same current
+          # executable is used on both sides, with the full historical and current
+          # manifest directories. The historical tree is evaluated by current code.
+          mkdir -p "$historical_catalog_root"
+          git -C "$anchor_worktree" archive "$ANCHOR_SHA" manifests \
+            | tar -xf - -C "$historical_catalog_root"
+          historical_manifests="$historical_catalog_root/manifests"
+          current_manifests="$GITHUB_WORKSPACE/manifests"
+          PYTHONPATH=tools python3 - "$historical_manifests" "$current_manifests" \
+            > "$RUNNER_TEMP/latency-catalog-metadata.json" <<'PY'
+          import json
+          import sys
+          from compare_latency import manifest_tree_metadata
+
+          print(json.dumps({
+              "historical_catalog": manifest_tree_metadata(sys.argv[1]),
+              "current_catalog": manifest_tree_metadata(sys.argv[2]),
+          }, indent=2, sort_keys=True))
+          PY
+          cat "$RUNNER_TEMP/latency-catalog-metadata.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          preflight_program="$RUNNER_TEMP/latency-catalog-preflight.program"
+          printf 'run printf with message "catalog preflight"\n' > "$preflight_program"
+          preflight_report="$RUNNER_TEMP/latency-catalog-preflight.txt"
+          : > "$preflight_report"
+          for catalog in historical current; do
+            if [[ "$catalog" == historical ]]; then
+              manifest_dir="$historical_manifests"
+            else
+              manifest_dir="$current_manifests"
+            fi
+            if "$candidate_bin" run "$preflight_program" --manifest-dir "$manifest_dir" \
+              >/dev/null 2>"$RUNNER_TEMP/catalog-preflight.stderr"; then
+              echo "$catalog catalog: compatible with current binary" | tee -a "$preflight_report" "$GITHUB_STEP_SUMMARY"
+            else
+              status=$?
+              {
+                echo "$catalog catalog: incompatible or execution failed (exit $status)"
+                cat "$RUNNER_TEMP/catalog-preflight.stderr"
+              } | tee -a "$preflight_report" "$GITHUB_STEP_SUMMARY"
+              echo "::error::Catalog preflight failed for $catalog catalog; full-catalog comparison was not run."
+              exit 1
+            fi
+          done
+
+          python3 tools/compare_latency.py \
+            --baseline "$candidate_bin" \
+            --candidate "$candidate_bin" \
+            --baseline-label "$GITHUB_SHA binary + $ANCHOR_SHA full catalog" \
+            --candidate-label "$GITHUB_SHA binary + current full catalog" \
+            --baseline-manifest-dir "$historical_manifests" \
+            --candidate-manifest-dir "$current_manifests" \
+            --json-out "$RUNNER_TEMP/latency-catalog-paired.json"
       - name: Save paired diagnostic samples
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -90,6 +145,9 @@ jobs:
           name: linux-latency-anchor-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/latency-anchor-paired.json
+            ${{ runner.temp }}/latency-catalog-paired.json
+            ${{ runner.temp }}/latency-catalog-metadata.json
+            ${{ runner.temp }}/latency-catalog-preflight.txt
             ${{ runner.temp }}/latency-anchor-metadata.txt
           if-no-files-found: ignore
           retention-days: 14

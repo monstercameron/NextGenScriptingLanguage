@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Focused tests for interleaved latency comparison behavior."""
+import hashlib
+import io
 import json
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from compare_latency import paired_samples, summarize_pairs  # noqa: E402
+from compare_latency import (  # noqa: E402
+    main,
+    manifest_tree_metadata,
+    paired_samples,
+    summarize_pairs,
+)
 
 
 class PairedLatencyTests(unittest.TestCase):
@@ -50,10 +59,128 @@ class PairedLatencyTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("tools/compare_latency.py", workflow)
+        self.assertIn(
+            'git -C "$anchor_worktree" archive "$ANCHOR_SHA" manifests', workflow
+        )
+        self.assertIn("--baseline-manifest-dir \"$historical_manifests\"", workflow)
+        self.assertIn("--candidate-manifest-dir \"$current_manifests\"", workflow)
+        self.assertIn('"$candidate_bin" run "$preflight_program"', workflow)
+        self.assertIn("incompatible or execution failed", workflow)
+        self.assertIn("Catalog preflight failed", workflow)
+        self.assertIn("manifest_tree_metadata", workflow)
         self.assertNotIn("tools/check_latency.py", workflow)
         self.assertIn("diagnostic only", workflow)
         self.assertEqual(budgets["one_line_median_ms"], 5)
         self.assertEqual(budgets["ten_step_median_ms"], 8)
+
+    def test_same_binary_can_be_paired_with_separate_argument_sets(self) -> None:
+        commands = []
+
+        def runner(command):
+            commands.append(command)
+            return 1.0, 100, 0, ""
+
+        paired_samples(
+            Path("/bin/execute"),
+            Path("/bin/execute"),
+            [],
+            2,
+            1,
+            runner,
+            baseline_arguments=["--manifest-dir", "historical"],
+            candidate_arguments=["--manifest-dir", "current"],
+        )
+
+        self.assertEqual(
+            [command[-1] for command in commands],
+            ["historical", "current", "historical", "current", "current", "historical"],
+        )
+
+    def test_manifest_tree_metadata_fingerprints_sorted_direct_json_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "b.json").write_bytes(b"{}\n")
+            (directory / "a.json").write_bytes(b"{\"a\":1}\n")
+            nested = directory / "nested"
+            nested.mkdir()
+            (nested / "ignored.json").write_bytes(b"ignored")
+
+            metadata = manifest_tree_metadata(directory)
+
+        digest = hashlib.sha256()
+        for name, content in (("a.json", b'{"a":1}\n'), ("b.json", b"{}\n")):
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(content).digest())
+        self.assertEqual(metadata["json_files"], 2)
+        self.assertEqual(metadata["bytes"], len(b'{"a":1}\n') + len(b"{}\n"))
+        self.assertEqual(metadata["sha256"], digest.hexdigest())
+
+    def test_manifest_tree_metadata_rejects_missing_or_empty_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            empty = Path(temporary)
+            with self.assertRaisesRegex(ValueError, "no JSON files"):
+                manifest_tree_metadata(empty)
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                manifest_tree_metadata(empty / "missing")
+
+    def test_cli_records_each_manifest_directory_and_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline_manifests = root / "historical"
+            candidate_manifests = root / "current"
+            baseline_manifests.mkdir()
+            candidate_manifests.mkdir()
+            (baseline_manifests / "printf.json").write_text("{}\n", encoding="utf-8")
+            (candidate_manifests / "printf.json").write_text(
+                '{"name":"printf"}\n', encoding="utf-8"
+            )
+            output = root / "paired.json"
+            commands = []
+
+            def runner(command):
+                commands.append(command)
+                return 1.0, None, 0, ""
+
+            with redirect_stdout(io.StringIO()):
+                status = main(
+                    [
+                        "--baseline",
+                        sys.executable,
+                        "--candidate",
+                        sys.executable,
+                        "--baseline-manifest-dir",
+                        str(baseline_manifests),
+                        "--candidate-manifest-dir",
+                        str(candidate_manifests),
+                        "--only",
+                        "version",
+                        "--runs",
+                        "1",
+                        "--warmup",
+                        "0",
+                        "--json-out",
+                        str(output),
+                    ],
+                    runner=runner,
+                )
+            report = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            commands,
+            [
+                [sys.executable, "--version"],
+                [sys.executable, "--version"],
+            ],
+        )
+        self.assertEqual(report["manifest_dir"], None)
+        self.assertEqual(report["baseline_manifest_dir"]["json_files"], 1)
+        self.assertEqual(report["candidate_manifest_dir"]["json_files"], 1)
+        self.assertNotEqual(
+            report["baseline_manifest_dir"]["sha256"],
+            report["candidate_manifest_dir"]["sha256"],
+        )
 
     def test_warmups_and_samples_alternate_balanced_order(self) -> None:
         calls = []

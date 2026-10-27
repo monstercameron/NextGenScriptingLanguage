@@ -60,6 +60,14 @@ original version labels.
   policy setup dominates: a one-line program is level with a cold run, and a
   530-manifest directory with two policies ran 14 percent faster. Unix only. See the
   [daemon section](docs/language.md#warm-daemon---daemon).
+- Live control endpoints are confined to private directories. `execute live serve`
+  refuses a Unix socket whose parent directory is not owned by you and private
+  (mode 0700), and `run --control` hosts its endpoint under a private per-user
+  directory with a randomized name instead of a predictable `$TMPDIR` path. A
+  reserved lane keeps `control stop` and `read` working while all 16 client slots
+  hold long polls; other requests past the limit, or while peers connect faster
+  than 64 per second, fail fast with `busy`. See the
+  [live control contract](docs/live-control.md#resource-and-compatibility-contract).
 - Bundled manifest index. The shipped manifests are embedded as one deflate stream with a
   generated index and parsed on first use, so registry load fell from 5.41 to 0.32 ms.
   The default directory uses the index when it matches by name and size; a directory

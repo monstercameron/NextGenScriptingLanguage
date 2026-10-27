@@ -580,3 +580,169 @@ fn live_error_diagnostics_redact_secret_input_values() {
         panic!("live server failed to stop");
     }
 }
+
+#[test]
+fn live_serve_refuses_a_socket_in_a_shared_parent() {
+    use serde_json::Value;
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let shared = directory.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let program = directory.path().join("tool.program");
+    let socket = shared.join("control.sock");
+    std::fs::write(
+        &program,
+        "accept name as text with default \"x\"\nrun \"printf\" with arguments [\"finished\"]\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("live")
+        .arg("serve")
+        .arg(&program)
+        .arg("--socket")
+        .arg(&socket)
+        .arg("--paused")
+        .arg("--headless")
+        .current_dir(directory.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(!status.success(), "serve must refuse a shared socket parent");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "serve did not refuse the shared socket parent"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let _ = child.wait();
+    let reply: Value = serde_json::from_str(&stdout).expect("serve prints a JSON error");
+    assert_eq!(reply["ok"], false);
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("private"),
+        "refusal names the private-directory requirement: {reply}"
+    );
+    assert!(
+        !socket.exists(),
+        "a refused endpoint must not be created in the shared directory"
+    );
+}
+
+#[test]
+fn live_stop_is_served_while_wait_slots_are_full() {
+    use serde_json::{json, Value};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    const WAITERS: usize = 16;
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("tool.program");
+    let socket = directory.path().join("control.sock");
+    std::fs::write(
+        &program,
+        "accept name as text with default \"x\"\nrun \"printf\" with arguments [\"finished\"]\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("live")
+        .arg("serve")
+        .arg(&program)
+        .arg("--socket")
+        .arg(&socket)
+        .arg("--paused")
+        .arg("--headless")
+        .current_dir(directory.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut ready = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&ready).unwrap()["event"],
+        "ready",
+        "{ready}"
+    );
+    let request = |message: Value| -> Value {
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        writeln!(stream, "{message}").unwrap();
+        let mut response = String::new();
+        BufReader::new(stream).read_line(&mut response).unwrap();
+        serde_json::from_str(&response).unwrap()
+    };
+    let revision = request(json!({"op":"read"}))["revision"]
+        .as_u64()
+        .expect("read reports a revision");
+    // Hold every general client slot with a long poll.
+    let sent = Arc::new(AtomicUsize::new(0));
+    let waiters: Vec<_> = (0..WAITERS)
+        .map(|_| {
+            let socket = socket.clone();
+            let sent = sent.clone();
+            std::thread::spawn(move || -> Value {
+                let mut stream = UnixStream::connect(&socket).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"op":"wait","after":revision,"timeout_ms":10000})
+                )
+                .unwrap();
+                sent.fetch_add(1, Ordering::SeqCst);
+                let mut response = String::new();
+                BufReader::new(stream).read_line(&mut response).unwrap();
+                serde_json::from_str(&response).unwrap()
+            })
+        })
+        .collect();
+    while sent.load(Ordering::SeqCst) != WAITERS {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The accept loop polls every 20 ms; let it admit every wait before probing
+    // the reserved lane with stop.
+    std::thread::sleep(Duration::from_secs(2));
+    let stop = request(json!({"op":"control","action":"stop"}));
+    assert_eq!(stop["ok"], true, "stop is served past full wait slots: {stop}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if child.try_wait().unwrap().is_none() {
+        child.kill().unwrap();
+        child.wait().unwrap();
+        panic!("live server did not stop while {WAITERS} waits were connected");
+    }
+    for waiter in waiters {
+        let reply = waiter.join().expect("wait thread finishes after stop");
+        assert_eq!(reply["ok"], true, "a woken wait answers: {reply}");
+    }
+}

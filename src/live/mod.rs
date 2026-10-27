@@ -27,7 +27,7 @@ use std::sync::{
     Arc, Condvar, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub fn cli(
     arguments: &[String],
@@ -77,14 +77,7 @@ pub fn host_run(
     default_manifests: PathBuf,
     path: fn(&str) -> Result<PathBuf>,
 ) -> Result<i32> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let socket = std::env::temp_dir().join(format!(
-        "execute-control-{}-{nanos}.sock",
-        std::process::id()
-    ));
+    let socket = control_endpoint_path()?;
     let mut args = vec![
         "serve".to_owned(),
         run.file.to_string_lossy().into_owned(),
@@ -133,6 +126,149 @@ pub fn host_run(
         .as_i64()
         .and_then(|status| i32::try_from(status).ok())
         .unwrap_or(1))
+}
+
+/// General client slots. One handler thread serves each admitted connection, and
+/// a `wait` client may hold its slot for up to 10 s.
+const MAX_CLIENTS: usize = 16;
+/// Extra handlers admitted past [`MAX_CLIENTS`] so priority traffic is still
+/// served while every general slot holds a long poll. Constrained-lane handlers
+/// answer only priority requests; anything else fails fast with `busy`.
+const PRIORITY_SPARE: usize = 2;
+/// Same-user connection flood shedding: more than this many accepted connections
+/// in the trailing second constrains new handlers to priority requests. Stop
+/// and read stay exempt however fast peers connect.
+const MAX_ACCEPTS_PER_SECOND: usize = 64;
+
+#[cfg(unix)]
+fn euid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    crate::platform::unix_ffi::effective_uid()
+}
+
+/// The per-user directory that owns `run --control` endpoints. It persists like
+/// the daemon's per-user directory; each endpoint inside it is removed on exit.
+#[cfg(unix)]
+fn control_dir_name() -> String {
+    format!("execute-live-{}", euid())
+}
+/// The per-user directory that owns `run --control` endpoints.
+#[cfg(not(unix))]
+fn control_dir_name() -> String {
+    "execute-live".to_owned()
+}
+
+/// A fresh endpoint for one `run --control`: a randomized name inside the
+/// private per-user directory, so neither the path nor its parent is a shared
+/// foothold. Binding still creates the socket exclusively and never replaces an
+/// existing path.
+fn control_endpoint_path() -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(control_dir_name());
+    ensure_private_dir(&dir)?;
+    for _ in 0..16 {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).context("randomizing the control socket name")?;
+        let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let socket = dir.join(format!("control-{}-{name}.sock", std::process::id()));
+        // Never reuse a planted path: binding creates the socket exclusively, and
+        // a link at a candidate name is skipped here rather than followed.
+        if fs::symlink_metadata(&socket).is_err() {
+            return Ok(socket);
+        }
+    }
+    bail!("could not pick a unique control socket name")
+}
+
+/// Create `dir` private to this user when missing, then refuse anything that is
+/// not a caller-owned directory with no group/other permission bits.
+fn ensure_private_dir(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        match fs::DirBuilder::new().mode(0o700).create(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", dir.display()));
+            }
+        }
+        check_private_dir(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        match fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", dir.display()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Refuse a socket parent that is not a real directory owned by this user and
+/// private to it. Links, group/world-readable directories and other users'
+/// directories are all refused.
+#[cfg(unix)]
+fn check_private_dir(dir: &Path) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(dir).with_context(|| format!("reading {}", dir.display()))?;
+    if !metadata.is_dir() {
+        bail!("{} is not a directory", dir.display());
+    }
+    if metadata.uid() != euid() || metadata.mode() & 0o077 != 0 {
+        bail!(
+            "{} must be owned by you and private (mode 0700)",
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// Refuse to bind a socket whose parent directory is not private to this user.
+/// A shared parent lets another user pre-create the path to make the run fail,
+/// so the predictable-name foothold is closed by refusing it outright.
+#[cfg(unix)]
+fn check_socket_parent(socket: &Path) -> Result<()> {
+    let parent = socket
+        .parent()
+        .with_context(|| format!("socket path {} has no directory", socket.display()))?;
+    // A bare file name binds in the working directory, which gets the same check.
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let metadata = fs::symlink_metadata(parent).with_context(|| {
+        format!(
+            "refusing to bind {}: its directory {} must be private and owned by you (mode 0700)",
+            socket.display(),
+            parent.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        bail!(
+            "refusing to bind {}: {} is not a directory",
+            socket.display(),
+            parent.display()
+        );
+    }
+    if metadata.uid() != euid() || metadata.mode() & 0o077 != 0 {
+        bail!(
+            "refusing to bind {}: {} must be owned by you and private (mode 0700)",
+            socket.display(),
+            parent.display()
+        );
+    }
+    Ok(())
+}
+
+/// Priority traffic that a constrained-lane handler still serves: inspection
+/// reads and the stop the operator relies on. Every other request fails fast
+/// with `busy` instead of starving behind long polls or a connection flood.
+fn is_priority_request(op: &str, action: Option<&str>) -> bool {
+    op == "read" || (op == "control" && action == Some("stop"))
 }
 
 fn error_response(error: &anyhow::Error) -> Json {
@@ -771,6 +907,8 @@ impl Drop for SignalGuard {
     }
 }
 fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) -> Result<Json> {
+    #[cfg(unix)]
+    check_socket_parent(socket)?;
     let listener = UnixListener::bind(socket)
         .context("could not bind socket; an existing path is never replaced")?;
     #[cfg(unix)]
@@ -810,6 +948,7 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     let worker = thread::spawn(move || worker::run(control, options));
     let active = Arc::new(AtomicUsize::new(0));
     let mut clients = Vec::new();
+    let mut recent: VecDeque<Instant> = VecDeque::new();
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
             if mode == Mode::Run && run_end.is_none() {
@@ -843,15 +982,27 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 Err(e) => return Err(e.into()),
             };
-            if active.load(Ordering::Relaxed) >= 16 {
+            if active.load(Ordering::Relaxed) >= MAX_CLIENTS + PRIORITY_SPARE {
                 drop(stream);
                 continue;
             }
-            active.fetch_add(1, Ordering::Relaxed);
+            let now = Instant::now();
+            while recent
+                .front()
+                .is_some_and(|first| now.duration_since(*first) > Duration::from_secs(1))
+            {
+                recent.pop_front();
+            }
+            recent.push_back(now);
+            // Past the general slots, or while peers connect faster than
+            // MAX_ACCEPTS_PER_SECOND, a handler answers only priority traffic
+            // (read, stop) so a flood of long polls cannot starve control.
+            let constrained = active.fetch_add(1, Ordering::Relaxed) + 1 > MAX_CLIENTS
+                || recent.len() > MAX_ACCEPTS_PER_SECOND;
             let count = active.clone();
             let control = shared.clone();
             clients.push(thread::spawn(move || {
-                handle(stream, &control);
+                handle(stream, &control, constrained);
                 count.fetch_sub(1, Ordering::Relaxed);
             }));
             let mut i = 0;
@@ -938,7 +1089,7 @@ fn run_outcome(shared: &Shared) -> Option<RunEnd> {
         _ => None,
     }
 }
-fn handle(mut stream: UnixStream, shared: &Shared) {
+fn handle(mut stream: UnixStream, shared: &Shared, constrained: bool) {
     if stream.set_nonblocking(false).is_err() || !peer_is_owner(&stream) {
         return;
     }
@@ -947,7 +1098,7 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
         if bytes.len() > MAX_MESSAGE {
             bail!("request exceeds 1 MiB");
         }
-        let mut value: Json = serde_json::from_slice(&bytes)?;
+        let value: Json = serde_json::from_slice(&bytes)?;
         if matches!(
             value.get("op").and_then(Json::as_str),
             Some("create" | "update" | "send" | "event")
@@ -964,86 +1115,25 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
             .get("action")
             .and_then(Json::as_str)
             .map(str::to_owned);
+        // A constrained lane (past the general client slots, or while peers
+        // connect faster than the flood threshold) answers only priority
+        // traffic. The shed happens before policy work so a flood of long
+        // polls or rapid connects cannot spend server time or starve control.
+        if constrained && !is_priority_request(&op, action.as_deref()) {
+            return Err(ApiError {
+                code: "busy",
+                message: "the server is saturated; retry, or stop and read remain available"
+                    .into(),
+            }
+            .into());
+        }
         let auth = value
             .get("auth")
             .cloned()
             .map(serde_json::from_value::<RequestAuth>)
             .transpose()
             .context("auth must contain an agent and token")?;
-        let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
-        if let Some(policy) = agent_policy.as_ref() {
-            let required = auth::required_permission(&op, action.as_deref()).ok();
-            let authorization = policy.authorize(auth.as_ref(), &op, action.as_deref());
-            if let Some(required) = required {
-                let (permission, risk) = match required {
-                    auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
-                    auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
-                    auth::AgentPermission::Control => {
-                        ("control", crate::security::PolicyRisk::High)
-                    }
-                    auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
-                    auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
-                };
-                let (outcome, reason) = if authorization.is_ok() {
-                    (
-                        crate::security::PolicyDecisionOutcome::Approved,
-                        crate::security::PolicyDecisionReason::PolicyMatched,
-                    )
-                } else {
-                    (
-                        crate::security::PolicyDecisionOutcome::Denied,
-                        crate::security::PolicyDecisionReason::MissingGrant,
-                    )
-                };
-                let subject = auth
-                    .as_ref()
-                    .map_or("unknown", |credential| credential.agent.as_str());
-                crate::security::record_policy_decision(
-                    &shared.registry,
-                    subject,
-                    &format!("live.{permission}"),
-                    None,
-                    risk,
-                    outcome,
-                    reason,
-                );
-            }
-            authorization
-                .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
-        } else if auth.is_some() {
-            bail!("live agent credentials require serve --agent-policy");
-        }
-        value
-            .as_object_mut()
-            .context("request must be an object")?
-            .remove("auth");
-        let allowed: &[&str] = match op.as_str() {
-            "read" => &["op", "path"],
-            "create" | "update" => &["op", "path", "value", "if_revision"],
-            "delete" => &["op", "path", "if_revision"],
-            "patch" => &["op", "operations", "if_revision"],
-            "control" => &["op", "action", "value", "if_revision"],
-            "send" | "event" => &["op", "value", "if_revision"],
-            "wait" => &["op", "path", "after", "timeout_ms"],
-            _ => bail!("unknown operation"),
-        };
-        for key in value
-            .as_object()
-            .context("request must be an object")?
-            .keys()
-        {
-            if !allowed.contains(&key.as_str()) {
-                bail!("unexpected field {key} for {op}");
-            }
-        }
-        if value
-            .get("if_revision")
-            .is_some_and(|revision| revision.as_u64().is_none())
-        {
-            bail!("if_revision must be a nonnegative integer");
-        }
-        let request: Request = serde_json::from_value(value)?;
-        state::request(shared, request)
+        handle_request(op, action, auth, value, shared)
     })();
     let response = result.unwrap_or_else(|error| {
         let mut response = error_response(&error);
@@ -1056,6 +1146,91 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
         bytes.push(b'\n');
         let _ = transport::write_message(&mut stream, &bytes, transport::IO_TIMEOUT);
     }
+}
+
+/// Authorize and apply one parsed request. Split from `handle` so both the
+/// general and the constrained lanes share the same policy and validation.
+fn handle_request(
+    op: String,
+    action: Option<String>,
+    auth: Option<RequestAuth>,
+    mut value: Json,
+    shared: &Shared,
+) -> Result<Json> {
+    let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
+    if let Some(policy) = agent_policy.as_ref() {
+        let required = auth::required_permission(&op, action.as_deref()).ok();
+        let authorization = policy.authorize(auth.as_ref(), &op, action.as_deref());
+        if let Some(required) = required {
+            let (permission, risk) = match required {
+                auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
+                auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
+                auth::AgentPermission::Control => {
+                    ("control", crate::security::PolicyRisk::High)
+                }
+                auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
+                auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
+            };
+            let (outcome, reason) = if authorization.is_ok() {
+                (
+                    crate::security::PolicyDecisionOutcome::Approved,
+                    crate::security::PolicyDecisionReason::PolicyMatched,
+                )
+            } else {
+                (
+                    crate::security::PolicyDecisionOutcome::Denied,
+                    crate::security::PolicyDecisionReason::MissingGrant,
+                )
+            };
+            let subject = auth
+                .as_ref()
+                .map_or("unknown", |credential| credential.agent.as_str());
+            crate::security::record_policy_decision(
+                &shared.registry,
+                subject,
+                &format!("live.{permission}"),
+                None,
+                risk,
+                outcome,
+                reason,
+            );
+        }
+        authorization
+            .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+    } else if auth.is_some() {
+        bail!("live agent credentials require serve --agent-policy");
+    }
+    value
+        .as_object_mut()
+        .context("request must be an object")?
+        .remove("auth");
+    let allowed: &[&str] = match op.as_str() {
+        "read" => &["op", "path"],
+        "create" | "update" => &["op", "path", "value", "if_revision"],
+        "delete" => &["op", "path", "if_revision"],
+        "patch" => &["op", "operations", "if_revision"],
+        "control" => &["op", "action", "value", "if_revision"],
+        "send" | "event" => &["op", "value", "if_revision"],
+        "wait" => &["op", "path", "after", "timeout_ms"],
+        _ => bail!("unknown operation"),
+    };
+    for key in value
+        .as_object()
+        .context("request must be an object")?
+        .keys()
+    {
+        if !allowed.contains(&key.as_str()) {
+            bail!("unexpected field {key} for {op}");
+        }
+    }
+    if value
+        .get("if_revision")
+        .is_some_and(|revision| revision.as_u64().is_none())
+    {
+        bail!("if_revision must be a nonnegative integer");
+    }
+    let request: Request = serde_json::from_value(value)?;
+    state::request(shared, request)
 }
 
 #[cfg(all(test, unix))]

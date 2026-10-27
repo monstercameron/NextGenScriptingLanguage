@@ -293,11 +293,16 @@ Unix permission/UID details below apply to macOS and Linux.
 The socket is mode 0600; macOS/Linux peer credentials must match the server's
 user. The pending source candidate also verifies the server peer UID in the CLI
 before transmitting a request. This prevents sending values to a socket owned
-by another user; same-user processes remain inside the trust boundary. Prefer a
-private directory for socket paths. Installed 0.8.0 performs the server-side check
-only. Limits are 1 MiB/request,
-8 MiB/editable state, 64 KiB/source, 128 queued records, 16 simultaneous clients,
-64 retained events, and 10 seconds per long poll. Live node/record output defaults
+by another user; same-user processes remain inside the trust boundary. On Unix
+the socket's parent directory must be owned by you and private (mode 0700):
+`serve` refuses any other parent, and `run --control` hosts its endpoint under
+a private per-user directory with a randomized name. Installed 0.8.0 only
+recommended a private directory. Limits are 1 MiB/request,
+8 MiB/editable state, 64 KiB/source, 128 queued records, 16 simultaneous clients
+plus a reserved lane so `control stop` and `read` are still served while every
+general slot holds a long poll (other requests past the limit, or while peers
+connect faster than 64 per second, fail fast with `busy`), 64 retained events,
+and 10 seconds per long poll. Live node/record output defaults
 to 256 KiB and can be raised to 1 MiB with `--max-output-bytes`. Native groups
 support `--command-timeout-ms`. Established connections have absolute two-second
 budgets for request reads and

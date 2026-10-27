@@ -16,6 +16,8 @@ mod cli;
 #[cfg(any(feature = "tooling", feature = "live"))]
 use cli::workflow_path;
 use cli::{parse_args, take_option_value, Args};
+#[cfg(any(feature = "tooling", feature = "records"))]
+mod execution_policy_options;
 mod github_annotations;
 mod manifest_cache;
 #[cfg(feature = "records")]

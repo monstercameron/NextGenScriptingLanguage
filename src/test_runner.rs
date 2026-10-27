@@ -62,6 +62,7 @@ impl Outcome {
 
 /// Entry point for `execute test ...`. Exits with status 1 when any test fails.
 pub fn cli(arguments: &[String]) -> Result<()> {
+    let mut policy = crate::execution_policy_options::ExecutionPolicyOptions::default();
     let mut json = false;
     let mut manifest_dir: Option<PathBuf> = None;
     let mut roots: Vec<PathBuf> = Vec::new();
@@ -77,11 +78,14 @@ pub fn cli(arguments: &[String]) -> Result<()> {
                         .context("--manifest-dir requires a directory")?,
                 ));
             }
+            _ if policy.parse_option(arguments, &mut index)? => {}
             option if option.starts_with("--") => bail!("unknown test option {option:?}"),
             path => roots.push(PathBuf::from(path)),
         }
         index += 1;
     }
+    policy.load()?;
+    let manifest_dir = manifest_dir.map(std::fs::canonicalize).transpose()?;
     if roots.is_empty() {
         let tests = PathBuf::from("tests");
         roots.push(if tests.is_dir() {
@@ -97,7 +101,7 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     let executable = std::env::current_exe().context("locating the execute executable")?;
     let mut outcomes = Vec::new();
     for file in &files {
-        let outcome = match run_one(&executable, file, manifest_dir.as_deref()) {
+        let outcome = match run_one(&executable, file, manifest_dir.as_deref(), &policy) {
             Ok(outcome) => outcome,
             Err(error) => Outcome {
                 name: test_name(file),
@@ -205,7 +209,12 @@ pub fn load_sidecar(file: &Path) -> Result<Sidecar> {
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
-fn run_one(executable: &Path, file: &Path, manifest_dir: Option<&Path>) -> Result<Outcome> {
+fn run_one(
+    executable: &Path,
+    file: &Path,
+    manifest_dir: Option<&Path>,
+    policy: &crate::execution_policy_options::ExecutionPolicyOptions,
+) -> Result<Outcome> {
     let sidecar = load_sidecar(file)?;
     let program = fs::canonicalize(file)?;
     let fixtures = program
@@ -220,6 +229,7 @@ fn run_one(executable: &Path, file: &Path, manifest_dir: Option<&Path>) -> Resul
         &sidecar,
         &fixtures,
         manifest_dir,
+        policy,
         work.path(),
     )?;
     Ok(Outcome {
@@ -240,6 +250,7 @@ fn run_in(
     sidecar: &Sidecar,
     fixtures: &Path,
     manifest_dir: Option<&Path>,
+    policy: &crate::execution_policy_options::ExecutionPolicyOptions,
     work: &Path,
 ) -> Result<RunResult> {
     let mut command = Command::new(executable);
@@ -247,6 +258,7 @@ fn run_in(
     if let Some(manifest_dir) = manifest_dir {
         command.arg("--manifest-dir").arg(manifest_dir);
     }
+    policy.forward(&mut command);
     for (name, value) in &sidecar.inputs {
         command.arg("--input").arg(format!("{name}={value}"));
     }

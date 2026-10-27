@@ -521,6 +521,12 @@ needs the tools the program calls.
 
 ## Try statements in a session
 
+`test`, `run-parts`, and `repl` accept `--capability-policy FILE`,
+`--data-flow-policy FILE`, and `--execution-mode trusted|untrusted`. The same
+policy applies to test fixture shims; adding a fixture to `PATH` does not grant
+it permission to run. `--allow` is an explain-only option and is rejected by
+these execution commands.
+
 `execute repl` reads statements from standard input, one statement at a time. An
 indented body, or a statement that opens one (`if`, `for`, `repeat`, `every`, ...),
 continues until a blank line. Each block is validated against the whole session, with

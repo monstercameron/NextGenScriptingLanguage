@@ -8,6 +8,7 @@ use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
 pub fn repl(arguments: &[String]) -> Result<()> {
+    let mut policy = crate::execution_policy_options::ExecutionPolicyOptions::default();
     let mut manifest_dir: Option<PathBuf> = None;
     let mut index = 0;
     while index < arguments.len() {
@@ -20,17 +21,22 @@ pub fn repl(arguments: &[String]) -> Result<()> {
                         .context("--manifest-dir requires a directory")?,
                 ));
             }
+            _ if policy.parse_option(arguments, &mut index)? => {}
             other => bail!("unknown repl option or argument {other:?}"),
         }
         index += 1;
     }
+    let (capability, data_flow) = policy.load()?;
     let registry = crate::load_workflow_registry(
         manifest_dir,
         None,
         flow::manifest::ManifestCheck::Lazy,
-        None,
-        None,
+        capability.as_ref(),
+        data_flow.as_ref(),
     )?;
+    if policy.mode.is_some() {
+        registry.set_host_state(policy.mode);
+    }
     let working_directory = env::current_dir().context("could not determine current directory")?;
     let mut session = Session::new(&registry, working_directory);
     let interactive = io::stdin().is_terminal();

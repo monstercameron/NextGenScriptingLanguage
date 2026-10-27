@@ -21,13 +21,14 @@ use std::process::Command;
 const PROGRAM_SUFFIX: &str = ".program";
 const STATE_FILE: &str = "state.json";
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Options {
     directory: Option<PathBuf>,
     once: Option<PathBuf>,
     continue_after_failure: bool,
     json: bool,
     manifest_dir: Option<PathBuf>,
+    policy: crate::execution_policy_options::ExecutionPolicyOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +62,7 @@ struct Entry {
 /// Entry point for `execute run-parts ...`. Exits with status 1 when a program fails.
 pub fn cli(arguments: &[String]) -> Result<()> {
     let options = parse(arguments)?;
+    options.policy.load()?;
     let directory = options
         .directory
         .clone()
@@ -151,6 +153,7 @@ fn parse(arguments: &[String]) -> Result<Options> {
             }
             "--continue" => options.continue_after_failure = true,
             "--json" => options.json = true,
+            _ if options.policy.parse_option(arguments, &mut index)? => {}
             option if option.starts_with("--") => bail!("unknown run-parts option {option:?}"),
             directory => {
                 if options.directory.is_some() {
@@ -197,6 +200,7 @@ fn run_program(executable: &Path, path: &Path, options: &Options, name: &str) ->
     if let Some(manifest_dir) = &options.manifest_dir {
         command.arg("--manifest-dir").arg(manifest_dir);
     }
+    options.policy.forward(&mut command);
     let output = command
         .output()
         .with_context(|| format!("starting {}", executable.display()))?;

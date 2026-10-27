@@ -751,8 +751,14 @@ fn publish_affected_diagnostics<W: Write>(
                     && existing.span.start_byte == diagnostic.span.start_byte
                     && existing.span.end_byte == diagnostic.span.end_byte
             }) {
-                if existing.related.is_empty() {
-                    existing.related = diagnostic.related;
+                // The same leaf diagnostic can arrive through multiple open
+                // callers. Preserve the full call chain, even when a shorter
+                // route was encountered first, while keeping repeated callsites
+                // out of the LSP payload.
+                for related in diagnostic.related {
+                    if !existing.related.contains(&related) {
+                        existing.related.push(related);
+                    }
                 }
             } else {
                 merged.push(diagnostic);
@@ -2117,6 +2123,67 @@ mod tests {
             diagnostic["relatedInformation"][0]["location"]["range"]["start"]["line"],
             0
         );
+    }
+
+    #[test]
+    fn nested_open_callee_keeps_middle_and_outer_callsites_when_deduplicated() {
+        let dir = tempfile::tempdir().unwrap();
+        let middle = dir.path().join("a-middle.program");
+        let leaf = dir.path().join("m-leaf.program");
+        let outer = dir.path().join("z-outer.program");
+        let middle_text = "run program file \"m-leaf.program\"\n";
+        let leaf_text = "run \"printf\" with arguments [missing]\n";
+        let outer_text = "run program file \"a-middle.program\"\n";
+        fs::write(&middle, middle_text).unwrap();
+        fs::write(&leaf, leaf_text).unwrap();
+        fs::write(&outer, outer_text).unwrap();
+
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
+        let middle_uri = url::Url::from_file_path(&middle).unwrap().to_string();
+        let leaf_uri = url::Url::from_file_path(&leaf).unwrap().to_string();
+        let outer_uri = url::Url::from_file_path(&outer).unwrap().to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({ "rootUri": root_uri, "capabilities": {} }),
+        ));
+        for (uri, text) in [
+            (&middle_uri, middle_text),
+            (&leaf_uri, leaf_text),
+            (&outer_uri, outer_text),
+        ] {
+            input.extend(frame(json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {"textDocument": {"uri": uri, "version": 1, "text": text}}
+            })));
+        }
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({"jsonrpc": "2.0", "method": "exit"})));
+
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let leaf_publish = messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == leaf_uri
+            })
+            .expect("leaf diagnostics are published");
+        let diagnostic = leaf_publish["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "check.undefined_name")
+            .expect("leaf undefined-name diagnostic is routed to the leaf document");
+        let related = diagnostic["relatedInformation"].as_array().unwrap();
+        assert_eq!(related.len(), 2, "{related:#?}");
+        assert_eq!(related[0]["location"]["uri"], middle_uri);
+        assert_eq!(related[1]["location"]["uri"], outer_uri);
     }
 
     #[cfg(unix)]

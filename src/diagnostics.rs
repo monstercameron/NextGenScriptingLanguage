@@ -61,6 +61,13 @@ pub const CODES: &[CodeInfo] = &[
         typical_fix: "Correct the program name or define the called program.",
     },
     CodeInfo {
+        code: "check.program.file.unknown",
+        family: "resolve",
+        meaning: "a called program file path does not exist",
+        example: "run program file \"missing.program\"",
+        typical_fix: "Correct the path or restore the missing program file.",
+    },
+    CodeInfo {
         code: "check.program.cycle",
         family: "validate",
         meaning: "a reusable program call graph contains a recursive cycle",
@@ -539,11 +546,14 @@ fn classified_parse_error(
         || lower.contains("redirection and environment apply only")
         || lower.contains("stdin from` applies only")
         || lower.contains("applies only to")
+            && !lower.contains("one of applies only to text inputs")
         || lower.contains("applies to one")
         || lower.contains("applies to a single")
         || lower.contains("cannot be combined")
     {
         "check.scope"
+    } else if lower.contains("program file") && lower.contains("not found") {
+        "check.program.file.unknown"
     } else if lower.contains("undefined program")
         || lower.contains("program") && lower.contains("not found")
     {
@@ -608,7 +618,12 @@ fn classified_parse_error(
     let words = line_words_from_start(source, line_span.start_byte);
     let semantic_match =
         |word: &&(String, usize, usize, bool)| semantic_token_matches(&word.0, &lower);
-    let token = if code == "check.duplicate_name" || code == "check.value.constraint" {
+    let token = if code == "check.program.file.unknown" {
+        words
+            .windows(2)
+            .find(|pair| pair[0].0 == "file" && pair[1].3)
+            .map(|pair| &pair[1])
+    } else if code == "check.duplicate_name" || code == "check.value.constraint" {
         words.iter().rev().find(semantic_match)
     } else {
         words.iter().find(semantic_match)
@@ -702,6 +717,7 @@ fn semantic_token_matches(token: &str, message: &str) -> bool {
         "interactively",
         "environment",
         "trigger",
+        "one",
     ]
     .iter()
     .any(|candidate| token == *candidate && message.contains(candidate))
@@ -1294,9 +1310,21 @@ fn missing_program_input_edit(
     let line_start = starts.start(line);
     let line_end = starts.ends.get(line.saturating_sub(1)).copied()?;
     let raw = source.get(line_start..line_end)?;
-    let content = parser::strip_comment(raw);
-    let offset_in_line = content.trim_end().len();
-    let offset = line_start + offset_in_line;
+    let statement = parser::logical_lines(source)
+        .ok()?
+        .into_iter()
+        .find(|statement| statement.number == line)?;
+    let bom = if line == 1 && raw.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    let physical = parser::strip_comment(raw.get(bom..)?).trim_start_matches(' ');
+    if physical != statement.text {
+        return None;
+    }
+    let layout = parser::repair_invocation_layout(&statement.text).ok()?;
+    let offset = line_start + bom + statement.indent + layout.parameter_insert;
     let placeholder = match kind {
         crate::ast::InputType::Text => "\"\"",
         crate::ast::InputType::Integer => "0",

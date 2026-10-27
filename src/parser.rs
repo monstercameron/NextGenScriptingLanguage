@@ -2271,6 +2271,7 @@ fn is_result_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
 struct InvocationLayout {
     parameters: BTreeMap<String, Range<usize>>,
     retry_insert_token: usize,
+    parameter_insert_token: usize,
 }
 
 fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
@@ -2383,6 +2384,11 @@ fn parse_invocation_with_layout(
         }
     }
 
+    if let Some(layout) = layout.as_deref_mut() {
+        // Place new named parameters after existing parameters and before suffixes.
+        layout.parameter_insert_token = cursor;
+    }
+
     let binding = if word_is(tokens.get(cursor), "as") {
         cursor += 1;
         let name = parse_binding_identifier(tokens.get(cursor), "binding name")?;
@@ -2467,14 +2473,13 @@ fn parse_invocation_with_layout(
 }
 
 /// Parser-derived byte spans for a single invocation, used by structured edits.
-#[cfg(all(feature = "records", not(target_arch = "wasm32")))]
 pub(crate) struct RepairInvocationLayout {
     pub(crate) parameters: BTreeMap<String, Range<usize>>,
     pub(crate) retry_insert: usize,
+    pub(crate) parameter_insert: usize,
     pub(crate) has_retry: bool,
 }
 
-#[cfg(all(feature = "records", not(target_arch = "wasm32")))]
 pub(crate) fn repair_invocation_layout(source: &str) -> Result<RepairInvocationLayout> {
     let mut tokens = Vec::new();
     let mut ranges = Vec::new();
@@ -2555,9 +2560,15 @@ pub(crate) fn repair_invocation_layout(source: &str) -> Result<RepairInvocationL
     } else {
         ranges[indices[layout.retry_insert_token - 1]].end
     };
+    let parameter_insert = if layout.parameter_insert_token == 0 {
+        bail!("no invocation parameter position");
+    } else {
+        ranges[indices[layout.parameter_insert_token - 1]].end
+    };
     Ok(RepairInvocationLayout {
         parameters,
         retry_insert: insert,
+        parameter_insert,
         has_retry: call.retry.is_some(),
     })
 }

@@ -2,7 +2,7 @@
 //! fixes. Each fix is applied to the source and the result is checked again, so a
 //! suggestion that does not actually repair the program fails the test.
 
-use flow::diagnostics::{Diagnostic, SuggestedFix, analyze_source};
+use flow::diagnostics::{Diagnostic, SuggestedFix, analyze_source, analyze_source_at};
 use flow::manifest::Registry;
 use std::path::Path;
 use std::process::Command;
@@ -210,6 +210,11 @@ fn semantic_parser_errors_have_specific_codes_and_token_spans() {
             "worker",
         ),
         (
+            "accept color as integer one of [\"red\"]\n",
+            "check.type_mismatch",
+            "one",
+        ),
+        (
             "define worker\n  run \"true\"\n\nrun program workre\n",
             "check.program.unknown",
             "workre",
@@ -249,7 +254,7 @@ fn direct_executable_args_typo_has_a_machine_applicable_fix() {
 #[test]
 fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
     let registry = Registry::default();
-    let definition = "define worker\n  accept input as text\n  use value input\n\n";
+    let definition = "define worker\n  accept input as text\n  accept extra as text\n  use value input\n  use value extra\n\n";
     for (call, code, token) in [
         (
             "run program worker with typo \"value\"\n",
@@ -257,7 +262,7 @@ fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
             "typo",
         ),
         (
-            "run program worker\n",
+            "run program worker with extra \"value\" as result\n",
             "check.program.input.required",
             "worker",
         ),
@@ -290,7 +295,11 @@ fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
                 &source,
                 diagnostic.fixes.first().expect("input insertion fix"),
             );
-            assert!(repaired.contains("run program worker with input \"\"\n"));
+            assert!(
+                repaired
+                    .contains("run program worker with extra \"value\" and input \"\" as result\n"),
+                "{repaired}"
+            );
             assert!(
                 analyze_source(&repaired, &registry)
                     .iter()
@@ -298,6 +307,35 @@ fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
             );
         }
     }
+}
+
+#[test]
+fn missing_program_file_is_distinct_and_points_at_path() {
+    let root = std::env::temp_dir().join(format!("flow-diagnostic-path-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let main = root.join("main.program");
+    std::fs::write(&main, "").unwrap();
+    let source = "run program file \"missing-469-child.program\"\n";
+    let diagnostics = analyze_source_at(source, Some(&main), &Registry::default());
+    let diagnostic = diagnostics
+        .iter()
+        .find(|d| d.code == "check.program.file.unknown")
+        .unwrap_or_else(|| panic!("expected missing-file diagnostic: {diagnostics:#?}"));
+    assert_eq!(
+        diagnostic.span.precision,
+        flow::diagnostics::SpanPrecision::Token
+    );
+    assert_eq!(
+        &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
+        "\"missing-469-child.program\""
+    );
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.code == "check.program.unknown")
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

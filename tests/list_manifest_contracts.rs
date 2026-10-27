@@ -226,3 +226,30 @@ fn aggregation_json_list_items_accept_dynamic_json_values() {
         assert_eq!(actual, json!([expected]), "{declaration}");
     }
 }
+
+#[test]
+fn aggregation_json_items_reject_nested_bytes_but_accept_nested_text() {
+    let root = tempfile::tempdir().unwrap();
+    for items in ["[{\"nested\":raw}]", "[[raw]]"] {
+        let invalid = format!(
+            "run \"printf\" with arguments [\"x\"]\nthen capture bytes as raw\nrun list.unique with items {items} as result\n"
+        );
+        let output = invoke(root.path(), &invalid, "check");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("raw bytes reference \"raw\""),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let source = "accept value as text\nrun list.unique with items [{\"nested\":value}] as result\nthen encode result as json\n";
+    let output = invoke_with_arguments(root.path(), source, "run", &["--input", "value=hello"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(actual, json!([{"nested":"hello"}]));
+}

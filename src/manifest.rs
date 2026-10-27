@@ -3332,8 +3332,7 @@ fn validate_port_value_with_references(
     bindings: &BTreeMap<String, InputType>,
 ) -> Result<()> {
     if schema.kind == OutputType::Json {
-        // JSON accepts all literal values and every declared input type; the
-        // unresolved references cannot violate a narrower JSON schema.
+        validate_json_references(value, bindings)?;
         return Ok(());
     }
     match (schema.kind, value) {
@@ -3375,6 +3374,30 @@ fn validate_port_value_with_references(
         }
         _ => schema.validate_value(value),
     }
+}
+
+fn validate_json_references(value: &Value, bindings: &BTreeMap<String, InputType>) -> Result<()> {
+    match value {
+        Value::Reference(reference)
+            if bindings.get(reference).copied().unwrap_or(InputType::Text) == InputType::Bytes =>
+        {
+            bail!("raw bytes reference {reference:?} cannot appear inside a JSON value")
+        }
+        Value::List(items) => {
+            for (index, item) in items.iter().enumerate() {
+                validate_json_references(item, bindings)
+                    .with_context(|| format!("validating JSON array item {index}"))?;
+            }
+        }
+        Value::Record(fields) => {
+            for (name, value) in fields {
+                validate_json_references(value, bindings)
+                    .with_context(|| format!("validating JSON field {name:?}"))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn contains_parameter_reference(value: &Value) -> bool {

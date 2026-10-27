@@ -262,11 +262,7 @@ impl InputDeclaration {
                     items
                         .iter()
                         .map(|item| {
-                            Value::Number(
-                                item.as_number()
-                                    .expect("validated usize array")
-                                    .clone(),
-                            )
+                            Value::Number(item.as_number().expect("validated usize array").clone())
                         })
                         .collect(),
                 )

@@ -132,7 +132,7 @@ run pwd
 ## Native commands and applets
 
 ```text
-statement   = invocation [ "as" NAME ] { modifier }
+statement   = invocation suffixes
 invocation  = "run" target [ "with" argument { "and" argument } ]
             | "then" target [ "with" argument { "and" argument } ]
             | "pipe" "to" target [ "with" argument { "and" argument } ]
@@ -141,10 +141,13 @@ argument    = NAME value | "arguments" list | "flags" list
 value       = TEXT | INTEGER | BOOL | NAME (a binding) | list
 list        = "[" [ item { "," item } ] "]"
 item        = TEXT | INTEGER | BOOL | NAME
-modifier    = "and" "keep" "status" "as" NAME
-            | "and" "keep" "result" "as" NAME
-            | "and" "discard" "stderr"        (direct quoted commands only)
-            | "and" "cache"                   (declared deterministic applets only)
+suffixes    = [ "as" NAME ]
+              [ "and" "discard" "stderr" ]        (direct quoted commands only)
+              [ "and" "keep" "status" "as" NAME ]
+              [ "and" "keep" "result" "as" NAME ]
+              [ "and" "keep" "secret" ]           (requires `as NAME`)
+              [ "and" "cache" ]                   (declared deterministic applets only)
+              [ "and" "retry" "up" "to" INTEGER "times" ... ]
 ```
 
 ```program
@@ -152,6 +155,15 @@ run "printf" with arguments ["hello %s\n", "world"]
 run "printf" with arguments ["count"] as label
 run "test" with arguments ["-f", "input.txt"] and keep status as present
 ```
+
+Invocation suffixes have one canonical order, stated once by the `suffixes`
+production above: each family at most once, in the order listed. Redirection
+(`and stderr to`, `and stdin from`, `and environment`, ...) and `and cache`
+restrictions aside, a misordered suffix is a `parse.suffix_order` diagnostic
+with a machine-applicable fix that reorders the suffixes; the reorder preserves
+meaning. `and retry` cannot be combined with `and cache`, `and keep status`,
+or `and keep result`, so those combinations keep their existing errors and get
+no reorder fix.
 
 `then` waits for the previous statement to succeed and passes its output as stdin.
 `pipe to` connects the previous stage's stdout to this command with an OS pipe.

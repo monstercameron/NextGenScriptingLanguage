@@ -370,11 +370,13 @@ fn streams_graph_events(arguments: &[String]) -> bool {
 
 /// Whether a run without an explicit `--events` flag will still stream: a
 /// `run` of a persistent graph with no `--checkpoint` defaults to `--events
-/// jsonl`. This needs a registry to detect, so it runs in the daemon child
-/// with the preloaded registry. Anything unparseable returns false so the
-/// normal path still reports the real diagnostic; a custom-manifest persistent
-/// graph the preloaded registry cannot parse still streams through the
-/// daemon child's direct stdio, which is correct but holds the daemon.
+/// jsonl`. Detection needs the run's own registry: a persistent graph that
+/// needs custom manifests fails to parse against the preloaded registry, so
+/// the request's manifest selectors are honoured here instead of letting the
+/// daemon child inherit an indefinite stream that holds a daemon slot.
+/// Anything unreadable still returns false so the normal path reports the
+/// real diagnostic; a custom registry that cannot even load is declined (true)
+/// so the client reports the diagnostic directly instead of holding the daemon.
 fn implicit_graph_stream(arguments: &[String], registry: &Registry) -> bool {
     let separator = arguments
         .iter()
@@ -403,6 +405,23 @@ fn implicit_graph_stream(arguments: &[String], registry: &Registry) -> bool {
     {
         if !flow::graph::is_graph(&source) {
             return false;
+        }
+        if args.manifest_dir.is_some() || args.manifest_catalog.is_some() {
+            // The preloaded registry cannot see the run's custom manifests, so
+            // detect against the requested registry instead.
+            let Ok(custom) = load_registry(
+                args.manifest_dir.clone(),
+                args.manifest_catalog.clone(),
+                ManifestCheck::Lazy,
+            ) else {
+                return true;
+            };
+            if custom.manifests().is_err() {
+                return true;
+            }
+            return flow::graph::parse(&source, &custom)
+                .map(|plan| plan.has_persistent_nodes())
+                .unwrap_or(true);
         }
         flow::graph::parse(&source, registry)
             .map(|plan| plan.has_persistent_nodes())
@@ -1314,7 +1333,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                             // itself so a closed stdout exits quietly through
                             // the SIGPIPE convention (141), like every other
                             // pipe writer, instead of succeeding.
-                            return Err(stream_write_error(session, error));
+                            return Err(stream_write_error(&mut session, error));
                         }
                     }
                     session.cancel_and_join()?;
@@ -1351,7 +1370,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                             "revision": event.revision,
                             "sequence": event.sequence,
                             "sensitivity": event.sensitivity,
-                            "payload": event.payload
+                            "payload": flow::graph::graph_event_payload_json(&event.payload)
                         })
                     })
                     .collect::<Vec<_>>();

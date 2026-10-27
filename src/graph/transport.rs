@@ -3112,6 +3112,24 @@ pub fn run(
     run_plan(plan, registry, options, cancelled, None)
 }
 
+/// Render a terminal payload the way the published `graph-event.v1` schema
+/// describes it: bytes as an integer array, every other value as natural
+/// JSON. `Value` itself serializes as an externally tagged object
+/// (`{"Integer": 42}`), which the schema's open `value` still accepts but
+/// consumers do not expect; both the stream and the closing document use
+/// this shape so a piped line matches its document entry.
+pub fn graph_event_payload_json(payload: &PortValue) -> serde_json::Value {
+    match payload {
+        PortValue::Bytes(bytes) => serde_json::json!({"kind": "bytes", "value": bytes}),
+        PortValue::Value(value) => {
+            let natural = crate::structured::to_json(value).unwrap_or_else(|_| {
+                serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+            });
+            serde_json::json!({"kind": "value", "value": natural})
+        }
+    }
+}
+
 /// One streamed terminal event as a single JSON line on stdout. The shape
 /// matches one entry of the closing `execute.graph-run/1` document's
 /// `outputs` array, wrapped with the `execute.graph-event/1` protocol, the
@@ -3132,7 +3150,7 @@ pub fn graph_event_line(
         "port": event.port,
         "sequence": event.sequence,
         "sensitivity": event.sensitivity,
-        "payload": event.payload
+        "payload": graph_event_payload_json(&event.payload)
     })
 }
 

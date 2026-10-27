@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn timer_plan() -> GraphPlan {
-    let registry = Registry::from_sources(&[]).expect("empty registry parses");
+    let registry = Registry::from_sources(&[] as &[&str]).expect("empty registry parses");
     flow::graph::parse(
         "graph ticks\nevery 10 milliseconds as ticker\nend graph\n",
         &registry,
@@ -140,6 +140,14 @@ fn int_schema() -> ValueSchema {
 }
 
 fn mock_node(id: &str, outputs: BTreeMap<String, PortSchema>) -> GraphNode {
+    mock_node_with_events(id, outputs, BTreeMap::new())
+}
+
+fn mock_node_with_events(
+    id: &str,
+    outputs: BTreeMap<String, PortSchema>,
+    events: BTreeMap<String, PortSchema>,
+) -> GraphNode {
     GraphNode {
         id: id.into(),
         kind: GraphNodeKind::Renderer {
@@ -147,7 +155,7 @@ fn mock_node(id: &str, outputs: BTreeMap<String, PortSchema>) -> GraphNode {
         },
         inputs: BTreeMap::new(),
         outputs,
-        events: BTreeMap::new(),
+        events,
         line: None,
     }
 }
@@ -292,8 +300,11 @@ impl GraphExecutor for WaitForCancelExecutor {
 #[test]
 fn head_close_cancels_session_promptly_without_worker_error() {
     let mut plan = GraphPlan::new("pausable");
-    plan.add_node(mock_node(
+    // Event-delivery ports live in the events namespace: declaring `tick` as
+    // an output is rejected as `invalid_output_delivery`.
+    plan.add_node(mock_node_with_events(
         "source",
+        BTreeMap::new(),
         BTreeMap::from([("tick".into(), PortSchema::events(int_schema()))]),
     ))
     .expect("mock node is admitted");
@@ -309,7 +320,10 @@ fn head_close_cancels_session_promptly_without_worker_error() {
         "the session limit is the derived per-event bound"
     );
     // A closed pipe reader cancels the session; the next receive reports the
-    // cancellation immediately instead of hanging or reporting EOF.
+    // cancellation immediately instead of hanging or reporting EOF. The
+    // elapsed bound pins the head-close promptness acceptance: a close must
+    // surface as a cancellation on a millisecond scale, not after a hang.
+    let closed = Instant::now();
     session.cancel();
     let error = session
         .recv_output()
@@ -317,6 +331,11 @@ fn head_close_cancels_session_promptly_without_worker_error() {
     assert!(
         error.to_string().contains("cancelled"),
         "unexpected cancel error: {error:#}"
+    );
+    assert!(
+        closed.elapsed() < Duration::from_secs(1),
+        "head close took {:?}, expected a prompt cancellation",
+        closed.elapsed()
     );
     session
         .cancel_and_join()
@@ -644,8 +663,9 @@ fn emitted_lines_validate_against_the_full_schema() {
 fn schema_validation_rejects_misshapen_lines() {
     let schema = load_event_schema();
     let valid = graph_event_line("ticks", 1, 1, &sample_envelope());
-    // The validator is not vacuous: a missing field, an extra field, and a
-    // payload matching no variant must each fail with a reason.
+    // The validator is not vacuous: a missing field, an extra field, an
+    // out-of-range byte, a wrong protocol, an unknown sensitivity label, and
+    // a payload matching neither variant must each fail with a reason.
     let mut missing = valid.clone();
     missing.as_object_mut().unwrap().remove("payload");
     assert!(
@@ -666,6 +686,24 @@ fn schema_validation_rejects_misshapen_lines() {
     assert!(
         validate_graph_event_line(&schema, &bad_payload).is_err(),
         "a byte outside 0..=255 must not validate"
+    );
+    let mut bad_protocol = valid.clone();
+    bad_protocol["protocol"] = serde_json::json!("execute.graph-run/1");
+    assert!(
+        validate_graph_event_line(&schema, &bad_protocol).is_err(),
+        "a closing-document protocol must not validate as a stream event"
+    );
+    let mut bad_label = valid.clone();
+    bad_label["sensitivity"] = serde_json::json!(["public", "no-such-label"]);
+    assert!(
+        validate_graph_event_line(&schema, &bad_label).is_err(),
+        "a sensitivity label outside the schema enum must not validate"
+    );
+    let mut bad_kind = valid.clone();
+    bad_kind["payload"] = serde_json::json!({"kind": "text", "value": "hello"});
+    assert!(
+        validate_graph_event_line(&schema, &bad_kind).is_err(),
+        "a payload matching neither the bytes nor the value variant must not validate"
     );
 }
 
@@ -716,9 +754,8 @@ fn large_string_and_nested_value_payloads_fit_the_derived_bound() {
 #[test]
 fn first_tick_arrives_with_millisecond_latency() {
     // The producer never finishes on its own, so receiving here proves the
-    // tick was visible mid-run; the elapsed time pins the "milliseconds"
-    // acceptance behind a CI-safe bound (production ticks land in ~2 ms
-    // poll steps, and the issue asks for 50 ms).
+    // tick was visible mid-run; the 50 ms bound is the issue #558 acceptance
+    // for first-tick visibility (production ticks land in ~2 ms poll steps).
     let started = Instant::now();
     let mut session = GraphSession::start(
         terminal_plan("live-latency"),
@@ -737,8 +774,8 @@ fn first_tick_arrives_with_millisecond_latency() {
         "the live tick carries its payload"
     );
     assert!(
-        elapsed < Duration::from_secs(2),
-        "tick took {elapsed:?}, expected millisecond-scale visibility"
+        elapsed < Duration::from_millis(50),
+        "tick took {elapsed:?}, expected visibility within 50 ms"
     );
     session.cancel();
     session
@@ -781,4 +818,69 @@ fn streaming_outlives_the_old_collection_cap() {
     session
         .cancel_and_join()
         .expect("a clean finish joins quietly");
+}
+
+/// Resident set size in bytes, when the platform exposes it. Linux parses it
+/// from `/proc/self/status`; other platforms skip the flat-RSS assertion but
+/// still stream the million events.
+#[cfg(target_os = "linux")]
+fn rss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kibibytes: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kibibytes * 1024);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rss_bytes() -> Option<u64> {
+    None
+}
+
+#[test]
+fn streaming_holds_flat_rss_past_one_million_events() {
+    // Issue #558 acceptance: the stream holds nothing, so one million small
+    // events must flow past the old 100,000-event cap with flat memory. A
+    // collected document for this stream would retain every envelope (well
+    // over 100 MB); stream growth must stay well below that.
+    let mut options = GraphRunOptions::default();
+    options.max_collected_events = 8;
+    let before = rss_bytes();
+    let mut session = GraphSession::start(
+        terminal_plan("million"),
+        Arc::new(EmitManyExecutor { count: 1_000_000 }),
+        options,
+    )
+    .expect("streaming session starts");
+    let mut seen = 0usize;
+    loop {
+        match session
+            .recv_output()
+            .expect("streaming holds nothing back")
+        {
+            Some(event) => {
+                assert_eq!(
+                    event.payload,
+                    PortValue::Value(Value::Integer(seen as i64)),
+                    "streamed events arrive in emission order"
+                );
+                seen += 1;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(seen, 1_000_000, "every event streams past the old cap");
+    session
+        .cancel_and_join()
+        .expect("a clean finish joins quietly");
+    if let (Some(before), Some(after)) = (before, rss_bytes()) {
+        let growth = after.saturating_sub(before);
+        assert!(
+            growth < 64 * 1024 * 1024,
+            "streaming 1M events grew RSS by {growth} bytes, expected flat memory"
+        );
+    }
 }

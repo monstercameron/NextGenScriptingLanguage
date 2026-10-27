@@ -431,9 +431,10 @@ mod descriptor_enumeration_tests {
         let mut pipe = [-1; 2];
         // SAFETY: `pipe` points to two writable integers for the kernel to initialize.
         assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
-        // SAFETY: pipe initialized both entries as fresh, uniquely owned descriptors.
-        let (reader, writer) =
-            unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
+        let (reader, writer) = {
+            // SAFETY: pipe initialized both entries as fresh, uniquely owned descriptors.
+            unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) }
+        };
         // SAFETY: F_DUPFD_CLOEXEC reads the live pipe writer and returns a fresh descriptor.
         let inherited = unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
         assert!(
@@ -473,9 +474,10 @@ mod descriptor_enumeration_tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let mut byte = 0u8;
-        // SAFETY: `reader` is the live read end; EOF confirms no process kept the writer open.
-        let bytes_read =
-            unsafe { libc::read(reader.as_raw_fd(), (&mut byte as *mut u8).cast(), 1) };
+        let bytes_read = {
+            // SAFETY: `reader` is the live read end; EOF confirms no process kept the writer open.
+            unsafe { libc::read(reader.as_raw_fd(), (&mut byte as *mut u8).cast(), 1) }
+        };
         assert_eq!(bytes_read, 0);
     }
 }

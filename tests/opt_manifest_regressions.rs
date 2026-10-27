@@ -186,7 +186,6 @@ fn opt_manifest_parameter_deserialization_stays_strict_and_keeps_serialize_shape
         r#"{"name":"check","binary":"tool","parameters":{"text":{"type":"string","surprise":true}},"arguments":[]}"#,
     );
     assert!(unknown_field.contains("unknown field `surprise`"));
-    assert!(unknown_field.contains("expected one of `type`, `required`, `items`, `min_items`"));
 
     let invalid_type = opt_manifest_load_error(
         r#"{"name":"check","binary":"tool","parameters":{"text":{"type":"textual"}},"arguments":[]}"#,

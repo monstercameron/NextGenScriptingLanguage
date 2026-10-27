@@ -121,36 +121,6 @@ pub(crate) fn cancel_exit_code() -> Option<i32> {
 #[cfg(test)]
 pub(crate) static CANCEL_SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[cfg(test)]
-mod cancel_signal_tests {
-    use super::*;
-
-    #[test]
-    fn interrupt_signals_map_to_128_plus_signal() {
-        assert_eq!(exit_code_for_signal(2), 130);
-        assert_eq!(exit_code_for_signal(15), 143);
-        assert_eq!(exit_code_for_signal(1), 129);
-        assert_eq!(exit_code_for_signal(3), 131);
-    }
-
-    #[test]
-    fn clearing_the_recorded_signal_removes_the_sticky_exit_code() {
-        let _serial = CANCEL_SIGNAL_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let previous = CANCEL_SIGNAL.load(std::sync::atomic::Ordering::SeqCst);
-        record_cancel_signal(15);
-        assert_eq!(cancel_exit_code(), Some(143));
-        clear_cancel_signal();
-        assert_eq!(cancel_exit_code(), None);
-        if previous == 0 {
-            clear_cancel_signal();
-        } else {
-            record_cancel_signal(previous);
-        }
-    }
-}
-
 /// Interrupt drain states shared by a run and its signal handlers. The first
 /// interrupt of a run with an `on interrupt` body requests a drain: no new work is
 /// admitted and the program unwinds at the next statement boundary. A second
@@ -243,5 +213,35 @@ pub(crate) fn signals(
         let _ = wake;
         windows::signals(cancel, drain, cleanup, signal_code)?;
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod cancel_signal_tests {
+    use super::*;
+
+    #[test]
+    fn interrupt_signals_map_to_128_plus_signal() {
+        assert_eq!(exit_code_for_signal(2), 130);
+        assert_eq!(exit_code_for_signal(15), 143);
+        assert_eq!(exit_code_for_signal(1), 129);
+        assert_eq!(exit_code_for_signal(3), 131);
+    }
+
+    #[test]
+    fn clearing_the_recorded_signal_removes_the_sticky_exit_code() {
+        let _serial = CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = CANCEL_SIGNAL.load(std::sync::atomic::Ordering::SeqCst);
+        record_cancel_signal(15);
+        assert_eq!(cancel_exit_code(), Some(143));
+        clear_cancel_signal();
+        assert_eq!(cancel_exit_code(), None);
+        if previous == 0 {
+            clear_cancel_signal();
+        } else {
+            record_cancel_signal(previous);
+        }
     }
 }

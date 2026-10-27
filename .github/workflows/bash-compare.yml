@@ -74,6 +74,14 @@ jobs:
           LD_DEBUG=statistics "${program[@]}" 2>&1 | head -n 20
           strace -f -c -o "$RUNNER_TEMP/bash-count.txt" bash --norc --noprofile -c :
           tail -n 4 "$RUNNER_TEMP/bash-count.txt"
+      - name: Gate CPU-bound instruction counts (fail-closed when a verified baseline exists)
+        run: |
+          baseline="benchmarks/instruction-baseline-${{ matrix.os }}-${{ matrix.variant }}.json"
+          if [ -f "$baseline" ]; then
+            python3 tools/check_instruction_regression.py "$baseline" target/bash-compare.json --fail-closed --require-provenance
+          else
+            echo "instruction gate incomplete: no verified baseline at $baseline; the synthetic contract test above is not a real regression gate."
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

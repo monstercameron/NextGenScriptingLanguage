@@ -40,13 +40,15 @@ original version labels.
   4.37 ms) and marginally on a 100-spawn loop (63.86 against 67.07 ms). The workflow also
   compares `opt-level = "s"`, static musl and musl `min`-profile builds. Optimisation is
   ongoing. See [the numbers and method](docs/production-readiness.md#performance-against-bash-and-dash).
-- Perf gating on shared runners. `tools/bash_compare.py` now reports a deterministic
+- Perf measurement groundwork on shared runners. `tools/bash_compare.py` now reports a deterministic
   bootstrap 95% confidence interval for every median wall time and, on Linux with a
   working perf counter, the median user instruction count per scenario; the `Execute
   vs bash` workflow installs perf on a best-effort basis and runs the new instruction
-  gate contract test. `tools/check_instruction_regression.py` fails when a CPU-bound
-  row regresses by more than 2% against a stored baseline, so sub-noise CPU
-  regressions the wall-time medians cannot see are still caught.
+  gate contract test (synthetic reports only). `tools/check_instruction_regression.py`
+  defines a +2% gate for CPU-bound rows with `--fail-closed` and `--require-provenance`
+  modes, but no verified baseline is checked in and CI does not yet gate real reports,
+  so sub-noise CPU regressions are not yet caught in CI. The real gate stays explicitly
+  incomplete until a provenance-recorded baseline lands; missing perf data is not acceptance.
 - Twenty more Omarchy v4.0.4 scripts are ported under `examples/omarchy-ports/<script>/`
   with the Bash original, the port and a `case.json`. `tools/port_compare.py` runs both in
   sandboxes with logging fake binaries and compares status, stdout, stderr, the

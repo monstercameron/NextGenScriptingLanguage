@@ -217,15 +217,21 @@ execute run FILE with the workflow's explicit manifest directory. Peak RSS uses 
 /usr/bin/time -f %M, at most three runs per arm, with the same temporary working
 directory and fresh output/checkpoint fixtures. On Linux with a working perf counter,
 each arm also reports the median user instruction count (`perf stat -e
-instructions:u`, three samples) next to wall time, and
-[tools/check_instruction_regression.py](../tools/check_instruction_regression.py)
-gates the CPU-bound rows at +2% against a stored baseline. Where perf is missing or
+instructions:u`, three samples) next to wall time. Where perf is missing or
 forbidden from counting, those rows report `-` instead of a count. Every child has a
 30-second timeout and the harness stops at a 285-second end-to-end budget (hard maximum
 300 seconds).
 [bash-compare.yml](../.github/workflows/bash-compare.yml) runs the workload-contract
-test and comparison for each release/profile variant on ubuntu-24.04 and
-ubuntu-24.04-arm, retaining a grouped JSON report. The local macOS expanded table above
+test, the synthetic instruction-gate contract test, and the comparison for each
+release/profile variant on ubuntu-24.04 and
+ubuntu-24.04-arm, retaining a grouped JSON report. The workflow then runs
+[tools/check_instruction_regression.py](../tools/check_instruction_regression.py)
+with `--fail-closed --require-provenance` only when a verified per-OS/variant
+baseline exists at `benchmarks/instruction-baseline-<os>-<variant>.json`; no such
+baseline is checked in, so the real +2% CPU-bound instruction gate is explicitly
+incomplete in CI and the contract test alone is not a regression gate. Missing perf
+data fails the fail-closed gate as incomplete rather than passing silently. The local
+macOS expanded table above
 is diagnostic; the Linux eight-scenario table below is a historical snapshot. The
 latest Linux workflow artifacts remain the source for per-profile CI results.
 What it does not show. The pairs use each runtime's natural operation, so they compare

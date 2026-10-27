@@ -24,19 +24,19 @@ GATE_SPEC.loader.exec_module(gate)
 
 
 def report(revision, instructions, *, machine="x86_64", platform="Linux-6.x", manifest_dir="manifests",
-           keys=("builtin_loop", "text_upper", "spawn_loop")):
+           keys=("builtin_loop", "text_upper", "spawn_loop"), extra=None):
     results = []
     for key in keys:
         results.append({"key": key, "execute": {"median_instructions": instructions.get(key)}})
-    return {
-        "metadata": {
-            "source_revision": revision,
-            "platform": platform,
-            "machine": machine,
-            "manifest_dir": manifest_dir,
-        },
-        "results": results,
+    metadata = {
+        "source_revision": revision,
+        "platform": platform,
+        "machine": machine,
+        "manifest_dir": manifest_dir,
     }
+    if extra:
+        metadata.update(extra)
+    return {"metadata": metadata, "results": results}
 
 
 def full_report(revision, instructions, keys):
@@ -186,6 +186,55 @@ class InstructionGateTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(skipped, ["text_upper"])
 
+    def test_fail_closed_missing_gated_data_fails(self):
+        _, failures, skipped = gate.evaluate(
+            full_report("base", {"builtin_loop": 1_000_000, "text_upper": None},
+                        ("builtin_loop", "text_upper")),
+            full_report("head", {"builtin_loop": 1_000_000, "text_upper": None},
+                        ("builtin_loop", "text_upper")),
+            fail_closed=True,
+        )
+        self.assertEqual(failures, ["text_upper"])
+        self.assertEqual(skipped, ["text_upper"])
+
+    def test_fail_closed_missing_non_gated_data_stays_skipped(self):
+        _, failures, skipped = gate.evaluate(
+            full_report("base", {"builtin_loop": 1_000_000, "spawn_loop": None},
+                        ("builtin_loop", "spawn_loop")),
+            full_report("head", {"builtin_loop": 1_000_000, "spawn_loop": None},
+                        ("builtin_loop", "spawn_loop")),
+            fail_closed=True,
+        )
+        self.assertEqual(failures, [])
+        self.assertEqual(skipped, ["spawn_loop"])
+
+    def test_rejects_runner_and_repeat_mismatch(self):
+        baseline = full_report("base", {"builtin_loop": 1}, ("builtin_loop",))
+        baseline["metadata"]["runner_sha256"] = "runner-a"
+        candidate = full_report("head", {"builtin_loop": 1}, ("builtin_loop",))
+        candidate["metadata"]["runner_sha256"] = "runner-b"
+        with self.assertRaisesRegex(ValueError, "runner_sha256"):
+            gate.evaluate(baseline, candidate)
+        baseline = full_report("base", {"builtin_loop": 1}, ("builtin_loop",))
+        baseline["metadata"]["instruction_repeats"] = 3
+        candidate = full_report("head", {"builtin_loop": 1}, ("builtin_loop",))
+        candidate["metadata"]["instruction_repeats"] = 5
+        with self.assertRaisesRegex(ValueError, "instruction_repeats"):
+            gate.evaluate(baseline, candidate)
+
+    def test_require_provenance_needs_recorded_hashes(self):
+        provenance = {"execute_sha256": "exe", "runner_sha256": "runner", "instruction_repeats": 3}
+        baseline = report("base", {"builtin_loop": 1}, keys=("builtin_loop",), extra=provenance)
+        candidate = report("head", {"builtin_loop": 1}, keys=("builtin_loop",), extra=provenance)
+        _, failures, _ = gate.evaluate(baseline, candidate, require_provenance=True)
+        self.assertEqual(failures, [])
+        with self.assertRaisesRegex(ValueError, "verified provenance"):
+            gate.evaluate(
+                full_report("base", {"builtin_loop": 1}, ("builtin_loop",)),
+                full_report("head", {"builtin_loop": 1}, ("builtin_loop",)),
+                require_provenance=True,
+            )
+
     def test_requires_exact_scenario_coverage(self):
         with self.assertRaisesRegex(ValueError, "without a stored baseline"):
             gate.evaluate(
@@ -226,6 +275,18 @@ class InstructionGateTests(unittest.TestCase):
             steady_path = Path(tmp) / "steady.json"
             steady_path.write_text(json.dumps(steady), encoding="utf-8")
             self.assertEqual(gate.main([str(baseline_path), str(steady_path)]), 0)
+
+    def test_cli_fail_closed_reports_missing_gated_data_as_incomplete(self):
+        baseline = full_report("base", {"builtin_loop": None}, ("builtin_loop",))
+        candidate = full_report("head", {"builtin_loop": None}, ("builtin_loop",))
+        with tempfile.TemporaryDirectory(prefix="instruction-gate-") as tmp:
+            baseline_path = Path(tmp) / "baseline.json"
+            candidate_path = Path(tmp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            self.assertEqual(gate.main([str(baseline_path), str(candidate_path)]), 0)
+            self.assertEqual(
+                gate.main([str(baseline_path), str(candidate_path), "--fail-closed"]), 1)
 
 
 if __name__ == "__main__":

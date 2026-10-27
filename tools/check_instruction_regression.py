@@ -4,14 +4,19 @@
 Both inputs are JSON reports produced by tools/bash_compare.py. The baseline
 report must come from the same OS family, machine architecture, and manifest
 selection as the candidate. A baseline is intentionally required: this tool
-never invents one from a current run.
+never invents one from a current run. No verified baseline is checked in, so
+there is currently no real regression gate in CI — only the synthetic contract
+tests. When a verified baseline exists, run with --fail-closed (and
+--require-provenance) so missing gated data fails instead of passing silently.
 
 Only CPU-bound scenarios are gated: rows where the Execute arm is dominated by
 interpreter work rather than child processes or filesystem traffic, so the
 `instructions:u` count is a stable signal for the optimization backlog (#305).
 Every other scenario's instruction counts are reported for stability but never
-fail the gate. Scenarios without instruction data in either report (perf was
-unavailable or forbidden from counting) are listed as skipped, not failed.
+fail the gate. Without --fail-closed, scenarios without instruction data in
+either report (perf was unavailable or forbidden from counting) are listed as
+skipped, not failed; with --fail-closed, a gated row without data in either
+report fails the gate as incomplete rather than passing silently.
 """
 import argparse
 import json
@@ -74,11 +79,24 @@ def report_instructions(report, label):
     return metadata, instructions
 
 
-def evaluate(baseline, candidate, max_regression=MAX_REGRESSION):
+def evaluate(baseline, candidate, max_regression=MAX_REGRESSION, *,
+              fail_closed=False, require_provenance=False):
     if not 0 <= max_regression < 1:
         raise ValueError("max regression must be between 0 and 1")
     baseline_meta, baseline_instructions = report_instructions(baseline, "baseline")
     candidate_meta, candidate_instructions = report_instructions(candidate, "candidate")
+    if require_provenance:
+        for field in ("execute_sha256", "runner_sha256"):
+            value = baseline_meta.get(field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"baseline lacks verified provenance: {field} is missing")
+    for field in ("runner_sha256", "instruction_repeats"):
+        before = baseline_meta.get(field)
+        after = candidate_meta.get(field)
+        if before is not None and after is not None and before != after:
+            raise ValueError(
+                f"baseline/candidate {field} differ: {before!r} != {after!r}"
+            )
     if str(baseline_meta.get("platform", "")).split("-", 1)[0] != str(
         candidate_meta.get("platform", "")
     ).split("-", 1)[0]:
@@ -117,6 +135,8 @@ def evaluate(baseline, candidate, max_regression=MAX_REGRESSION):
         after = candidate_instructions.get(key)
         if before is None or after is None:
             skipped.append(key)
+            if fail_closed and key in CPU_BOUND_SCENARIOS:
+                failures.append(key)
             continue
         regression = after / before - 1.0
         gated = key in CPU_BOUND_SCENARIOS
@@ -136,14 +156,34 @@ def main(argv=None):
         default=MAX_REGRESSION * 100,
         help="maximum allowed instruction regression on CPU-bound rows (default: 2)",
     )
+    parser.add_argument(
+        "--fail-closed",
+        action="store_true",
+        help="fail when a gated CPU-bound row lacks instruction data in either report",
+    )
+    parser.add_argument(
+        "--require-provenance",
+        action="store_true",
+        help="require the baseline to record execute_sha256 and runner_sha256",
+    )
     args = parser.parse_args(argv)
     if not args.baseline.is_file() or not args.candidate.is_file():
-        print("error: baseline and candidate reports must both exist", file=sys.stderr)
+        print(
+            "error: gate incomplete: baseline and candidate reports must both exist; "
+            "no verified baseline is checked in, so a missing baseline is not acceptance",
+            file=sys.stderr,
+        )
         return 2
     try:
         baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
         candidate = json.loads(args.candidate.read_text(encoding="utf-8"))
-        comparisons, failures, skipped = evaluate(baseline, candidate, args.max_regression_percent / 100)
+        comparisons, failures, skipped = evaluate(
+            baseline,
+            candidate,
+            args.max_regression_percent / 100,
+            fail_closed=args.fail_closed,
+            require_provenance=args.require_provenance,
+        )
     except (json.JSONDecodeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -153,11 +193,21 @@ def main(argv=None):
     if skipped:
         print("skipped (no instruction data in one or both reports): " + ", ".join(skipped))
     if failures:
-        print(
-            f"error: CPU-bound instruction count regressed by more than {args.max_regression_percent:g}% in: "
-            + ", ".join(failures),
-            file=sys.stderr,
-        )
+        incomplete = sorted(set(skipped) & set(CPU_BOUND_SCENARIOS)) if args.fail_closed else []
+        if incomplete:
+            print(
+                "error: gate incomplete: gated CPU-bound rows lack instruction data in: "
+                + ", ".join(incomplete)
+                + " (perf unavailable or forbidden; this is not acceptance)",
+                file=sys.stderr,
+            )
+        regressed = [key for key in failures if key not in set(skipped)]
+        if regressed:
+            print(
+                f"error: CPU-bound instruction count regressed by more than {args.max_regression_percent:g}% in: "
+                + ", ".join(regressed),
+                file=sys.stderr,
+            )
         return 1
     print(f"all gated CPU-bound instruction counts remain within {args.max_regression_percent:g}% of the stored baseline")
     return 0

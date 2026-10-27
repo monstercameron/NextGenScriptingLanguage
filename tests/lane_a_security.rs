@@ -187,8 +187,7 @@ fn plain_numbers_remain_usable_after_the_option_rule() {
         let output = explain(&source);
         assert!(output.status.success(), "{amount}: {}", stderr(&output));
         assert!(
-            stdout(&output)
-                .contains(&explained_argv(&["dispatch", "resizeactive", amount, "0"])),
+            stdout(&output).contains(&explained_argv(&["dispatch", "resizeactive", amount, "0"])),
             "{amount}: {}",
             stdout(&output)
         );

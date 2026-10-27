@@ -4156,11 +4156,7 @@ struct ControlContext<'program, 'frames> {
 }
 
 impl<'program, 'frames> ControlContext<'program, 'frames> {
-    fn unwind(
-        &mut self,
-        unwind: control_flow::UnwindTo,
-        collect_loop_jobs: bool,
-    ) -> Result<()> {
+    fn unwind(&mut self, unwind: control_flow::UnwindTo, collect_loop_jobs: bool) -> Result<()> {
         let control_flow::UnwindTo {
             call_depth,
             loop_depth,
@@ -4238,7 +4234,9 @@ fn apply_control_action(
                     .loop_frames
                     .end_iteration(header, context.bindings)?
                 {
-                    context.job_supervisor.collect_loop_iteration(parent, scope)?;
+                    context
+                        .job_supervisor
+                        .collect_loop_iteration(parent, scope)?;
                 }
             }
             Ok(AppliedControl::Jump(target))

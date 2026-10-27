@@ -785,8 +785,7 @@ fn run_service_with_signals(
             StepKind::Invoke { call, .. }
                 if registry.resolve_call(call)?.builtin == Some(Builtin::Cd) =>
             {
-                let args =
-                    arguments_for_call(call, registry.resolve_call(call)?, &options.inputs)?;
+                let args = arguments_for_call(call, registry.resolve_call(call)?, &options.inputs)?;
                 let destination = cwd.join(&args[0]);
                 stopped(&signals)?;
                 crate::capabilities::authorize_host_path(

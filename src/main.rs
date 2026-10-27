@@ -2157,7 +2157,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
                 "results": ranked.iter().map(|(contract, score)| serde_json::json!({
                     "name": contract["name"],
                     "score": (score * 100.0).round() / 100.0,
-                    "signature": applet_signature_with_description(contract, true),
+                    "signature": applet_signature_with_description(contract),
                     "description": contract["description"]
                 })).collect::<Vec<_>>()
             }));
@@ -2165,7 +2165,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
         for (contract, score) in ranked {
             let line = format!(
                 "{score:.2} {}",
-                applet_signature_with_description(&contract, true)
+                applet_signature_with_description(&contract)
             );
             writeln!(io::stdout(), "{}", escape_applet_text_line(&line))?;
         }
@@ -2241,7 +2241,20 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
 }
 
 fn applet_signature(contract: &serde_json::Value) -> String {
-    applet_signature_with_description(contract, false)
+    const DESCRIPTION_BUDGET_BYTES: usize = 30;
+    let mut line = applet_signature_core(contract);
+    if let Some(description) = contract["description"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+    {
+        let escaped = escape_applet_text_line(description);
+        let summary = compact_applet_description(&escaped, DESCRIPTION_BUDGET_BYTES);
+        if !summary.is_empty() {
+            line.push_str("  ");
+            line.push_str(&summary);
+        }
+    }
+    line
 }
 
 fn escape_applet_text_line(text: &str) -> String {
@@ -2252,10 +2265,46 @@ fn escape_applet_text_line(text: &str) -> String {
         .replace('\u{2029}', r"\u{2029}")
 }
 
-fn applet_signature_with_description(
-    contract: &serde_json::Value,
-    include_redundant: bool,
-) -> String {
+fn applet_signature_with_description(contract: &serde_json::Value) -> String {
+    let mut line = applet_signature_core(contract);
+    if let Some(description) = contract["description"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+    {
+        line.push_str("  ");
+        line.push_str(description);
+    }
+    line
+}
+
+fn compact_applet_description(description: &str, max_bytes: usize) -> String {
+    const ELLIPSIS: &str = "…";
+    let words = description.split_whitespace().collect::<Vec<_>>();
+    let mut summary = String::new();
+    let mut consumed = 0;
+    for (index, word) in words.iter().enumerate() {
+        let separator = usize::from(!summary.is_empty());
+        let reserve_ellipsis = if index + 1 < words.len() {
+            ELLIPSIS.len()
+        } else {
+            0
+        };
+        if summary.len() + separator + word.len() + reserve_ellipsis > max_bytes {
+            break;
+        }
+        if separator != 0 {
+            summary.push(' ');
+        }
+        summary.push_str(word);
+        consumed = index + 1;
+    }
+    if consumed < words.len() && !summary.is_empty() {
+        summary.push_str(ELLIPSIS);
+    }
+    summary
+}
+
+fn applet_signature_core(contract: &serde_json::Value) -> String {
     let name = contract["name"].as_str().unwrap_or("<unknown>");
     let properties = contract["parameters_schema"]["properties"].as_object();
     let required = contract["parameters_schema"]["required"]
@@ -2298,31 +2347,7 @@ fn applet_signature_with_description(
         "object" => "record",
         output => output,
     };
-    let mut line = format!("{name}({parameters}) -> {output}");
-    if let Some(description) = contract["description"].as_str().filter(|text| {
-        !text.is_empty() && (include_redundant || !is_redundant_applet_description(name, text))
-    }) {
-        line.push_str("  ");
-        line.push_str(description);
-    }
-    line
-}
-
-fn is_redundant_applet_description(name: &str, description: &str) -> bool {
-    let normalized_name = name
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() {
-                character
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    description == format!("Provides the {normalized_name} operation for controlled scripts.")
+    format!("{name}({parameters}) -> {output}")
 }
 
 fn applet_search_score(query: &str, contract: &serde_json::Value) -> f64 {

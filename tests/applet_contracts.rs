@@ -250,10 +250,50 @@ fn compact_signatures_and_ranked_search_keep_catalog_discovery_small_and_usable(
         String::from_utf8_lossy(&names.stdout).lines().count(),
         String::from_utf8_lossy(&signatures.stdout).lines().count()
     );
+    let signatures_text = String::from_utf8(signatures.stdout).unwrap();
+    let replace_signature = signatures_text
+        .lines()
+        .find(|line| line.starts_with("text.replace("))
+        .expect("text.replace signature is listed");
+    assert!(
+        replace_signature.ends_with("  Replaces every…"),
+        "{replace_signature}"
+    );
+    let description_summary = replace_signature.rsplit_once("  ").unwrap().1;
+    assert!(description_summary.len() <= 30);
+
+    let catalog = value(cli(cwd, &["applets", "list"]));
+    let render_catalog = catalog["applets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|contract| contract["name"] == "text.render")
+        .unwrap();
+    assert!(render_catalog["description"].as_str().unwrap().len() > 30);
+    assert!(!render_catalog["examples"].as_array().unwrap().is_empty());
+    let inspected = value(cli(cwd, &["applets", "inspect", "text.render"]));
+    assert_eq!(
+        inspected["applet"]["description"],
+        render_catalog["description"]
+    );
+    assert_eq!(inspected["applet"]["examples"], render_catalog["examples"]);
 
     let sort = value(cli(cwd, &["applets", "search", "sort a list", "--json"]));
     assert_eq!(sort["protocol"], "execute.applet-search/1");
     assert_eq!(sort["results"][0]["name"], "list.sort");
+    let render = value(cli(
+        cwd,
+        &["applets", "search", "render template", "--json"],
+    ));
+    assert_eq!(render["results"][0]["name"], "text.render");
+    assert_eq!(
+        render["results"][0]["description"],
+        render_catalog["description"]
+    );
+    assert!(render["results"][0]["signature"]
+        .as_str()
+        .unwrap()
+        .contains(render_catalog["description"].as_str().unwrap()));
     let files = value(cli(cwd, &["applets", "search", "list files", "--json"]));
     let file_names = files["results"]
         .as_array()
@@ -390,12 +430,16 @@ fn text_discovery_escapes_terminal_controls_but_json_preserves_descriptions() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8(output.stdout).unwrap();
-        assert!(stdout.contains(r"\u{1b}"), "{stdout:?}");
-        assert!(stdout.contains(r"\u{9b}"), "{stdout:?}");
-        assert!(stdout.contains(r"\u{202e}"), "{stdout:?}");
         assert!(!stdout.contains('\u{1b}'));
         assert!(!stdout.contains('\u{9b}'));
         assert!(!stdout.contains('\u{202e}'));
+        if args[1] == "search" {
+            assert!(stdout.contains(r"\u{1b}"), "{stdout:?}");
+            assert!(stdout.contains(r"\u{9b}"), "{stdout:?}");
+            assert!(stdout.contains(r"\u{202e}"), "{stdout:?}");
+        } else {
+            assert!(stdout.contains(r"\u{1b}"), "{stdout:?}");
+        }
     }
 
     let json_result = value(cli(

@@ -39,10 +39,12 @@ explicit `--manifest-dir` or `--manifest-catalog` always gets full validation.
 
 `list` without a mode returns protocol `execute.applets/1` with applets sorted by
 canonical name. `--names` prints only one canonical name per line. `--signatures`
-prints one concise callable signature and description per line, derived from the
-validated parameter and output schemas. Repetitive descriptions that merely
-restate the applet name are omitted in this compact view. Text output visibly
-escapes terminal controls and line separators so manifest text stays on one line.
+prints one callable signature and a description summary of at most 30 UTF-8 bytes
+per line, derived from the validated parameter and output schemas. Summaries end
+at word boundaries and use an ellipsis when truncated. Full descriptions and
+examples remain available in the JSON list, inspect, and search results. Text
+output visibly escapes terminal controls and line separators so manifest text
+stays on one line.
 `search` ranks name, phrase, description, and parameter matches using token
 overlap and edit distance; it does not execute
 applets. `--json` returns protocol `execute.applet-search/1` with scores,

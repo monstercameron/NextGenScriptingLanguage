@@ -27,6 +27,62 @@ fn registry() -> Registry {
     .unwrap()
 }
 
+#[test]
+fn literal_csv_stringify_tables_are_checked_statically() {
+    let registry = registry();
+    let cases = [
+        (
+            r#"run csv.stringify with table {"headers":["a"],"rows":[["x","y"]]} as result"#,
+            "CSV row 0 has 2 fields; expected 1",
+        ),
+        (
+            r#"run csv.stringify with table {"headers":[],"rows":[["x"],["y","z"]]} as result"#,
+            "CSV row 1 has 2 fields; expected 1",
+        ),
+        (
+            r#"run csv.stringify with table {"headers":["a","a"],"rows":[["x","y"]]} as result"#,
+            "CSV header \"a\" is duplicated at column 1",
+        ),
+        (
+            r#"run csv.stringify with table {"headers":["a"],"rows":[[]]} as result"#,
+            "CSV row 0 must contain at least one field",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let program = parser::parse(source).unwrap();
+        let error = runtime::validate(&program, &registry).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(expected),
+            "expected {expected:?} in {error:#}"
+        );
+    }
+
+    let valid =
+        parser::parse(r#"run csv.stringify with table {"headers":["a"],"rows":[["x"]]} as result"#)
+            .unwrap();
+    runtime::validate(&valid, &registry).unwrap();
+}
+
+#[test]
+fn csv_table_relational_checks_defer_references_and_do_not_narrow_custom_manifests() {
+    let registry = registry();
+    let dynamic = parser::parse(
+        "run csv.parse with text \"a\\nx\\ny\" as table\nrun csv.stringify with table table as result\n",
+    )
+    .unwrap();
+    runtime::validate(&dynamic, &registry).unwrap();
+
+    let custom =
+        include_str!("../manifests/core.csv_stringify.json").replace("csv.stringify", "csv.custom");
+    let custom_registry = Registry::from_sources(&[custom]).unwrap();
+    let malformed = parser::parse(
+        r#"run csv.custom with table {"headers":["a"],"rows":[["x","y"]]} as result"#,
+    )
+    .unwrap();
+    runtime::validate(&malformed, &custom_registry).unwrap();
+}
+
 fn single_header_table(header: String) -> Value {
     Value::Object(Map::from_iter([
         (

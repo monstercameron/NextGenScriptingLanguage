@@ -2177,6 +2177,23 @@ impl Manifest {
         None
     }
 
+    /// Whether this manifest dispatches the canonical in-process CSV stringifier.
+    /// Keep its literal-only relational checks away from custom applets that happen
+    /// to use a similarly shaped table input.
+    fn is_builtin_csv_stringify(&self) -> bool {
+        self.name == "csv.stringify"
+            && self.binary == "@execute-applet"
+            && self.execution_backend() == AppletBackend::InProcess
+            && matches!(
+                self.arguments.as_slice(),
+                [
+                    ArgumentNode::Literal { literal: operation },
+                    ArgumentNode::Literal { literal: flag },
+                    ArgumentNode::JsonArguments
+                ] if operation == "csv.stringify" && flag == "--args"
+            )
+    }
+
     /// Check names, required parameters, and statically known types. Named
     /// results contain text; their string contents are checked after resolution.
     pub fn validate(&self, invocation: &Invocation) -> Result<()> {
@@ -2259,6 +2276,9 @@ impl Manifest {
                     port.schema
                         .validate_value(value)
                         .with_context(|| format!("validating input port {name:?}"))?;
+                    if name == "table" && self.is_builtin_csv_stringify() {
+                        validate_literal_csv_table(value)?;
+                    }
                 }
             }
         }
@@ -4505,6 +4525,53 @@ fn validate_json_references(value: &Value, bindings: &BTreeMap<String, InputType
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_literal_csv_table(value: &Value) -> Result<()> {
+    let Value::Record(fields) = value else {
+        bail!("CSV table must be a record");
+    };
+    let Some(Value::List(headers)) = fields.get("headers") else {
+        bail!("CSV table headers must be a list");
+    };
+    let Some(Value::List(rows)) = fields.get("rows") else {
+        bail!("CSV table rows must be a list");
+    };
+
+    let mut seen = BTreeSet::new();
+    for (index, header) in headers.iter().enumerate() {
+        let Value::String(header) = header else {
+            bail!("CSV header {index} must be text");
+        };
+        if !seen.insert(header.as_str()) {
+            bail!("CSV header {header:?} is duplicated at column {index}");
+        }
+    }
+
+    let expected_columns = if headers.is_empty() {
+        match rows.first() {
+            Some(Value::List(first_row)) => first_row.len(),
+            Some(_) => bail!("CSV row 0 must be a list"),
+            None => 0,
+        }
+    } else {
+        headers.len()
+    };
+    for (row_index, row) in rows.iter().enumerate() {
+        let Value::List(fields) = row else {
+            bail!("CSV row {row_index} must be a list");
+        };
+        if fields.is_empty() {
+            bail!("CSV row {row_index} must contain at least one field");
+        }
+        if fields.len() != expected_columns {
+            bail!(
+                "CSV row {row_index} has {} fields; expected {expected_columns}",
+                fields.len()
+            );
+        }
     }
     Ok(())
 }

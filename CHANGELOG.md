@@ -20,6 +20,10 @@ original version labels.
   hexadecimal colors with an optional `#`. Invalid literals fail static checking;
   referenced values are checked after resolution.
 
+- `execute check` now rejects literal `csv.stringify` tables with duplicate headers,
+  empty rows or row widths that disagree with the headers (or first row when headers
+  are absent). Tables supplied through references keep their runtime validation.
+
 - Program inputs now support `list of integer` and `list of json`; integer list
   values are statically typed when iterated and invalid items fail before execution.
 

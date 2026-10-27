@@ -431,6 +431,29 @@ fn parallel_for_each_bounds_concurrent_direct_executables() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn parallel_for_each_preserves_input_order_when_completion_order_differs() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let worker = directory.path().join("staggered.sh");
+    write_executable(
+        &worker,
+        "#!/bin/sh\ncase \"$1\" in 1) sleep 0.15;; 2) sleep 0.08;; 3) sleep 0.01;; esac\nprintf 'done %s\\n' \"$1\"\n",
+    )?;
+    let source = format!(
+        "parallel for each n in [\"1\", \"2\", \"3\"] at most 3 as results\n  run {} with arguments [n]\nthen encode results as json\n",
+        quote_path(&worker)?
+    );
+    let manifests = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let result = run_program(&source, &manifests, directory.path())?;
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+
+    assert_eq!(value["items"][0]["output"], "done 1\n");
+    assert_eq!(value["items"][1]["output"], "done 2\n");
+    assert_eq!(value["items"][2]["output"], "done 3\n");
+    Ok(())
+}
+
 #[test]
 fn independent_task_groups_reject_sibling_binding_reads() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -898,7 +921,10 @@ fn parallel_each_bounds_one_byte_secret_redaction_expansion() -> Result<()> {
     };
     let result = flow::runtime::run(&program, &registry, &options)?;
     assert_eq!(result.output, b"done");
-    assert_eq!(std::fs::read_to_string(temp.path().join("ledger"))?, "completed\n");
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("ledger"))?,
+        "completed\n"
+    );
     Ok(())
 }
 

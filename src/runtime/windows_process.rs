@@ -215,6 +215,8 @@ fn execute_group_with_sink(
         process_observer: Arc::clone(&signals.process_observer),
         worker_pool: signals.worker_pool.clone(),
         outer_cancelled: signals.outer_cancelled.clone(),
+        cancel_wakes: signals.cancel_wakes.clone(),
+        unnotified_cancellation: signals.unnotified_cancellation,
         job_cancelled: signals.job_cancelled.clone(),
         job_launch_ack: signals.job_launch_ack.clone(),
         job_output_budget: signals.job_output_budget.clone(),
@@ -565,7 +567,9 @@ fn execute_group_with_sink(
                     stages: collect_native_stages(calls, &observed_stages, &children, signals),
                 });
             }
-            std::thread::sleep(Duration::from_millis(1));
+            // `available` avoids blocking on an empty pipe. Pipe readiness is
+            // picked up within this bounded 10 Hz fallback interval.
+            std::thread::sleep(Duration::from_millis(100));
         }
     })();
     // Kill jobs before joining a potentially blocked stdin writer. All inherited

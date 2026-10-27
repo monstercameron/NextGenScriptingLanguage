@@ -1600,7 +1600,7 @@ impl Signals {
             cancel: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         };
-        guard.ids = crate::platform::signals(guard.cancel.clone(), None)?;
+        guard.ids = crate::platform::signals(guard.cancel.clone(), None, None)?;
         Ok(guard)
     }
 }

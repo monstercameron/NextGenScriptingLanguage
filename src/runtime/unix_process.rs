@@ -153,7 +153,7 @@ fn write_input(
                 match crate::platform::unix_ffi::poll_one(
                     fd,
                     libc::POLLOUT,
-                    deadline_poll_timeout(deadline, 20),
+                    deadline_poll_timeout(deadline, 100),
                 ) {
                     Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}

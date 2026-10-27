@@ -8,29 +8,108 @@
 
 use anyhow::{anyhow, bail, Result};
 use std::any::Any;
-use std::collections::BTreeMap;
-#[cfg(debug_assertions)]
+use std::collections::{BTreeMap, VecDeque};
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, RawFd};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
+use std::sync::{Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
+
+/// A one-shot wake descriptor shared by a task group and its native children.
+/// Unix supervisors poll this beside their pipes and child-exit handles, so an
+/// idle group sleeps until output, process exit, or cancellation is ready.
+#[derive(Debug)]
+pub(crate) struct CancellationWake {
+    notified: AtomicBool,
+    #[cfg(unix)]
+    reader: std::os::unix::net::UnixStream,
+    #[cfg(unix)]
+    writer: Mutex<std::os::unix::net::UnixStream>,
+    #[cfg(unix)]
+    writer_fd: RawFd,
+}
+
+impl CancellationWake {
+    pub(crate) fn new() -> Result<Self> {
+        #[cfg(unix)]
+        {
+            let (reader, writer) = std::os::unix::net::UnixStream::pair()?;
+            reader.set_nonblocking(true)?;
+            writer.set_nonblocking(true)?;
+            let writer_fd = writer.as_raw_fd();
+            Ok(Self {
+                notified: AtomicBool::new(false),
+                reader,
+                writer: Mutex::new(writer),
+                writer_fd,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {
+                notified: AtomicBool::new(false),
+            })
+        }
+    }
+
+    pub(crate) fn notify(&self) {
+        if self.notified.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        #[cfg(unix)]
+        if let Ok(mut writer) = self.writer.lock() {
+            let _ = writer.write(&[1]);
+        }
+    }
+
+    /// Signal-handler variant: this uses only lock-free atomics and `write(2)`.
+    #[cfg(unix)]
+    pub(crate) fn notify_signal(&self) {
+        if self.notified.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let byte = [1u8];
+        // SAFETY: `writer_fd` refers to the nonblocking socket owned by `self`,
+        // and the one-byte write uses a live buffer. `write` is async-signal-safe.
+        unsafe {
+            libc::write(self.writer_fd, byte.as_ptr().cast(), byte.len());
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn raw_fd(&self) -> std::os::fd::RawFd {
+        self.reader.as_raw_fd()
+    }
+}
 
 /// Cooperative cancellation state shared with every task in a scope.
 #[derive(Clone, Debug)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
     deadline: Option<Instant>,
+    wake: Arc<CancellationWake>,
 }
 
 impl CancellationToken {
     /// Whether a sibling, caller, or the task-group deadline requested stop.
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-            || self
-                .deadline
-                .is_some_and(|deadline| Instant::now() >= deadline)
+        if self.cancelled.load(Ordering::Acquire) {
+            return true;
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.wake.notify();
+            return true;
+        }
+        false
     }
 
     /// Check cancellation before starting another externally visible action.
@@ -43,6 +122,7 @@ impl CancellationToken {
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
             self.cancelled.store(true, Ordering::Release);
+            self.wake.notify();
             bail!("task group deadline exceeded; external effects may be uncertain")
         }
         Ok(())
@@ -58,10 +138,28 @@ impl CancellationToken {
     pub fn cancellation_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.cancelled)
     }
+
+    /// Shared event descriptor used by native supervisors to wake on group
+    /// cancellation without periodic polling.
+    pub(crate) fn cancellation_wake(&self) -> Arc<CancellationWake> {
+        Arc::clone(&self.wake)
+    }
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+struct QueueState {
+    jobs: VecDeque<Job>,
+    shutdown: bool,
+}
+
+struct WorkerQueue {
+    state: Mutex<QueueState>,
+    ready: Condvar,
 }
 
 struct Worker {
-    join: Option<JoinHandle<()>>,
+    done: Receiver<()>,
 }
 
 /// A typed result receiver for one child owned by a [`TaskScope`].
@@ -109,6 +207,9 @@ pub struct TaskScope {
     active: Arc<AtomicUsize>,
     next_id: usize,
     workers: BTreeMap<usize, Worker>,
+    queue: Arc<WorkerQueue>,
+    pool: Vec<JoinHandle<()>>,
+    wake: Arc<CancellationWake>,
 }
 
 impl TaskScope {
@@ -126,6 +227,7 @@ impl TaskScope {
         if max_parallel == 0 {
             bail!("task group max_parallel must be greater than zero")
         }
+        let wake = Arc::new(CancellationWake::new()?);
         Ok(Self {
             max_parallel,
             deadline,
@@ -133,6 +235,15 @@ impl TaskScope {
             active: Arc::new(AtomicUsize::new(0)),
             next_id: 0,
             workers: BTreeMap::new(),
+            queue: Arc::new(WorkerQueue {
+                state: Mutex::new(QueueState {
+                    jobs: VecDeque::new(),
+                    shutdown: false,
+                }),
+                ready: Condvar::new(),
+            }),
+            pool: Vec::new(),
+            wake,
         })
     }
 
@@ -151,6 +262,7 @@ impl TaskScope {
         CancellationToken {
             cancelled: Arc::clone(&self.cancelled),
             deadline: self.deadline,
+            wake: Arc::clone(&self.wake),
         }
     }
 
@@ -162,6 +274,7 @@ impl TaskScope {
     /// Request cooperative cancellation for every child.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+        self.wake.notify();
     }
 
     /// Start a child if the configured concurrency bound has capacity.
@@ -201,34 +314,54 @@ impl TaskScope {
         self.next_id = next_id;
         let (sender, receiver) = mpsc::channel();
         let cancelled = Arc::clone(&self.cancelled);
+        let wake = Arc::clone(&self.wake);
         let deadline = self.deadline;
         let worker_active = Arc::clone(&self.active);
         let finished = Arc::new(AtomicBool::new(false));
         let worker_finished = Arc::clone(&finished);
-        let thread = thread::Builder::new()
-            .name(format!("flow-task-{id}"))
-            .spawn(move || {
-                let token = CancellationToken {
-                    cancelled,
-                    deadline,
-                };
-                #[cfg(debug_assertions)]
-                let result = catch_unwind(AssertUnwindSafe(|| work(token)))
-                    .unwrap_or_else(|payload| Err(task_panic(payload)));
-                #[cfg(not(debug_assertions))]
-                let result = work(token);
-                let _ = sender.send(result);
-                worker_finished.store(true, Ordering::Release);
-                worker_active.fetch_sub(1, Ordering::AcqRel);
-            });
-        let thread = match thread {
-            Ok(thread) => thread,
-            Err(error) => {
-                self.active.fetch_sub(1, Ordering::AcqRel);
-                return Err(error.into());
+        // Grow the fixed pool only as concurrency is requested. In particular,
+        // sequential tasks reuse one small-stack worker instead of creating a
+        // fresh OS thread for every element.
+        if self.pool.len() < active + 1 {
+            let queue = Arc::clone(&self.queue);
+            let worker_id = self.pool.len();
+            let thread = thread::Builder::new()
+                .name(format!("flow-task-{worker_id}"))
+                .stack_size(512 * 1024)
+                .spawn(move || worker_loop(queue));
+            match thread {
+                Ok(thread) => self.pool.push(thread),
+                Err(error) => {
+                    self.active.fetch_sub(1, Ordering::AcqRel);
+                    return Err(error.into());
+                }
             }
-        };
-        self.workers.insert(id, Worker { join: Some(thread) });
+        }
+        let (done_sender, done_receiver) = mpsc::channel();
+        let job: Job = Box::new(move || {
+            let token = CancellationToken {
+                cancelled,
+                deadline,
+                wake,
+            };
+            let result = catch_unwind(AssertUnwindSafe(|| work(token)))
+                .unwrap_or_else(|payload| Err(task_panic(payload)));
+            let _ = sender.send(result);
+            worker_finished.store(true, Ordering::Release);
+            worker_active.fetch_sub(1, Ordering::AcqRel);
+            let _ = done_sender.send(());
+        });
+        {
+            let mut state = self.queue.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.jobs.push_back(job);
+        }
+        self.queue.ready.notify_one();
+        self.workers.insert(
+            id,
+            Worker {
+                done: done_receiver,
+            },
+        );
         Ok(TaskHandle::with_finished(id, receiver, finished))
     }
 
@@ -278,30 +411,20 @@ impl TaskScope {
     }
 
     fn reap(&mut self, id: usize) -> Result<()> {
-        let Some(mut worker) = self.workers.remove(&id) else {
-            return Ok(());
-        };
-        if let Some(thread) = worker.join.take() {
-            thread
-                .join()
-                .map_err(task_panic)
-                .map_err(|error| anyhow!("task worker panicked while reaping: {error}"))?;
+        if let Some(worker) = self.workers.remove(&id) {
+            worker
+                .done
+                .recv()
+                .map_err(|_| anyhow!("task worker exited without completion"))?;
         }
         Ok(())
     }
 
     fn join_workers(&mut self) -> Result<()> {
         let mut first_error = None;
-        for (_, mut worker) in std::mem::take(&mut self.workers) {
-            if let Some(thread) = worker.join.take() {
-                if let Err(payload) = thread.join() {
-                    first_error.get_or_insert_with(|| {
-                        anyhow!(
-                            "task worker panicked while reaping: {}",
-                            task_panic(payload)
-                        )
-                    });
-                }
+        for (_, worker) in std::mem::take(&mut self.workers) {
+            if worker.done.recv().is_err() {
+                first_error.get_or_insert_with(|| anyhow!("task worker exited without completion"));
             }
         }
         if let Some(error) = first_error {
@@ -312,10 +435,36 @@ impl TaskScope {
     }
 }
 
+fn worker_loop(queue: Arc<WorkerQueue>) {
+    loop {
+        let job = {
+            let mut state = queue.state.lock().unwrap_or_else(|e| e.into_inner());
+            while state.jobs.is_empty() && !state.shutdown {
+                state = queue.ready.wait(state).unwrap_or_else(|e| e.into_inner());
+            }
+            if state.shutdown && state.jobs.is_empty() {
+                return;
+            }
+            state.jobs.pop_front()
+        };
+        if let Some(job) = job {
+            let _ = catch_unwind(AssertUnwindSafe(job));
+        }
+    }
+}
+
 impl Drop for TaskScope {
     fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.cancel();
         let _ = self.join_workers();
+        {
+            let mut state = self.queue.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.shutdown = true;
+        }
+        self.queue.ready.notify_all();
+        for worker in self.pool.drain(..) {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -331,6 +480,23 @@ fn task_panic(payload: Box<dyn Any + Send>) -> anyhow::Error {
 #[cfg(test)]
 mod retention_tests {
     use super::*;
+    use std::sync::Barrier;
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_notifies_native_supervisor_wake_descriptor() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let wake = scope.cancellation_token().cancellation_wake();
+        let (ready, _) = crate::platform::unix_ffi::poll_one(wake.raw_fd(), libc::POLLIN, 0)?;
+        assert_eq!(ready, 0);
+
+        scope.cancel();
+
+        let (ready, events) = crate::platform::unix_ffi::poll_one(wake.raw_fd(), libc::POLLIN, 0)?;
+        assert_eq!(ready, 1);
+        assert_ne!(events & libc::POLLIN, 0);
+        Ok(())
+    }
 
     #[test]
     fn joined_workers_do_not_accumulate() -> Result<()> {
@@ -340,6 +506,32 @@ mod retention_tests {
             scope.join(handle)?;
             assert!(scope.workers.is_empty());
         }
+        assert_eq!(scope.pool.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn many_tasks_reuse_a_bounded_pool() -> Result<()> {
+        let mut scope = TaskScope::new(64, None)?;
+        let started = Arc::new(Barrier::new(65));
+        let mut handles = Vec::with_capacity(10_000);
+        for _ in 0..64 {
+            let worker_started = Arc::clone(&started);
+            handles.push(scope.spawn(move |_| {
+                worker_started.wait();
+                Ok(())
+            })?);
+        }
+        started.wait();
+        assert_eq!(scope.pool.len(), 64);
+        for handle in handles {
+            scope.join(handle)?;
+        }
+        for _ in 0..9_936 {
+            let handle = scope.spawn(|_| Ok(()))?;
+            scope.join(handle)?;
+        }
+        assert_eq!(scope.pool.len(), 64);
         Ok(())
     }
 }

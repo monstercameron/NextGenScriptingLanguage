@@ -163,7 +163,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Measure hot-path benchmarks
-        run: python3 tools/bench_budget.py target/release/execute tools/linux-bench-budget.json --manifest-dir manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_src="$RUNNER_TEMP/parallel-each-baseline-src"
+          baseline_target="$RUNNER_TEMP/parallel-each-baseline-target"
+          git fetch --no-tags --depth=1 origin 35483ce
+          git worktree add --detach "$baseline_src" 35483ce
+          CARGO_TARGET_DIR="$baseline_target" cargo build --locked --release --manifest-path "$baseline_src/Cargo.toml" --bin execute
+          python3 tools/bench_budget.py target/release/execute tools/linux-bench-budget.json \
+            --manifest-dir manifests \
+            --baseline-binary "$baseline_target/release/execute"
       - name: Check Linux minimal build size and tests
         run: |
           cargo build --locked --release --bin execute --no-default-features

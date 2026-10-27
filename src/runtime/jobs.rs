@@ -7,7 +7,7 @@
 use super::*;
 use crate::ast::{JobStage, Value};
 use crate::contracts::AppletBackend;
-use crate::tasks::{TaskHandle, TaskScope};
+use crate::tasks::{CancellationWake, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -246,6 +246,7 @@ struct Job {
     snapshot: Arc<Mutex<JobSnapshot>>,
     handle: Option<TaskHandle<execution_result::ExecutionResult>>,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
+    cancel_wake: Arc<CancellationWake>,
     terminal: Option<execution_result::ExecutionResult>,
     resolved: bool,
     _permit: HandlePermit,
@@ -428,6 +429,8 @@ impl Supervisor {
         let outer_cancelled = Arc::clone(&outer_signals.cancelled);
         let job_cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_job_cancelled = Arc::clone(&job_cancelled);
+        let job_cancel_wake = Arc::new(CancellationWake::new()?);
+        let worker_job_cancel_wake = Arc::clone(&job_cancel_wake);
         let invocation_context = AppletInvocationContext::from_signals(outer_signals)?;
         let prepared = Arc::new(prepared);
         let truncation = Arc::new(Mutex::new(vec![false; stages.len()]));
@@ -449,9 +452,11 @@ impl Supervisor {
 
             let result = match worker_signals {
                 Ok(mut signals) => {
-                    signals.outer_cancelled = Some(outer_cancelled);
+                    signals.outer_cancelled.push(outer_cancelled);
                     signals.job_cancelled = Some(worker_job_cancelled);
                     signals.inherit_applet_context(&invocation_context)?;
+                    signals.cancel_wakes.push(token.cancellation_wake());
+                    signals.cancel_wakes.push(worker_job_cancel_wake);
                     signals.job_launch_ack = Some(Arc::new(Mutex::new(Some(worker_ack))));
                     signals.job_output_budget = Some(output_budget);
                     signals.job_output_limit = Some(output_limit);
@@ -549,6 +554,7 @@ impl Supervisor {
                 snapshot: Arc::clone(&snapshot),
                 handle: Some(handle),
                 cancelled: job_cancelled,
+                cancel_wake: job_cancel_wake,
                 terminal: None,
                 resolved: false,
                 _permit: handle_permit,
@@ -680,6 +686,7 @@ impl Supervisor {
         if !job.resolved {
             job.cancelled
                 .store(true, std::sync::atomic::Ordering::Release);
+            job.cancel_wake.notify();
             self.join_job_result(&key)?;
             self.jobs.get_mut(&key).expect("job exists").resolved = true;
         }
@@ -726,6 +733,7 @@ impl Supervisor {
             if let Some(job) = self.jobs.get(&key) {
                 job.cancelled
                     .store(true, std::sync::atomic::Ordering::Release);
+                job.cancel_wake.notify();
             }
             self.join_job_result(&key)?;
             if let Some(job) = self.jobs.get_mut(&key) {

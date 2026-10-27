@@ -99,6 +99,7 @@ pub(crate) fn request_drain(state: &std::sync::atomic::AtomicU8) -> bool {
 pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
+    wake: Option<Arc<crate::tasks::CancellationWake>>,
 ) -> Result<Vec<signal_hook::SigId>> {
     #[cfg(unix)]
     {
@@ -106,8 +107,9 @@ pub(crate) fn signals(
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT, libc::SIGHUP] {
             let flag = cancel.clone();
             let drain = drain.clone();
-            // SAFETY: the action only performs atomic operations, which are
-            // async-signal-safe.
+            let wake = wake.clone();
+            // SAFETY: the action performs atomic operations and a nonblocking
+            // one-byte write through the cancellation wake, all signal-safe.
             let registered = unsafe {
                 signal_hook::low_level::register(signal, move || {
                     record_cancel_signal(signal);
@@ -118,6 +120,9 @@ pub(crate) fn signals(
                         drain.store(DRAIN_CANCELLED, std::sync::atomic::Ordering::SeqCst);
                     }
                     flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(wake) = &wake {
+                        wake.notify_signal();
+                    }
                 })
             };
             match registered {
@@ -134,6 +139,7 @@ pub(crate) fn signals(
     }
     #[cfg(windows)]
     {
+        let _ = wake;
         windows::signals(cancel, drain)?;
         Ok(Vec::new())
     }

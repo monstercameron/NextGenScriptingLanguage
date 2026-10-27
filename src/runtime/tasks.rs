@@ -6,16 +6,15 @@ use crate::ast::{Invocation, TaskEach, TaskGroupMode, Value};
 use crate::contracts::{Outcome, OutcomeKind};
 use crate::manifest::{AppletBackend, Registry};
 use crate::modules::ProgramModuleSession;
-use crate::tasks::{TaskHandle, TaskScope};
+use crate::tasks::{CancellationToken, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const MAX_TASKS: usize = 256;
@@ -23,6 +22,21 @@ const MAX_PARALLEL: usize = 64;
 /// Element bound for `parallel for each`; matches the scale of a worker pool
 /// over a file of inputs while keeping preflight and result records bounded.
 const MAX_EACH_ITEMS: usize = 10_000;
+const GROUP_WAIT_INTERVAL: Duration = Duration::from_millis(100);
+
+fn min_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
+}
+
+fn any_cancelled(flags: &[Arc<AtomicBool>]) -> bool {
+    flags
+        .iter()
+        .any(|cancelled| cancelled.load(Ordering::Acquire))
+}
 
 #[derive(Clone)]
 struct PreparedTask {
@@ -262,12 +276,16 @@ pub(super) fn run_group(
         draining,
         context,
     } = request;
+    let mut context = context;
+    context.outer_cancelled.push(Arc::clone(&cancelled));
+    let outer_cancelled = context.outer_cancelled.clone();
     let TaskGroupConfig {
         mode,
         limit,
         outer_deadline,
     } = config;
-    if cancelled.load(Ordering::Acquire) {
+    context.deadline = min_deadline(context.deadline, outer_deadline);
+    if any_cancelled(&outer_cancelled) {
         bail!("task group was cancelled before preflight")
     }
     if !(1..=MAX_PARALLEL).contains(&limit) {
@@ -328,7 +346,6 @@ pub(super) fn run_group(
     .context("task group result metadata exceeds the configured output limit")?;
     let deadline = outer_deadline;
     let group_cancelled = Arc::new(AtomicBool::new(false));
-    let _bridge = CancellationBridge::new(Arc::clone(&cancelled), Arc::clone(&group_cancelled))?;
     let mut scope =
         TaskScope::new_with_cancellation(limit, deadline, Arc::clone(&group_cancelled))?;
     let (sender, receiver) = mpsc::channel();
@@ -352,7 +369,7 @@ pub(super) fn run_group(
                 });
                 break;
             }
-            if group_cancelled.load(Ordering::Acquire) {
+            if group_cancelled.load(Ordering::Acquire) || any_cancelled(&outer_cancelled) {
                 first_failure.get_or_insert_with(|| {
                     (
                         next,
@@ -367,6 +384,7 @@ pub(super) fn run_group(
             let task = prepared[index].clone();
             let registry = registry.clone();
             let context = context.clone();
+            let inherited_cancelled = context.outer_cancelled.clone();
             let parent_cancelled = Arc::clone(&cancelled);
             let mut task_options = options.clone();
             task_options.max_output_bytes =
@@ -382,6 +400,8 @@ pub(super) fn run_group(
             let sender = sender.clone();
             let handle = match scope.spawn(move |token| {
                 let _output_scope = super::OutputScopeGuard::enter(super::OutputScope::TaskGroup);
+                let mut context = context;
+                context.cancel_wakes.push(token.cancellation_wake());
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {
@@ -406,7 +426,7 @@ pub(super) fn run_group(
                             .downcast_ref::<super::AppletInvocationError>()
                             .map_or(0, super::AppletInvocationError::launched_processes)
                     });
-                let cancelled = token.is_cancelled();
+                let cancelled = completion_was_cancelled(&token, &inherited_cancelled);
                 sender
                     .send(Completion {
                         index,
@@ -442,9 +462,26 @@ pub(super) fn run_group(
         if active == 0 {
             break;
         }
-        let completion = receiver
-            .recv()
-            .context("task group worker ended without reporting a result")?;
+        let completion = match receiver.recv_timeout(GROUP_WAIT_INTERVAL) {
+            Ok(completion) => completion,
+            Err(RecvTimeoutError::Timeout) if any_cancelled(&outer_cancelled) => {
+                let index = handles
+                    .iter()
+                    .position(Option::is_some)
+                    .unwrap_or_else(|| next.saturating_sub(1).min(prepared.len() - 1));
+                first_failure = Some((
+                    index,
+                    "task group was cancelled while tasks were running".into(),
+                    None,
+                    prepared[index].uncertain_on_error,
+                ));
+                break;
+            }
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                bail!("task group worker ended without reporting a result")
+            }
+        };
         let index = completion.index;
         let handle = handles[index]
             .take()
@@ -528,6 +565,14 @@ pub(super) fn run_group(
                     break;
                 }
             }
+        }
+        if cancelled.load(Ordering::Acquire) && first_failure.is_none() && winner.is_none() {
+            first_failure = Some((
+                index,
+                "task group was cancelled while tasks were running".into(),
+                None,
+                records[index].uncertain,
+            ));
         }
     }
 
@@ -681,12 +726,16 @@ pub(super) fn run_each(
         draining,
         context,
     } = request;
+    let mut context = context;
+    context.outer_cancelled.push(Arc::clone(&cancelled));
+    let outer_cancelled = context.outer_cancelled.clone();
     let TaskGroupConfig {
         limit,
         outer_deadline,
         ..
     } = config;
-    if cancelled.load(Ordering::Acquire) {
+    context.deadline = min_deadline(context.deadline, outer_deadline);
+    if any_cancelled(&outer_cancelled) {
         bail!("parallel for each was cancelled before preflight")
     }
     if !(1..=MAX_PARALLEL).contains(&limit) {
@@ -773,7 +822,7 @@ pub(super) fn run_each(
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     if prepared.is_empty() {
         return Ok(TaskGroupResult {
-            value: each_value(&mut records, items.into_iter(), &secret_redactor),
+            value: each_value(&mut records, items, &secret_redactor),
             launched_processes: 0,
         });
     }
@@ -793,7 +842,6 @@ pub(super) fn run_each(
     // not relevant when elements run in bounded waves.
     let per_task_output_limit = (max_output_bytes / limit).max(1);
     let group_cancelled = Arc::new(AtomicBool::new(false));
-    let _bridge = CancellationBridge::new(Arc::clone(&cancelled), Arc::clone(&group_cancelled))?;
     let mut scope =
         TaskScope::new_with_cancellation(limit, outer_deadline, Arc::clone(&group_cancelled))?;
     let (sender, receiver) = mpsc::channel();
@@ -857,7 +905,7 @@ pub(super) fn run_each(
                 next = prepared.len();
                 break;
             }
-            if scope.is_cancelled() {
+            if scope.is_cancelled() || any_cancelled(&outer_cancelled) {
                 stopped.get_or_insert_with(|| (next, "parallel for each was cancelled".into()));
                 break;
             }
@@ -875,6 +923,7 @@ pub(super) fn run_each(
             let registry = registry.clone();
             let mut context = context.clone();
             context.group_output_budget = Some((Arc::clone(&group_budget), max_output_bytes));
+            let inherited_cancelled = context.outer_cancelled.clone();
             let parent_cancelled = Arc::clone(&cancelled);
             let mut task_options = options.clone();
             // Native stdout and retained stderr share the incremental group
@@ -895,6 +944,7 @@ pub(super) fn run_each(
             let sender = sender.clone();
             let spawned = scope.spawn(move |token| {
                 let _output_scope = super::OutputScopeGuard::enter(super::OutputScope::TaskGroup);
+                context.cancel_wakes.push(token.cancellation_wake());
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {
@@ -922,7 +972,7 @@ pub(super) fn run_each(
                             .downcast_ref::<super::AppletInvocationError>()
                             .map_or(0, super::AppletInvocationError::launched_processes)
                     });
-                let cancelled = token.is_cancelled();
+                let cancelled = completion_was_cancelled(&token, &inherited_cancelled);
                 sender
                     .send(Completion {
                         index,
@@ -939,7 +989,7 @@ pub(super) fn run_each(
                     handles[index] = Some(handle);
                     active += 1;
                 }
-                Err(error) if scope.is_cancelled() => {
+                Err(error) if scope.is_cancelled() || any_cancelled(&outer_cancelled) => {
                     stopped.get_or_insert_with(|| (index, format!("{error:#}")));
                     break;
                 }
@@ -953,9 +1003,21 @@ pub(super) fn run_each(
         if stopped.is_some() || active == 0 {
             break;
         }
-        let completion = receiver
-            .recv()
-            .context("parallel for each worker ended without reporting a result")?;
+        let completion = match receiver.recv_timeout(GROUP_WAIT_INTERVAL) {
+            Ok(completion) => completion,
+            Err(RecvTimeoutError::Timeout) if any_cancelled(&outer_cancelled) => {
+                let index = handles
+                    .iter()
+                    .position(Option::is_some)
+                    .unwrap_or_else(|| next.saturating_sub(1).min(prepared.len() - 1));
+                stopped = Some((index, "parallel for each was cancelled".into()));
+                break;
+            }
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                bail!("parallel for each worker ended without reporting a result")
+            }
+        };
         let index = completion.index;
         let handle = handles[index]
             .take()
@@ -1010,7 +1072,7 @@ pub(super) fn run_each(
             ));
             break;
         }
-        if element_cancelled || scope.is_cancelled() {
+        if element_cancelled || scope.is_cancelled() || any_cancelled(&outer_cancelled) {
             stopped.get_or_insert_with(|| (index, "parallel for each was cancelled".into()));
             break;
         }
@@ -1075,7 +1137,7 @@ pub(super) fn run_each(
     drop(sender);
     drop(skip);
     let item_count = items.len();
-    let value = each_value(&mut records, items.into_iter(), &secret_redactor);
+    let value = each_value(&mut records, items, &secret_redactor);
     // `max_output_bytes` accounts for captured stdout and stderr. The result
     // record has a different JSON representation: redaction can expand each
     // captured stderr byte to the 10-byte `[REDACTED]` marker. JSON string
@@ -1151,6 +1213,10 @@ fn task_error_uncertain(error: &anyhow::Error, manifest_uncertain: bool) -> bool
         .unwrap_or(manifest_uncertain)
 }
 
+fn completion_was_cancelled(token: &CancellationToken, inherited: &[Arc<AtomicBool>]) -> bool {
+    token.is_cancelled() || any_cancelled(inherited)
+}
+
 fn update_record(
     index: usize,
     result: Result<AppletInvocationResult>,
@@ -1188,6 +1254,40 @@ fn update_record(
             record.uncertain = task_error_uncertain(&error, tasks[index].uncertain_on_error);
             record.launched_processes = launched_processes;
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn parent_cancellation_marks_task_completion_cancelled() {
+        let mut scope = TaskScope::new(1, None).unwrap();
+        let token = scope.cancellation_token();
+        let parent_cancelled = Arc::new(AtomicBool::new(true));
+        let inherited = [Arc::clone(&parent_cancelled)];
+        let cancelled = completion_was_cancelled(&token, &inherited);
+        let tasks = [PreparedTask {
+            id: "child".into(),
+            applet: "fixture.wait".into(),
+            parameters: BTreeMap::new(),
+            uncertain_on_error: false,
+        }];
+        let mut records = vec![TaskRecord::pending(&tasks[0])];
+        let mut total_output_bytes = 0;
+
+        update_record(
+            0,
+            Err(anyhow!("in-process applet observed parent cancellation")),
+            cancelled,
+            0,
+            &mut records,
+            &tasks,
+            &mut total_output_bytes,
+        );
+
+        assert_eq!(records[0].state, TaskState::Cancelled);
     }
 }
 
@@ -1259,17 +1359,20 @@ fn task_value(
             }
         };
         let (output_encoding, output) = encode(&result.output);
-        fields.insert("output_encoding".into(), Value::String(output_encoding.into()));
+        fields.insert(
+            "output_encoding".into(),
+            Value::String(output_encoding.into()),
+        );
         fields.insert("output".into(), output);
         let redacted_stderr = secret_redactor.redact_bytes(&result.stderr);
         let (stderr_encoding, stderr) = encode(&redacted_stderr);
-        fields.insert("stderr_encoding".into(), Value::String(stderr_encoding.into()));
+        fields.insert(
+            "stderr_encoding".into(),
+            Value::String(stderr_encoding.into()),
+        );
         // Keep the raw bytes on AppletInvocationResult for callers that need
         // exact diagnostics; only the task-group presentation is redacted.
-        fields.insert(
-            "stderr".into(),
-            stderr,
-        );
+        fields.insert("stderr".into(), stderr);
         if let Some(value) = &result.value {
             fields.insert("value".into(), value.clone());
         }
@@ -1421,41 +1524,4 @@ fn task_panic(payload: Box<dyn std::any::Any + Send>) -> anyhow::Error {
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("non-string panic payload");
     anyhow!("task worker panicked: {message}")
-}
-
-struct CancellationBridge {
-    stop: Arc<AtomicBool>,
-    join: Option<JoinHandle<()>>,
-}
-
-impl CancellationBridge {
-    fn new(parent: Arc<AtomicBool>, child: Arc<AtomicBool>) -> Result<Self> {
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = Arc::clone(&stop);
-        let join = thread::Builder::new()
-            .name("flow-task-cancel-bridge".into())
-            .spawn(move || {
-                while !worker_stop.load(Ordering::Acquire) {
-                    if parent.load(Ordering::Acquire) {
-                        child.store(true, Ordering::Release);
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(2));
-                }
-            })
-            .context("starting task cancellation bridge")?;
-        Ok(Self {
-            stop,
-            join: Some(join),
-        })
-    }
-}
-
-impl Drop for CancellationBridge {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-    }
 }

@@ -7,17 +7,19 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
-/// Start a run that writes a marker file just before its 30-second sleep, and return once the
-/// marker exists. Signals sent after this point hit a run that is inside its sleep.
+/// Start a native shell that writes a marker immediately before execing a 30-second sleep, and
+/// return after a short settle so a signal hits the idle native supervisor.
 fn spawn_sleeping_run() -> (tempfile::TempDir, Child) {
     let directory = tempdir().unwrap();
     let program = directory.path().join("sleep.program");
     let marker = directory.path().join("started.txt");
+    let script = "touch \"$1\"; exec sleep 30";
     fs::write(
         &program,
         format!(
-            "run printf with message \"started\"\nthen save to file {:?}\nrun \"sleep\" with arguments [\"30\"]\n",
-            marker.display().to_string()
+            "run \"sh\" with arguments [\"-c\", {}, \"idle\", {:?}]\n",
+            serde_json::to_string(script).unwrap(),
+            marker.display().to_string(),
         ),
     )
     .unwrap();
@@ -33,6 +35,7 @@ fn spawn_sleeping_run() -> (tempfile::TempDir, Child) {
         assert!(Instant::now() < deadline, "the run never reached its sleep");
         std::thread::sleep(Duration::from_millis(10));
     }
+    std::thread::sleep(Duration::from_millis(100));
     (directory, child)
 }
 
@@ -53,13 +56,16 @@ fn interrupt_with(signal: libc::c_int) -> Option<i32> {
     let (_directory, mut child) = spawn_sleeping_run();
     // SAFETY: the pid belongs to the child spawned above and is not reaped yet.
     unsafe { libc::kill(child.id() as libc::pid_t, signal) };
-    let status = wait_for(&mut child, Duration::from_secs(20))
-        .expect("interrupted run should exit after cleanup");
+    let Some(status) = wait_for(&mut child, Duration::from_secs(5)) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("signal cancellation waited for the idle native child");
+    };
     status.code()
 }
 
 #[test]
-fn sigint_exits_130() {
+fn sigint_wakes_idle_native_supervisor_and_exits_130() {
     assert_eq!(interrupt_with(libc::SIGINT), Some(130));
 }
 

@@ -571,6 +571,38 @@ fn cancelling_one_job_reaps_it_without_cancelling_its_sibling() -> anyhow::Resul
 
 #[cfg(unix)]
 #[test]
+fn cancelling_idle_native_job_wakes_its_supervisor() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let started = directory.path().join("idle-job-started");
+    let script = "touch \"$1\"; exec sleep 30";
+    let wait_for_start = "while [ ! -e \"$1\" ]; do sleep 0.01; done; sleep 0.1";
+    let source = format!(
+        "spawn as idle\n  run \"sh\" with arguments [\"-c\", {}, \"job\", {}]\nrun \"sh\" with arguments [\"-c\", {}, \"wait\", {}]\ncancel idle\nthen encode \"done\" as json\n",
+        quote(script),
+        quote(&started.to_string_lossy()),
+        quote(wait_for_start),
+        quote(&started.to_string_lossy()),
+    );
+    let program = parser::parse(&source)?;
+    let options = options(directory.path(), 1024 * 1024);
+    let began = std::time::Instant::now();
+
+    let result = runtime::run(&program, &Registry::default(), &options)?;
+
+    assert!(started.is_file(), "the native background job never started");
+    assert_eq!(
+        serde_json::from_slice::<Json>(&result.output)?,
+        json!("done")
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(3),
+        "cancelling an idle native job waited for its child to exit"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn completed_unobserved_job_still_makes_normal_scope_exit_fail() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let program = parser::parse("spawn as finished\n  run \"true\"\n")?;

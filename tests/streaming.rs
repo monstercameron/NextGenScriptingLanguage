@@ -887,6 +887,8 @@ fn blocked_stdout_remains_deadline_bounded_and_cancellable() {
 
 #[test]
 fn shared_cancellation_kills_idle_child_after_stdout_closes() {
+    // The caller changes this Arc directly, so the supervisor must retain its
+    // bounded fallback even though Signals also has a signal-only wake fd.
     let dir = fixture();
     add_idle_closed_stdout_child(&dir);
     let registry = Registry::load(&manifest_dir(&dir)).unwrap();

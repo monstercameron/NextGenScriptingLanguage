@@ -228,7 +228,12 @@ fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> 
             .saturating_duration_since(Instant::now())
             .as_nanos()
             / 1_000_000;
-        remaining_ms.min(maximum_ms as u128) as libc::c_int
+        let maximum_ms = if maximum_ms < 0 {
+            libc::c_int::MAX as u128
+        } else {
+            maximum_ms as u128
+        };
+        remaining_ms.min(maximum_ms) as libc::c_int
     })
 }
 pub struct RunResult {
@@ -518,7 +523,11 @@ pub(crate) struct Signals {
     process_launches: Arc<AtomicUsize>,
     process_observer: Arc<OnceLock<ProcessObserver>>,
     worker_pool: Option<Arc<worker_backend::WorkerPool>>,
-    outer_cancelled: Option<Arc<AtomicBool>>,
+    outer_cancelled: Vec<Arc<AtomicBool>>,
+    cancel_wakes: Vec<Arc<crate::tasks::CancellationWake>>,
+    /// True when a cancellation flag can be changed by a caller that cannot
+    /// signal these wake descriptors (for example, an externally owned Arc).
+    unnotified_cancellation: bool,
     job_cancelled: Option<Arc<AtomicBool>>,
     job_launch_ack: Option<Arc<Mutex<Option<jobs::LaunchAcknowledger>>>>,
     job_output_budget: Option<Arc<AtomicUsize>>,
@@ -572,6 +581,16 @@ pub(crate) struct AppletInvocationContext {
     pub(crate) process_observer: Option<ProcessObserver>,
     pub(crate) job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
     pub(crate) background_jobs_allowed: bool,
+    /// Cancellation inherited from enclosing invocations. Shared flags let
+    /// nested task children observe cancellation from every ancestor without a
+    /// polling bridge thread.
+    pub(crate) outer_cancelled: Vec<Arc<AtomicBool>>,
+    /// One-shot event descriptors for every enclosing task group. Keeping the
+    /// full chain lets native supervisors wake immediately on ancestor cancel.
+    pub(crate) cancel_wakes: Vec<Arc<crate::tasks::CancellationWake>>,
+    pub(crate) unnotified_cancellation: bool,
+    /// Absolute deadline inherited by a nested invocation.
+    pub(crate) deadline: Option<Instant>,
     /// A task group's shared stdout budget and its limit: native output is charged
     /// against it as it arrives, so the group stops at its aggregate limit.
     pub(crate) group_output_budget: Option<(Arc<AtomicUsize>, usize)>,
@@ -589,6 +608,10 @@ impl AppletInvocationContext {
             process_observer: None,
             job_run_context: Arc::new(Mutex::new(None)),
             background_jobs_allowed: true,
+            outer_cancelled: Vec::new(),
+            cancel_wakes: Vec::new(),
+            unnotified_cancellation: false,
+            deadline: None,
             group_output_budget: None,
         }
     }
@@ -601,6 +624,10 @@ impl AppletInvocationContext {
             process_observer: signals.process_observer.get().cloned(),
             job_run_context: Arc::clone(&signals.job_run_context),
             background_jobs_allowed: signals.background_jobs_allowed,
+            outer_cancelled: signals.outer_cancelled.clone(),
+            cancel_wakes: signals.cancel_wakes.clone(),
+            unnotified_cancellation: signals.unnotified_cancellation,
+            deadline: signals.deadline,
             group_output_budget: None,
         })
     }
@@ -635,7 +662,9 @@ impl Signals {
             process_launches: Arc::new(AtomicUsize::new(0)),
             process_observer: Arc::new(OnceLock::new()),
             worker_pool: None,
-            outer_cancelled: None,
+            outer_cancelled: Vec::new(),
+            cancel_wakes: Vec::new(),
+            unnotified_cancellation: false,
             job_cancelled: None,
             job_launch_ack: None,
             job_output_budget: None,
@@ -648,6 +677,7 @@ impl Signals {
             #[cfg(test)]
             job_panic_before_ack: None,
         };
+        let signal_wake = Arc::new(crate::tasks::CancellationWake::new()?);
         let armed = match drain {
             Some(budget) => {
                 let stop = Arc::new(AtomicBool::new(false));
@@ -656,13 +686,16 @@ impl Signals {
                     Arc::clone(&guard.cancelled),
                     budget,
                     Arc::clone(&stop),
+                    Some(Arc::clone(&signal_wake)),
                 )?;
                 guard.drain_stop = Some(stop);
                 Some(Arc::clone(&guard.drain))
             }
             None => None,
         };
-        guard.registrations = crate::platform::signals(guard.cancelled.clone(), armed)?;
+        guard.cancel_wakes.push(Arc::clone(&signal_wake));
+        guard.registrations =
+            crate::platform::signals(guard.cancelled.clone(), armed, Some(signal_wake))?;
         Ok(guard)
     }
 
@@ -670,8 +703,13 @@ impl Signals {
         cancelled: Arc<AtomicBool>,
         deadline: Option<Instant>,
     ) -> Result<Self> {
+        // The caller can set this flag directly without notifying the signal
+        // wake, so native supervisors retain the bounded cancellation check.
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
-        guard.registrations = crate::platform::signals(guard.cancelled.clone(), None)?;
+        let signal_wake = Arc::new(crate::tasks::CancellationWake::new()?);
+        guard.cancel_wakes.push(Arc::clone(&signal_wake));
+        guard.registrations =
+            crate::platform::signals(guard.cancelled.clone(), None, Some(signal_wake))?;
         Ok(guard)
     }
 
@@ -699,7 +737,9 @@ impl Signals {
             process_launches: Arc::new(AtomicUsize::new(0)),
             process_observer: Arc::new(OnceLock::new()),
             worker_pool: None,
-            outer_cancelled: None,
+            outer_cancelled: Vec::new(),
+            cancel_wakes: Vec::new(),
+            unnotified_cancellation: true,
             job_cancelled: None,
             job_launch_ack: None,
             job_output_budget: None,
@@ -732,7 +772,9 @@ impl Signals {
             process_launches: Arc::clone(&self.process_launches),
             process_observer: Arc::clone(&self.process_observer),
             worker_pool: self.worker_pool.clone(),
-            outer_cancelled: None,
+            outer_cancelled: Vec::new(),
+            cancel_wakes: Vec::new(),
+            unnotified_cancellation: true,
             job_cancelled: None,
             job_launch_ack: None,
             job_output_budget: None,
@@ -771,6 +813,8 @@ impl Signals {
             process_observer: Arc::clone(&self.process_observer),
             worker_pool: self.worker_pool.clone(),
             outer_cancelled: self.outer_cancelled.clone(),
+            cancel_wakes: self.cancel_wakes.clone(),
+            unnotified_cancellation: self.unnotified_cancellation,
             job_cancelled: self.job_cancelled.clone(),
             job_launch_ack: self.job_launch_ack.clone(),
             job_output_budget: if group_owns_stdout {
@@ -802,6 +846,26 @@ impl Signals {
         self.worker_pool = context.worker_pool.clone();
         self.job_run_context = Arc::clone(&context.job_run_context);
         self.background_jobs_allowed = context.background_jobs_allowed;
+        for cancelled in &context.outer_cancelled {
+            if !self
+                .outer_cancelled
+                .iter()
+                .any(|inherited| Arc::ptr_eq(inherited, cancelled))
+            {
+                self.outer_cancelled.push(Arc::clone(cancelled));
+            }
+        }
+        for wake in &context.cancel_wakes {
+            if !self
+                .cancel_wakes
+                .iter()
+                .any(|inherited| Arc::ptr_eq(inherited, wake))
+            {
+                self.cancel_wakes.push(Arc::clone(wake));
+            }
+        }
+        self.unnotified_cancellation =
+            context.unnotified_cancellation || context.cancel_wakes.is_empty();
         if let Some((budget, limit)) = &context.group_output_budget {
             self.group_diagnostic_budget = Some((Arc::clone(budget), *limit));
             if self.job_output_budget.is_none() {
@@ -872,8 +936,8 @@ impl Signals {
         self.cancelled.load(Ordering::Relaxed)
             || self
                 .outer_cancelled
-                .as_ref()
-                .is_some_and(|cancelled| cancelled.load(Ordering::Relaxed))
+                .iter()
+                .any(|cancelled| cancelled.load(Ordering::Relaxed))
             || self
                 .job_cancelled
                 .as_ref()
@@ -1155,6 +1219,7 @@ fn spawn_drain_watchdog(
     cancelled: Arc<AtomicBool>,
     budget: Duration,
     stop: Arc<AtomicBool>,
+    wake: Option<Arc<crate::tasks::CancellationWake>>,
 ) -> Result<()> {
     std::thread::Builder::new()
         .name("execute-drain-watchdog".into())
@@ -1168,6 +1233,9 @@ fn spawn_drain_watchdog(
                 if clock.expired(state, Instant::now()) {
                     drain.store(crate::platform::DRAIN_CANCELLED, Ordering::SeqCst);
                     cancelled.store(true, Ordering::SeqCst);
+                    if let Some(wake) = &wake {
+                        wake.notify();
+                    }
                     return;
                 }
                 // 50 ms keeps an idle run with an `on interrupt` body to 20 wakeups a second;
@@ -2484,7 +2552,7 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
         registry,
     } = env;
     check_deadline(signals.deadline)?;
-    if signals.cancelled.load(Ordering::Relaxed) {
+    if signals.is_cancelled() {
         let mut failure = execution_result::ExecutionResult::runtime_failure(
             execution_result::ExecutionKind::Cancelled,
             "workflow cancelled before in_process applet execution",
@@ -2528,7 +2596,7 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
     let checkpoint = || {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             Err(crate::applets::ExecutionBudgetExceeded::Timeout)
-        } else if signals.cancelled.load(Ordering::Relaxed) {
+        } else if signals.is_cancelled() {
             Err(crate::applets::ExecutionBudgetExceeded::Cancelled)
         } else {
             Ok(())
@@ -2597,7 +2665,7 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
                 failure.message = Some(format!("{error:#}"));
                 return Err(execution_result::ExecutionFailure::new(failure).into());
             }
-            if signals.cancelled.load(Ordering::Relaxed) {
+            if signals.is_cancelled() {
                 let mut failure = execution_result::ExecutionResult::from_outcome(
                     outcome,
                     Some(bytes.clone()),
@@ -3650,8 +3718,17 @@ pub(crate) fn invoke_call_with_context(
         options,
     } = request;
     let module_session = Arc::clone(&context.module_session);
-    let mut invocation_options = options.clone();
-    invocation_options.working_directory = fs::canonicalize(&options.working_directory)?;
+    let working_directory = fs::canonicalize(&options.working_directory)?;
+    let mut canonicalized_options = None;
+    if working_directory != options.working_directory {
+        let mut owned = options.clone();
+        owned.working_directory = working_directory;
+        canonicalized_options = Some(owned);
+    }
+    // Most runtime callers already carry a canonical working directory. Avoid
+    // cloning the run inputs for each child when the only required adjustment
+    // is already satisfied.
+    let invocation_options = canonicalized_options.as_ref().unwrap_or(options);
     let call = Invocation {
         operation: name.to_owned(),
         direct,
@@ -3684,11 +3761,13 @@ pub(crate) fn invoke_call_with_context(
     {
         bail!("json_lines_worker backend is unsupported on this platform");
     }
-    let mut signals = Signals::with_cancellation_and_deadline(
-        cancelled,
-        true,
-        deadline_after(invocation_options.total_timeout, "total timeout")?,
-    )?;
+    let own_deadline = deadline_after(invocation_options.total_timeout, "total timeout")?;
+    let deadline = match (own_deadline, context.deadline) {
+        (Some(own), Some(outer)) => Some(own.min(outer)),
+        (Some(own), None) => Some(own),
+        (None, outer) => outer,
+    };
+    let mut signals = Signals::with_cancellation_and_deadline(cancelled, true, deadline)?;
     signals.inherit_applet_context(&context)?;
     preflight_module_session(
         &module_session,
@@ -4931,6 +5010,44 @@ mod in_process_budget_tests {
     use super::*;
 
     #[test]
+    fn cooperative_applet_checkpoints_observe_ancestor_cancellation() {
+        let local = Arc::new(AtomicBool::new(false));
+        let ancestor = Arc::new(AtomicBool::new(false));
+        let mut signals = Signals::with_cancellation_and_deadline(local, true, None).unwrap();
+        signals.outer_cancelled.push(Arc::clone(&ancestor));
+        ancestor.store(true, Ordering::Release);
+        let checkpoint = || {
+            if signals.is_cancelled() {
+                Err(crate::applets::ExecutionBudgetExceeded::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        let context = crate::applets::ExecutionContext::new(&checkpoint);
+        let document = serde_json::json!({
+            "items": (0..512).map(|value| serde_json::json!({"value": value})).collect::<Vec<_>>()
+        });
+        let arguments = serde_json::json!({
+            "document": document,
+            "pointer": "/items",
+            "select": "/value"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let error = crate::applets::execute_with_context(
+            "json.map",
+            &arguments,
+            &[],
+            Path::new("."),
+            &context,
+        )
+        .expect_err("an inherited cancellation must stop cooperative work");
+        assert_eq!(error.kind, crate::applets::AppletErrorKind::Cancelled);
+    }
+
+    #[test]
     fn cooperative_budget_errors_are_typed_with_uncertain_effects() {
         for (operation, budget, applet_kind, expected_kind) in [
             (
@@ -5516,6 +5633,7 @@ mod drain_tests {
             Arc::clone(&cancelled),
             Duration::from_millis(50),
             Arc::clone(&stop),
+            None,
         )
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -5543,6 +5661,7 @@ mod drain_tests {
             Arc::clone(&cancelled),
             Duration::from_millis(10),
             Arc::clone(&stop),
+            None,
         )
         .unwrap();
         std::thread::sleep(Duration::from_millis(100));

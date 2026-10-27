@@ -11,5 +11,9 @@
   "pipe_1mb_max_rss_kb": 32768,
   "parallel_limit_8_median_ms": 1000.0,
   "parallel_limit_8_max_rss_kb": 65536,
+  "parallel_each_10000_median_ms": 5000.0,
+  "parallel_each_10000_max_rss_kb": 65536,
+  "parallel_each_10000_max_threads": 65,
+  "parallel_native_idle_group_max_wakeups_per_sec": 10.0,
   "note": "Initial enforceable ceilings with broad headroom pending retained per-scenario CI samples: measured README.md baseline at commit 234c1fc gives 4.30 ms for a five-stage pipeline, 2.80 ms for 1,000 builtin applet calls, and 6.2 MB startup peak. Pipeline 50 ms is 10x its current baseline; 100-call applet budget 50 ms is 18x the 1,000-call baseline; 1 MiB pipe 250 ms allows about 4 MiB/s; 10,000-element loops allow 1 s without checkpoints and 2 s with durable checkpoints; parallel-8 allows 1 s. RSS caps (32 MiB, 64 MiB for parallel work) provide broad process and workload headroom."
 }

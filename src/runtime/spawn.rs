@@ -526,6 +526,8 @@ pub(super) fn execute_group_with_sink(
         process_observer: Arc::clone(&signals.process_observer),
         worker_pool: signals.worker_pool.clone(),
         outer_cancelled: signals.outer_cancelled.clone(),
+        cancel_wakes: signals.cancel_wakes.clone(),
+        unnotified_cancellation: signals.unnotified_cancellation,
         job_cancelled: signals.job_cancelled.clone(),
         job_launch_ack: signals.job_launch_ack.clone(),
         job_output_budget: signals.job_output_budget.clone(),
@@ -806,13 +808,18 @@ pub(super) fn execute_group_with_sink(
         (-1, true)
     };
     let capture_diagnostics = children.0.iter().any(|child| child.stderr.is_some());
+    let cancellation_fds = signals
+        .cancel_wakes
+        .iter()
+        .map(|wake| wake.raw_fd())
+        .collect::<Vec<_>>();
     let mut diagnostic_poll_descriptors = Vec::with_capacity(if capture_diagnostics {
-        children.0.len() + 2
+        children.0.len() + 2 + cancellation_fds.len()
     } else {
         0
     });
     if capture_diagnostics {
-        for _ in 0..children.0.len() + 2 {
+        for _ in 0..children.0.len() + 2 + cancellation_fds.len() {
             diagnostic_poll_descriptors.push(libc::pollfd {
                 fd: -1,
                 events: libc::POLLIN,
@@ -991,13 +998,16 @@ pub(super) fn execute_group_with_sink(
         if eof && children.0.iter().all(|child| child.reaped) {
             break;
         }
-        // Keep a short timeout for external cancellation and observer fallback.
-        // Active kqueue observation makes a 20 ms EOF fallback sufficient;
-        // unavailable observers retain the previous 1 ms EOF rescan.
-        let maximum_wait_ms = if eof && child_observer.is_none() {
-            1
+        // Output, child-exit and cancellation descriptors wake this poll.
+        // Use a timeout only when no child-exit observer is available after
+        // stdout EOF; otherwise slow native children sleep in the kernel.
+        let maximum_wait_ms = if signals.unnotified_cancellation
+            || signals.cancel_wakes.is_empty()
+            || (eof && child_observer.is_none())
+        {
+            100
         } else {
-            20
+            -1
         };
         let timeout_ms = deadline_poll_timeout(signals.deadline, maximum_wait_ms);
         let observer_notified;
@@ -1009,7 +1019,18 @@ pub(super) fn execute_group_with_sink(
             descriptors[1].fd = child_observer.as_ref().map_or(-1, ChildObserver::raw_fd);
             descriptors[1].events = libc::POLLIN;
             descriptors[1].revents = 0;
-            for (descriptor, child) in descriptors[2..].iter_mut().zip(&children.0) {
+            for (descriptor, cancellation_fd) in descriptors[2..2 + cancellation_fds.len()]
+                .iter_mut()
+                .zip(&cancellation_fds)
+            {
+                descriptor.fd = *cancellation_fd;
+                descriptor.events = libc::POLLIN;
+                descriptor.revents = 0;
+            }
+            for (descriptor, child) in descriptors[2 + cancellation_fds.len()..]
+                .iter_mut()
+                .zip(&children.0)
+            {
                 descriptor.fd = child
                     .stderr
                     .as_ref()
@@ -1019,29 +1040,33 @@ pub(super) fn execute_group_with_sink(
             }
             let ready =
                 // SAFETY: `descriptors` is a Vec of pollfd whose length was set before the loop to
-                // children + 2, and poll writes only revents within it. Each fd is -1, which poll
-                // ignores, or a pipe held open by `stdout`, `children` or `child_observer` for
-                // this iteration.
+                // children + 2 + cancellation descriptors, and poll writes only revents within
+                // it. Each fd is -1, which poll ignores, or a pipe/event held open by `stdout`,
+                // `children`, `child_observer` or `signals` for this iteration.
                 unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout_ms) };
             observer_notified = ready > 0 && descriptors[1].revents != 0;
             ready
         } else {
-            let mut descriptors = [
-                libc::pollfd {
-                    fd: if eof { -1 } else { fd },
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-                libc::pollfd {
-                    fd: child_observer.as_ref().map_or(-1, ChildObserver::raw_fd),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-            ];
-            // SAFETY: `descriptors` is a live array of two pollfd, and the count 2 matches it.
-            // Entry 0 is the stdout pipe or -1, and entry 1 is the observer or -1. poll ignores
-            // entries with a negative fd, as POSIX specifies.
-            let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, timeout_ms) };
+            let mut descriptors = Vec::with_capacity(2 + cancellation_fds.len());
+            descriptors.push(libc::pollfd {
+                fd: if eof { -1 } else { fd },
+                events: libc::POLLIN,
+                revents: 0,
+            });
+            descriptors.push(libc::pollfd {
+                fd: child_observer.as_ref().map_or(-1, ChildObserver::raw_fd),
+                events: libc::POLLIN,
+                revents: 0,
+            });
+            descriptors.extend(cancellation_fds.iter().map(|fd| libc::pollfd {
+                fd: *fd,
+                events: libc::POLLIN,
+                revents: 0,
+            }));
+            // SAFETY: `descriptors` is a live vector of pollfd and the count is its length.
+            // Entries are stdout, child observer and cancellation events; negative fds are ignored.
+            let ready =
+                unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout_ms) };
             observer_notified = ready > 0 && descriptors[1].revents != 0;
             ready
         };

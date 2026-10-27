@@ -30,6 +30,10 @@ pub struct CodeInfo {
     /// The stage that finds the problem: parse, resolve, type, policy or validate.
     pub family: &'static str,
     pub meaning: &'static str,
+    /// A minimal source fragment that commonly produces this diagnostic.
+    pub example: &'static str,
+    /// The usual repair, stated for humans rather than as an edit.
+    pub typical_fix: &'static str,
 }
 
 /// Every code `execute check --json` can emit. A code is never renamed. A new
@@ -39,116 +43,162 @@ pub const CODES: &[CodeInfo] = &[
         code: "check.duplicate_name",
         family: "validate",
         meaning: "a result, input, label, or program name is declared more than once",
+        example: "run \"true\" as result\nrun \"true\" as result",
+        typical_fix: "Rename one binding so every result name is unique in its scope.",
     },
     CodeInfo {
         code: "check.scope",
         family: "validate",
         meaning: "a control-flow or job statement is used outside its valid construct",
+        example: "break",
+        typical_fix: "Move the statement into a valid loop, program, or job lifetime.",
     },
     CodeInfo {
         code: "check.program.unknown",
         family: "resolve",
         meaning: "a called reusable program is not defined",
+        example: "run program workre",
+        typical_fix: "Correct the program name or define the called program.",
     },
     CodeInfo {
         code: "check.program.input.unknown",
         family: "validate",
         meaning: "a reusable program call supplies an input it does not declare",
+        example: "run program worker with typo \"value\"",
+        typical_fix: "Rename the supplied input to one declared by the program.",
     },
     CodeInfo {
         code: "check.program.input.required",
         family: "validate",
         meaning: "a reusable program call omits a required input",
+        example: "define worker\n  accept input as text\n  use value input\nrun program worker",
+        typical_fix: "Supply the required input, or declare a default value.",
     },
     CodeInfo {
         code: "check.range",
         family: "validate",
         meaning: "a literal is outside the supported range for its setting",
+        example: "exit with status 300",
+        typical_fix: "Choose an integer within the documented range.",
     },
     CodeInfo {
         code: "check.parameter.direct",
         family: "validate",
         meaning: "a direct executable call uses named applet parameters",
+        example: "run \"grep\" with args [\"needle\"]",
+        typical_fix: "Use the `arguments` parameter for the direct executable's argv list.",
     },
     CodeInfo {
         code: "check.bound_output_withheld",
         family: "validate",
         meaning: "a final bound value is internal; explicitly reuse it to produce program stdout",
+        example: "run text.trim with text \" value \" as result",
+        typical_fix: "Use an unbound `use value result` or encode the value to stdout.",
     },
     CodeInfo {
         code: "parse.lexical",
         family: "parse",
         meaning: "a line has an unterminated or invalid quoted or bracketed token",
+        example: "run \"printf\" with arguments [\"missing quote]",
+        typical_fix: "Close the string and use valid escapes and balanced brackets.",
     },
     CodeInfo {
         code: "parse.syntax",
         family: "parse",
         meaning: "a statement does not match the grammar",
+        example: "rnu \"printf\" with arguments [\"x\"]",
+        typical_fix: "Rewrite the statement using a supported language form.",
     },
     CodeInfo {
         code: "parse.indentation",
         family: "parse",
         meaning: "a line is indented with tabs, or its indentation does not nest",
+        example: "\tuse value result",
+        typical_fix: "Use spaces and indent the line under its containing block.",
     },
     CodeInfo {
         code: "parse.control",
         family: "parse",
         meaning: "a control construct is unsupported or nested beyond the supported depth",
+        example: "try\n  try\n    run \"true\"",
+        typical_fix: "Use a supported control construct and stay within its nesting limit.",
     },
     CodeInfo {
         code: "source.invisible_format",
         family: "validate",
         meaning: "source contains a Unicode format control that can change how it is displayed",
+        example: "a source line containing U+200B ZERO WIDTH SPACE",
+        typical_fix: "Remove the invisible Unicode format character.",
     },
     CodeInfo {
         code: "check.undefined_name",
         family: "validate",
         meaning: "a referenced result or input name is not defined at this point",
+        example: "use value result",
+        typical_fix: "Define the name first or correct it to an existing name.",
     },
     CodeInfo {
         code: "check.type_mismatch",
         family: "type",
         meaning: "statically known value types are incompatible at a use site",
+        example: "if count equals \"many\"",
+        typical_fix: "Convert the value or use operands with compatible types.",
     },
     CodeInfo {
         code: "check.diagnostics.truncated",
         family: "validate",
         meaning: "more diagnostics were found than the response limit permits",
+        example: "a source file with more than 10,000 independent errors",
+        typical_fix: "Fix the reported diagnostics, then check again for the remaining errors.",
     },
     CodeInfo {
         code: "applet.unknown",
         family: "resolve",
         meaning: "the operation names no declared applet and is not a quoted executable",
+        example: "run text.trim_finall_lf with text \"x\"",
+        typical_fix: "Correct the applet name or quote a direct executable name.",
     },
     CodeInfo {
         code: "applet.parameter.unknown",
         family: "resolve",
         meaning: "the applet declares no parameter with this name",
+        example: "run fixture.reader with argumens \"x\"",
+        typical_fix: "Rename the parameter to one declared by the applet.",
     },
     CodeInfo {
         code: "applet.parameter.type",
         family: "type",
         meaning: "a literal value does not match the parameter's declared type",
+        example: "run fixture.reader with text 42",
+        typical_fix: "Provide a value matching the parameter's declared type.",
     },
     CodeInfo {
         code: "applet.parameter.required",
         family: "validate",
         meaning: "a required parameter is missing from the call",
+        example: "run fixture.reader",
+        typical_fix: "Supply a value for the required parameter.",
     },
     CodeInfo {
         code: "applet.pipeline.incompatible",
         family: "type",
         meaning: "a pipeline stage's declared output does not satisfy the next stage's input",
+        example: "then text.decode",
+        typical_fix: "Add a conversion or connect stages with compatible schemas and encodings.",
     },
     CodeInfo {
         code: "data_flow_policy_not_configured",
         family: "policy",
         meaning: "a capability policy is set without a data-flow policy, so remote egress and persistence are unprotected",
+        example: "execute check workflow.program --capability-policy allow.json",
+        typical_fix: "Add a data-flow policy that grants the intended egress and persistence.",
     },
     CodeInfo {
         code: "check_failed",
         family: "validate",
         meaning: "validation failed without a static diagnostic; the causes list explains why",
+        example: "a check failure that has no source-aware diagnostic yet",
+        typical_fix: "Follow the causes and report any reproducible source case without a specific code.",
     },
 ];
 
@@ -305,9 +355,10 @@ pub fn analyze_source_at(
         let label = match parser::statement_label(&tokens, line_number) {
             Ok(label) => label,
             Err(error) => {
+                let message = format!("{error:#}");
                 diagnostics.push(Diagnostic::error(
-                    "parse.syntax",
-                    format!("{error:#}"),
+                    syntax_code(&message),
+                    message,
                     line_starts.span(source, line_number),
                 ));
                 local_error_lines.insert(line_number);
@@ -324,11 +375,7 @@ pub fn analyze_source_at(
         }
         if let Err(error) = parser::validate_statement(tokens) {
             let message = format!("{error:#}");
-            let mut diagnostic = Diagnostic::error(
-                syntax_code(&message),
-                message,
-                line_starts.span(source, line_number),
-            );
+            let mut diagnostic = classified_parse_error(source, &message, line_number, &line_starts);
             let line_start_offset = line_starts.start(line_number);
             let content_start = line_start_offset + statement.indent;
             if let Some(first) = content.split_whitespace().next() {
@@ -436,7 +483,8 @@ fn classified_parse_error(
             || lower.contains("input")
             || lower.contains("program")
             || lower.contains("binding")
-            || lower.contains("name"))
+            || lower.contains("name")
+            || lower.contains("identifier"))
     {
         "check.duplicate_name"
     } else if (lower.contains("only valid inside") || lower.contains("only valid in"))
@@ -930,18 +978,37 @@ fn collect_job_reference_diagnostics(
 ) {
     let mut jobs = BTreeSet::new();
     for step in steps {
-        let reference = match &step.kind {
+        let (reference, consume) = match &step.kind {
             StepKind::SpawnJob { name, .. } => {
-                jobs.insert(name.as_str());
-                None
+                if !jobs.insert(name.as_str()) {
+                    let span = line_words_from_start(source, line_starts.start(step.line))
+                        .into_iter()
+                        .find(|word| !word.3 && word.0 == name.as_str())
+                        .map(|word| {
+                            line_starts.span_at(source, word.1, word.2, SpanPrecision::Token)
+                        })
+                        .unwrap_or_else(|| line_starts.span(source, step.line));
+                    diagnostics.push(Diagnostic::error(
+                        "check.duplicate_name",
+                        format!("job name {name:?} is spawned more than once"),
+                        span,
+                    ));
+                }
+                (None, false)
             }
-            StepKind::AwaitJob { name, .. }
-            | StepKind::CancelJob { name }
-            | StepKind::InspectJob { name, .. } => Some(name.as_str()),
-            _ => None,
+            StepKind::AwaitJob { name, .. } | StepKind::CancelJob { name } => {
+                (Some(name.as_str()), true)
+            }
+            StepKind::InspectJob { name, .. } => (Some(name.as_str()), false),
+            _ => (None, false),
         };
         let Some(name) = reference else { continue };
-        if jobs.contains(name) {
+        let known = if consume {
+            jobs.remove(name)
+        } else {
+            jobs.contains(name)
+        };
+        if known {
             continue;
         }
         let span = line_words_from_start(source, line_starts.start(step.line))
@@ -951,7 +1018,7 @@ fn collect_job_reference_diagnostics(
             .unwrap_or_else(|| line_starts.span(source, step.line));
         diagnostics.push(Diagnostic::error(
             "check.scope",
-            format!("job {name:?} must be spawned before it is inspected, awaited, or cancelled"),
+            format!("job {name:?} must name a currently running job created by a prior spawn"),
             span,
         ));
     }

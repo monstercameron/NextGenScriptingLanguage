@@ -30,6 +30,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
 
     let mut file = None;
     let mut json = false;
+    let mut diagnostic_explain = None;
     let mut explain_version = None;
     #[cfg(feature = "agent-advisory")]
     let mut allow = Vec::new();
@@ -101,6 +102,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     bail!("--json may be specified only once");
                 }
                 json = true;
+            }
+            "--explain" if command == "check" => {
+                if diagnostic_explain.is_some() {
+                    bail!("--explain may be specified only once");
+                }
+                diagnostic_explain = Some(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--explain",
+                    "a diagnostic code",
+                )?);
             }
             "--explain-version" if command == "explain" || command == "run" => {
                 if explain_version.is_some() {
@@ -448,7 +460,14 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         index += 1;
     }
 
-    let file = file.ok_or_else(|| anyhow!("missing workflow file\n{}", usage()))?;
+    if diagnostic_explain.is_some() && (arguments.len() != 3 || file.is_some() || json) {
+        bail!("check --explain CODE accepts only a diagnostic code");
+    }
+    let file = match (file, diagnostic_explain.is_some()) {
+        (Some(file), _) => file,
+        (None, true) => PathBuf::new(),
+        (None, false) => return Err(anyhow!("missing workflow file\n{}", usage())),
+    };
     if command == "resume" && checkpoint_dir.is_none() {
         bail!("resume requires --checkpoint DIR");
     }
@@ -466,6 +485,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         program_arguments,
         program_arguments_literal,
         json,
+        diagnostic_explain,
         explain_version,
         allow,
         what_if,
@@ -619,5 +639,33 @@ mod tests {
             .expect("run arguments");
         assert!(parsed.program_arguments_literal);
         assert_eq!(parsed.program_arguments, ["--help"]);
+    }
+
+    #[test]
+    fn check_explain_parses_without_a_workflow_file() {
+        let arguments = vec![
+            "check".to_owned(),
+            "--explain".to_owned(),
+            "check.scope".to_owned(),
+        ];
+        let parsed = parse_args(&arguments)
+            .expect("arguments parse")
+            .expect("check explain arguments");
+        assert_eq!(parsed.diagnostic_explain.as_deref(), Some("check.scope"));
+        assert!(parsed.file.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn check_explain_rejects_a_workflow_file_and_json_mode() {
+        for tail in [
+            vec!["check.scope", "workflow.program"],
+            vec!["check.scope", "--json"],
+        ] {
+            let arguments = std::iter::once("check".to_owned())
+                .chain(std::iter::once("--explain".to_owned()))
+                .chain(tail.into_iter().map(str::to_owned))
+                .collect::<Vec<_>>();
+            assert!(parse_args(&arguments).is_err());
+        }
     }
 }

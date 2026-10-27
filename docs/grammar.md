@@ -158,7 +158,7 @@ run "test" with arguments ["-f", "input.txt"] and keep status as present
 
 Invocation suffixes have one canonical order, stated once by the `suffixes`
 production above: each family at most once, in the order listed. Redirection
-(`and stderr to`, `and stdin from`, `and environment`, ...) and `and cache`
+(`and stderr to`, `and stdin from`, `and environment`, ...) and `and retry`
 restrictions aside, a misordered suffix is a `parse.suffix_order` diagnostic
 with a machine-applicable fix that reorders the suffixes; the reorder preserves
 meaning. `and retry` cannot be combined with `and cache`, `and keep status`,

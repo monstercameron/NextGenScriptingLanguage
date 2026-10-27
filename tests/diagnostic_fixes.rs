@@ -502,6 +502,119 @@ fn issue_475_suffix_order_rows_check_or_reorder_cleanly() {
 }
 
 #[test]
+fn issue_475_trailing_comment_suffix_reorder_is_span_safe() {
+    let registry = Registry::default();
+    let source = "run \"ls\" and keep status as s as out # trailing comment\n";
+    let diagnostics = analyze_source(source, &registry);
+    for diagnostic in &diagnostics {
+        assert!(
+            diagnostic.span.start_byte <= diagnostic.span.end_byte
+                && diagnostic.span.end_byte <= source.len(),
+            "span out of bounds for {source:?}: {diagnostics:#?}"
+        );
+        assert!(
+            source
+                .get(diagnostic.span.start_byte..diagnostic.span.end_byte)
+                .is_some(),
+            "span is not on a char boundary for {source:?}: {diagnostics:#?}"
+        );
+    }
+    let ordered: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "parse.suffix_order")
+        .collect();
+    let mut saw_fix = false;
+    for diagnostic in ordered {
+        assert_eq!(
+            diagnostic.span.precision,
+            flow::diagnostics::SpanPrecision::Token
+        );
+        let span_text = &source[diagnostic.span.start_byte..diagnostic.span.end_byte];
+        assert!(
+            !span_text.contains('#'),
+            "suffix span must not swallow the trailing comment: {diagnostics:#?}"
+        );
+        for fix in &diagnostic.fixes {
+            saw_fix = true;
+            let repaired = apply(source, fix);
+            assert!(
+                repaired.contains("# trailing comment"),
+                "reorder fix must preserve the trailing comment: {repaired:?}"
+            );
+            assert!(
+                repaired.contains("as out") && repaired.contains("and keep status as s"),
+                "reorder fix must preserve suffix content: {repaired:?}"
+            );
+            let after = analyze_source(&repaired, &registry);
+            assert!(
+                after
+                    .iter()
+                    .all(|d| d.code != "parse.suffix_order" && d.code != "parse.syntax"),
+                "repaired source should check: {after:#?}"
+            );
+        }
+    }
+    if !saw_fix {
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.code != "parse.suffix_order" || d.fixes.is_empty()),
+            "no unsafe reorder fix expected for {source:?}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
+fn issue_475_bracket_joined_suffix_reorder_is_span_safe() {
+    let registry = Registry::default();
+    let source = "run \"ls\" with arguments [\n  \"-l\",\n] and keep status as s as out\n";
+    let diagnostics = analyze_source(source, &registry);
+    for diagnostic in &diagnostics {
+        assert!(
+            diagnostic.span.start_byte <= diagnostic.span.end_byte
+                && diagnostic.span.end_byte <= source.len(),
+            "span out of bounds for {source:?}: {diagnostics:#?}"
+        );
+        assert!(
+            source
+                .get(diagnostic.span.start_byte..diagnostic.span.end_byte)
+                .is_some(),
+            "span is not on a char boundary for {source:?}: {diagnostics:#?}"
+        );
+    }
+    let ordered: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "parse.suffix_order")
+        .collect();
+    let mut saw_fix = false;
+    for diagnostic in ordered {
+        for fix in &diagnostic.fixes {
+            saw_fix = true;
+            let repaired = apply(source, fix);
+            assert!(
+                repaired.contains("\"-l\"") && repaired.contains("as out"),
+                "reorder fix must preserve bracketed content: {repaired:?}"
+            );
+            let after = analyze_source(&repaired, &registry);
+            assert!(
+                after
+                    .iter()
+                    .all(|d| d.code != "parse.suffix_order" && d.code != "parse.syntax"),
+                "repaired source should check: {after:#?}"
+            );
+        }
+    }
+    if !saw_fix {
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.code != "parse.suffix_order" || d.fixes.is_empty()),
+            "multiline reorder must not offer an unsafe fix for {source:?}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
 fn issue_475_invalid_combinations_get_no_reorder_fix() {
     let registry = Registry::default();
     for source in [

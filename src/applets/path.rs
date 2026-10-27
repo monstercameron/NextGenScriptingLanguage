@@ -40,9 +40,6 @@ fn posix_basename<'a>(value: &'a str, suffix: Option<&str>) -> &'a str {
         return "/";
     }
     let name = trimmed.rsplit('/').next().unwrap_or(trimmed);
-    if name == "." || name == ".." {
-        return name;
-    }
     match suffix
         .filter(|suffix| !suffix.is_empty())
         .and_then(|suffix| name.strip_suffix(suffix))

@@ -249,6 +249,7 @@ fn explain_json_version(
         depth: 0,
         cwd_poisoned: false,
         group_tainted: false,
+        initial_working_directory: std::env::current_dir().ok(),
         program_directory: crate::program_files::program_directory(std::path::Path::new(
             program_path,
         )),
@@ -303,19 +304,18 @@ struct Walker<'a> {
     depth: usize,
     /// Set by a folder change nested in a body. The folder stays unknown after it.
     cwd_poisoned: bool,
+    /// The process's starting directory, where runtime relative executables resolve.
+    initial_working_directory: Option<std::path::PathBuf>,
     /// The calling program's directory. Called files are shown relative to it.
     program_directory: Option<std::path::PathBuf>,
 }
 
 impl Walker<'_> {
     /// Resolve the filesystem working directory when the explanation walk still
-    /// has a known cwd. `Cwd` components are relative to the program's starting
-    /// directory, matching `change_folder` and runtime program-file semantics.
+    /// has a known cwd. Runtime begins in the process's current directory;
+    /// `program_directory` is for source-relative file lookup, not command cwd.
     fn known_working_directory(&self) -> Option<std::path::PathBuf> {
-        let base = self
-            .program_directory
-            .clone()
-            .or_else(|| std::env::current_dir().ok())?;
+        let base = self.initial_working_directory.clone()?;
         match &self.cwd {
             Cwd::Known(components) => Some(
                 components

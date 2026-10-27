@@ -123,20 +123,22 @@ fn direct_executable_resolution_uses_the_walkers_known_folder() {
 
     let directory = tempfile::tempdir().unwrap();
     let manifests = write_manifests(directory.path());
+    let scripts = directory.path().join("scripts");
+    std::fs::create_dir(&scripts).unwrap();
     let bin = directory.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
     let printf = bin.join("printf");
     std::fs::write(&printf, "placeholder; explain must not execute this file\n").unwrap();
     std::fs::set_permissions(&printf, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(
-        directory.path().join("plan.program"),
+        scripts.join("plan.program"),
         "use folder \"bin\"\nrun \"printf\"\n",
     )
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args([
             "explain",
-            "plan.program",
+            "scripts/plan.program",
             "--json",
             "--manifest-dir",
         ])

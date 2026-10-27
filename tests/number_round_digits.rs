@@ -1,5 +1,5 @@
 use flow::applets::{self, AppletErrorKind};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{fs, process::Command};
 
 fn round(value: Value, digits: Option<Value>) -> Result<Value, flow::applets::AppletError> {

@@ -61,19 +61,21 @@ impl<W: Write> Write for Writer<W> {
                         return Err(io::Error::other(format!(
                             "injected failure at {}",
                             self.point
-                        )))
+                        )));
                     }
                     Action::Abort => std::process::abort(),
                     Action::Lost => return Ok(bytes.len()),
                     Action::Partial(count) => {
                         self.inner.write_all(&bytes[..count.min(bytes.len())])?;
                         self.inner.flush()?;
+                        mark_hard_abort()?;
                         std::process::abort()
                     }
                     Action::PartialWait(count) => {
                         self.inner.write_all(&bytes[..count.min(bytes.len())])?;
                         self.inner.flush()?;
                         wait_for_release()?;
+                        mark_hard_abort()?;
                         std::process::abort()
                     }
                 }
@@ -143,12 +145,14 @@ pub(crate) fn write_all(point: &str, file: &mut File, bytes: &[u8]) -> io::Resul
         Some(Action::Abort) => std::process::abort(),
         Some(Action::Lost) => Ok(()),
         Some(Action::Partial(count)) => {
-            let _ = file.write_all(&bytes[..count.min(bytes.len())]);
+            file.write_all(&bytes[..count.min(bytes.len())])?;
+            mark_hard_abort()?;
             std::process::abort()
         }
         Some(Action::PartialWait(count)) => {
             file.write_all(&bytes[..count.min(bytes.len())])?;
             wait_for_release()?;
+            mark_hard_abort()?;
             std::process::abort()
         }
         None => file.write_all(bytes),
@@ -173,4 +177,13 @@ fn wait_for_release() -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(10));
     }
     Ok(())
+}
+
+/// Leave evidence for subprocess tests that the successful prefix write passed its
+/// handshake and reached the hard-abort branch, rather than returning an I/O error.
+fn mark_hard_abort() -> io::Result<()> {
+    let Some(hold_dir) = std::env::var_os("EXECUTE_FAILPOINT_HOLD_DIR") else {
+        return Ok(());
+    };
+    std::fs::write(PathBuf::from(hold_dir).join("hard-abort"), b"abort")
 }

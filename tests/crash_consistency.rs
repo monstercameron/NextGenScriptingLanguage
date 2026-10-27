@@ -304,6 +304,7 @@ fn trials() -> usize {
 
 /// After a failure or a kill: resume, then either match the uninterrupted run or refuse.
 fn check_resume(fixture: &Fixture, expected: &[String], context: &str) {
+    let before_resume = log_lines(fixture);
     let output = resume(fixture);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() {
@@ -325,6 +326,57 @@ fn check_resume(fixture: &Fixture, expected: &[String], context: &str) {
     assert!(
         stderr.contains("checkpoint") || stderr.contains("retry-uncertain"),
         "{context}: refusal without a reason: {stderr}"
+    );
+    assert_eq!(
+        log_lines(fixture),
+        before_resume,
+        "{context}: refusal replayed a side effect"
+    );
+}
+
+/// Hold a partial-write failpoint after its prefix has reached the file. The ready
+/// marker is written only after write_all and flush succeed; the hard-abort marker is
+/// written only after release, immediately before process::abort.
+fn partial_write_abort(fixture: &Fixture, point: &str) {
+    let hold_dir = fixture._directory.path().join("partial-write-handshake");
+    fs::create_dir(&hold_dir).unwrap();
+    let mut child = checkpointed_run(fixture)
+        .env("EXECUTE_FAILPOINT", format!("{point}:1:partial-wait:3"))
+        .env("EXECUTE_FAILPOINT_HOLD_DIR", &hold_dir)
+        .spawn()
+        .unwrap();
+    let ready = hold_dir.join("ready");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready.exists() && Instant::now() < deadline {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("{point}:partial-wait exited before prefix-write handshake: {status}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !ready.exists() {
+        let _ = fs::write(hold_dir.join("release"), b"release");
+        let _ = child.wait();
+        panic!("{point}:partial-wait did not report a successful prefix write");
+    }
+    assert_eq!(fs::read(&ready).unwrap(), b"ready");
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "{point}:partial-wait exited before release"
+    );
+    assert!(
+        !hold_dir.join("hard-abort").exists(),
+        "{point}:partial-wait marked the abort before release"
+    );
+    fs::write(hold_dir.join("release"), b"release").unwrap();
+    let status = child.wait().unwrap();
+    assert!(
+        !status.success(),
+        "{point}:partial-wait exited successfully after release"
+    );
+    assert_eq!(
+        fs::read(hold_dir.join("hard-abort")).unwrap(),
+        b"abort",
+        "{point}:partial-wait did not reach the hard-abort path"
     );
 }
 
@@ -556,18 +608,24 @@ fn eight_named_write_points_survive_abort_and_torn_write_actions() {
     ];
     for (mode, point) in cases {
         let (expected, _) = baseline(mode);
-        for action in ["abort", "partial:3"] {
-            let fixture = fixture(mode);
-            let output = checkpointed_run(&fixture)
-                .env("EXECUTE_FAILPOINT", format!("{point}:1:{action}"))
-                .output()
-                .unwrap();
-            assert!(
-                !output.status.success(),
-                "{point}:{action} did not terminate the checkpointed run"
-            );
-            check_resume(&fixture, &expected, &format!("{point}:{action}"));
-        }
+        let abort_fixture = fixture(mode);
+        let output = checkpointed_run(&abort_fixture)
+            .env("EXECUTE_FAILPOINT", format!("{point}:1:abort"))
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{point}:abort did not terminate the checkpointed run"
+        );
+        check_resume(&abort_fixture, &expected, &format!("{point}:abort"));
+
+        let partial_fixture = fixture(mode);
+        partial_write_abort(&partial_fixture, point);
+        check_resume(
+            &partial_fixture,
+            &expected,
+            &format!("{point}:partial-wait:3"),
+        );
     }
 }
 

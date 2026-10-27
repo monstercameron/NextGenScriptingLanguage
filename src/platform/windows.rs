@@ -21,8 +21,10 @@ use windows_sys::Win32::{
 };
 
 /// Add arguments with a command-line representation accepted by both the MSVC
-/// CRT and MSYS-family parsers. Rust's default quoting only quotes spaces and
-/// tabs, while MSYS also treats CR/LF/VT/FF as argument separators.
+/// CRT and MSYS-family parsers. Rust's default quoting handles spaces and tabs,
+/// while MSYS also treats CR/LF/VT/FF as argument separators. Keep ordinary
+/// arguments in `Command`'s regular path because tools such as cmd.exe have
+/// additional command-line syntax beyond the CRT parser.
 pub(crate) fn add_arguments<I, S>(command: &mut Command, arguments: I)
 where
     I: IntoIterator<Item = S>,
@@ -33,6 +35,10 @@ where
 
     for argument in arguments {
         let units: Vec<u16> = argument.as_ref().encode_wide().collect();
+        if !units.iter().any(|unit| matches!(*unit, 0x0a..=0x0d)) {
+            command.arg(argument);
+            continue;
+        }
         let mut quoted = Vec::with_capacity(units.len() + 2);
         quoted.push(b'"' as u16);
         let mut slashes = 0usize;

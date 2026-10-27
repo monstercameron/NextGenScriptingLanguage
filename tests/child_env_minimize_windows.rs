@@ -33,3 +33,29 @@ fn command_line_allowlist_filters_a_native_windows_child() {
     assert!(!stdout.contains("leaked"), "{stdout}");
     assert!(!stdout.contains("private-windows-child-canary"), "{stdout}");
 }
+
+#[test]
+fn cmd_executes_crlf_multiline_command_argument() {
+    let directory = tempfile::tempdir().unwrap();
+    let workflow = directory.path().join("multiline.program");
+    fs::write(
+        &workflow,
+        "run \"cmd.exe\" with arguments [\"/d\", \"/c\", \"echo first\\r\\necho second\"]\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("run")
+        .arg(&workflow)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(lines, ["first", "second"]);
+}

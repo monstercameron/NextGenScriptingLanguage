@@ -110,11 +110,12 @@ fn write_owner(root: &Path) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let pid = std::process::id();
+        let proc_root = Path::new("/proc");
         let owner = owner_record(
             system_boot_id().as_deref(),
-            process_pid_namespace("self"),
+            process_pid_namespace(proc_root, "self"),
             pid,
-            process_start_time(pid),
+            process_start_time(proc_root, "self"),
         );
         write!(file, "{owner}").context("recording the temporary scope owner")
     }
@@ -192,6 +193,11 @@ fn sweep_stale(temp: &Path) {
 
 #[cfg(target_os = "linux")]
 fn scope_owner_alive(owner: &str) -> bool {
+    scope_owner_alive_in_proc(owner, Path::new("/proc"))
+}
+
+#[cfg(target_os = "linux")]
+fn scope_owner_alive_in_proc(owner: &str, proc_root: &Path) -> bool {
     let mut parts = owner.trim().split(':');
     let (Some(boot_id), Some(pid_namespace), Some(pid), Some(start), None) = (
         parts.next(),
@@ -221,19 +227,28 @@ fn scope_owner_alive(owner: &str) -> bool {
     ) else {
         return true;
     };
-    let Some(current_pid_namespace) = process_pid_namespace("self") else {
+    let Some(current_pid_namespace) = process_pid_namespace(proc_root, "self") else {
         return true;
     };
+    let Some(proc_mount_pid_namespace) = process_pid_namespace(proc_root, "1") else {
+        // Numeric /proc entries are unsafe unless this procfs was mounted for the
+        // same PID namespace as the sweeper.
+        return true;
+    };
+    if proc_mount_pid_namespace != current_pid_namespace {
+        return true;
+    }
     if pid_namespace != current_pid_namespace {
         // PIDs are local to a namespace. The same numeric PID may refer to an
         // unrelated live process here, so its start time cannot prove staleness.
         return true;
     }
-    if process_pid_namespace(&pid.to_string()) != Some(pid_namespace) {
+    let pid_path = pid.to_string();
+    if process_pid_namespace(proc_root, &pid_path) != Some(pid_namespace) {
         // /proc may resolve this PID to a different namespace's process.
         return true;
     }
-    match process_start_time(pid) {
+    match process_start_time(proc_root, &pid_path) {
         // A missing PID can be alive in another PID namespace sharing this directory.
         // Keep its scope; only a visible, different process start proves PID reuse.
         None => true,
@@ -247,8 +262,8 @@ fn scope_owner_alive(owner: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn process_pid_namespace(pid: &str) -> Option<u64> {
-    let namespace = fs::read_link(format!("/proc/{pid}/ns/pid")).ok()?;
+fn process_pid_namespace(proc_root: &Path, pid: &str) -> Option<u64> {
+    let namespace = fs::read_link(proc_root.join(pid).join("ns/pid")).ok()?;
     let namespace = namespace
         .to_str()?
         .strip_prefix("pid:[")?
@@ -278,8 +293,8 @@ fn is_valid_boot_id(boot_id: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn process_start_time(pid: u32) -> Option<u64> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+fn process_start_time(proc_root: &Path, pid: &str) -> Option<u64> {
+    let stat = fs::read_to_string(proc_root.join(pid).join("stat")).ok()?;
     let after_command = stat.rsplit_once(')')?.1;
     after_command
         .split_whitespace()
@@ -401,9 +416,10 @@ mod tests {
         }
         #[cfg(target_os = "linux")]
         {
+            let proc_root = Path::new("/proc");
             let boot_id = system_boot_id().unwrap();
-            let pid_namespace = process_pid_namespace("self").unwrap();
-            let start = process_start_time(std::process::id()).unwrap();
+            let pid_namespace = process_pid_namespace(proc_root, "self").unwrap();
+            let start = process_start_time(proc_root, "self").unwrap();
             fs::write(
                 dead.join(OWNER_FILE),
                 format!(
@@ -477,10 +493,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn missing_owner_identity_components_are_retained() {
+        let proc_root = Path::new("/proc");
         let boot_id = system_boot_id().unwrap();
-        let pid_namespace = process_pid_namespace("self").unwrap();
+        let pid_namespace = process_pid_namespace(proc_root, "self").unwrap();
         let pid = std::process::id();
-        let start = process_start_time(pid).unwrap();
+        let start = process_start_time(proc_root, "self").unwrap();
 
         let missing_boot_id = owner_record(None, Some(pid_namespace), pid, Some(start));
         let missing_pid_namespace = owner_record(Some(&boot_id), None, pid, Some(start));
@@ -501,5 +518,86 @@ mod tests {
         assert!(scope_owner_alive(&missing_boot_id));
         assert!(scope_owner_alive(&missing_pid_namespace));
         assert!(scope_owner_alive(&missing_start_time));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_bind_mounted_host_proc_keeps_an_owner_when_a_pid_number_collides() {
+        let proc_root = tempfile::tempdir().unwrap();
+        let namespace = 20_001;
+        write_test_pid_namespace(proc_root.path(), "self", namespace);
+        // PID 1 identifies the namespace for which this procfs was mounted.
+        write_test_pid_namespace(proc_root.path(), "1", 10_001);
+        // The host-view numeric PID happens to point at a process in the owner's
+        // namespace, but its start time differs. The procfs mount mismatch means
+        // this lookup cannot prove that the owner is stale.
+        write_test_pid_namespace(proc_root.path(), "42", namespace);
+        write_test_stat(proc_root.path(), "42", 200);
+        let owner = format!("{}:{namespace}:42:100", system_boot_id().unwrap());
+
+        assert!(scope_owner_alive_in_proc(&owner, proc_root.path()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_matched_proc_view_detects_a_reused_pid() {
+        let proc_root = tempfile::tempdir().unwrap();
+        let namespace = 20_002;
+        write_test_pid_namespace(proc_root.path(), "self", namespace);
+        write_test_pid_namespace(proc_root.path(), "1", namespace);
+        write_test_pid_namespace(proc_root.path(), "42", namespace);
+        write_test_stat(proc_root.path(), "42", 200);
+        let owner = format!("{}:{namespace}:42:100", system_boot_id().unwrap());
+
+        assert!(!scope_owner_alive_in_proc(&owner, proc_root.path()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_missing_proc_mount_namespace_keeps_the_owner() {
+        let proc_root = tempfile::tempdir().unwrap();
+        let namespace = 20_003;
+        write_test_pid_namespace(proc_root.path(), "self", namespace);
+        write_test_pid_namespace(proc_root.path(), "42", namespace);
+        write_test_stat(proc_root.path(), "42", 200);
+        let owner = format!("{}:{namespace}:42:100", system_boot_id().unwrap());
+
+        assert!(scope_owner_alive_in_proc(&owner, proc_root.path()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_missing_current_namespace_keeps_the_owner() {
+        let proc_root = tempfile::tempdir().unwrap();
+        let namespace = 20_004;
+        write_test_pid_namespace(proc_root.path(), "1", namespace);
+        write_test_pid_namespace(proc_root.path(), "42", namespace);
+        write_test_stat(proc_root.path(), "42", 200);
+        let owner = format!("{}:{namespace}:42:100", system_boot_id().unwrap());
+
+        assert!(scope_owner_alive_in_proc(&owner, proc_root.path()));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_test_pid_namespace(proc_root: &Path, pid: &str, namespace: u64) {
+        use std::os::unix::fs::symlink;
+
+        let path = proc_root.join(pid).join("ns/pid");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        symlink(format!("pid:[{namespace}]"), path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_test_stat(proc_root: &Path, pid: &str, start_time: u64) {
+        let mut fields = vec!["0".to_owned(); 20];
+        fields[0] = "S".to_owned();
+        fields[19] = start_time.to_string();
+        let path = proc_root.join(pid);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(
+            path.join("stat"),
+            format!("{pid} (mock) {}", fields.join(" ")),
+        )
+        .unwrap();
     }
 }

@@ -8,7 +8,7 @@ use super::*;
 use crate::ast::{JobStage, Value};
 use crate::contracts::AppletBackend;
 use crate::tasks::{CancellationWake, TaskHandle, TaskScope};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::AtomicUsize;
@@ -1391,11 +1391,9 @@ mod tests {
         }
 
         let error = supervisor.finish_scope(0).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("explicitly awaited or cancelled")
-        );
+        assert!(error
+            .to_string()
+            .contains("explicitly awaited or cancelled"));
         supervisor.cancel_scope(0)?;
         supervisor.finish_scope(0)?;
         Ok(())

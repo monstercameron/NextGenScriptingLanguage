@@ -1,6 +1,6 @@
 use flow::ast::StepKind;
 use flow::{manifest::Registry, parser, runtime};
-use serde_json::{Value as Json, json};
+use serde_json::{json, Value as Json};
 use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
@@ -1179,12 +1179,10 @@ await shared
 "#;
     let program = parser::parse(source)?;
     // Calls execute their inlined bodies in the same step array as the caller.
-    assert!(
-        program
-            .steps
-            .iter()
-            .any(|step| matches!(&step.kind, StepKind::CallProgram { .. }))
-    );
+    assert!(program
+        .steps
+        .iter()
+        .any(|step| matches!(&step.kind, StepKind::CallProgram { .. })));
     let result = runtime::run(
         &program,
         &Registry::default(),
@@ -1326,11 +1324,9 @@ fn diagnostic_capture_limit_and_truncation_are_portable() -> anyhow::Result<()> 
         let stderr = record["stderr_by_stage"][0].as_array().unwrap();
         assert_eq!(record["stderr_limit_per_stage"], json!(65_536));
         assert_eq!(stderr.len(), retained, "input length {count}");
-        assert!(
-            stderr
-                .iter()
-                .all(|byte| byte.as_u64() == Some(u64::from(b'e')))
-        );
+        assert!(stderr
+            .iter()
+            .all(|byte| byte.as_u64() == Some(u64::from(b'e'))));
         assert_eq!(record["stderr_truncated"], json!([truncated]));
         assert_eq!(record["stages"][0]["stderr_truncated"], json!(truncated));
     }

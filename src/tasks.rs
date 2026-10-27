@@ -6,17 +6,17 @@
 //! the runtime operation they supervise. Applet-specific policy and contract
 //! preflight belongs to the caller and must complete before spawning work.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, VecDeque};
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::sync::{Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;

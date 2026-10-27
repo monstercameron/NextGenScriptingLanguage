@@ -255,8 +255,6 @@ struct ParameterSpec {
     min_properties: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_properties: Option<usize>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    nonempty: bool,
 }
 
 impl From<RawParameter> for ParameterSpec {
@@ -276,7 +274,6 @@ impl From<RawParameter> for ParameterSpec {
             additional_properties: raw.additional_properties,
             min_properties: raw.min_properties,
             max_properties: raw.max_properties,
-            nonempty: raw.nonempty,
         }
     }
 }
@@ -651,7 +648,6 @@ impl Registry {
                     additional_properties: None,
                     min_properties: None,
                     max_properties: None,
-                    nonempty: false,
                 },
             )]),
             parameter_alternatives: Vec::new(),
@@ -1475,13 +1471,6 @@ impl Manifest {
                 if let Some(maximum) = spec.max_properties {
                     schema["maxProperties"] = maximum.into();
                 }
-                if spec.nonempty {
-                    schema["minLength"] = 1.into();
-                    schema["pattern"] = "^[^\\u0000]*$".into();
-                    schema["not"] = serde_json::json!({
-                        "pattern": OPEN_OBJECT_NONEMPTY_WHITESPACE_PATTERN
-                    });
-                }
                 (name.clone(), schema)
             })
             .collect::<serde_json::Map<_, _>>();
@@ -2199,7 +2188,8 @@ fn validate_value(
         && allow_reference_items
         && contains_parameter_reference(value)
     {
-        validate_json_parameter_references(name, value, bindings)?;
+        validate_json_references(value, bindings)
+            .with_context(|| format!("validating JSON parameter {name:?}"))?;
     }
     if let Value::String(string) = value {
         if string.contains('\0') {
@@ -2221,9 +2211,6 @@ fn validate_value(
             if !values.iter().any(|allowed| allowed == string) {
                 bail!("parameter {name:?} must be one of {values:?}, got {string:?}");
             }
-        }
-        if spec.nonempty && string.trim().is_empty() {
-            bail!("parameter {name:?} must be nonempty");
         }
     }
     if let (ParameterType::Record, Value::Record(values)) = (spec.kind, value) {
@@ -2507,7 +2494,8 @@ fn validate_parameter_field(
     }
     if field.kind == ParameterType::Json && allow_references && contains_parameter_reference(value)
     {
-        validate_json_parameter_references(name, value, bindings)?;
+        validate_json_references(value, bindings)
+            .with_context(|| format!("validating JSON field {name:?}"))?;
     }
     if field.kind == ParameterType::Record {
         let Value::Record(values) = value else {
@@ -2550,32 +2538,6 @@ fn is_scalar_type(value: &Value, expected: ParameterType) -> bool {
                 Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_)
             )
     )
-}
-
-fn validate_json_parameter_references(
-    name: &str,
-    value: &Value,
-    bindings: &BTreeMap<String, InputType>,
-) -> Result<()> {
-    match value {
-        Value::Reference(reference) => {
-            if bindings.get(reference).copied().unwrap_or(InputType::Text) == InputType::Bytes {
-                bail!("JSON parameter {name:?} cannot contain a bytes reference");
-            }
-        }
-        Value::List(values) => {
-            for value in values {
-                validate_json_parameter_references(name, value, bindings)?;
-            }
-        }
-        Value::Record(values) => {
-            for value in values.values() {
-                validate_json_parameter_references(name, value, bindings)?;
-            }
-        }
-        Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
-    }
-    Ok(())
 }
 
 fn value_kind(value: &Value) -> &'static str {
@@ -2934,8 +2896,6 @@ struct RawParameter {
     min_properties: Option<usize>,
     #[serde(default)]
     max_properties: Option<usize>,
-    #[serde(default)]
-    nonempty: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3164,9 +3124,6 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         }
         if spec.forbid_option_items && (!is_list || spec.item_type != Some(ParameterType::String)) {
             bail!("parameter {name:?}: forbid_option_items applies only to string lists");
-        }
-        if spec.nonempty && spec.kind != ParameterType::String {
-            bail!("parameter {name:?}: nonempty only applies to string parameters");
         }
         if spec
             .min_properties
@@ -5470,7 +5427,6 @@ mod first_token_rule_tests {
             additional_properties: None,
             min_properties: None,
             max_properties: None,
-            nonempty: false,
         }
     }
 

@@ -30,3 +30,14 @@ description = "Synthetic API-key fixtures in historical explain JSON tests"
 condition = "AND"
 commits = ["bc9239987b4af26bcce685ccfa5062725ee47c67"]
 paths = ['''^tests/agent_explain_json\.rs$''']
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = "Exact synthetic sentinel in the historical structured-value redaction test"
+  condition = "AND"
+  commits = ["ea80928b98e5ae5a78507127050fe74fdda53da0"]
+  paths = ['''^src/record\.rs$''']
+  regexTarget = "secret"
+  regexes = ['''^(?:\x43\x41\x4e\x41\x52\x59\x2d\x50\x52\x49\x56\x41\x54\x45\x2d\x4b\x45\x59\x2d\x33\x31\x35)$''']

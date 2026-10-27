@@ -46,7 +46,11 @@ fn polymorphic_output_kind(
             };
             let mut kinds = items.iter().filter_map(item_type);
             let first = kinds.next().unwrap_or(crate::ast::InputType::Json);
-            if kinds.all(|kind| kind == first) { first } else { crate::ast::InputType::Json }
+            if kinds.all(|kind| kind == first) {
+                first
+            } else {
+                crate::ast::InputType::Json
+            }
         }
         _ => return None,
     };
@@ -2480,6 +2484,10 @@ fn binding_value_type(
             }
             kind
         }
+        // NUL cannot cross the native text boundary. Preserve it as JSON so
+        // a list binding containing NUL has the same loop element type as an
+        // equivalent inline JSON array.
+        Value::String(text) if text.contains('\0') => InputType::Json,
         Value::String(_) => InputType::Text,
         Value::Integer(_) => InputType::Integer,
         Value::Bool(_) => InputType::Boolean,
@@ -2579,4 +2587,36 @@ fn path_value(value: &Value, bindings: &BTreeMap<String, Value>, cwd: &Path) -> 
         _ => bail!("path result must contain text"),
     };
     Ok(cwd.join(crate::home::expand_home_path(path)?))
+}
+
+#[cfg(test)]
+mod binding_type_tests {
+    use super::binding_value_type;
+    use crate::ast::{InputType, Value};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn nul_strings_and_lists_are_json_typed_while_plain_text_lists_stay_text() {
+        let types = BTreeMap::new();
+        assert_eq!(
+            binding_value_type(&Value::String("nul\0text".into()), &types).unwrap(),
+            InputType::Json
+        );
+        assert_eq!(
+            binding_value_type(
+                &Value::List(vec![Value::String("nul\0text".into())]),
+                &types,
+            )
+            .unwrap(),
+            InputType::Json
+        );
+        assert_eq!(
+            binding_value_type(
+                &Value::List(vec![Value::String("plain text".into())]),
+                &types,
+            )
+            .unwrap(),
+            InputType::TextList
+        );
+    }
 }

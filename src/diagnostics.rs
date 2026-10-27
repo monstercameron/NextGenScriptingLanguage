@@ -1768,6 +1768,10 @@ fn known_value_type(
 ) -> Option<OutputType> {
     match value {
         Value::Reference(name) => known_types.get(name).copied(),
+        // Native text parameters and runtime text-list bindings cannot carry
+        // NUL. Keep NUL-containing strings on the JSON side of the boundary,
+        // including when they are first captured into a list binding.
+        Value::String(text) if text.contains('\0') => Some(OutputType::Json),
         Value::String(_) => Some(OutputType::Text),
         Value::Integer(_) => Some(OutputType::Integer),
         Value::Number(_) => Some(OutputType::Number),
@@ -1954,6 +1958,40 @@ fn collect_scoped_call_types(
                     },
                 );
             }
+            StepKind::TaskGroup {
+                binding,
+                tasks,
+                each,
+                ..
+            } => {
+                let mut task_scope = scope.clone();
+                let task_inside_loop = each.is_some();
+                if let Some(each) = each {
+                    if let Some(kind) = known_for_each_item_type(
+                        &each.values,
+                        &task_scope.known_types,
+                        &task_scope.list_item_types,
+                    ) {
+                        task_scope.known_types.insert(each.binding.clone(), kind);
+                    } else {
+                        task_scope.known_types.remove(&each.binding);
+                    }
+                    task_scope.list_item_types.remove(&each.binding);
+                }
+                for task in tasks {
+                    calls.insert(
+                        task as *const Invocation as usize,
+                        CallTypeScope {
+                            scope: task_scope.clone(),
+                            inside_loop: inside_loop || task_inside_loop,
+                        },
+                    );
+                    if !task_inside_loop {
+                        infer_call_output_type(task, registry, scope);
+                    }
+                }
+                set_scoped_binding_type(scope, binding, OutputType::Json);
+            }
             StepKind::BindValue { source, binding } => {
                 if let Some(kind) = known_value_type(source, &scope.known_types) {
                     scope.known_types.insert(binding.clone(), kind);
@@ -1983,7 +2021,6 @@ fn collect_scoped_call_types(
             }
             StepKind::ParseJson { binding }
             | StepKind::Catch { binding, .. }
-            | StepKind::TaskGroup { binding, .. }
             | StepKind::InspectJob { binding, .. } => {
                 set_scoped_binding_type(scope, binding, OutputType::Json);
             }
@@ -3130,6 +3167,26 @@ mod tests {
     }
 
     #[test]
+    fn parallel_for_each_template_uses_its_iteration_binding_type() {
+        let fixture = json!({
+            "name": "fixture.boolean",
+            "binary": "fixture-boolean",
+            "parameters": {"flag": {"type": "boolean", "required": true}},
+            "arguments": [{"parameter": "flag"}]
+        });
+        let registry = Registry::from_sources(&[fixture.to_string()]).unwrap();
+        let source = "parallel for each item in [\"x\"] at most 2 as results\n  run fixture.boolean with flag item\n";
+        let diagnostics = analyze_source(source, &registry);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "applet.parameter.type"
+                    && diagnostic.message.contains("result \"item\" is text")
+            }),
+            "parallel loop template skipped its item schema check: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
     fn loop_item_inference_treats_nul_text_as_json_like_runtime() {
         let item = Value::String("text\0with-nul".into());
         let items = Value::List(vec![item]);
@@ -3138,6 +3195,87 @@ mod tests {
             known_for_each_item_type(&items, &types, &types),
             Some(OutputType::Json)
         );
+    }
+
+    #[test]
+    fn nul_list_item_type_matches_inline_bound_and_applet_list_sources() {
+        let nul_items = Value::List(vec![Value::String("text\0with-nul".into())]);
+        let mut known = BTreeMap::new();
+        let mut list_items = BTreeMap::new();
+
+        // A value binding and an applet's same-as-parameter list output both
+        // infer their items through known_list_item_type.
+        assert_eq!(known_value_type(&nul_items, &known), Some(OutputType::List));
+        let item_kind = known_list_item_type(&nul_items, &known, &list_items).unwrap();
+        assert_eq!(item_kind, OutputType::Json);
+        known.insert("bound".into(), OutputType::List);
+        list_items.insert("bound".into(), item_kind);
+        assert_eq!(
+            known_for_each_item_type(&Value::Reference("bound".into()), &known, &list_items,),
+            Some(OutputType::Json)
+        );
+
+        let fixture = json!({
+            "name": "fixture.boolean",
+            "binary": "fixture-boolean",
+            "parameters": {"flag": {"type": "boolean", "required": true}},
+            "arguments": [{"parameter": "flag"}]
+        });
+        let list_fixture = json!({
+            "name": "fixture.list",
+            "binary": "fixture-list",
+            "parameters": {"items": {"type": "json", "required": true}},
+            "arguments": [{"json_arguments": true}],
+            "contract": {
+                "version": 1,
+                "output": {
+                    "type": "list",
+                    "encoding": "json",
+                    "items": {"type": "json"},
+                    "same_as_parameter": "items"
+                }
+            }
+        });
+        let registry =
+            Registry::from_sources(&[fixture.to_string(), list_fixture.to_string()]).unwrap();
+        for source in [
+            "parallel for each item in [\"\\u0000\"] at most 2 as results\n  run fixture.boolean with flag item\n",
+            "use value [\"\\u0000\"] as bound\nparallel for each item in bound at most 2 as results\n  run fixture.boolean with flag item\n",
+            "run fixture.list with items [\"\\u0000\"] as bound\nparallel for each item in bound at most 2 as results\n  run fixture.boolean with flag item\n",
+        ] {
+            let program = parser::parse(source)
+                .unwrap_or_else(|error| panic!("could not parse {source:?}: {error:#}"));
+            let mut call_scopes = HashMap::new();
+            collect_scoped_call_types(
+                &program.steps,
+                &registry,
+                &mut InferredTypeScope::default(),
+                &mut call_scopes,
+                false,
+            );
+            let template = program.steps.iter().find_map(|step| match &step.kind {
+                StepKind::TaskGroup {
+                    tasks,
+                    each: Some(_),
+                    ..
+                } => tasks.first(),
+                _ => None,
+            }).unwrap();
+            assert_eq!(
+                call_scopes
+                    .get(&(template as *const Invocation as usize))
+                    .and_then(|scope| scope.scope.known_types.get("item")),
+                Some(&OutputType::Json),
+                "NUL-containing item must stay JSON-typed for {source:?}"
+            );
+            let diagnostics = analyze_source(source, &registry);
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.code != "applet.parameter.type"),
+                "generic JSON loop item should defer schema validation for {source:?}: {diagnostics:#?}"
+            );
+        }
     }
 
     #[test]

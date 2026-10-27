@@ -8,10 +8,16 @@ intentionally required: this tool never invents one from a current run. In CI
 the pair is two focused runs on the same runner from two distinct builds --
 the baseline built at the base revision and the candidate at the head
 revision (pull_request base/head SHAs; push before/sha with a HEAD~1
-fallback for a zero before; dispatch inputs or HEAD~1 versus HEAD) -- so a
-regression verdict never depends on cross-runner numbers; run with
---fail-closed (and --require-provenance) so missing gated data fails instead
-of passing silently.
+fallback for a zero before; dispatch inputs or HEAD~1 versus HEAD), both
+measured back-to-back with the same head-revision measurement tool so an
+old base without newer flags stays supported and tool hashes stay
+comparable -- so a regression verdict never depends on cross-runner numbers;
+run with --fail-closed (and --require-provenance) so missing gated data
+fails instead of passing silently. Same-runner is procedural (one job
+measures both binaries); runner identity is not derived from hashes:
+runner_sha256/tool_sha256 attest the measurement-tool version and
+valgrind_version attests the cachegrind provider, and mismatches in either
+are rejected as incomparable rather than gated.
 
 Only CPU-bound scenarios are gated: rows where the Execute arm is dominated by
 interpreter work rather than child processes or filesystem traffic, so the
@@ -105,7 +111,7 @@ def evaluate(baseline, candidate, max_regression=MAX_REGRESSION, *,
             value = baseline_meta.get(field)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"baseline lacks verified provenance: {field} is missing")
-    for field in ("runner_sha256", "instruction_repeats"):
+    for field in ("runner_sha256", "tool_sha256", "instruction_repeats"):
         before = baseline_meta.get(field)
         after = candidate_meta.get(field)
         if before is not None and after is not None and before != after:
@@ -114,6 +120,17 @@ def evaluate(baseline, candidate, max_regression=MAX_REGRESSION, *,
             )
     before_backend = baseline_meta.get("instructions_backend")
     after_backend = candidate_meta.get("instructions_backend")
+    before_valgrind = baseline_meta.get("valgrind_version")
+    after_valgrind = candidate_meta.get("valgrind_version")
+    if before_backend == "cachegrind" or after_backend == "cachegrind":
+        if before_valgrind != after_valgrind:
+            raise ValueError(
+                f"baseline/candidate valgrind_version differ: "
+                f"{before_valgrind!r} != {after_valgrind!r} "
+                f"(cachegrind I refs are provider-specific; different valgrind "
+                f"versions, or a pre-tool baseline without a recorded version, "
+                f"are incomparable, never assumed equal)"
+            )
     if before_backend != after_backend:
         raise ValueError(
             f"baseline/candidate instructions_backend differ: "
@@ -295,7 +312,9 @@ def main(argv=None):
     parser.add_argument(
         "--require-provenance",
         action="store_true",
-        help="require the baseline to record execute_sha256 and runner_sha256",
+        help="require the baseline to record execute_sha256 and runner_sha256 "
+             "(the measurement-tool hash; tool/valgrind mismatches are always "
+             "compared, provenance or not)",
     )
     args = parser.parse_args(argv)
     if args.canary is not None:

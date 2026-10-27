@@ -678,5 +678,148 @@ class SameRunnerPairTests(unittest.TestCase):
         self.assertEqual(sorted(failures), sorted(self.GATED_KEYS))
 
 
+class ToolComparabilityTests(unittest.TestCase):
+    """A tool-only change must read as incomparable, never as green or red.
+
+    Both gate reports are measured with the same head-revision tool, so a
+    matching tool hash and valgrind version pass while any drift -- including
+    a pre-tool baseline that records neither -- fails the job instead of
+    passing silently or reporting a phantom regression.
+    """
+
+    GATED_KEYS = SameRunnerPairTests.GATED_KEYS
+    COUNTS = SameRunnerPairTests.COUNTS
+
+    def extras(self, **overrides):
+        extra = {
+            "instructions_backend": "cachegrind",
+            "instruction_repeats": 2,
+            "execute_sha256": "exe",
+            "runner_sha256": "tool-v1",
+            "tool_sha256": "tool-v1",
+            "valgrind_version": "valgrind-3.24.0",
+        }
+        extra.update(overrides)
+        return extra
+
+    def pair(self, base_extra, head_extra):
+        baseline = report("a" * 40,
+                          {key: self.COUNTS[key] for key in self.GATED_KEYS},
+                          keys=self.GATED_KEYS, extra=base_extra)
+        candidate = report("b" * 40,
+                           {key: self.COUNTS[key] for key in self.GATED_KEYS},
+                           keys=self.GATED_KEYS, extra=head_extra)
+        return baseline, candidate
+
+    def test_matching_tool_and_valgrind_pass(self):
+        baseline, candidate = self.pair(self.extras(), self.extras())
+        _, failures, skipped = gate.evaluate(
+            baseline, candidate, fail_closed=True, require_provenance=True)
+        self.assertEqual(failures, [])
+        self.assertEqual(skipped, [])
+
+    def test_runner_hash_mismatch_is_incomparable(self):
+        baseline, candidate = self.pair(
+            self.extras(), self.extras(runner_sha256="tool-v2"))
+        with self.assertRaisesRegex(ValueError, "runner_sha256"):
+            gate.evaluate(baseline, candidate)
+
+    def test_tool_hash_mismatch_is_incomparable(self):
+        baseline, candidate = self.pair(
+            self.extras(), self.extras(tool_sha256="tool-v2"))
+        with self.assertRaisesRegex(ValueError, "tool_sha256"):
+            gate.evaluate(baseline, candidate)
+
+    def test_valgrind_mismatch_is_incomparable(self):
+        baseline, candidate = self.pair(
+            self.extras(), self.extras(valgrind_version="valgrind-3.25.0"))
+        with self.assertRaisesRegex(ValueError, "valgrind_version"):
+            gate.evaluate(baseline, candidate)
+
+    def test_pre_tool_baseline_without_valgrind_is_incomparable(self):
+        base = self.extras()
+        del base["valgrind_version"]
+        baseline, candidate = self.pair(base, self.extras())
+        with self.assertRaisesRegex(ValueError, "valgrind_version"):
+            gate.evaluate(baseline, candidate)
+
+    def test_pre_tool_baseline_without_backend_is_incomparable(self):
+        base = self.extras()
+        del base["instructions_backend"]
+        baseline, candidate = self.pair(base, self.extras())
+        with self.assertRaisesRegex(ValueError, "instructions_backend"):
+            gate.evaluate(baseline, candidate)
+
+    def test_pre_tool_baseline_without_provenance_fails_closed(self):
+        baseline = full_report(
+            "a" * 40, {"builtin_loop": 1_000_000}, ("builtin_loop",))
+        candidate = full_report(
+            "b" * 40, {"builtin_loop": 1_000_000}, ("builtin_loop",))
+        with self.assertRaisesRegex(ValueError, "verified provenance"):
+            gate.evaluate(baseline, candidate, require_provenance=True)
+
+
+class WorkflowPinTests(unittest.TestCase):
+    """Action pins stay full-length SHAs; unrelated pin churn is a risk."""
+
+    WORKFLOW = ROOT / ".github" / "workflows" / "bash-compare.yml"
+
+    def test_all_action_pins_are_full_length_hex(self):
+        import re
+
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        pins = re.findall(r"@([0-9a-f]+)", text)
+        self.assertTrue(pins, "expected pinned actions in bash-compare.yml")
+        for pin in pins:
+            self.assertEqual(len(pin), 40, f"truncated action pin: {pin!r}")
+
+    def test_restored_pins_match_the_reviewed_revisions(self):
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249",
+            text,
+        )
+        self.assertIn(
+            "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+            text,
+        )
+
+
+class MeasurementToolTests(unittest.TestCase):
+    def test_valgrind_version_returns_none_without_valgrind(self):
+        with patch.object(bash_compare.shutil, "which", return_value=None):
+            self.assertIsNone(bash_compare.valgrind_version())
+
+    def test_valgrind_version_reports_the_provider_verbatim(self):
+        with patch.object(bash_compare.shutil, "which",
+                          return_value="/usr/bin/valgrind"):
+            with patch.object(
+                bash_compare.subprocess, "run",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, "valgrind-3.24.0\n", ""),
+            ):
+                self.assertEqual(
+                    bash_compare.valgrind_version(), "valgrind-3.24.0")
+
+    def test_valgrind_version_returns_none_on_probe_failure(self):
+        with patch.object(bash_compare.shutil, "which",
+                          return_value="/usr/bin/valgrind"):
+            with patch.object(
+                bash_compare.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 1, "", ""),
+            ):
+                self.assertIsNone(bash_compare.valgrind_version())
+
+    def test_source_revision_flag_exists_for_cross_checkout_measurement(self):
+        import contextlib
+        import io
+
+        stdout = io.StringIO()
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stdout(stdout):
+                bash_compare.main(["--help"])
+        self.assertIn("--source-revision", stdout.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

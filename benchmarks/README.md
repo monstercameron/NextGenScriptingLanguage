@@ -40,7 +40,10 @@ available, and binary sizes. A separate gate pair then builds two distinct
 binaries on the same runner -- the baseline at the base revision and the
 candidate at the head revision -- and measures the eight gated CPU-bound
 scenarios once per build, back-to-back, pinned to cachegrind
-(`I refs` via valgrind, which needs no PMU); each focused report prints its
+(`I refs` via valgrind, which needs no PMU), both with the head-revision
+tool so a base predating newer flags still gates and both reports share one
+tool hash (`--source-revision` stamps each report with its built revision);
+each focused report prints its
 own table with real per-scenario instruction counts, the producing backend,
 counter diagnostics, and coverage. `tools/check_instruction_regression.py`
 defines the +2% gate for the CPU-bound rows: CI runs it fail-closed with
@@ -51,7 +54,8 @@ is live but is not itself a regression gate. An inconclusive canary or an
 incomplete pair fails the job; there is no incomplete-green. Baselines are
 backend-specific (perf and cachegrind counts are different units; the gate
 rejects any backend mismatch, including a missing backend against a recorded
-one). Revisions come from `tools/resolve_gate_revisions.py` (pull-request
+one; a tool-hash or valgrind-version mismatch is likewise incomparable,
+never green). Revisions come from `tools/resolve_gate_revisions.py` (pull-request
 base/head SHAs; push before/sha with a HEAD~1 fallback for a zero before;
 dispatch inputs or HEAD~1 versus HEAD). Measurement budgets are unchanged from
 the former same-binary pair (3 runs, no warmup, 2 instruction samples per arm,

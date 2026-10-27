@@ -38,10 +38,10 @@ jobs:
           # The instruction gate compares the PR base against the PR head (or
           # before against sha on push), so both commits must be present.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@686976e191b89faba5713205c55f1f0f3308cb29 # stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59f2b # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.variant }}
       - run: sudo apt-get install -y --no-install-recommends time strace musl-tools valgrind
@@ -57,15 +57,14 @@ jobs:
         run: python3 -m unittest tests/test_resolve_gate_revisions.py -v
       - name: Resolve gate revisions
         id: gate-revs
-        env:
-          BASE_INPUT: ${{ inputs.base_sha }}
-          HEAD_INPUT: ${{ inputs.head_sha }}
+        # Revisions come from the event payload via the resolver (PR
+        # base/head, push before/sha with a HEAD~1 fallback, dispatch inputs
+        # or HEAD~1 versus HEAD). The `inputs` context only exists on
+        # workflow_dispatch, so this step deliberately avoids it here; manual
+        # reruns pass base_sha/head_sha as dispatch inputs instead.
         run: |
           set -e
-          args=(--event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --sha "$GITHUB_SHA")
-          if [ -n "$BASE_INPUT" ]; then args+=(--base-input "$BASE_INPUT"); fi
-          if [ -n "$HEAD_INPUT" ]; then args+=(--head-input "$HEAD_INPUT"); fi
-          python3 tools/resolve_gate_revisions.py "${args[@]}" | tee "$RUNNER_TEMP/gate-revs.txt"
+          python3 tools/resolve_gate_revisions.py --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --sha "$GITHUB_SHA" | tee "$RUNNER_TEMP/gate-revs.txt"
           base="$(sed -n 's/^BASE_SHA=//p' "$RUNNER_TEMP/gate-revs.txt")"
           head="$(sed -n 's/^HEAD_SHA=//p' "$RUNNER_TEMP/gate-revs.txt")"
           if [ -z "$base" ] || [ -z "$head" ] || [ "$base" = "$head" ]; then
@@ -80,21 +79,30 @@ jobs:
           HEAD_SHA: ${{ steps.gate-revs.outputs.head_sha }}
         run: |
           set -e
-          # Best effort: a full checkout already carries both commits on most
-          # events; the pull head ref covers forks.
-          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || true
+          # A full checkout already carries both commits on most events, but
+          # fetch them explicitly so a shallow or partial checkout still
+          # gates the right pair. These fetches are required: failures exit
+          # non-zero with the missing SHA named, never masked. Only the
+          # fork-head ref below is best-effort (same-origin PRs already have
+          # it), and PRs gate the head SHA -- the merge commit that lands is
+          # the head merged with its current base, so rebase/merge drift
+          # after the run is out of scope for this per-commit signal.
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || { echo "error: cannot fetch gate revisions $BASE_SHA $HEAD_SHA" >&2; exit 2; }
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "${{ github.event.pull_request.number }}" ]; then
             git fetch --no-tags origin "pull/${{ github.event.pull_request.number }}/head:refs/remotes/pull/${{ github.event.pull_request.number }}/head" || true
           fi
-          git cat-file -e "$BASE_SHA^{commit}"
-          git cat-file -e "$HEAD_SHA^{commit}"
+          git cat-file -e "$BASE_SHA^{commit}" || { echo "error: base revision $BASE_SHA is not a commit" >&2; exit 2; }
+          git cat-file -e "$HEAD_SHA^{commit}" || { echo "error: head revision $HEAD_SHA is not a commit" >&2; exit 2; }
           [ "$BASE_SHA" != "$HEAD_SHA" ]
-      - name: Build baseline and measure its instructions
+      - name: Build baseline binary
         env:
           VARIANT: ${{ matrix.variant }}
           BASE_SHA: ${{ steps.gate-revs.outputs.base_sha }}
         run: |
           set -e
+          # Build only: measuring happens below with the head-revision tool
+          # so a base predating newer measurement flags still gates, and both
+          # reports share one tool hash.
           git checkout --quiet "$BASE_SHA"
           musl="$(uname -m)-unknown-linux-musl"
           case "$VARIANT" in
@@ -107,10 +115,6 @@ jobs:
           esac
           cp "$bin" "$RUNNER_TEMP/execute-base"
           echo "EXECUTE_BASE=$RUNNER_TEMP/execute-base" >> "$GITHUB_ENV"
-          opts="--manifest-dir manifests --max-runtime-seconds 285 --runs 3 --warmup 0 --instruction-repeats 2 --instructions-backend cachegrind"
-          only="--only builtin_loop --only text_upper --only json_get --only csv_parse --only read_10k_lines --only suffix_strip --only here_string --only text_substitution"
-          # shellcheck disable=SC2086
-          python3 tools/bash_compare.py "$RUNNER_TEMP/execute-base" $opts $only --json-out target/instructions-baseline.json
       - name: Build candidate
         env:
           VARIANT: ${{ matrix.variant }}
@@ -154,25 +158,29 @@ jobs:
           LD_DEBUG=statistics "${program[@]}" 2>&1 | head -n 20
           strace -f -c -o "$RUNNER_TEMP/bash-count.txt" bash --norc --noprofile -c :
           tail -n 4 "$RUNNER_TEMP/bash-count.txt"
-      - name: Measure candidate instructions (same-runner gate pair)
+      - name: Measure baseline and candidate instructions (same-tool gate pair)
         timeout-minutes: 10
         env:
+          BASE_SHA: ${{ steps.gate-revs.outputs.base_sha }}
           HEAD_SHA: ${{ steps.gate-revs.outputs.head_sha }}
         run: |
           set -e
           git checkout --quiet "$HEAD_SHA"
-          # Focused instruction run over the eight gated CPU-bound scenarios
+          # Focused instruction runs over the eight gated CPU-bound scenarios
           # only, pinned to cachegrind: deterministic counts from its virtual
-          # CPU with no PMU or privileges required on hosted runners. The
-          # baseline report above and this candidate report form the gate pair:
-          # two distinct builds (base versus head) measured back-to-back on
-          # this same runner, so a regression verdict never depends on
-          # cross-runner numbers. Same 285-second budget and sample counts as
-          # the former same-binary pair.
+          # CPU with no PMU or privileges required on hosted runners. Both
+          # binaries are measured here with this (head-revision) tool, so a
+          # base predating newer flags still gates and both reports share one
+          # tool hash; --source-revision stamps each report with the built
+          # revision rather than HEAD. Two distinct builds measured
+          # back-to-back on this same runner, so a regression verdict never
+          # depends on cross-runner numbers.
           opts="--manifest-dir manifests --max-runtime-seconds 285 --runs 3 --warmup 0 --instruction-repeats 2 --instructions-backend cachegrind"
           only="--only builtin_loop --only text_upper --only json_get --only csv_parse --only read_10k_lines --only suffix_strip --only here_string --only text_substitution"
           # shellcheck disable=SC2086
-          python3 tools/bash_compare.py "$EXECUTE_HEAD" $opts $only --json-out target/instructions-candidate.json
+          python3 tools/bash_compare.py "$EXECUTE_BASE" $opts $only --source-revision "$BASE_SHA" --json-out target/instructions-baseline.json
+          # shellcheck disable=SC2086
+          python3 tools/bash_compare.py "$EXECUTE_HEAD" $opts $only --source-revision "$HEAD_SHA" --json-out target/instructions-candidate.json
       - name: Gate CPU-bound instructions (base versus head, fail-closed)
         env:
           BASE_SHA: ${{ steps.gate-revs.outputs.base_sha }}
@@ -184,7 +192,8 @@ jobs:
           # +2%. The canary then only proves the wired gate is live by failing
           # a synthetic +3% regression on the real candidate report (exit 0
           # means caught); the canary alone is not a regression gate. Exit 2
-          # (unresolved revisions, no gated counts, incomparable backends) is
+          # (unresolved revisions, no gated counts, incomparable backends,
+          # tool-hash or valgrind-version mismatches) is
           # a job failure, never acceptance green.
           set -e
           echo "Gate pair: baseline $BASE_SHA versus candidate $HEAD_SHA"

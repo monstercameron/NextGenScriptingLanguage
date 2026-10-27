@@ -9,7 +9,10 @@ working counter the median instruction count next to wall time: hardware user
 instructions (`instructions:u`) via perf when available, otherwise executed
 instructions (`I refs`) via cachegrind when valgrind is present and explicitly or
 automatically selected. The report records which backend produced the counts plus
-counter diagnostics, because baselines are backend-specific. The report ends with
+counter diagnostics, the measurement-tool hash, and the valgrind provider
+version, because baselines are backend-specific. `--source-revision` overrides
+the recorded revision when the measured binary was built from a different
+checkout than the tool. The report ends with
 the size of each binary.
 Bash runs with `--norc --noprofile`; nothing is cached between runs except what
 the OS caches for both.
@@ -613,6 +616,29 @@ def parse_cachegrind_instructions(output):
     return None
 
 
+def valgrind_version(binary=None):
+    """Return `valgrind --version` output, or None when valgrind is absent.
+
+    Recorded verbatim in report metadata so the regression gate can reject
+    cross-version cachegrind pairs as incomparable rather than gating on
+    numbers produced by different virtual CPUs.
+    """
+    candidate = binary or shutil.which("valgrind")
+    if not candidate:
+        return None
+    try:
+        probe = subprocess.run(
+            [candidate, "--version"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if probe.returncode != 0:
+        return None
+    version = (probe.stdout.strip() or probe.stderr.strip())
+    return version or None
+
+
 def cachegrind_stat():
     """Return a valgrind binary that can count instructions, or None.
 
@@ -848,6 +874,11 @@ def main(argv=None):
                              "then no counters; an explicit backend never falls through (default: auto)")
     parser.add_argument("--instruction-repeats", type=int, default=3,
                         help="instruction samples per arm (default: 3)")
+    parser.add_argument("--source-revision", default=None,
+                        help="override the source_revision recorded in metadata "
+                             "(default: git rev-parse HEAD; pass the built "
+                             "revision when measuring a binary built from a "
+                             "different checkout with this tool version)")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--only", action="append", help="run only these scenario keys")
@@ -1011,18 +1042,24 @@ def main(argv=None):
                 manifest_location = str(args.manifest_dir.resolve().relative_to(Path.cwd().resolve()))
             except ValueError:
                 manifest_location = "external"
-        source_revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=Path.cwd(), capture_output=True,
-            text=True, check=False,
-        )
-        source_revision = source_revision.stdout.strip() if source_revision.returncode == 0 else None
+        if args.source_revision:
+            source_revision = args.source_revision
+        else:
+            source_revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=Path.cwd(), capture_output=True,
+                text=True, check=False,
+            )
+            source_revision = source_revision.stdout.strip() if source_revision.returncode == 0 else None
+        tool_digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         metadata = {
             "source_revision": source_revision,
             "platform": platform.platform(),
             "machine": platform.machine(),
             "python": platform.python_version(),
             "execute_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
-            "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "runner_sha256": tool_digest,
+            "tool_sha256": tool_digest,
+            "valgrind_version": valgrind_version(cachegrind_binary) if selected_backend == "cachegrind" else None,
             "manifest_dir": manifest_location,
             "time_binary": args.time,
             "perf_binary": perf_binary,

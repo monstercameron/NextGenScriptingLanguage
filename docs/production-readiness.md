@@ -221,9 +221,13 @@ medians or spends its budget; its instruction columns report `-` by design.
 Instruction counts come from a dedicated gate pair: the eight gated CPU-bound
 scenarios measured once per build, back-to-back on the same runner (3 runs, no
 warmup, 2 instruction samples), pinned to cachegrind (`I refs` via valgrind,
-which needs no PMU). Each focused report records which backend produced the
+which needs no PMU), both with the head-revision tool so a base predating
+newer flags still gates and both reports share one tool hash
+(`--source-revision` stamps each report with its built revision). Each focused
+report records which backend produced the
 counts plus one-line counter diagnostics (kernel `perf_event_paranoid` level,
-perf/valgrind probe outcomes), and the log and step
+perf/valgrind probe outcomes), the measurement-tool hash, and the
+`valgrind --version` provider string, and the log and step
 summary state how many execute arms report counts. Every child has a
 30-second timeout and the harness stops at a 285-second end-to-end budget (hard maximum
 300 seconds).
@@ -264,7 +268,10 @@ overhead for the two focused runs against their shared 10-minute step timeout
 is unchanged), behavior on static musl binaries, and the doubled build cost of
 compiling both revisions per matrix variant. The gate rejects any backend
 mismatch (including a missing backend against a recorded one) as incomparable
-units, and likewise rejects differing runner scripts or sample counts.
+units, and likewise rejects a differing measurement-tool hash, a differing
+`valgrind --version`, or differing sample counts. Same-runner is procedural
+(one job measures both binaries); the hashes attest the tool and provider,
+not the runner identity.
 What it does not show. The pairs use each runtime's natural operation, so they compare
 jobs rather than isolating interpreter overhead. The runners are shared machines, files
 are warm in the page cache, and wall-time point estimates stay noisy; use the retained

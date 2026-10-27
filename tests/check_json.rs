@@ -605,6 +605,7 @@ fn called_file_diagnostics_keep_their_own_source_and_call_site() {
     let diagnostic = &result["diagnostics"][0];
     assert_eq!(diagnostic["code"], "check.undefined_name");
     assert_eq!(diagnostic["span"]["path"], root.path().join("sub/child.program").canonicalize().unwrap().display().to_string());
+    assert_eq!(diagnostic["span"]["path_bytes"], json!(root.path().join("sub/child.program").canonicalize().unwrap().as_os_str().as_encoded_bytes()));
     assert_eq!(diagnostic["span"]["line"], 2);
     assert_eq!(diagnostic["span"]["precision"], "token");
     assert!(diagnostic["message"].as_str().unwrap().contains("did you mean \"theme\""));

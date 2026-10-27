@@ -623,6 +623,8 @@ fn analyze_source_impl(
                 &mut diagnostics,
             );
             if let Some(parent_path) = path {
+                #[cfg(feature = "lsp")]
+                let replay_scope = scope.map(|scope| scope.replay());
                 let mut calls = Vec::new();
                 collect_file_calls(&program.steps, &mut calls);
                 for (name, definition) in &program.definitions {
@@ -642,13 +644,23 @@ fn analyze_source_impl(
                     else {
                         continue;
                     };
-                    let Ok(child_path) = std::fs::canonicalize(child_path) else {
-                        continue;
+                    #[cfg(feature = "lsp")]
+                    let child_source = if let Some(scope) = scope {
+                        scope.loaded_source(&child_path)
+                    } else {
+                        std::fs::read_to_string(&child_path).ok()
                     };
-                    let Ok(child_source) = std::fs::read_to_string(&child_path) else {
-                        continue;
-                    };
-                    let mut child = analyze_source_at(&child_source, Some(&child_path), registry);
+                    #[cfg(not(feature = "lsp"))]
+                    let child_source = std::fs::read_to_string(&child_path).ok();
+                    let Some(child_source) = child_source else { continue; };
+                    let mut child = analyze_child_source(
+                        &child_source,
+                        &child_path,
+                        registry,
+                        #[cfg(feature = "lsp")]
+                        replay_scope.as_ref(),
+                    );
+                    let parent_path = diagnostic_source_path(parent_path);
                     let mut callsite = line_starts.span(source, *line);
                     callsite.path = Some(parent_path.display().to_string());
                     callsite.path_bytes = Some(parent_path.as_os_str().as_encoded_bytes().to_vec());
@@ -664,6 +676,8 @@ fn analyze_source_impl(
         }
         Err(error) => {
             let message = format!("{error:#}");
+            #[cfg(feature = "lsp")]
+            let replay_scope = scope.map(|scope| scope.replay());
             if let Some(path_text) = message
                 .split_once("called program file ")
                 .and_then(|(_, tail)| {
@@ -672,10 +686,20 @@ fn analyze_source_impl(
                 })
             {
                 let child_path = std::path::PathBuf::from(path_text);
-                if let (Some(parent_path), Ok(child_source)) =
-                    (path, std::fs::read_to_string(&child_path))
-                {
-                    let mut child = analyze_source_at(&child_source, Some(&child_path), registry);
+                #[cfg(feature = "lsp")]
+                let child_source = scope
+                    .and_then(|scope| scope.loaded_source(&child_path))
+                    .or_else(|| scope.is_none().then(|| std::fs::read_to_string(&child_path).ok()).flatten());
+                #[cfg(not(feature = "lsp"))]
+                let child_source = std::fs::read_to_string(&child_path).ok();
+                if let (Some(parent_path), Some(child_source)) = (path, child_source) {
+                    let mut child = analyze_child_source(
+                        &child_source,
+                        &child_path,
+                        registry,
+                        #[cfg(feature = "lsp")]
+                        replay_scope.as_ref(),
+                    );
                     let name = child_path
                         .file_name()
                         .and_then(|name| name.to_str())
@@ -685,6 +709,7 @@ fn analyze_source_impl(
                         .position(|line| line.contains(name))
                         .map_or(1, |line| line + 1);
                     let mut callsite = line_starts.span(source, call_line);
+                    let parent_path = diagnostic_source_path(parent_path);
                     callsite.path = Some(parent_path.display().to_string());
                     callsite.path_bytes = Some(parent_path.as_os_str().as_encoded_bytes().to_vec());
                     for diagnostic in &mut child {
@@ -723,6 +748,7 @@ fn analyze_source_impl(
         ))
     });
     if let Some(path) = path {
+        let path = diagnostic_source_path(path);
         let display = path.display().to_string();
         let bytes = path.as_os_str().as_encoded_bytes().to_vec();
         for diagnostic in &mut diagnostics {
@@ -2614,6 +2640,24 @@ fn collect_resolve_calls<'a>(
         }
         index += 1;
     }
+}
+fn analyze_child_source(
+    source: &str,
+    path: &std::path::Path,
+    registry: &Registry,
+    #[cfg(feature = "lsp")] scope: Option<&crate::program_files::SourceScope<'_>>,
+) -> Vec<Diagnostic> {
+    analyze_source_impl(
+        source,
+        Some(path),
+        registry,
+        #[cfg(feature = "lsp")]
+        scope,
+    )
+}
+
+fn diagnostic_source_path(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {

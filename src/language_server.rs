@@ -564,7 +564,9 @@ fn diagnostics_with_overlays<'a>(
     let root = path.as_deref().and_then(|path| workspace.root_for(path));
     let scope = root
         .as_ref()
-        .map(|root| crate::program_files::SourceScope::new(root, open_documents));
+        .map(|root| {
+            crate::program_files::SourceScope::new(root, open_documents).with_source_snapshots()
+        });
     let usable_path = if scope.is_some() {
         path.as_deref()
     } else {
@@ -599,6 +601,7 @@ fn publish_affected_diagnostics<W: Write>(
     changed_uri: Option<&str>,
 ) -> Result<()> {
     let open_documents = open_document_overlays(documents);
+    let mut outgoing = BTreeMap::<String, Vec<Diagnostic>>::new();
     for (uri, document) in documents {
         // Any file call, including a transitive one, contains these literal words.
         // This is a conservative filter; comments can cause harmless extra checks.
@@ -607,12 +610,71 @@ fn publish_affected_diagnostics<W: Write>(
         {
             continue;
         }
-        let positions = SourcePositions::new(&document.text);
-        let diagnostics =
+        outgoing.entry(uri.clone()).or_default();
+        for diagnostic in
             diagnostics_with_overlays(uri, documents, workspace, registry, &open_documents)
-                .into_iter()
-                .map(|diagnostic| lsp_diagnostic(&document.text, &positions, diagnostic))
-                .collect::<Vec<_>>();
+        {
+            let diagnostic_path = diagnostic
+                .span
+                .path
+                .as_deref()
+                .map(PathBuf::from);
+            let destination = diagnostic_path
+                .as_deref()
+                .and_then(|path| uri_for_source_path(path, documents))
+                .cloned();
+            let destination = if let Some(destination) = destination {
+                destination
+            } else {
+                if diagnostic_path.is_some() {
+                    if let Some(callsite) = diagnostic.related.iter().find(|related| {
+                        related
+                            .span
+                            .path
+                            .as_deref()
+                            .and_then(|path| uri_for_source_path(Path::new(path), documents))
+                            .is_some_and(|source_uri| source_uri == uri)
+                    }) {
+                        diagnostic.span = callsite.span.clone();
+                    }
+                }
+                uri.clone()
+            };
+            outgoing.entry(destination).or_default().push(diagnostic);
+        }
+    }
+    for (uri, diagnostics) in outgoing {
+        let Some(document) = documents.get(&uri) else {
+            continue;
+        };
+        let positions = SourcePositions::new(&document.text);
+        let mut merged = Vec::<Diagnostic>::new();
+        for diagnostic in diagnostics {
+            if let Some(existing) = merged.iter_mut().find(|existing| {
+                existing.code == diagnostic.code
+                    && existing.message == diagnostic.message
+                    && existing.span.path == diagnostic.span.path
+                    && existing.span.start_byte == diagnostic.span.start_byte
+                    && existing.span.end_byte == diagnostic.span.end_byte
+            }) {
+                if existing.related.is_empty() {
+                    existing.related = diagnostic.related;
+                }
+            } else {
+                merged.push(diagnostic);
+            }
+        }
+        let diagnostics = merged
+            .into_iter()
+            .map(|diagnostic| {
+                lsp_diagnostic_with_documents(
+                    &document.text,
+                    &positions,
+                    diagnostic,
+                    documents,
+                )
+            })
+            .collect::<Vec<_>>();
         let mut params = json!({ "uri": uri, "diagnostics": diagnostics });
         if let Some(version) = document.version {
             params["version"] = version.into();
@@ -622,8 +684,47 @@ fn publish_affected_diagnostics<W: Write>(
     Ok(())
 }
 
+fn uri_for_source_path<'a>(
+    path: &Path,
+    documents: &'a BTreeMap<String, Document>,
+) -> Option<&'a String> {
+    documents.keys().find(|uri| {
+        let Some(document_path) = local_file_path(uri) else {
+            return false;
+        };
+        let candidate = fs::canonicalize(&document_path).unwrap_or(document_path);
+        candidate == path
+    })
+}
+
 fn lsp_diagnostic(source: &str, positions: &SourcePositions, diagnostic: Diagnostic) -> JsonValue {
-    json!({
+    lsp_diagnostic_with_documents(source, positions, diagnostic, &BTreeMap::new())
+}
+
+fn lsp_diagnostic_with_documents(
+    source: &str,
+    positions: &SourcePositions,
+    diagnostic: Diagnostic,
+    documents: &BTreeMap<String, Document>,
+) -> JsonValue {
+    let related = diagnostic
+        .related
+        .iter()
+        .filter_map(|related| {
+            let path = related.span.path.as_deref()?;
+            let uri = uri_for_source_path(Path::new(path), documents)?;
+            let related_source = &documents.get(uri)?.text;
+            let related_positions = SourcePositions::new(related_source);
+            Some(json!({
+                "location": {
+                    "uri": uri,
+                    "range": related_positions.range(related_source, related.span.start_byte, related.span.end_byte)
+                },
+                "message": related.message
+            }))
+        })
+        .collect::<Vec<_>>();
+    let mut result = json!({
         "range": positions.range(source, diagnostic.span.start_byte, diagnostic.span.end_byte),
         "severity": match diagnostic.severity {
             crate::diagnostics::DiagnosticSeverity::Error => 1,
@@ -635,7 +736,11 @@ fn lsp_diagnostic(source: &str, positions: &SourcePositions, diagnostic: Diagnos
         "source": "execute",
         "message": diagnostic.message,
         "data": { "span_precision": diagnostic.span.precision }
-    })
+    });
+    if !related.is_empty() {
+        result["relatedInformation"] = json!(related);
+    }
+    result
 }
 
 fn apply_content_changes(document: &mut Document, params: &JsonValue) -> Result<()> {
@@ -731,9 +836,8 @@ fn code_actions(
         Some((start, end))
     });
     let mut actions = Vec::new();
-    // File-call diagnostics currently do not identify the callee in edit spans (#474).
-    // Keep quick fixes on pathless caller-only analysis so a callee diagnostic cannot
-    // accidentally edit a matching line in the caller.
+    // Recompute fixes for this document's own text; a callee fix is therefore
+    // translated against the callee document rather than a caller's offsets.
     for diagnostic in analyze_source(source, registry) {
         if diagnostic.fixes.is_empty() {
             continue;
@@ -1725,6 +1829,155 @@ mod tests {
             &Registry::default(),
         );
         assert!(fixed.is_empty(), "{fixed:#?}");
+    }
+
+    #[test]
+    fn called_file_diagnostic_uses_unsaved_overlay_and_callee_coordinates() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = dir.path().join("callee.program");
+        let caller_text = "run program file \"callee.program\"\n";
+        let disk_text = "accept theme as text\nrun \"printf\" with arguments [\"ok\"]\n";
+        let overlay_text = "accept theme as text\nrun \"printf\" with arguments [them]\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, disk_text).unwrap();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            caller_uri.clone(),
+            Document {
+                text: caller_text.into(),
+                version: Some(1),
+            },
+        );
+        documents.insert(
+            callee_uri,
+            Document {
+                text: overlay_text.into(),
+                version: Some(2),
+            },
+        );
+        let diagnostics = diagnostics_for_document(
+            &caller_uri,
+            &documents,
+            &Workspace::default(),
+            &Registry::default(),
+        );
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "check.undefined_name")
+            .expect("the unsaved callee typo is reported");
+        assert_eq!(diagnostic.span.path.as_deref(), Some(callee.canonicalize().unwrap().to_str().unwrap()));
+        assert_eq!(diagnostic.span.line, 2);
+        assert_eq!(diagnostic.span.precision, crate::diagnostics::SpanPrecision::Token);
+        assert!(diagnostic.message.contains("did you mean \"theme\""));
+        assert_eq!(diagnostic.related[0].span.path.as_deref(), Some(caller.canonicalize().unwrap().to_str().unwrap()));
+        assert_eq!(diagnostic.related[0].span.line, 1);
+    }
+
+    #[test]
+    fn open_callee_receives_its_diagnostics_with_the_caller_as_related_information() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = dir.path().join("caller.program");
+        let callee = dir.path().join("callee.program");
+        let caller_text = "run program file \"callee.program\"\n";
+        let callee_disk = "accept theme as text\nrun \"printf\" with arguments [\"ok\"]\n";
+        let callee_overlay = "accept theme as text\nrun \"printf\" with arguments [them]\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, callee_disk).unwrap();
+        let root_uri = url::Url::from_directory_path(dir.path()).unwrap().to_string();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({ "rootUri": root_uri, "capabilities": {} }),
+        ));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {"textDocument": {"uri": caller_uri, "version": 1, "text": caller_text}}
+        })));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {"textDocument": {"uri": callee_uri, "version": 1, "text": callee_overlay}}
+        })));
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({"jsonrpc": "2.0", "method": "exit"})));
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let caller_publish = messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == caller_uri
+            })
+            .unwrap();
+        assert!(caller_publish["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|diagnostic| diagnostic["code"] != "check.undefined_name"));
+        let callee_publish = messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == callee_uri
+            })
+            .unwrap();
+        let diagnostic = callee_publish["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "check.undefined_name")
+            .expect("the callee receives its own diagnostic");
+        assert_eq!(diagnostic["range"]["start"]["line"], 1);
+        assert_eq!(diagnostic["relatedInformation"][0]["location"]["uri"], caller_uri);
+        assert_eq!(diagnostic["relatedInformation"][0]["location"]["range"]["start"]["line"], 0);
+    }
+
+    #[test]
+    fn replayed_file_diagnostics_use_the_original_loader_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let caller = root.join("caller.program");
+        let callee = root.join("callee.program");
+        let caller_text = "run program file \"callee.program\"\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(
+            &callee,
+            "accept theme as text\nrun \"printf\" with arguments [them]\n",
+        )
+        .unwrap();
+        let overlays = BTreeMap::new();
+        let scope = crate::program_files::SourceScope::new(&root, &overlays)
+            .with_source_snapshots();
+        let registry = Registry::default();
+        let access = crate::program_files::Access {
+            registry: &registry,
+            cwd: &root,
+        };
+        crate::program_files::parse_at_scoped(
+            caller_text,
+            Some(&caller),
+            Some(access),
+            Some(&scope),
+        )
+        .unwrap();
+        assert!(scope.loaded_source(&callee).is_some());
+        fs::remove_file(&callee).unwrap();
+        let replay = scope.replay();
+        let diagnostics = analyze_source_scoped(caller_text, Some(&caller), &registry, Some(&replay));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "check.undefined_name"
+                && diagnostic.span.path.as_deref() == callee.to_str()
+                && diagnostic.span.line == 2
+        }), "{diagnostics:#?}");
     }
 
     #[test]

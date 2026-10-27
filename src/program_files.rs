@@ -70,7 +70,9 @@ pub(crate) struct SourceScope<'a> {
     pub root: &'a Path,
     pub open_documents: &'a BTreeMap<PathBuf, &'a str>,
     loaded_sources: std::cell::RefCell<BTreeMap<PathBuf, String>>,
+    loaded_requests: std::cell::RefCell<BTreeMap<PathBuf, (PathBuf, String)>>,
     capture_sources: bool,
+    replay_only: bool,
 }
 
 #[cfg(feature = "lsp")]
@@ -80,7 +82,9 @@ impl<'a> SourceScope<'a> {
             root,
             open_documents,
             loaded_sources: std::cell::RefCell::new(BTreeMap::new()),
+            loaded_requests: std::cell::RefCell::new(BTreeMap::new()),
             capture_sources: false,
+            replay_only: false,
         }
     }
 
@@ -97,6 +101,36 @@ impl<'a> SourceScope<'a> {
     #[allow(dead_code)]
     pub(crate) fn loaded_source(&self, canonical: &Path) -> Option<String> {
         self.loaded_sources.borrow().get(canonical).cloned()
+    }
+
+    /// Sources captured during one load, suitable as overlays for subsequent
+    /// diagnostic passes that must use the same file contents.
+    pub(crate) fn loaded_sources(&self) -> BTreeMap<PathBuf, String> {
+        self.loaded_sources.borrow().clone()
+    }
+
+    pub(crate) fn replay(&self) -> Self {
+        Self {
+            root: self.root,
+            open_documents: self.open_documents,
+            loaded_sources: std::cell::RefCell::new(self.loaded_sources()),
+            loaded_requests: std::cell::RefCell::new(self.loaded_requests.borrow().clone()),
+            capture_sources: false,
+            replay_only: true,
+        }
+    }
+
+    fn replay_request(&self, requested: &Path) -> Option<(PathBuf, String)> {
+        self.loaded_requests.borrow().get(requested).cloned()
+    }
+
+    fn record_request(&self, requested: &Path, canonical: &Path, source: &str) {
+        if self.capture_sources {
+            self.loaded_requests.borrow_mut().insert(
+                requested.to_path_buf(),
+                (canonical.to_path_buf(), source.to_owned()),
+            );
+        }
     }
 }
 
@@ -144,6 +178,10 @@ pub(crate) fn parse_at_scoped<'a>(
 ) -> Result<Program> {
     match path {
         Some(path) => {
+            #[cfg(feature = "lsp")]
+            if let Some(scope) = scope.filter(|scope| scope.replay_only) {
+                return parse_source_resolved_inner(path, source, access, Some(scope));
+            }
             let canonical =
                 fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))?;
             parse_source_resolved_inner(&canonical, source, access, scope)
@@ -196,6 +234,19 @@ impl Loader<'_> {
         let access = self.access.context(
             "run program file needs the program's capability policy to authorize its read; this entry point cannot load it",
         )?;
+        #[cfg(feature = "lsp")]
+        let replayed = self.scope.and_then(|scope| scope.replay_request(path));
+        #[cfg(feature = "lsp")]
+        if self.scope.is_some_and(|scope| scope.replay_only) && replayed.is_none() {
+            bail!("line {line}: no captured source snapshot exists for called program file {}", path.display());
+        }
+        #[cfg(feature = "lsp")]
+        let canonical = match &replayed {
+            Some((canonical, _)) => canonical.clone(),
+            None => fs::canonicalize(path)
+                .with_context(|| format!("line {line}: program file {} not found", path.display()))?,
+        };
+        #[cfg(not(feature = "lsp"))]
         let canonical = fs::canonicalize(path)
             .with_context(|| format!("line {line}: program file {} not found", path.display()))?;
         let shown = display_path(&canonical);
@@ -227,15 +278,24 @@ impl Loader<'_> {
         if self.called.len() >= MAX_CALLED_FILES {
             bail!("line {line}: a program may call at most {MAX_CALLED_FILES} program files");
         }
-        authorize_read(access, &canonical, &shown, line)?;
-        let disk_source = read_program_file(&canonical, &shown, line)?;
+        #[cfg(feature = "lsp")]
+        let disk_source = if let Some((_, source)) = &replayed {
+            source.clone()
+        } else {
+            authorize_read(access, &canonical, &shown, line)?;
+            read_program_file(&canonical, &shown, line)?
+        };
+        #[cfg(not(feature = "lsp"))]
+        let disk_source = {
+            authorize_read(access, &canonical, &shown, line)?;
+            read_program_file(&canonical, &shown, line)?
+        };
         #[cfg(not(feature = "lsp"))]
         let source = disk_source.as_str();
         #[cfg(feature = "lsp")]
-        let source = if let Some(edited) = self
-            .scope
-            .and_then(|scope| scope.open_documents.get(&canonical))
-        {
+        let source = if let Some((_, source)) = &replayed {
+            source.as_str()
+        } else if let Some(edited) = self.scope.and_then(|scope| scope.open_documents.get(&canonical)) {
             if edited.len() as u64 > MAX_PROGRAM_FILE_BYTES {
                 bail!("line {line}: program file {shown} is larger than 1 MiB");
             }
@@ -249,6 +309,7 @@ impl Loader<'_> {
                 .loaded_sources
                 .borrow_mut()
                 .insert(canonical.clone(), source.to_owned());
+            scope.record_request(path, &canonical, source);
         }
         let mut raw = parser::parse_raw(source).map_err(|error| {
             anyhow::anyhow!(

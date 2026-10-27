@@ -814,13 +814,45 @@ fn lsp_diagnostic_with_documents(
         .iter()
         .filter_map(|related| {
             let path = related.span.path.as_deref()?;
-            let uri = uri_for_source_path(Path::new(path), documents)?;
-            let related_source = &documents.get(uri)?.text;
-            let related_positions = SourcePositions::new(related_source);
+            let path = Path::new(path);
+            let (uri, range) = if let Some(uri) = uri_for_source_path(path, documents) {
+                let related_source = &documents.get(uri)?.text;
+                let related_positions = SourcePositions::new(related_source);
+                (
+                    uri.clone(),
+                    related_positions.range(
+                        related_source,
+                        related.span.start_byte,
+                        related.span.end_byte,
+                    ),
+                )
+            } else {
+                // Closed caller files are never reopened to publish related
+                // information. Use the URI and UTF-16 range captured while the
+                // authorized source snapshot was already in memory.
+                if related.span.path_bytes.as_deref() != Some(path.as_os_str().as_encoded_bytes()) {
+                    return None;
+                }
+                let uri = url::Url::from_file_path(path).ok()?.to_string();
+                let range = related.lsp_range?;
+                (
+                    uri,
+                    json!({
+                        "start": {
+                            "line": range.start_line,
+                            "character": range.start_character
+                        },
+                        "end": {
+                            "line": range.end_line,
+                            "character": range.end_character
+                        }
+                    }),
+                )
+            };
             Some(json!({
                 "location": {
                     "uri": uri,
-                    "range": related_positions.range(related_source, related.span.start_byte, related.span.end_byte)
+                    "range": range
                 },
                 "message": related.message
             }))
@@ -2184,6 +2216,71 @@ mod tests {
         assert_eq!(related.len(), 2, "{related:#?}");
         assert_eq!(related[0]["location"]["uri"], middle_uri);
         assert_eq!(related[1]["location"]["uri"], outer_uri);
+    }
+
+    #[test]
+    fn nested_callee_reports_closed_middle_callsite_with_captured_utf16_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let middle = dir.path().join("a-middle.program");
+        let leaf = dir.path().join("m-leaf.program");
+        let outer = dir.path().join("z-outer.program");
+        let middle_text = "run program file \"m-leaf.program\" # 🍎\n";
+        let leaf_text = "run \"printf\" with arguments [missing]\n";
+        let outer_text = "run program file \"a-middle.program\"\n";
+        fs::write(&middle, middle_text).unwrap();
+        fs::write(&leaf, leaf_text).unwrap();
+        fs::write(&outer, outer_text).unwrap();
+
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
+        let middle_uri = url::Url::from_file_path(fs::canonicalize(&middle).unwrap())
+            .unwrap()
+            .to_string();
+        let leaf_uri = url::Url::from_file_path(&leaf).unwrap().to_string();
+        let outer_uri = url::Url::from_file_path(&outer).unwrap().to_string();
+        let mut input = frame(request(
+            1,
+            "initialize",
+            json!({ "rootUri": root_uri, "capabilities": {} }),
+        ));
+        for (uri, text) in [(&leaf_uri, leaf_text), (&outer_uri, outer_text)] {
+            input.extend(frame(json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {"textDocument": {"uri": uri, "version": 1, "text": text}}
+            })));
+        }
+        input.extend(frame(request(2, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({"jsonrpc": "2.0", "method": "exit"})));
+
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        let leaf_publish = messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == leaf_uri
+            })
+            .expect("leaf diagnostics are published");
+        let diagnostic = leaf_publish["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "check.undefined_name")
+            .expect("leaf undefined-name diagnostic is routed to the leaf document");
+        let related = diagnostic["relatedInformation"].as_array().unwrap();
+        assert_eq!(related.len(), 2, "{related:#?}");
+        assert_eq!(related[0]["location"]["uri"], middle_uri);
+        assert_eq!(related[1]["location"]["uri"], outer_uri);
+        assert_eq!(related[0]["location"]["range"]["start"]["line"], 0);
+        assert_eq!(related[0]["location"]["range"]["start"]["character"], 0);
+        assert_eq!(
+            related[0]["location"]["range"]["end"]["character"],
+            middle_text.trim_end_matches('\n').encode_utf16().count()
+        );
     }
 
     #[cfg(unix)]

@@ -387,6 +387,21 @@ pub struct Diagnostic {
 pub struct RelatedInformation {
     pub message: String,
     pub span: SourceSpan,
+    /// The original source's UTF-16 range for LSP routing when the caller is
+    /// closed. This is captured during analysis so publishing diagnostics does
+    /// not need to reopen or read the caller file.
+    #[cfg(feature = "lsp")]
+    #[serde(skip)]
+    pub lsp_range: Option<RelatedSourceRange>,
+}
+
+#[cfg(feature = "lsp")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelatedSourceRange {
+    pub start_line: usize,
+    pub start_character: usize,
+    pub end_line: usize,
+    pub end_character: usize,
 }
 
 /// A repair described as text replacements over the checked source.
@@ -763,6 +778,12 @@ fn analyze_source_impl(
                         diagnostic.related.push(RelatedInformation {
                             message: "called from here".into(),
                             span: callsite.clone(),
+                            #[cfg(feature = "lsp")]
+                            lsp_range: Some(line_starts.lsp_range(
+                                source,
+                                callsite.start_byte,
+                                callsite.end_byte,
+                            )),
                         });
                     }
                     diagnostics.append(&mut child);
@@ -822,6 +843,12 @@ fn analyze_source_impl(
                         diagnostic.related.push(RelatedInformation {
                             message: "called from here".into(),
                             span: callsite.clone(),
+                            #[cfg(feature = "lsp")]
+                            lsp_range: Some(line_starts.lsp_range(
+                                source,
+                                callsite.start_byte,
+                                callsite.end_byte,
+                            )),
                         });
                     }
                     diagnostics.append(&mut child);
@@ -2927,6 +2954,27 @@ impl LineStarts {
             precision,
             path: None,
             path_bytes: None,
+        }
+    }
+
+    #[cfg(feature = "lsp")]
+    fn lsp_range(&self, source: &str, start: usize, end: usize) -> RelatedSourceRange {
+        let position = |offset: usize| {
+            let offset = offset.min(source.len());
+            let line = self
+                .starts
+                .partition_point(|line_start| *line_start <= offset)
+                .saturating_sub(1);
+            let line_start = self.starts[line];
+            (line, source[line_start..offset].encode_utf16().count())
+        };
+        let (start_line, start_character) = position(start);
+        let (end_line, end_character) = position(end.max(start));
+        RelatedSourceRange {
+            start_line,
+            start_character,
+            end_line,
+            end_character,
         }
     }
 

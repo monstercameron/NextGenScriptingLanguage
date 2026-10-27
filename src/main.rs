@@ -608,8 +608,13 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             if data_flow_warning {
                 eprintln!("warning[data_flow_policy_not_configured]: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants");
             }
-            for diagnostic in static_diagnostics.iter().filter(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning) {
-                eprintln!("warning[{}]: line {}: {}", diagnostic.code, diagnostic.span.line, diagnostic.message);
+            for diagnostic in static_diagnostics.iter().filter(|diagnostic| {
+                diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning
+            }) {
+                eprintln!(
+                    "warning[{}]: line {}: {}",
+                    diagnostic.code, diagnostic.span.line, diagnostic.message
+                );
             }
             let errors: Vec<String> = static_diagnostics
                 .iter()
@@ -627,7 +632,12 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
                     )
                 );
             }
-            if deny_warnings && (data_flow_warning || static_diagnostics.iter().any(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning)) {
+            if deny_warnings
+                && (data_flow_warning
+                    || static_diagnostics.iter().any(|diagnostic| {
+                        diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning
+                    }))
+            {
                 bail!("warnings are denied (--deny-warnings)");
             }
             return Ok(());
@@ -635,7 +645,11 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         let has_static_error = static_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Error);
-        let has_denied_warning = deny_warnings && (data_flow_warning || static_diagnostics.iter().any(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning));
+        let has_denied_warning = deny_warnings
+            && (data_flow_warning
+                || static_diagnostics.iter().any(|diagnostic| {
+                    diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning
+                }));
         let mut diagnostics = static_diagnostics
             .iter()
             .map(serde_json::to_value)

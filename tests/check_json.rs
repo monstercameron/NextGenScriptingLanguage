@@ -63,7 +63,10 @@ fn deny_warnings_fails_check_and_keeps_warning_severity() {
         &invoke(root.path(), &["check", "job.program", "--json"]),
         true,
     );
-    assert_eq!(ordinary["diagnostics"][0]["code"], "lint.executable_name_whitespace");
+    assert_eq!(
+        ordinary["diagnostics"][0]["code"],
+        "lint.executable_name_whitespace"
+    );
     assert_eq!(ordinary["diagnostics"][0]["severity"], "warning");
 
     let denied = report(

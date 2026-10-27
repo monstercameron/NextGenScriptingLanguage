@@ -94,6 +94,192 @@ fn json_repl_captures_each_fresh_streamed_command_without_leaking_to_process_std
 }
 
 #[test]
+fn json_redaction_preserves_protocol_keys_and_redacts_marker_containing_secrets() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir(&manifests).unwrap();
+    let marker_secret = "prefix[REDACTED]suffix";
+    let arguments = if cfg!(windows) {
+        serde_json::json!([{"literal":"/c"},{"literal":"echo %REPL_SECRET% %KEY_SECRET%"}])
+    } else {
+        serde_json::json!([{"literal":"-c"},{"literal":"printf '%s|%s' \"$REPL_SECRET\" \"$KEY_SECRET\""}])
+    };
+    let manifest = serde_json::json!({
+        "name":"secret.echo", "binary":if cfg!(windows) {"cmd"} else {"/bin/sh"}, "arguments":arguments,
+        "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":{"REPL_SECRET":marker_secret,"KEY_SECRET":"status"}}}
+    });
+    std::fs::write(manifests.join("secret.echo.json"), manifest.to_string()).unwrap();
+    let policy = directory.path().join("policy.json");
+    std::fs::write(
+        &policy,
+        r#"{"version":1,"secrets":{"environment":{"secret.echo":["REPL_SECRET","KEY_SECRET"]}}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["repl", "--json", "--manifest-dir"])
+        .arg(&manifests)
+        .args(["--data-flow-policy"])
+        .arg(&policy)
+        .current_dir(directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    writeln!(input, "{{\"submit\":\"run secret.echo\"}}").unwrap();
+    writeln!(
+        input,
+        "{{\"submit\":\"use value \\\"{marker_secret}\\\"\"}}"
+    )
+    .unwrap();
+    writeln!(input, "{{\"source\":true}}").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !raw.contains(marker_secret),
+        "secret leaked in protocol output: {raw}"
+    );
+    let responses = parse_lines(raw.as_bytes());
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0]["status"], "ran", "{}", responses[0]);
+    assert_eq!(
+        responses[0]["stdout"],
+        if cfg!(windows) {
+            "[REDACTED] [REDACTED]\r\n"
+        } else {
+            "[REDACTED]|[REDACTED]"
+        }
+    );
+    assert_eq!(responses[1]["status"], "ran", "{}", responses[1]);
+    assert!(!responses[2]["source"]
+        .as_str()
+        .unwrap()
+        .contains(marker_secret));
+}
+
+#[cfg(unix)]
+#[test]
+fn json_repl_frames_manifest_inherited_stdout_as_response_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir(&manifests).unwrap();
+    let manifest = serde_json::json!({
+        "name":"fixture.inherit", "binary":"/bin/sh",
+        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"-c"},{"literal":"printf FRAME-SENTINEL; printf ERR-SENTINEL >&2"}],
+        "stdio":{"stdout":"inherit","stderr":"inherit"}
+    });
+    std::fs::write(manifests.join("fixture.inherit.json"), manifest.to_string()).unwrap();
+    let mut child = repl_child(directory.path(), &manifests, false);
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"submit\":\"run fixture.inherit\"}\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses = parse_lines(&output.stdout);
+    assert_eq!(
+        responses.len(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(responses[0]["status"], "ran");
+    assert_eq!(responses[0]["stdout"], "FRAME-SENTINEL");
+    assert_eq!(responses[0]["stderr_tail"], "ERR-SENTINEL");
+    assert!(
+        output.stderr.is_empty(),
+        "child stderr escaped the protocol: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn failed_json_submission_returns_redacted_partial_stdout() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir(&manifests).unwrap();
+    let secret = "partial-failure-secret";
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            "cmd",
+            serde_json::json!([{"literal":"/c"},{"literal":"<nul set /p =%REPL_SECRET%& exit /b 7"}]),
+        )
+    } else {
+        (
+            "/bin/sh",
+            serde_json::json!([{"literal":"-c"},{"literal":"printf %s \"$REPL_SECRET\"; exit 7"}]),
+        )
+    };
+    let manifest = serde_json::json!({
+        "name":"secret.fail", "binary":binary, "arguments":arguments,
+        "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":{"REPL_SECRET":secret}}}
+    });
+    std::fs::write(manifests.join("secret.fail.json"), manifest.to_string()).unwrap();
+    let policy = directory.path().join("policy.json");
+    std::fs::write(
+        &policy,
+        r#"{"version":1,"secrets":{"environment":{"secret.fail":["REPL_SECRET"]}}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["repl", "--json", "--manifest-dir"])
+        .arg(&manifests)
+        .args(["--data-flow-policy"])
+        .arg(&policy)
+        .current_dir(directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"submit\":\"run secret.fail\"}\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !raw.contains(secret),
+        "secret leaked in protocol output: {raw}"
+    );
+    let responses = parse_lines(raw.as_bytes());
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["status"], "failed");
+    assert_eq!(responses[0]["stdout"], "[REDACTED]");
+}
+
+#[test]
 fn what_if_returns_a_plan_without_running_the_block() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");

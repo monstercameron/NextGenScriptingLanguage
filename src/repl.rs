@@ -130,6 +130,13 @@ impl Observer for SessionObserver {
             .capture_only
     }
 
+    fn captures_inherited_stdio(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .capture_only
+    }
+
     fn terminal_output(&self, bytes: &[u8]) {
         self.state
             .lock()
@@ -246,7 +253,7 @@ impl<'a> Session<'a> {
         let result =
             runtime::with_streamed_stdout(|| runtime::run(&program, self.registry, &options));
         drop(guard);
-        let (fresh, fresh_output) = self.observer.finish();
+        let (fresh, mut fresh_output) = self.observer.finish();
         match result {
             Ok(run_result) => {
                 self.history.push((
@@ -261,7 +268,15 @@ impl<'a> Session<'a> {
                 self.steps.extend(fresh);
                 Ok(BlockOutcome::Ran)
             }
-            Err(error) => Ok(BlockOutcome::Failed(format!("{error:#}"))),
+            Err(error) => {
+                // Failed child groups do not reach the normal streamed-output
+                // writer. Their captured bytes are still part of this submit.
+                for step in fresh.iter().filter(|step| step.result.failed) {
+                    fresh_output.extend_from_slice(&step.result.stdout);
+                }
+                self.last_output = fresh_output;
+                Ok(BlockOutcome::Failed(format!("{error:#}")))
+            }
         }
     }
 
@@ -296,8 +311,7 @@ impl<'a> Session<'a> {
     fn what_if(&mut self, block: &str) -> Result<serde_json::Value> {
         let (candidate, diagnostics) = self.validate(block)?;
         if !diagnostics.is_empty() {
-            return redact_json(
-                self.registry,
+            return Ok(
                 serde_json::json!({"status":"rejected", "protocol":"execute.check/1", "diagnostics":diagnostics_json(self.source.len(), block, diagnostics)}),
             );
         }
@@ -309,10 +323,7 @@ impl<'a> Session<'a> {
             );
         }
         let plan_path = self.working_directory.to_string_lossy();
-        let plan = redact_json(
-            self.registry,
-            crate::agent::explain::explain_json(&program, self.registry, &plan_path)?,
-        )?;
+        let plan = crate::agent::explain::explain_json(&program, self.registry, &plan_path)?;
         self.history.push((
             self.source.clone(),
             self.steps.clone(),
@@ -438,30 +449,17 @@ fn diagnostics_json(
 }
 
 fn redact_json(registry: &Registry, mut value: serde_json::Value) -> Result<serde_json::Value> {
-    const MARKER: &str = "[REDACTED]";
-    fn redact_text(redactor: &crate::security::SecretRedactor, text: &str) -> String {
-        if !text.contains(MARKER) {
-            return redactor.redact_text(text);
-        }
-        text.split(MARKER)
-            .map(|part| redactor.redact_text(part))
-            .collect::<Vec<_>>()
-            .join(MARKER)
-    }
-
     fn visit(value: &mut serde_json::Value, redactor: &crate::security::SecretRedactor) {
         match value {
-            serde_json::Value::String(text) => *text = redact_text(redactor, text),
+            serde_json::Value::String(text) => *text = redactor.redact_text(text),
             serde_json::Value::Array(items) => {
                 for item in items {
                     visit(item, redactor);
                 }
             }
             serde_json::Value::Object(fields) => {
-                let previous = std::mem::take(fields);
-                for (key, mut item) in previous {
-                    visit(&mut item, redactor);
-                    fields.insert(redact_text(redactor, &key), item);
+                for item in fields.values_mut() {
+                    visit(item, redactor);
                 }
             }
             _ => {}
@@ -596,7 +594,8 @@ pub fn run_json(
                     }
                     BlockOutcome::Failed(error) => {
                         let redactor = crate::security::secret_redactor(session.registry);
-                        Ok(serde_json::json!({"status":"failed","error":redactor.redact_text(&error)}))
+                        let stdout = String::from_utf8_lossy(session.last_output()).into_owned();
+                        Ok(serde_json::json!({"status":"failed","error":redactor.redact_text(&error),"stdout":redactor.redact_text(&stdout)}))
                     }
                     BlockOutcome::Ran => {
                         let fresh = &session.steps[before..];

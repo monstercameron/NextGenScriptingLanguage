@@ -65,6 +65,13 @@ pub trait Observer: Send + Sync {
         true
     }
 
+    /// Whether native child streams that would normally be inherited by the
+    /// caller must be captured instead. Framed protocols use this to keep raw
+    /// child bytes from escaping their response channel.
+    fn captures_inherited_stdio(&self) -> bool {
+        false
+    }
+
     /// Bytes the run wrote to the terminal as streamed output, in order.
     fn terminal_output(&self, _bytes: &[u8]) {}
 
@@ -101,6 +108,11 @@ pub(super) fn note_program_output(bytes: &[u8], line: Option<usize>) {
 /// Whether streamed output should reach the process stdout.
 pub(super) fn writes_streamed_stdout() -> bool {
     current().is_none_or(|observer| observer.writes_streamed_stdout())
+}
+
+/// Whether an observer requires inherited native streams to be captured.
+pub(super) fn captures_inherited_stdio() -> bool {
+    current().is_some_and(|observer| observer.captures_inherited_stdio())
 }
 
 static OBSERVER: Mutex<Option<Arc<dyn Observer>>> = Mutex::new(None);

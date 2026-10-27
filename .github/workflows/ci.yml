@@ -113,54 +113,10 @@ jobs:
         run: python3 tests/test_latency_budget_regression.py
       - name: Prove Linux latency gate reports independent child RSS
         run: python3 tests/test_latency_budget_rss.py
-      - name: Build Linux default release binary
-        run: cargo build --locked --release --bin execute
       - name: Check Linux default release binary size
-        id: linux_binary_size
-        run: python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
-      # Temporary diagnostic for the #573 size boundary. Remove this step and the id above
-      # after one same-runner comparison reports the sizes for the two pinned revisions.
-      - name: Diagnose #573 Linux release binary size delta
-        if: failure() && steps.linux_binary_size.outcome == 'failure' && github.event_name == 'push' && github.event.before == '885c8fb9034dc66b32c96d82592983dc8e053549'
-        env:
-          BASE_SHA: b2dfe34f625a6f26f4cde0677d0a8b0124a6bf45
-          CANDIDATE_SHA: 885c8fb9034dc66b32c96d82592983dc8e053549
-        shell: bash
         run: |
-          set -euo pipefail
-          base_worktree="$RUNNER_TEMP/issue-573-size-base"
-          candidate_worktree="$RUNNER_TEMP/issue-573-size-candidate"
-          target_dir="$RUNNER_TEMP/issue-573-size-target"
-          baseline_bin="$RUNNER_TEMP/issue-573-size-baseline"
-          candidate_bin="$RUNNER_TEMP/issue-573-size-candidate-bin"
-          base_added=0
-          candidate_added=0
-          cleanup() {
-            status=$?
-            trap - EXIT
-            if (( candidate_added )); then
-              git worktree remove --force "$candidate_worktree" || status=1
-            fi
-            if (( base_added )); then
-              git worktree remove --force "$base_worktree" || status=1
-            fi
-            exit "$status"
-          }
-          trap cleanup EXIT
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" "$CANDIDATE_SHA"
-          git worktree add --detach "$base_worktree" "$BASE_SHA"
-          base_added=1
-          git worktree add --detach "$candidate_worktree" "$CANDIDATE_SHA"
-          candidate_added=1
-          CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$target_dir" cargo build --locked --release --manifest-path "$base_worktree/Cargo.toml" --bin execute
-          cp "$target_dir/release/execute" "$baseline_bin"
-          CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$target_dir" cargo build --locked --release --manifest-path "$candidate_worktree/Cargo.toml" --bin execute
-          cp "$target_dir/release/execute" "$candidate_bin"
-          baseline_size=$(stat -c '%s' "$baseline_bin")
-          candidate_size=$(stat -c '%s' "$candidate_bin")
-          delta=$((candidate_size - baseline_size))
-          printf 'Pinned Linux release sizes: %s=%s bytes; %s=%s bytes; delta=%+d bytes\n' \
-            "$BASE_SHA" "$baseline_size" "$CANDIDATE_SHA" "$candidate_size" "$delta"
+          cargo build --locked --release --bin execute
+          python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
       - name: Compare Omarchy ports with their Bash originals
         run: python3 tools/port_compare.py --binary target/release/execute
       - name: Test paired latency comparison tool

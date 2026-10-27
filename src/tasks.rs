@@ -59,12 +59,11 @@ impl CancellationWake {
     }
 
     pub(crate) fn notify(&self) {
-        if self.notified.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        #[cfg(unix)]
-        if let Ok(mut writer) = self.writer.lock() {
-            let _ = writer.write(&[1]);
+        if !self.notified.swap(true, Ordering::AcqRel) {
+            #[cfg(unix)]
+            if let Ok(mut writer) = self.writer.lock() {
+                let _ = writer.write(&[1]);
+            }
         }
     }
 

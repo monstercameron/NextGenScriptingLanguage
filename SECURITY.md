@@ -82,6 +82,10 @@ When a policy is present, its strict JSON shape is:
 ```json
 {
   "version": 1,
+  "host": {
+    "capabilities": ["filesystem.read", "filesystem.write"],
+    "filesystem": { "read": ["/etc/example.conf"], "write": ["/tmp/results"] }
+  },
   "applets": {
     "file.snapshot": {
       "capabilities": ["filesystem.read"],
@@ -102,15 +106,19 @@ are extensible, exact-match namespaced strings. Declared effects must also be
 declared capabilities, and the grant must permit every capability in the
 applet's contract. Separately, a grant with `network: true` must include the
 `network.connect` capability, and nonempty filesystem read/write grants must
-include `filesystem.read`/`filesystem.write`, respectively. These grant checks
-do not require a remote applet's logical contract to declare `network.connect`.
+include `filesystem.read`/`filesystem.write`, respectively. The optional
+`host` grant follows the same rule for host-language file actions. These grant
+checks do not require a remote applet's logical contract to declare
+`network.connect`.
 `binary_sha256` is an optional executable-content check. For each applet launch,
 the environment is cleared and only names in that grant's `environment` list
 are forwarded. Contract-level `set` overrides must use allowlisted names;
 `unset` may remove inherited names. Host `UseFolder`, `Read` and `Save` paths are
-checked against the union of policy filesystem grants before effects; dynamic
-paths that cannot be checked in preflight are rejected. These host checks do
-not confine a native child process. Configured cache paths are also checked
+checked against the matching read/write paths in the explicit `host` grant
+before effects; applet grants never authorize these host actions. Without a
+host grant, these actions are denied under a policy. Dynamic paths that cannot
+be checked in preflight are rejected. These host checks do not confine a native
+child process. Configured cache paths are also checked
 against each cacheable applet's own read and write grants. When the program
 changes working directory, a relative or default cache path is rejected because
 preflight cannot resolve the eventual cache directory safely.

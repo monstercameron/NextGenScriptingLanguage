@@ -448,6 +448,7 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
         sandbox_required: false,
     };
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -477,6 +478,7 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
     )
     .unwrap();
     denied_registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),

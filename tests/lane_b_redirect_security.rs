@@ -1,7 +1,7 @@
 //! Redirection and append are persistence writes. Under a capability policy they
 //! are refused before any effect unless the target has a write grant, and a
 //! redirect target that is a link is refused rather than followed.
-use flow::capabilities::{preflight, AppletGrant, CapabilityPolicy, FilesystemGrant};
+use flow::capabilities::{preflight, AppletGrant, CapabilityPolicy, FilesystemGrant, HostGrant};
 use flow::manifest::Registry;
 use flow::{parser, runtime};
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,6 +54,7 @@ fn stderr_redirect_without_a_write_grant_is_refused_before_effects() {
     let directory = tempfile::tempdir().unwrap();
     let registry = registry_for(&binary());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -74,6 +75,7 @@ fn append_without_a_write_grant_is_refused_before_effects() {
     let directory = tempfile::tempdir().unwrap();
     let registry = registry_for(&binary());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -99,6 +101,7 @@ fn a_symlinked_redirect_target_is_refused_and_not_written() {
 
     let registry = registry_for(&binary());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -127,6 +130,7 @@ fn a_symlinked_append_target_is_refused_and_not_written() {
 
     let registry = registry_for(&binary());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -172,6 +176,13 @@ fn a_new_redirect_file_is_owner_only() {
     fs::create_dir(&allowed).unwrap();
     let registry = registry_for(&binary());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: Some(HostGrant {
+            capabilities: BTreeSet::from(["filesystem.write".into()]),
+            filesystem: FilesystemGrant {
+                write: vec![allowed.clone()],
+                ..FilesystemGrant::default()
+            },
+        }),
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),

@@ -368,6 +368,7 @@ fn deny_all_privileged_registry(manifests: &[serde_json::Value]) -> Registry {
     let sources: Vec<String> = manifests.iter().map(|value| value.to_string()).collect();
     let registry = Registry::from_sources(&sources).unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         applets: BTreeMap::new(),
         deny_privileged: true,

@@ -60,6 +60,7 @@ fn capability_endpoint_rejects_non_ascii_hosts_even_when_idna_matches() {
         sandbox_required: false,
     };
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         applets: BTreeMap::from([("remote.lookup".to_owned(), grant)]),
         host_environment: BTreeSet::new(),

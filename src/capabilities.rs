@@ -270,6 +270,11 @@ pub struct CapabilityPolicy {
     pub version: u8,
     #[serde(default)]
     pub applets: BTreeMap<String, AppletGrant>,
+    /// Permissions for host-language file operations such as `Read`, `Save`,
+    /// and `UseFolder`. These actions have no applet subject and must not
+    /// inherit authority from an unrelated applet.
+    #[serde(default)]
+    pub host: Option<HostGrant>,
     /// Host environment variables workflow inputs may read with from environment.
     /// Empty by default so programs cannot inspect ambient secrets under a policy.
     #[serde(default)]
@@ -387,6 +392,16 @@ pub struct FilesystemGrant {
     pub write: Vec<PathBuf>,
 }
 
+/// Filesystem capabilities granted to host-language workflow actions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostGrant {
+    #[serde(default)]
+    pub capabilities: BTreeSet<String>,
+    #[serde(default)]
+    pub filesystem: FilesystemGrant,
+}
+
 impl CapabilityPolicy {
     /// Read and validate a policy file with a fixed size limit.
     pub fn load(path: &Path) -> Result<Self> {
@@ -474,6 +489,28 @@ impl CapabilityPolicy {
             {
                 validate_policy_path(path)
                     .with_context(|| format!("applet {name:?} filesystem grant"))?;
+            }
+        }
+        if let Some(grant) = &self.host {
+            for capability in &grant.capabilities {
+                validate_capability_id(capability).context("host capability")?;
+            }
+            if !grant.filesystem.read.is_empty() && !grant.capabilities.contains("filesystem.read")
+            {
+                bail!("host grants filesystem reads without filesystem.read");
+            }
+            if !grant.filesystem.write.is_empty()
+                && !grant.capabilities.contains("filesystem.write")
+            {
+                bail!("host grants filesystem writes without filesystem.write");
+            }
+            for path in grant
+                .filesystem
+                .read
+                .iter()
+                .chain(grant.filesystem.write.iter())
+            {
+                validate_policy_path(path).context("host filesystem grant")?;
             }
         }
         for variable in &self.host_environment {
@@ -1941,8 +1978,8 @@ pub enum HostAccess {
 }
 
 /// Guard host-language file operations that otherwise bypass a child sandbox.
-/// Explicit path grants are shared as the policy's host file authority, so a
-/// host read/save can happen only inside at least one declared read/write root.
+/// Host read/save can happen only inside a matching direction in the explicit
+/// host grant; applet grants never authorize host-language file operations.
 pub fn authorize_host_path(
     registry: &Registry,
     path: &Path,
@@ -1954,20 +1991,25 @@ pub fn authorize_host_path(
         return Ok(());
     };
     policy.validate()?;
-    let allowed = canonicalize_for_grant(path, cwd)
-        .ok()
-        .is_some_and(|target| {
-            policy.applets.values().any(|grant| {
-                let paths = if access == HostAccess::Write {
-                    &grant.filesystem.write
-                } else {
-                    &grant.filesystem.read
-                };
-                paths.iter().any(|path| {
-                    canonicalize_for_grant(path, cwd)
-                        .is_ok_and(|root| grant_contains(&root, &target))
-                })
-            })
+    let host = policy.host.as_ref();
+    let capability = if access == HostAccess::Write {
+        "filesystem.write"
+    } else {
+        "filesystem.read"
+    };
+    let paths = host.map(|grant| {
+        if access == HostAccess::Write {
+            &grant.filesystem.write
+        } else {
+            &grant.filesystem.read
+        }
+    });
+    let allowed = host.is_some_and(|grant| grant.capabilities.contains(capability))
+        && paths.into_iter().flatten().any(|root| {
+            canonicalize_for_grant(path, cwd)
+                .ok()
+                .zip(canonicalize_for_grant(root, cwd).ok())
+                .is_some_and(|(target, root)| grant_contains(&root, &target))
         });
     let (action, risk) = if access == HostAccess::Write {
         ("filesystem.write", PolicyRisk::High)

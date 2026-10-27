@@ -2,7 +2,7 @@ use flow::{
     capabilities::{
         authorize_environment_variable, authorize_host_path, effective_environment,
         filter_environment, policy_fingerprint, preflight_with_cache_directory, AppletGrant,
-        CapabilityPolicy, ContractView, FilesystemGrant, HostAccess,
+        CapabilityPolicy, ContractView, FilesystemGrant, HostAccess, HostGrant,
     },
     manifest::Registry,
 };
@@ -23,6 +23,20 @@ fn grant(capabilities: &[&str]) -> AppletGrant {
         network: false,
         network_origins: BTreeSet::new(),
         sandbox_required: false,
+    }
+}
+
+fn host_grant(read: Vec<std::path::PathBuf>, write: Vec<std::path::PathBuf>) -> HostGrant {
+    let mut capabilities = BTreeSet::new();
+    if !read.is_empty() {
+        capabilities.insert("filesystem.read".into());
+    }
+    if !write.is_empty() {
+        capabilities.insert("filesystem.write".into());
+    }
+    HostGrant {
+        capabilities,
+        filesystem: FilesystemGrant { read, write },
     }
 }
 
@@ -48,6 +62,16 @@ fn registry_with_applet(name: &str, binary: &Path) -> Registry {
 fn policy_is_strictly_versioned_and_unknown_fields_fail_closed() {
     let valid = r#"{"version":1,"applets":{"fixture.read":{"capabilities":["filesystem.read"]}}}"#;
     assert!(CapabilityPolicy::from_json(valid).is_ok());
+    assert!(CapabilityPolicy::from_json(
+        r#"{"version":1,"host":{"capabilities":["filesystem.write"],"filesystem":{"write":["/tmp/results"]}},"applets":{}}"#
+    )
+    .is_ok());
+    assert!(CapabilityPolicy::from_json(
+        r#"{"version":1,"host":{"filesystem":{"write":["/tmp/results"]}},"applets":{}}"#
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("filesystem.write"));
     assert!(CapabilityPolicy::from_json(r#"{"version":2,"applets":{}}"#)
         .unwrap_err()
         .to_string()
@@ -108,6 +132,7 @@ fn remote_endpoint_policy_matches_exact_canonical_origin() {
         .network_origins
         .insert("https://api.example.test".into());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -143,6 +168,7 @@ fn grants_require_canonical_allowlist_and_exact_contract_capabilities() {
     let binary = directory.path().join("fixture");
     fs::write(&binary, b"reviewed fixture").unwrap();
     let policy = CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -202,6 +228,7 @@ fn process_backends_require_a_separate_process_exec_grant() {
     let registry = registry_with_applet("fixture.command", &binary);
     let program = parser::parse("run fixture.command\n").unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -214,6 +241,7 @@ fn process_backends_require_a_separate_process_exec_grant() {
         .contains("backend requirement \"process.exec\""));
 
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -230,6 +258,7 @@ fn strict_policy_allows_shipped_pure_json_transformations() {
     let manifest = include_str!("../manifests/core.json_parse.json");
     let registry = Registry::from_sources(&[manifest]).unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -250,6 +279,7 @@ fn binary_pin_is_checked_and_policy_identity_changes_with_grants() {
     let mut pinned = grant(&[]);
     pinned.binary_sha256 = Some(digest);
     let policy = CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -283,6 +313,7 @@ fn binary_pin_is_checked_and_policy_identity_changes_with_grants() {
     let mut changed = grant(&["filesystem.read"]);
     changed.environment.insert("PATH".into());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -305,6 +336,7 @@ fn environment_is_cleared_to_the_applet_allowlist() {
     configured.environment.insert("PATH".into());
     let registry = registry_with_applet("fixture.read", &binary);
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -354,6 +386,7 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
     let mut applet_grant = grant(&["process.exec"]);
     applet_grant.environment.insert(canary.into());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -397,6 +430,7 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
         serde_json::json!({"EXECUTE_TEST_UNGRANTED_ENV":"not-logged"});
     let denied_registry = Registry::from_sources(&[denied.to_string()]).unwrap();
     denied_registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -427,6 +461,10 @@ fn decisions_record_approvals_and_denials_without_paths_or_environment_names() {
     let mut configured = grant(&["filesystem.read"]);
     configured.filesystem.read.push(allowed_root);
     registry.set_host_state(Some(CapabilityPolicy {
+        host: Some(host_grant(
+            vec![directory.path().join("allowed")],
+            Vec::new(),
+        )),
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -467,6 +505,10 @@ fn host_path_grants_are_canonical_and_directional() {
     configured.filesystem.write.push(write_root.clone());
     let registry = registry_with_applet("fixture.read", directory.path());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: Some(host_grant(
+            vec![read_root.clone()],
+            vec![write_root.clone()],
+        )),
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -516,6 +558,131 @@ fn host_path_grants_are_canonical_and_directional() {
 }
 
 #[test]
+fn host_save_cannot_borrow_an_unrelated_applets_write_grant() {
+    let directory = tempfile::tempdir().unwrap();
+    let applet_root = directory.path().join("applet-output");
+    fs::create_dir(&applet_root).unwrap();
+    let save_path = applet_root.join("result.txt");
+    let registry = registry_with_applet("fixture.writer", directory.path());
+    let mut applet = grant(&["filesystem.write"]);
+    applet.filesystem.write.push(applet_root);
+    registry.set_host_state(Some(CapabilityPolicy {
+        version: 1,
+        applets: BTreeMap::from([("fixture.writer".into(), applet)]),
+        host: None,
+        host_environment: Default::default(),
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+    }));
+
+    assert!(
+        authorize_host_path(&registry, &save_path, HostAccess::Write, directory.path()).is_err()
+    );
+
+    let mut policy = registry
+        .host_state::<Option<CapabilityPolicy>>()
+        .as_ref()
+        .as_ref()
+        .unwrap()
+        .clone();
+    policy.host = Some(host_grant(
+        Vec::new(),
+        vec![directory.path().join("applet-output")],
+    ));
+    registry.set_host_state(Some(policy));
+    authorize_host_path(&registry, &save_path, HostAccess::Write, directory.path()).unwrap();
+}
+
+#[test]
+fn save_preflight_requires_a_host_write_grant() {
+    let directory = tempfile::tempdir().unwrap();
+    let binary = std::env::current_exe().unwrap();
+    let registry = registry_with_applet("fixture.writer", &binary);
+    let mut applet = grant(&["process.exec", "filesystem.write"]);
+    applet.filesystem.write.push(directory.path().to_path_buf());
+    registry.set_host_state(Some(CapabilityPolicy {
+        version: 1,
+        applets: BTreeMap::from([("fixture.writer".into(), applet)]),
+        host: None,
+        host_environment: Default::default(),
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+    }));
+    let program =
+        flow::parser::parse("run fixture.writer\nthen save to file \"result.txt\"\n").unwrap();
+
+    assert!(flow::capabilities::preflight_plan(&program, &registry, directory.path()).is_err());
+
+    let mut policy = registry
+        .host_state::<Option<CapabilityPolicy>>()
+        .as_ref()
+        .as_ref()
+        .unwrap()
+        .clone();
+    policy.host = Some(host_grant(Vec::new(), vec![directory.path().to_path_buf()]));
+    registry.set_host_state(Some(policy));
+    flow::capabilities::preflight_plan(&program, &registry, directory.path()).unwrap();
+}
+
+#[test]
+fn host_read_and_use_folder_require_explicit_nested_host_grants() {
+    use flow::{capabilities::ExecutionMode, parser, runtime};
+
+    let directory = tempfile::tempdir().unwrap();
+    let nested = directory.path().join("applet-area/nested");
+    let sibling = directory.path().join("applet-area/sibling");
+    fs::create_dir_all(&nested).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+    fs::write(nested.join("input.txt"), b"nested data").unwrap();
+    fs::write(sibling.join("input.txt"), b"sibling data").unwrap();
+
+    let binary = std::env::current_exe().unwrap();
+    let registry = registry_with_applet("fixture.reader", &binary);
+    let mut applet = grant(&["filesystem.read"]);
+    // This broader applet grant must not authorize host-language actions.
+    applet
+        .filesystem
+        .read
+        .push(directory.path().join("applet-area"));
+    let mut policy = CapabilityPolicy {
+        version: 1,
+        applets: BTreeMap::from([("fixture.reader".into(), applet)]),
+        host: None,
+        host_environment: Default::default(),
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+    };
+    registry.set_host_state(Some(ExecutionMode::Trusted));
+    registry.set_host_state(Some(policy.clone()));
+    let options = runtime::RunOptions::new(directory.path().to_path_buf());
+
+    let direct_read = parser::parse("read \"applet-area/nested/input.txt\"\n").unwrap();
+    assert!(runtime::run(&direct_read, &registry, &options).is_err());
+
+    // A nested host grant permits that subtree while keeping its sibling denied.
+    policy.host = Some(host_grant(vec![nested.clone()], Vec::new()));
+    registry.set_host_state(Some(policy.clone()));
+    let result = runtime::run(&direct_read, &registry, &options).unwrap();
+    assert_eq!(result.output, b"nested data");
+
+    let sibling_read = parser::parse("read \"applet-area/sibling/input.txt\"\n").unwrap();
+    assert!(runtime::run(&sibling_read, &registry, &options).is_err());
+
+    // UseFolder is itself a host read action and remains blocked without a
+    // host grant, even though the applet has a broader filesystem read grant.
+    policy.host = None;
+    registry.set_host_state(Some(policy.clone()));
+    let in_folder =
+        parser::parse("use folder \"applet-area/nested\"\nread \"input.txt\"\n").unwrap();
+    assert!(runtime::run(&in_folder, &registry, &options).is_err());
+
+    policy.host = Some(host_grant(vec![nested], Vec::new()));
+    registry.set_host_state(Some(policy));
+    let result = runtime::run(&in_folder, &registry, &options).unwrap();
+    assert_eq!(result.output, b"nested data");
+}
+
+#[test]
 fn applet_file_reads_cannot_borrow_another_applets_path_grant() {
     use flow::capabilities::authorize_applet_host_path;
 
@@ -543,6 +710,7 @@ fn applet_file_reads_cannot_borrow_another_applets_path_grant() {
     let mut remote = grant(&["network.connect"]);
     remote.network = true;
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -589,6 +757,7 @@ fn cache_directory_requires_applet_scoped_read_and_write_grants() {
         .write
         .push(directory.path().to_path_buf());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -605,6 +774,7 @@ fn cache_directory_requires_applet_scoped_read_and_write_grants() {
 
     allowed.filesystem.write.clear();
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -650,6 +820,7 @@ fn whole_program_preflight_denies_later_applet_before_prior_spawn() {
     ];
     let registry = Registry::from_sources(&sources).unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -703,6 +874,7 @@ fn policy_preflight_rejects_later_unlisted_applet_before_prior_save() {
         .write
         .push(directory.path().to_path_buf());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -768,6 +940,7 @@ fn strict_policy_rejects_effectful_in_process_alias_before_prior_spawn() {
         .read
         .push(directory.path().to_path_buf());
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -810,6 +983,7 @@ fn required_sandbox_rejects_in_process_backend_during_preflight() {
     let mut required = grant(&[]);
     required.sandbox_required = true;
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
@@ -827,6 +1001,7 @@ fn required_sandbox_rejects_in_process_backend_during_preflight() {
 fn environment_entry_inputs_are_denied_by_the_shared_policy_preflight() {
     let registry = Registry::default();
     registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
         version: 1,
         applets: BTreeMap::new(),
         host_environment: BTreeSet::new(),

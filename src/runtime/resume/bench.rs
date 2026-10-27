@@ -122,6 +122,7 @@ fn legacy_fingerprint_with_digests(
                 call,
                 registry,
                 cwd,
+                None,
                 binary_digests,
                 matches!(
                     program.steps[start].kind,

@@ -270,6 +270,11 @@
               "null"
             ]
           },
+          "resolved_path_inferred": {
+            "type": "boolean",
+            "const": true,
+            "description": "The path follows from static evaluation of a restricted direct system printf binding; the command was not run. Sensitive PATH-derived components are not disclosed."
+          },
           "argv": {
             "type": [
               "array",

@@ -1547,11 +1547,27 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         let path = args.file.to_string_lossy().into_owned();
-        let mut plan = if args.explain_version == Some(1) {
+        let legacy = args.explain_version == Some(1);
+        let mut plan = if legacy {
             flow::agent::explain::explain_json_v1(&program, &registry, &path)?
         } else {
             flow::agent::explain::explain_json_with_inputs(&program, &registry, &path, &inputs)?
         };
+        let has_native_process = plan["steps"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["process"] == true));
+        if has_native_process {
+            let path_hmac_key = flow::agent::what_if_key::load_or_create()
+                .context("what-if review needs its private key to bind executable search paths")?;
+            plan = flow::agent::explain::explain_json_for_what_if(
+                &program,
+                &registry,
+                &path,
+                &inputs,
+                &path_hmac_key,
+                legacy,
+            )?;
+        }
         flow::capabilities::annotate_enforcement(&mut plan, &registry);
         let run_directory = cwd.clone();
         let context = flow::agent::what_if::RunSettings {

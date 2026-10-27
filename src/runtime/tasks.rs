@@ -150,6 +150,7 @@ pub(super) struct TaskGroupRequest<'a> {
     pub(super) cancelled: Arc<AtomicBool>,
     pub(super) draining: Arc<std::sync::atomic::AtomicU8>,
     pub(super) context: AppletInvocationContext,
+    pub(super) environment: Option<crate::capabilities::CommandEnvOverlay>,
 }
 
 /// Receives the begin and the successful result of each parallel element, so the
@@ -275,6 +276,7 @@ pub(super) fn run_group(
         cancelled,
         draining,
         context,
+        environment,
     } = request;
     let mut context = context;
     context.outer_cancelled.push(Arc::clone(&cancelled));
@@ -385,6 +387,7 @@ pub(super) fn run_group(
             let registry = registry.clone();
             let context = context.clone();
             let inherited_cancelled = context.outer_cancelled.clone();
+            let environment = environment.clone();
             let parent_cancelled = Arc::clone(&cancelled);
             let mut task_options = options.clone();
             task_options.max_output_bytes =
@@ -403,6 +406,8 @@ pub(super) fn run_group(
                 let mut context = context;
                 context.cancel_wakes.push(token.cancellation_wake());
                 let result = catch_unwind(AssertUnwindSafe(|| {
+                    let _environment = environment
+                        .map(|overlay| crate::capabilities::CommandEnvScope::enter(Some(overlay)));
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {
                         bail!("task group was cancelled before task launch")
@@ -725,6 +730,7 @@ pub(super) fn run_each(
         cancelled,
         draining,
         context,
+        environment,
     } = request;
     let mut context = context;
     context.outer_cancelled.push(Arc::clone(&cancelled));
@@ -922,6 +928,7 @@ pub(super) fn run_each(
             let native_command = prepared[index].native_command;
             let registry = registry.clone();
             let mut context = context.clone();
+            let environment = environment.clone();
             context.group_output_budget = Some((Arc::clone(&group_budget), max_output_bytes));
             let inherited_cancelled = context.outer_cancelled.clone();
             let parent_cancelled = Arc::clone(&cancelled);
@@ -946,6 +953,8 @@ pub(super) fn run_each(
                 let _output_scope = super::OutputScopeGuard::enter(super::OutputScope::TaskGroup);
                 context.cancel_wakes.push(token.cancellation_wake());
                 let result = catch_unwind(AssertUnwindSafe(|| {
+                    let _environment = environment
+                        .map(|overlay| crate::capabilities::CommandEnvScope::enter(Some(overlay)));
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {
                         bail!("parallel for each was cancelled before element launch")

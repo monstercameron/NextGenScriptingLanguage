@@ -1866,6 +1866,67 @@ fn parse_capture(tokens: &[Token<'_>]) -> Result<StepKind> {
 }
 
 fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
+    if word_is(tokens.get(1), "environment") {
+        let Some(Token::LeftBrace) = tokens.get(2) else {
+            bail!("expected `use environment {{\"NAME\": \"value\"}}`");
+        };
+        let close = matching_close(tokens, 2)
+            .context("environment record is missing its closing brace")?;
+        let mut cursor = 0;
+        let slice = &tokens[2..=close];
+        let Value::Record(fields) = parse_value(slice, &mut cursor)? else {
+            bail!("`use environment` takes a record of names and values");
+        };
+        ensure_end(slice, cursor)?;
+        ensure_end(tokens, close + 1)?;
+        let mut set = BTreeMap::new();
+        for (name, value) in fields {
+            if !valid_environment_name(&name) {
+                bail!("invalid environment name {name:?}");
+            }
+            match &value {
+                Value::String(text) if !text.contains('\0') => {}
+                Value::String(_) => bail!("environment value for {name:?} cannot contain a NUL byte"),
+                Value::Reference(_) => {}
+                _ => bail!("environment value for {name:?} must be a text literal or text binding"),
+            }
+            set.insert(name, value);
+        }
+        return Ok(StepKind::Environment {
+            set,
+            unset: Vec::new(),
+            workflow_scope: true,
+        });
+    }
+    if word_is(tokens.get(1), "without") && word_is(tokens.get(2), "environment") {
+        let Some(Token::LeftBracket) = tokens.get(3) else {
+            bail!("expected `use without environment [\"NAME\"]`");
+        };
+        let close = matching_close(tokens, 3)
+            .context("environment name list is missing its closing bracket")?;
+        let mut cursor = 0;
+        let slice = &tokens[3..=close];
+        let Value::List(items) = parse_value(slice, &mut cursor)? else {
+            bail!("`use without environment` takes a list of names");
+        };
+        ensure_end(slice, cursor)?;
+        ensure_end(tokens, close + 1)?;
+        let mut unset = Vec::with_capacity(items.len());
+        for item in items {
+            let Value::String(name) = item else {
+                bail!("`use without environment` names must be quoted literals");
+            };
+            if !valid_environment_name(&name) {
+                bail!("invalid environment name {name:?}");
+            }
+            unset.push(name);
+        }
+        return Ok(StepKind::Environment {
+            set: BTreeMap::new(),
+            unset,
+            workflow_scope: true,
+        });
+    }
     if word_is(tokens.get(1), "bytes") {
         let binding = parse_binding_identifier(tokens.get(2), "binding name")?;
         ensure_end(tokens, 3)?;
@@ -1886,7 +1947,7 @@ fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
         return Ok(StepKind::UseValue { source });
     }
     if !word_is(tokens.get(1), "folder") {
-        bail!("expected `use folder <value>` or `use value <value>`");
+        bail!("expected `use folder <value>`, `use value <value>`, or `use environment {{...}}`");
     }
     let mut cursor = 2;
     let path = parse_value(tokens, &mut cursor)?;
@@ -2280,6 +2341,7 @@ fn parse_simple_statement(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
         steps.push(StepKind::Environment {
             set: env_set,
             unset: env_unset,
+            workflow_scope: false,
         });
     }
     let consumer = if stdin_present {

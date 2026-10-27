@@ -30,7 +30,7 @@ use crate::ast::{
 use crate::manifest::{Builtin, Registry};
 use crate::privilege::is_privileged_invocation;
 use anyhow::Result;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Protocol identifier of the `--json` object.
@@ -63,6 +63,25 @@ enum Cwd {
     Unknown,
 }
 
+/// Static PATH state for a command. `Unset` must remain distinct from `Set("")`:
+/// child lookup treats the two as different environment states.
+#[derive(Clone)]
+enum PathOverride {
+    Set {
+        /// The exact value applied to the child and included in the confirmation HMAC.
+        path: std::ffi::OsString,
+        inferred_printf: bool,
+        /// The portion safe to use for public executable resolution. None means
+        /// the path depends on a sensitive value and no component is known safe.
+        lookup_path: Option<std::ffi::OsString>,
+        /// A later component contains sensitive PATH-derived bytes, so a miss in
+        /// `lookup_path` cannot establish that the executable is absent.
+        has_sensitive_tail: bool,
+    },
+    Unset,
+    Runtime,
+}
+
 /// One planned step or invocation.
 #[derive(Default)]
 struct Row {
@@ -78,6 +97,7 @@ struct Row {
     builtin: Option<bool>,
     process: Option<bool>,
     resolved_path: Option<String>,
+    resolved_path_inferred: bool,
     argv: Option<Vec<Json>>,
     legacy_argv: Option<Vec<String>>,
     parameters: Option<Json>,
@@ -90,6 +110,9 @@ struct Row {
     modifies_next_invocation: bool,
     environment_sensitive: bool,
     environment_tainted: bool,
+    environment_path_only: bool,
+    /// Private review token for the effective PATH at this process invocation.
+    effective_path_hmac_sha256: Option<String>,
     path: Option<String>,
     path_is_runtime: bool,
     escapes_cwd: bool,
@@ -138,6 +161,7 @@ impl Row {
             "modifies_next_invocation": self.modifies_next_invocation,
             "environment_sensitive": self.environment_sensitive,
             "environment_tainted": self.environment_tainted,
+            "environment_path_only": self.environment_path_only,
             "path": self.path,
             "path_is_runtime": self.path_is_runtime,
             "escapes_cwd": self.escapes_cwd,
@@ -151,6 +175,12 @@ impl Row {
         if legacy {
             row["argv"] = json!(self.legacy_argv);
             row.as_object_mut().unwrap().remove("parameters");
+        }
+        if let Some(hmac) = &self.effective_path_hmac_sha256 {
+            row["effective_path_hmac_sha256"] = json!(hmac);
+        }
+        if self.resolved_path_inferred {
+            row["resolved_path_inferred"] = json!(true);
         }
         row
     }
@@ -191,12 +221,40 @@ pub fn explain_json_with_inputs(
     program_path: &str,
     inputs: &BTreeMap<String, Value>,
 ) -> Result<Json> {
-    explain_json_version(program, registry, program_path, inputs, false)
+    explain_json_version(program, registry, program_path, inputs, false, None)
+}
+
+/// Build an explain plan for a what-if review. Unlike ordinary explain output,
+/// each native process row carries a keyed token for the effective PATH so the
+/// confirmation digest covers PATH entries beyond the primary executable.
+pub fn explain_json_for_what_if(
+    program: &Program,
+    registry: &Registry,
+    program_path: &str,
+    inputs: &BTreeMap<String, Value>,
+    path_hmac_key: &[u8; crate::agent::what_if_key::KEY_BYTES],
+    legacy: bool,
+) -> Result<Json> {
+    explain_json_version(
+        program,
+        registry,
+        program_path,
+        inputs,
+        legacy,
+        Some(*path_hmac_key),
+    )
 }
 
 /// Original v1 shape, including its intentionally incomplete argv.
 pub fn explain_json_v1(program: &Program, registry: &Registry, program_path: &str) -> Result<Json> {
-    explain_json_version(program, registry, program_path, &BTreeMap::new(), true)
+    explain_json_version(
+        program,
+        registry,
+        program_path,
+        &BTreeMap::new(),
+        true,
+        None,
+    )
 }
 
 fn explain_json_version(
@@ -205,9 +263,12 @@ fn explain_json_version(
     program_path: &str,
     inputs: &BTreeMap<String, Value>,
     legacy: bool,
+    path_hmac_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
 ) -> Result<Json> {
     let mut known = BTreeMap::new();
     let mut known_literals = BTreeMap::new();
+    let mut path_literals = BTreeMap::new();
+    let mut path_sensitive_literals = BTreeSet::new();
     for declaration in program.inputs.iter().filter(|_| !legacy) {
         let resolved = crate::inputs::resolve(
             std::slice::from_ref(declaration),
@@ -234,6 +295,17 @@ fn explain_json_version(
                 known_literals.insert(declaration.name.clone(), value.clone());
                 encode_literal(crate::inputs::literal_json(value)?)
             };
+            let safe_for_path_analysis = !crate::ast::is_sensitive(declaration)
+                || matches!(
+                    &declaration.source,
+                    Some(InputSource::Environment(name)) if is_path_name(name)
+                );
+            if safe_for_path_analysis {
+                path_literals.insert(declaration.name.clone(), value.clone());
+                if crate::ast::is_sensitive(declaration) {
+                    path_sensitive_literals.insert(declaration.name.clone());
+                }
+            }
             known.insert(declaration.name.clone(), shown);
         }
     }
@@ -241,18 +313,30 @@ fn explain_json_version(
         registry,
         known,
         known_literals,
+        path_literals,
+        path_sensitive_literals,
+        path_inferred_bindings: BTreeSet::new(),
+        path_sensitive_bindings: BTreeMap::new(),
         definitions: &program.definitions,
         rows: Vec::new(),
         stack: Vec::new(),
         cwd: Cwd::Known(Vec::new()),
         environment_tainted_next: false,
+        environment_path_only_next: true,
+        environment_path_next: None,
+        workflow_path: None,
+        workflow_environment_tainted: false,
+        workflow_environment_path_only: true,
         depth: 0,
+        control_flow_depth: 0,
         cwd_poisoned: false,
         group_tainted: false,
+        group_environment_path_only: true,
         initial_working_directory: std::env::current_dir().ok(),
         program_directory: crate::program_files::program_directory(std::path::Path::new(
             program_path,
         )),
+        path_hmac_key,
     };
     if let Some(crate::ast::Trigger::Listen {
         source: crate::ast::ListenSource::Applet(call),
@@ -290,6 +374,14 @@ fn input_summary(input: &crate::ast::InputDeclaration) -> Json {
 struct Walker<'a> {
     known: BTreeMap<String, Json>,
     known_literals: BTreeMap<String, Value>,
+    /// Private analysis values used only by the narrow static PATH evaluator.
+    /// Sensitive inputs are never rendered from this map.
+    path_literals: BTreeMap<String, Value>,
+    path_sensitive_literals: BTreeSet<String>,
+    path_inferred_bindings: BTreeSet<String>,
+    /// Inferred values that contain PATH input bytes, mapped to the safe public
+    /// PATH prefix before the first sensitive component. None means no prefix.
+    path_sensitive_bindings: BTreeMap<String, Option<String>>,
     registry: &'a Registry,
     definitions: &'a BTreeMap<String, ReusableProgram>,
     rows: Vec<Row>,
@@ -298,16 +390,30 @@ struct Walker<'a> {
     cwd: Cwd,
     /// Set by an environment change that can alter the next command.
     environment_tainted_next: bool,
+    /// True when every pending sensitive change is a static PATH update.
+    environment_path_only_next: bool,
+    /// PATH override from a per-command environment suffix. An inner `None`
+    /// means its value is runtime-derived and cannot be reviewed statically.
+    environment_path_next: Option<PathOverride>,
+    workflow_path: Option<PathOverride>,
+    workflow_environment_tainted: bool,
+    /// True when every persistent sensitive change is a static PATH update.
+    workflow_environment_path_only: bool,
     /// Taint for the current pipeline group. Every stage of the group shares it.
     group_tainted: bool,
+    /// True when every tainted change in the current group is a static PATH update.
+    group_environment_path_only: bool,
     /// Nesting depth of branch, loop, try, and called bodies.
     depth: usize,
+    /// Nesting depth of conditional, loop, and try bodies, excluding called bodies.
+    control_flow_depth: usize,
     /// Set by a folder change nested in a body. The folder stays unknown after it.
     cwd_poisoned: bool,
     /// The process's starting directory, where runtime relative executables resolve.
     initial_working_directory: Option<std::path::PathBuf>,
     /// The calling program's directory. Called files are shown relative to it.
     program_directory: Option<std::path::PathBuf>,
+    path_hmac_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
 }
 
 impl Walker<'_> {
@@ -326,6 +432,151 @@ impl Walker<'_> {
         }
     }
 
+    /// Infer a binding only for the portable `%s`/`%%` printf subset and only
+    /// when the resolved executable is the platform's standard utility. No
+    /// command is run; the explicit row marker records that this is an inference.
+    fn infer_printf_binding(
+        &self,
+        call: &Invocation,
+    ) -> Option<(String, String, bool, Option<String>)> {
+        let environment_taint_is_path_only = (!self.environment_tainted_next
+            || self.environment_path_only_next)
+            && (!self.workflow_environment_tainted || self.workflow_environment_path_only);
+        if !call.direct
+            || self.depth != 0
+            || !environment_taint_is_path_only
+            || call.operation != "printf"
+            || call.parameters.len() != 1
+            || call.cache
+            || call.status_binding.is_some()
+            || call.result_binding.is_some()
+            || call.retry.is_some()
+            || call.discard_stderr
+        {
+            return None;
+        }
+        let binding = call.binding.as_ref()?.clone();
+        if !self.resolves_to_standard_printf() {
+            return None;
+        }
+        let Value::List(argument_sources) = call.parameters.get("arguments")? else {
+            return None;
+        };
+        let arguments = argument_sources
+            .iter()
+            .map(|value| resolve_static(value, &self.path_literals))
+            .collect::<Option<Vec<_>>>()?;
+        let Some(Value::String(format)) = arguments.first() else {
+            return None;
+        };
+        if format.starts_with('-') || format.contains('\\') {
+            return None;
+        }
+        let mut output = String::new();
+        let mut sensitive_offset = match argument_sources.first() {
+            Some(Value::Reference(name))
+                if self.path_sensitive_literals.contains(name)
+                    || self.path_sensitive_bindings.contains_key(name) =>
+            {
+                Some(0)
+            }
+            _ => None,
+        };
+        let mut argument_index = 1;
+        let mut chars = format.chars();
+        while let Some(character) = chars.next() {
+            if character != '%' {
+                output.push(character);
+                continue;
+            }
+            match chars.next()? {
+                '%' => output.push('%'),
+                's' => {
+                    let source = argument_sources.get(argument_index)?;
+                    let Value::String(argument) = arguments.get(argument_index)? else {
+                        return None;
+                    };
+                    if let Value::Reference(name) = source {
+                        if self.path_sensitive_literals.contains(name)
+                            || self.path_sensitive_bindings.contains_key(name)
+                        {
+                            sensitive_offset.get_or_insert(output.len());
+                        }
+                    }
+                    output.push_str(argument);
+                    argument_index += 1;
+                }
+                _ => return None,
+            }
+        }
+        if argument_index != arguments.len() || output.contains('\0') {
+            return None;
+        }
+        let safe_prefix = sensitive_offset.map(|offset| safe_public_path_prefix(&output, offset));
+        Some((
+            binding,
+            output,
+            sensitive_offset.is_some(),
+            safe_prefix.flatten(),
+        ))
+    }
+
+    #[cfg(unix)]
+    fn resolves_to_standard_printf(&self) -> bool {
+        const LOADER_OVERRIDES: &[&str] = &[
+            "LD_PRELOAD",
+            "LD_AUDIT",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+            "DYLD_FALLBACK_LIBRARY_PATH",
+            "DYLD_IMAGE_SUFFIX",
+        ];
+        let present_override = LOADER_OVERRIDES
+            .iter()
+            .find(|name| std::env::var_os(name).is_some());
+        if present_override.is_some() {
+            return false;
+        }
+        let Some(cwd) = self.known_working_directory() else {
+            return false;
+        };
+        let path_override = self
+            .environment_path_next
+            .as_ref()
+            .or(self.workflow_path.as_ref());
+        let resolved = match path_override {
+            Some(PathOverride::Set {
+                lookup_path: Some(path),
+                ..
+            }) => crate::runtime::binary_path_with_path("printf", &cwd, Some(path)),
+            Some(PathOverride::Set {
+                lookup_path: None, ..
+            }) => return false,
+            Some(PathOverride::Unset) => crate::runtime::binary_path_with_path(
+                "printf",
+                &cwd,
+                Some(std::ffi::OsStr::new("")),
+            ),
+            Some(PathOverride::Runtime) => return false,
+            None => crate::runtime::binary_path("printf", &cwd),
+        };
+        let Ok(resolved) = resolved else {
+            return false;
+        };
+        let Ok(resolved) = std::fs::canonicalize(resolved) else {
+            return false;
+        };
+        resolved == std::path::Path::new("/usr/bin/printf")
+            || resolved == std::path::Path::new("/bin/printf")
+    }
+
+    #[cfg(windows)]
+    fn resolves_to_standard_printf(&self) -> bool {
+        false
+    }
+
     /// Walk a step list in order. A called definition's body is inlined after its
     /// `CallProgram`, using a relative `end` offset. The definition is walked once
     /// through the call, so the inlined copy is skipped. An invalid offset falls
@@ -335,6 +586,21 @@ impl Walker<'_> {
         let mut index = 0;
         while index < steps.len() {
             let step = &steps[index];
+            let stdout_redirected = index > 0
+                && matches!(
+                    &steps[index - 1].kind,
+                    StepKind::Redirect {
+                        target: RedirectTarget::StdoutToStderr,
+                        ..
+                    }
+                );
+            let inferred_path_binding = match &step.kind {
+                StepKind::Invoke {
+                    call,
+                    connection: Connection::Start,
+                } if self.depth == 0 && !stdout_redirected => self.infer_printf_binding(call),
+                _ => None,
+            };
             let target = match &step.kind {
                 StepKind::CallProgram { end, .. } => index
                     .checked_add(*end)
@@ -393,6 +659,20 @@ impl Walker<'_> {
             if may_bind {
                 self.known.clear();
                 self.known_literals.clear();
+                self.path_literals.clear();
+                self.path_inferred_bindings.clear();
+                self.path_sensitive_literals.clear();
+                self.path_sensitive_bindings.clear();
+                if let Some((binding, value, contains_sensitive, safe_prefix)) =
+                    inferred_path_binding
+                {
+                    self.path_literals
+                        .insert(binding.clone(), Value::String(value.clone()));
+                    self.path_inferred_bindings.insert(binding.clone());
+                    if contains_sensitive {
+                        self.path_sensitive_bindings.insert(binding, safe_prefix);
+                    }
+                }
             }
             // Rows from a nested body already carry their own ids; this step's rows take its id.
             for row in &mut self.rows[before..] {
@@ -411,9 +691,13 @@ impl Walker<'_> {
             StepKind::If { .. }
             | StepKind::IfCommand { .. }
             | StepKind::Loop { .. }
-            | StepKind::Try { .. } => self.depth += 1,
+            | StepKind::Try { .. } => {
+                self.depth += 1;
+                self.control_flow_depth += 1;
+            }
             StepKind::EndIf | StepKind::EndLoop { .. } | StepKind::EndTry => {
                 self.depth = self.depth.saturating_sub(1);
+                self.control_flow_depth = self.control_flow_depth.saturating_sub(1);
             }
             _ => {}
         }
@@ -509,17 +793,96 @@ impl Walker<'_> {
             }
             StepKind::Save { path, .. } => self.file_write(line, "save", Some(path), scope),
             StepKind::Append { path } => self.file_write(line, "append", Some(path), scope),
-            StepKind::Environment { set, unset } => {
+            StepKind::Environment {
+                set,
+                unset,
+                workflow_scope,
+            } => {
                 // A change to a loader or interpreter variable, or any runtime
                 // value, can change which program runs. Taint the next command.
                 let sensitive = set
                     .iter()
                     .any(|(name, value)| is_sensitive_name(name) || has_reference(value))
                     || unset.iter().any(|name| is_sensitive_name(name));
+                let path_only = self.depth == 0
+                    && workflow_path_only_update(
+                        set,
+                        unset,
+                        &self.path_inferred_bindings,
+                        &self.path_sensitive_literals,
+                        &self.path_sensitive_bindings,
+                    );
                 let mut row = Row::plain(line, "environment", scope);
                 row.modifies_next_invocation = true;
                 row.environment_sensitive = sensitive;
+                if sensitive {
+                    self.environment_path_only_next = if self.environment_tainted_next {
+                        self.environment_path_only_next && path_only
+                    } else {
+                        path_only
+                    };
+                }
                 self.environment_tainted_next |= sensitive;
+                let path_update = if let Some((_, value)) = set.iter().rev().find(|(name, _)| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    let referenced_name = match value {
+                        Value::Reference(name) => Some(name.as_str()),
+                        _ => None,
+                    };
+                    let inferred_printf = referenced_name
+                        .is_some_and(|name| self.path_inferred_bindings.contains(name));
+                    Some(match resolve_static(value, &self.path_literals) {
+                        Some(Value::String(path)) => PathOverride::Set {
+                            path: std::ffi::OsString::from(path.as_str()),
+                            inferred_printf,
+                            lookup_path: referenced_name
+                                .and_then(|name| self.path_sensitive_bindings.get(name))
+                                .cloned()
+                                .map(|safe| safe.map(std::ffi::OsString::from))
+                                .unwrap_or_else(|| {
+                                    if referenced_name.is_some_and(|name| {
+                                        self.path_sensitive_literals.contains(name)
+                                    }) {
+                                        None
+                                    } else {
+                                        Some(std::ffi::OsString::from(path.as_str()))
+                                    }
+                                }),
+                            has_sensitive_tail: referenced_name.is_some_and(|name| {
+                                self.path_sensitive_literals.contains(name)
+                                    || self.path_sensitive_bindings.contains_key(name)
+                            }),
+                        },
+                        _ => PathOverride::Runtime,
+                    })
+                } else if unset.iter().any(|name| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    Some(PathOverride::Unset)
+                } else {
+                    None
+                };
+                if *workflow_scope {
+                    if self.control_flow_depth > 0 && path_update.is_some() {
+                        // The walker visits every conditional/loop/try body in
+                        // source order. A workflow PATH update there may not run,
+                        // so its value cannot survive the control-flow join.
+                        self.workflow_path = Some(PathOverride::Runtime);
+                    } else if let Some(update) = path_update {
+                        self.workflow_path = Some(update);
+                    }
+                    if sensitive {
+                        self.workflow_environment_path_only = if self.workflow_environment_tainted {
+                            self.workflow_environment_path_only && path_only
+                        } else {
+                            path_only
+                        };
+                    }
+                    self.workflow_environment_tainted |= sensitive;
+                } else {
+                    self.environment_path_next = path_update;
+                }
                 self.rows.push(row);
             }
             StepKind::Interactive => {
@@ -656,13 +1019,43 @@ impl Walker<'_> {
         // An environment change before a group's first command taints the whole
         // group. A change before a `pipe to` stage taints the group from there on.
         // Every stage in a tainted group is undeclared, not only the first.
-        let pending = std::mem::take(&mut self.environment_tainted_next);
+        let pending_environment_tainted = std::mem::take(&mut self.environment_tainted_next);
+        let pending_environment_path_only = if pending_environment_tainted {
+            self.environment_path_only_next
+        } else {
+            true
+        };
+        let pending = pending_environment_tainted || self.workflow_environment_tainted;
+        let pending_path_only = pending_environment_path_only
+            && (!self.workflow_environment_tainted || self.workflow_environment_path_only);
+        self.environment_path_only_next = true;
+        let path_override = self
+            .environment_path_next
+            .take()
+            .or_else(|| self.workflow_path.clone());
+        let inherited_path = path_override
+            .is_none()
+            .then(|| std::env::var_os("PATH"))
+            .flatten();
+        let effective_path_hmac_sha256 = self
+            .path_hmac_key
+            .as_ref()
+            .map(|key| effective_path_hmac(path_override.as_ref(), inherited_path.as_deref(), key));
         if starts_group {
             self.group_tainted = pending;
+            self.group_environment_path_only = pending_path_only;
         } else {
             self.group_tainted |= pending;
+            self.group_environment_path_only &= pending_path_only;
         }
         let tainted = self.group_tainted;
+        let inferred_printf_path = matches!(
+            path_override.as_ref(),
+            Some(PathOverride::Set {
+                inferred_printf: true,
+                ..
+            })
+        );
         let mut row = Row {
             line,
             kind,
@@ -670,6 +1063,8 @@ impl Walker<'_> {
             invocation: true,
             direct: call.direct,
             environment_tainted: tainted,
+            environment_path_only: tainted && self.group_environment_path_only,
+            effective_path_hmac_sha256,
             ..Row::default()
         };
         // A declared retry is shown whether or not the command resolves. `idempotent`
@@ -716,12 +1111,43 @@ impl Walker<'_> {
             row.binary = Some(call.operation.clone());
             row.process = Some(true);
             if let Some(cwd) = self.known_working_directory() {
-                let resolved = crate::runtime::binary_path(&call.operation, &cwd);
-                row.resolved = Some(resolved.is_ok());
+                let resolved = match path_override.as_ref() {
+                    Some(PathOverride::Set {
+                        lookup_path: Some(path),
+                        ..
+                    }) => crate::runtime::binary_path_with_path(&call.operation, &cwd, Some(path)),
+                    Some(PathOverride::Set {
+                        lookup_path: None, ..
+                    }) => Err(anyhow::anyhow!(
+                        "PATH contains a sensitive unresolved component"
+                    )),
+                    Some(PathOverride::Unset) => crate::runtime::binary_path_with_path(
+                        &call.operation,
+                        &cwd,
+                        Some(std::ffi::OsStr::new("")),
+                    ),
+                    Some(PathOverride::Runtime) => Err(anyhow::anyhow!("PATH is a runtime value")),
+                    None => crate::runtime::binary_path(&call.operation, &cwd),
+                };
+                let has_sensitive_tail = matches!(
+                    path_override.as_ref(),
+                    Some(PathOverride::Set {
+                        has_sensitive_tail: true,
+                        ..
+                    })
+                );
+                row.resolved = if resolved.is_ok() {
+                    Some(true)
+                } else if has_sensitive_tail {
+                    None
+                } else {
+                    Some(false)
+                };
                 row.resolved_path = resolved
                     .ok()
                     .and_then(|path| std::fs::canonicalize(path).ok())
                     .map(|path| path.to_string_lossy().into_owned());
+                row.resolved_path_inferred = inferred_printf_path && row.resolved_path.is_some();
             }
             row.undeclared = true;
             self.rows.push(row);
@@ -755,6 +1181,37 @@ impl Walker<'_> {
                         | crate::contracts::AppletBackend::Remote
                 ),
         );
+        if row.process == Some(true) {
+            if let Some(cwd) = self.known_working_directory() {
+                let resolved = match path_override.as_ref() {
+                    Some(PathOverride::Set {
+                        lookup_path: Some(path),
+                        ..
+                    }) => crate::runtime::binary_path_with_path(
+                        manifest.binary_for(call),
+                        &cwd,
+                        Some(path),
+                    ),
+                    Some(PathOverride::Set {
+                        lookup_path: None, ..
+                    }) => Err(anyhow::anyhow!(
+                        "PATH contains a sensitive unresolved component"
+                    )),
+                    Some(PathOverride::Unset) => crate::runtime::binary_path_with_path(
+                        manifest.binary_for(call),
+                        &cwd,
+                        Some(std::ffi::OsStr::new("")),
+                    ),
+                    Some(PathOverride::Runtime) => Err(anyhow::anyhow!("PATH is a runtime value")),
+                    None => crate::runtime::binary_path(manifest.binary_for(call), &cwd),
+                };
+                row.resolved_path = resolved
+                    .ok()
+                    .and_then(|path| std::fs::canonicalize(path).ok())
+                    .map(|path| path.to_string_lossy().into_owned());
+                row.resolved_path_inferred = inferred_printf_path && row.resolved_path.is_some();
+            }
+        }
         // When every parameter is known and public, use the same manifest
         // renderer as execution (including path expansion and JSON arguments).
         let literals = if scope.is_none() {
@@ -891,6 +1348,9 @@ impl Walker<'_> {
         row.resolved = Some(true);
         self.rows.push(row);
         let saved_cwd = self.cwd.clone();
+        let saved_workflow_path = self.workflow_path.clone();
+        let saved_workflow_taint = self.workflow_environment_tainted;
+        let saved_workflow_path_only = self.workflow_environment_path_only;
         self.stack.push(name.clone());
         // A called body may run on some paths only, so its folder changes are nested.
         self.depth += 1;
@@ -898,6 +1358,9 @@ impl Walker<'_> {
         self.depth = self.depth.saturating_sub(1);
         self.stack.pop();
         self.cwd = saved_cwd;
+        self.workflow_path = saved_workflow_path;
+        self.workflow_environment_tainted = saved_workflow_taint;
+        self.workflow_environment_path_only = saved_workflow_path_only;
     }
 }
 
@@ -953,6 +1416,136 @@ fn is_sensitive_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     let inert = upper.starts_with("LC_") || INERT_NAMES.iter().any(|known| upper == *known);
     !inert
+}
+
+fn is_path_name(name: &str) -> bool {
+    if cfg!(windows) {
+        name.eq_ignore_ascii_case("PATH")
+    } else {
+        name == "PATH"
+    }
+}
+
+/// Return only complete PATH entries that precede the first sensitive bytes.
+/// A partial entry can depend on the secret, so it must not be used to publish
+/// an executable path. No separator means no component is known to be public.
+fn safe_public_path_prefix(value: &str, sensitive_offset: usize) -> Option<String> {
+    let value = value.get(..sensitive_offset)?;
+    #[cfg(windows)]
+    let separator = ';';
+    #[cfg(not(windows))]
+    let separator = ':';
+    let separator_index = value.rfind(separator)?;
+    // A leading separator is itself a known empty entry (the current directory).
+    let end = if separator_index == 0 {
+        separator_index + separator.len_utf8()
+    } else {
+        separator_index
+    };
+    Some(value[..end].to_owned())
+}
+
+fn effective_path_hmac(
+    path_override: Option<&PathOverride>,
+    inherited_path: Option<&std::ffi::OsStr>,
+    key: &[u8; crate::agent::what_if_key::KEY_BYTES],
+) -> String {
+    let mut message = b"execute-what-if-effective-path-v1\0".to_vec();
+    match path_override {
+        Some(PathOverride::Set { path, .. }) => {
+            message.extend_from_slice(b"set\0");
+            append_path_bytes(&mut message, path.as_encoded_bytes());
+        }
+        Some(PathOverride::Unset) => message.extend_from_slice(b"unset\0"),
+        Some(PathOverride::Runtime) => message.extend_from_slice(b"runtime-derived\0"),
+        None => match inherited_path {
+            Some(path) => {
+                message.extend_from_slice(b"inherited-present\0");
+                append_path_bytes(&mut message, path.as_encoded_bytes());
+            }
+            None => message.extend_from_slice(b"inherited-absent\0"),
+        },
+    }
+    crate::agent::what_if_key::hmac_sha256(key, &message)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn append_path_bytes(message: &mut Vec<u8>, path: &[u8]) {
+    message.extend_from_slice(&(path.len() as u64).to_be_bytes());
+    message.extend_from_slice(path);
+}
+
+#[cfg(test)]
+mod path_hmac_tests {
+    use super::*;
+
+    #[test]
+    fn effective_path_hmac_distinguishes_empty_unset_and_inherited_modes() {
+        let key = [0x5a; crate::agent::what_if_key::KEY_BYTES];
+        let empty = PathOverride::Set {
+            path: std::ffi::OsString::new(),
+            inferred_printf: false,
+            lookup_path: Some(std::ffi::OsString::new()),
+            has_sensitive_tail: false,
+        };
+        let unset = PathOverride::Unset;
+        assert_ne!(
+            effective_path_hmac(Some(&empty), None, &key),
+            effective_path_hmac(Some(&unset), None, &key),
+            "PATH empty and PATH unset are different child environments"
+        );
+
+        assert_ne!(
+            effective_path_hmac(None, Some(std::ffi::OsStr::new("unset")), &key),
+            effective_path_hmac(None, None, &key),
+            "an inherited PATH value cannot collide with an absent PATH"
+        );
+    }
+}
+
+/// Only a static PATH change or a narrowly inferred, non-sensitive PATH binding
+/// can be represented safely by an executable digest in a what-if review. Other
+/// sensitive values may change what the child loads even when its executable path
+/// stays the same.
+fn workflow_path_only_update(
+    set: &BTreeMap<String, Value>,
+    unset: &[String],
+    inferred_bindings: &BTreeSet<String>,
+    sensitive_literals: &BTreeSet<String>,
+    sensitive_bindings: &BTreeMap<String, Option<String>>,
+) -> bool {
+    let path_is_reviewable =
+        if let Some((_, value)) = set.iter().rev().find(|(name, _)| is_path_name(name)) {
+            match value {
+                Value::String(_) => true,
+                // Only accept a direct reference to the explain walk's narrow,
+                // non-executing printf inference. Its resolved value is included in
+                // the keyed PATH identity, while unknown or sensitive-derived
+                // bindings remain unreviewable.
+                Value::Reference(name) => {
+                    inferred_bindings.contains(name)
+                        && !sensitive_literals.contains(name)
+                        && !sensitive_bindings.contains_key(name)
+                }
+                Value::List(_)
+                | Value::Record(_)
+                | Value::Integer(_)
+                | Value::Bool(_)
+                | Value::Null
+                | Value::Number(_) => false,
+            }
+        } else {
+            unset.iter().any(|name| is_path_name(name))
+        };
+    path_is_reviewable
+        && !set.iter().any(|(name, value)| {
+            !is_path_name(name) && (is_sensitive_name(name) || has_reference(value))
+        })
+        && !unset
+            .iter()
+            .any(|name| !is_path_name(name) && is_sensitive_name(name))
 }
 
 /// True when a value depends on the program's runtime state.

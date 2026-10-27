@@ -1515,6 +1515,28 @@ fn command_overlay_active() -> bool {
     COMMAND_ENV_OVERLAY.with(|cell| cell.borrow().is_some())
 }
 
+/// PATH supplied by the active command overlay, when it changes PATH. An unset
+/// PATH is represented by an empty value so lookup cannot silently fall back to
+/// the interpreter's inherited PATH.
+pub(crate) fn command_overlay_path() -> Option<OsString> {
+    COMMAND_ENV_OVERLAY.with(|cell| {
+        let overlay = cell.borrow();
+        let overlay = overlay.as_ref()?;
+        if overlay
+            .unset
+            .iter()
+            .any(|name| same_environment_name(OsStr::new(name), "PATH"))
+        {
+            return Some(OsString::new());
+        }
+        overlay
+            .set
+            .iter()
+            .find(|(name, _)| same_environment_name(OsStr::new(name), "PATH"))
+            .map(|(_, value)| OsString::from(value))
+    })
+}
+
 pub use crate::home::expand_home_path;
 
 /// Per-command environment changes from `and environment {...}` and

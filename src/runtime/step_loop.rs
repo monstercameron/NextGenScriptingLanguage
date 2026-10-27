@@ -3,6 +3,54 @@
 
 use super::*;
 
+pub(super) fn merge_environment_overlay(
+    target: &mut crate::capabilities::CommandEnvOverlay,
+    update: crate::capabilities::CommandEnvOverlay,
+) {
+    for name in update.unset {
+        target
+            .set
+            .retain(|existing, _| !same_environment_variable(existing, &name));
+        if !target
+            .unset
+            .iter()
+            .any(|existing| same_environment_variable(existing, &name))
+        {
+            target.unset.push(name);
+        }
+    }
+    for (name, value) in update.set {
+        target
+            .unset
+            .retain(|existing| !same_environment_variable(existing, &name));
+        target
+            .set
+            .retain(|existing, _| !same_environment_variable(existing, &name));
+        target.set.insert(name, value);
+    }
+}
+
+#[cfg(windows)]
+fn same_environment_variable(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+#[cfg(not(windows))]
+fn same_environment_variable(left: &str, right: &str) -> bool {
+    left == right
+}
+
+fn normalize_environment_variable(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        name.to_ascii_uppercase()
+    }
+    #[cfg(not(windows))]
+    {
+        name.to_owned()
+    }
+}
+
 // Precompute each name's last possible source-level use once. Job operations
 // cannot occur directly in loops; repeated calls have fresh job scopes. Names in
 // nested scopes can only delay cleanup.
@@ -226,6 +274,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     let mut pending_redirect: Option<PendingRedirect> = None;
     // Set by an `Environment` step and consumed by the next command.
     let mut pending_env: Option<crate::capabilities::CommandEnvOverlay> = None;
+    // `use environment` overlays last through the current reusable-program
+    // scope. Calls inherit them and restore their caller's overlay on return.
+    let mut workflow_env = crate::capabilities::CommandEnvOverlay::default();
+    let mut workflow_env_scopes = Vec::new();
     let mut pending_handoff = false;
     let mut pending_process: Option<handoff::ProcessRequest> = None;
     // Detached launches started in this run, bounded by handoff::MAX_DETACHED_LAUNCHES.
@@ -291,6 +343,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             cwd = enter_directory(registry, &state.cwd, &cwd)?;
             bindings = state.bindings;
             data = Input::Bytes(state.output);
+            workflow_env = resume::restored_workflow_environment(program, index, &bindings)?;
             // A completed exit or fail is a terminal node: nothing after it ran,
             // so the restored run ends here with the same status. Its operands
             // are already in the restored bindings.
@@ -470,13 +523,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         | StepKind::Finally
                 ) || resume::uncertain_on_failure(program, index, end, registry)?);
             let module_session = current_module_session(signals)?;
-            let fingerprint = resume::node_fingerprint_with_modules(
+            let fingerprint = resume::node_fingerprint_with_modules_and_bindings(
                 program,
                 index,
                 end,
                 registry,
                 &cwd,
                 module_session.fingerprints(),
+                &bindings,
             )?;
             let step_id = journal_step_ids
                 .as_ref()
@@ -518,6 +572,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         options,
                                         signals,
                                         registry,
+                                        environment: (!workflow_env.set.is_empty()
+                                            || !workflow_env.unset.is_empty())
+                                        .then(|| workflow_env.clone()),
                                     },
                                     &mut result.launched_processes,
                                 )
@@ -645,6 +702,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             options,
                             signals,
                             registry,
+                            environment: (!workflow_env.set.is_empty()
+                                || !workflow_env.unset.is_empty())
+                            .then(|| workflow_env.clone()),
                         },
                         &mut result.launched_processes,
                     )?;
@@ -677,6 +737,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     connection,
                     end,
                 } => {
+                    workflow_env_scopes.push(workflow_env.clone());
                     let child = calls::bind(call, inputs, &bindings).with_context(|| {
                         format!("program {:?}, called at line {}", call.operation, step.line)
                     })?;
@@ -717,6 +778,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                     bindings = frame.bindings;
                     cwd = frame.cwd;
+                    workflow_env = workflow_env_scopes
+                        .pop()
+                        .context("program environment scope was not saved")?;
                     if let Some(name) = frame.binding {
                         let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                             options.max_output_bytes,
@@ -1057,6 +1121,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         cancelled: Arc::clone(&signals.cancelled),
                                         draining: Arc::clone(&signals.drain),
                                         context: AppletInvocationContext::from_signals(signals)?,
+                                        environment: (!workflow_env.set.is_empty()
+                                            || !workflow_env.unset.is_empty())
+                                        .then(|| workflow_env.clone()),
                                     },
                                     each,
                                     &tasks[0],
@@ -1074,6 +1141,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         cancelled: Arc::clone(&signals.cancelled),
                                         draining: Arc::clone(&signals.drain),
                                         context: AppletInvocationContext::from_signals(signals)?,
+                                        environment: (!workflow_env.set.is_empty()
+                                            || !workflow_env.unset.is_empty())
+                                        .then(|| workflow_env.clone()),
                                     },
                                     each,
                                     &tasks[0],
@@ -1090,6 +1160,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 cancelled: Arc::clone(&signals.cancelled),
                                 draining: Arc::clone(&signals.drain),
                                 context: AppletInvocationContext::from_signals(signals)?,
+                                environment: (!workflow_env.set.is_empty()
+                                    || !workflow_env.unset.is_empty())
+                                .then(|| workflow_env.clone()),
                             },
                             tasks,
                         ),
@@ -1163,6 +1236,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::SpawnJob { name, stages } => {
                     let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
+                    let _environment = (!workflow_env.set.is_empty()
+                        || !workflow_env.unset.is_empty())
+                    .then(|| workflow_env.clone())
+                    .map(|overlay| crate::capabilities::CommandEnvScope::enter(Some(overlay)));
                     match job_supervisor.spawn(
                         scope,
                         name,
@@ -1173,6 +1250,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             cwd: &cwd,
                             options,
                             signals,
+                            environment: (!workflow_env.set.is_empty()
+                                || !workflow_env.unset.is_empty())
+                            .then(|| workflow_env.clone()),
                         },
                     ) {
                         Ok(launched) => {
@@ -1371,10 +1451,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 StepKind::LaunchDetached { output } => {
                     pending_process = Some(handoff::ProcessRequest::Detach(output.clone()));
                 }
-                StepKind::Environment { set, unset } => {
+                StepKind::Environment {
+                    set,
+                    unset,
+                    workflow_scope,
+                } => {
                     let mut overlay = crate::capabilities::CommandEnvOverlay {
                         set: BTreeMap::new(),
-                        unset: unset.clone(),
+                        unset: unset
+                            .iter()
+                            .map(|name| normalize_environment_variable(name))
+                            .collect(),
                     };
                     for (name, value) in set {
                         let Value::String(text) = resolve(value, &bindings)
@@ -1391,9 +1478,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 step.line
                             );
                         }
-                        overlay.set.insert(name.clone(), text);
+                        overlay
+                            .set
+                            .insert(normalize_environment_variable(name), text);
                     }
-                    pending_env = Some(overlay);
+                    if *workflow_scope {
+                        merge_environment_overlay(&mut workflow_env, overlay);
+                    } else {
+                        pending_env = Some(overlay);
+                    }
                 }
                 StepKind::Redirect { target, path } => {
                     // The file is opened now, before the command can start, and the
@@ -1451,7 +1544,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::Invoke { call, connection } => {
                     let mut redirect = pending_redirect.take();
-                    let env = pending_env.take();
+                    let env = {
+                        let mut merged = workflow_env.clone();
+                        if let Some(pending) = pending_env.take() {
+                            merge_environment_overlay(&mut merged, pending);
+                        }
+                        (!merged.set.is_empty() || !merged.unset.is_empty()).then_some(merged)
+                    };
+                    let _environment_scope = env
+                        .map(|overlay| crate::capabilities::CommandEnvScope::enter(Some(overlay)));
                     let handoff = std::mem::take(&mut pending_handoff);
                     let process = pending_process.take();
                     let manifest = registry.resolve_call(call)?;
@@ -1787,7 +1888,6 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             let _inherit = InheritTerminalStdout::enter(
                                 streamed && !observe::captures_streamed_stdout(),
                             );
-                            let _env = crate::capabilities::CommandEnvScope::enter(env);
                             let _handoff = terminal::Scope::enter(handoff);
                             // One native command receives a file or stdout redirect as
                             // its own stream, so the bytes land as they are written.

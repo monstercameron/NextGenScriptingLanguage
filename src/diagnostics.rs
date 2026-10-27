@@ -2552,7 +2552,7 @@ pub fn resolve_executable_diagnostics(
     };
     let line_starts = LineStarts::new(source);
     let mut calls = Vec::new();
-    collect_resolve_calls(&program.steps, &cwd, registry, &mut calls);
+    collect_resolve_calls(&program.steps, &cwd, None, registry, &mut calls);
     for (name, definition) in program.definitions.iter() {
         // Called files keep their own source text and line numbers. This API
         // returns diagnostics against the caller source, so don't attach a child
@@ -2560,15 +2560,31 @@ pub fn resolve_executable_diagnostics(
         if name.starts_with(crate::parser::PROGRAM_FILE_PREFIX) {
             continue;
         }
-        collect_resolve_calls(&definition.steps, &cwd, registry, &mut calls);
+        collect_resolve_calls(&definition.steps, &cwd, None, registry, &mut calls);
     }
-    let path_value = std::env::var_os("PATH").unwrap_or_default();
-    let path_note = path_value.to_string_lossy();
-    let mut diagnostics = calls.into_iter().filter_map(|(line, call, call_cwd)| {
-        if !call.direct || crate::runtime::binary_path(&call.operation, &call_cwd).is_ok() {
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut diagnostics = calls.into_iter().filter_map(|(line, call, call_cwd, path)| {
+        let path = match path {
+            None => inherited_path.clone(),
+            Some(Some(path)) => path,
+            Some(None) => {
+                // A PATH binding that is produced at runtime cannot be resolved
+                // by static analysis; the run resolves it immediately before launch.
+                return None;
+            }
+        };
+        let path_note = path.to_string_lossy();
+        if !call.direct
+            || crate::runtime::binary_path_with_path(
+                &call.operation,
+                &call_cwd,
+                Some(&path),
+            )
+            .is_ok()
+        {
             return None;
         }
-        let path_names = path_executable_names(&path_value, &call_cwd);
+        let path_names = path_executable_names(&path, &call_cwd);
         let path_suggestion = crate::suggest::closest(
             &call.operation,
             path_names.iter().map(String::as_str),
@@ -2689,14 +2705,49 @@ fn executable_candidate_name(file_name: &std::ffi::OsStr) -> Option<String> {
 fn collect_resolve_calls<'a>(
     steps: &'a [Step],
     start_cwd: &std::path::Path,
+    start_path: Option<Option<std::ffi::OsString>>,
     registry: &Registry,
-    calls: &mut Vec<(usize, &'a Invocation, std::path::PathBuf)>,
+    calls: &mut Vec<(
+        usize,
+        &'a Invocation,
+        std::path::PathBuf,
+        Option<Option<std::ffi::OsString>>,
+    )>,
 ) {
     let mut cwd = Some(start_cwd.to_path_buf());
+    let mut command_path: Option<Option<std::ffi::OsString>> = None;
+    let mut workflow_path = start_path;
     let mut index = 0;
     while index < steps.len() {
         let step = &steps[index];
         match &step.kind {
+            StepKind::Environment {
+                set,
+                unset,
+                workflow_scope,
+            } => {
+                let path_update = if let Some((_, value)) = set.iter().rev().find(|(name, _)| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    Some(match value {
+                        Value::String(path) => Some(std::ffi::OsString::from(path)),
+                        _ => None,
+                    })
+                } else if unset.iter().any(|name| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    Some(Some(std::ffi::OsString::new()))
+                } else {
+                    None
+                };
+                if *workflow_scope {
+                    if let Some(update) = path_update {
+                        workflow_path = Some(update);
+                    }
+                } else {
+                    command_path = path_update;
+                }
+            }
             StepKind::UseFolder { path } => {
                 if let Value::String(folder) = path {
                     let folder = std::path::Path::new(folder);
@@ -2713,8 +2764,9 @@ fn collect_resolve_calls<'a>(
                 }
             }
             StepKind::Invoke { call, .. } => {
+                let call_path = command_path.take().or_else(|| workflow_path.clone());
                 if let Some(current) = &cwd {
-                    calls.push((step.line, call, current.clone()));
+                    calls.push((step.line, call, current.clone(), call_path));
                 }
                 if registry
                     .resolve_call(call)
@@ -2738,16 +2790,23 @@ fn collect_resolve_calls<'a>(
             }
             StepKind::TaskGroup { tasks, .. } => {
                 if let Some(current) = &cwd {
-                    calls.extend(tasks.iter().map(|call| (step.line, call, current.clone())));
+                    calls.extend(
+                        tasks
+                            .iter()
+                            .map(|call| (step.line, call, current.clone(), workflow_path.clone())),
+                    );
                 }
             }
             StepKind::SpawnJob { stages, .. } => {
                 if let Some(current) = &cwd {
-                    calls.extend(
-                        stages
-                            .iter()
-                            .map(|stage| (stage.line, &stage.call, current.clone())),
-                    );
+                    calls.extend(stages.iter().map(|stage| {
+                        (
+                            stage.line,
+                            &stage.call,
+                            current.clone(),
+                            workflow_path.clone(),
+                        )
+                    }));
                 }
             }
             StepKind::IfCommand { call, .. }
@@ -2756,7 +2815,7 @@ fn collect_resolve_calls<'a>(
                 ..
             } => {
                 if let Some(current) = &cwd {
-                    calls.push((step.line, call, current.clone()));
+                    calls.push((step.line, call, current.clone(), workflow_path.clone()));
                 }
             }
             StepKind::CallProgram { call, end, .. } => {
@@ -2769,6 +2828,7 @@ fn collect_resolve_calls<'a>(
                         collect_resolve_calls(
                             &steps[index + 1..finish - 1],
                             current,
+                            workflow_path.clone(),
                             registry,
                             calls,
                         );

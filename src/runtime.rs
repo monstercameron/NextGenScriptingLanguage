@@ -1247,6 +1247,16 @@ fn spawn_drain_watchdog(
     Ok(())
 }
 pub(crate) fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
+    binary_path_with_path(binary, cwd, crate::capabilities::command_overlay_path().as_deref())
+}
+
+/// Resolve an executable using a caller-supplied PATH when present. This keeps
+/// static checks and runtime launch resolution on the same search path.
+pub(crate) fn binary_path_with_path(
+    binary: &str,
+    cwd: &Path,
+    path_override: Option<&OsStr>,
+) -> Result<PathBuf> {
     if binary == "@execute-model" {
         return bundled_model_applet();
     }
@@ -1266,7 +1276,10 @@ pub(crate) fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
         }
         Ok(candidate)
     } else {
-        let path = std::env::var_os("PATH").unwrap_or_default();
+        let path = path_override
+            .map(OsStr::to_os_string)
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default();
         binary_path_from_path(binary, cwd, &path)
     }
 }
@@ -1306,6 +1319,9 @@ pub fn bundled_model_applet() -> Result<PathBuf> {
 }
 
 fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Result<PathBuf> {
+    if path.is_empty() {
+        bail!("executable {binary:?} not found in PATH");
+    }
     let mut candidate = PathBuf::new();
     for entry in std::env::split_paths(path) {
         candidate.clear();
@@ -1343,10 +1359,14 @@ impl LaunchPathCache {
         if !self.key.as_ref().is_some_and(|(saved_path, saved_cwd)| {
             saved_path == path && saved_cwd.as_os_str() == cwd.as_os_str()
         }) {
-            self.entries = std::env::split_paths(path)
+        self.entries = if path.is_empty() {
+            Vec::new().into()
+        } else {
+            std::env::split_paths(path)
                 .map(|entry| cwd.join(entry))
                 .collect::<Vec<_>>()
-                .into();
+                .into()
+        };
             self.key = Some((path.to_owned(), cwd.to_path_buf()));
         }
         Arc::clone(&self.entries)
@@ -1359,6 +1379,9 @@ impl LaunchPathCache {
 }
 
 fn binary_path_in_components(binary: &str, entries: &[PathBuf]) -> Result<PathBuf> {
+    if entries.is_empty() {
+        bail!("executable {binary:?} not found in PATH");
+    }
     let mut candidate = PathBuf::new();
     for entry in entries {
         candidate.clear();
@@ -1399,7 +1422,12 @@ fn binary_path_for_launch(binary: &str, cwd: &Path, registry: &Registry) -> Resu
     {
         return binary_path(binary, cwd);
     }
-    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = crate::capabilities::command_overlay_path()
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    if path.is_empty() {
+        bail!("executable {binary:?} not found in PATH");
+    }
     binary_path_from_cached_path(binary, cwd, &path, registry)
 }
 fn event(enabled: bool, mut value: serde_json::Value, signals: &Signals) -> Result<()> {
@@ -2899,6 +2927,7 @@ struct ConditionRequest<'a> {
     options: &'a RunOptions,
     signals: &'a Signals,
     registry: &'a Registry,
+    environment: Option<crate::capabilities::CommandEnvOverlay>,
 }
 
 fn run_command_condition(request: ConditionRequest<'_>, launched: &mut usize) -> Result<bool> {
@@ -2911,7 +2940,11 @@ fn run_command_condition(request: ConditionRequest<'_>, launched: &mut usize) ->
         options,
         signals,
         registry,
+        environment,
     } = request;
+    let _environment = environment.map(|overlay| {
+        crate::capabilities::CommandEnvScope::enter(Some(overlay))
+    });
     let manifest = registry.resolve_call(call)?;
     // A nonzero exit is the answer here, not an applet failure. Retaining the
     // status is the process layer's switch for that; the placeholder name is
@@ -4581,6 +4614,10 @@ mod opt_manifest_binary_path_tests {
 
     fn opt_manifest_legacy_binary_path(binary: &str, cwd: &Path, path: &OsStr) -> Result<PathBuf> {
         // This preserves the original candidate construction as a parity oracle.
+        // Empty PATH is a refusal rather than an implicit current-directory lookup.
+        if path.is_empty() {
+            bail!("executable {binary:?} not found in PATH");
+        }
         if binary.contains('/')
             || (cfg!(windows) && binary.contains('\\'))
             || Path::new(binary).is_absolute()
@@ -4626,7 +4663,9 @@ mod opt_manifest_binary_path_tests {
                 (Err(expected), Err(actual)) => {
                     assert_eq!(expected.to_string(), actual.to_string())
                 }
-                (expected, actual) => panic!("cached lookup differs: {expected:?}, {actual:?}"),
+                (expected, actual) => panic!(
+                    "cached lookup differs for PATH {path:?}: {expected:?}, {actual:?}"
+                ),
             }
         }
         match (legacy, optimized) {
@@ -4668,6 +4707,13 @@ mod opt_manifest_binary_path_tests {
         for entry in &entries {
             let candidate = cwd.join(entry).join(binary);
             let path = opt_manifest_join_path(std::slice::from_ref(entry));
+            // An empty PATH and one empty component have the same serialized
+            // representation. Never interpret that ambiguous value as cwd.
+            if entry.as_os_str().is_empty() {
+                opt_manifest_assert_path_parity(binary, &cwd, &path);
+                assert!(binary_path_from_path(binary, &cwd, &path).is_err());
+                continue;
+            }
             // APFS rejects invalid UTF-8 filenames; that entry still exercises
             // byte-preserving PATH splitting and identical failed lookup.
             if entry == &non_utf8 && cfg!(target_os = "macos") {
@@ -5527,6 +5573,7 @@ mod drain_tests {
                 },
                 registry: &registry,
                 bindings: &BTreeMap::new(),
+                environment: None,
                 options: &options(directory.path()),
                 cancelled: Arc::clone(&signals.cancelled),
                 draining: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
@@ -5592,6 +5639,7 @@ mod drain_tests {
                 },
                 registry: &registry,
                 bindings: &BTreeMap::new(),
+                environment: None,
                 options: &options(directory.path()),
                 cancelled: Arc::clone(&signals.cancelled),
                 draining: Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED)),

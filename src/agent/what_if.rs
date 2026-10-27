@@ -230,29 +230,42 @@ fn resolved_executables(plan: &Value, cwd: &Path) -> Result<Value> {
         if row["builtin"] == true {
             continue;
         }
-        if row["environment_tainted"] == true {
+        let Some(binary) = row["binary"].as_str() else {
+            continue;
+        };
+        if row["environment_tainted"] == true && row["environment_path_only"] != true {
             bail!(
                 "cannot bind the executable for line {} after a run-time environment change",
                 row["line"].as_u64().unwrap_or(0)
             );
         }
-        let Some(binary) = row["binary"].as_str() else {
-            continue;
+        let resolved = if let Some(resolved) = row["resolved_path"].as_str() {
+            PathBuf::from(resolved)
+        } else {
+            if row["environment_tainted"] == true {
+                bail!(
+                    "cannot bind the executable for line {} after a run-time environment change",
+                    row["line"].as_u64().unwrap_or(0)
+                );
+            }
+            let has_separator = binary.contains('/') || binary.contains('\\');
+            if folder_changed
+                && !Path::new(binary).is_absolute()
+                && (has_separator || relative_path_entry)
+            {
+                bail!(
+                    "cannot bind the executable {binary:?} for line {} after a folder change: it resolves relative to a folder the review cannot know",
+                    row["line"].as_u64().unwrap_or(0)
+                );
+            }
+            crate::runtime::binary_path(binary, cwd)
+                .with_context(|| format!("resolving executable {binary:?} for review"))?
         };
-        let has_separator = binary.contains('/') || binary.contains('\\');
-        if folder_changed
-            && !Path::new(binary).is_absolute()
-            && (has_separator || relative_path_entry)
-        {
-            bail!(
-                "cannot bind the executable {binary:?} for line {} after a folder change: it resolves relative to a folder the review cannot know",
-                row["line"].as_u64().unwrap_or(0)
-            );
-        }
-        let resolved = crate::runtime::binary_path(binary, cwd)
-            .with_context(|| format!("resolving executable {binary:?} for review"))?;
         let canonical = fs::canonicalize(&resolved)
             .with_context(|| format!("canonicalizing executable {}", resolved.display()))?;
+        let effective_path_hmac_sha256 = row["effective_path_hmac_sha256"]
+            .as_str()
+            .context("what-if plan is missing its effective PATH identity")?;
         let mut file = fs::File::open(&canonical)
             .with_context(|| format!("reading executable {}", canonical.display()))?;
         let mut hasher = Sha256::new();
@@ -267,8 +280,12 @@ fn resolved_executables(plan: &Value, cwd: &Path) -> Result<Value> {
             hasher.update(&buffer[..count]);
         }
         executables.insert(
-            binary.to_owned(),
-            json!({ "path": canonical.to_string_lossy(), "sha256": hex(&hasher.finalize()) }),
+            format!("{binary}@line:{}", row["line"].as_u64().unwrap_or(0)),
+            json!({
+                "path": canonical.to_string_lossy(),
+                "sha256": hex(&hasher.finalize()),
+                "effective_path_hmac_sha256": effective_path_hmac_sha256,
+            }),
         );
     }
     Ok(Value::Object(executables.into_iter().collect()))
@@ -297,13 +314,25 @@ fn settings_covered(plan: &Value, context: &RunSettings<'_>) -> Result<Value> {
 /// the fingerprint covers.
 pub fn fingerprint(plan: &Value, context: &RunSettings<'_>) -> Result<(String, Value)> {
     let settings = settings_covered(plan, context)?;
-    let covered = json!({ "plan": plan, "settings": settings });
+    let covered = json!({ "plan": strip_path_review_tokens(plan.clone()), "settings": settings });
     Ok((digest(&serde_json::to_vec(&covered)?), settings))
+}
+
+fn strip_path_review_tokens(mut plan: Value) -> Value {
+    if let Some(rows) = plan["steps"].as_array_mut() {
+        for row in rows {
+            if let Some(object) = row.as_object_mut() {
+                object.remove("effective_path_hmac_sha256");
+            }
+        }
+    }
+    plan
 }
 
 /// The `--what-if` report: the fingerprint to confirm, the plan it covers, and the
 /// settings it covers.
 pub fn report(program_path: &str, fingerprint: &str, plan: Value, settings: Value) -> Value {
+    let plan = strip_path_review_tokens(plan);
     json!({
         "protocol": if plan["protocol"] == crate::agent::explain::LEGACY_PROTOCOL { "execute.what_if/1" } else { PROTOCOL },
         "program": program_path,
@@ -413,12 +442,12 @@ mod tests {
             }
         }
         let first_settings = resolved_executables(
-            &json!({"steps":[{"binary":first.to_string_lossy(),"direct":true}]}),
+            &json!({"steps":[{"binary":first.to_string_lossy(),"direct":true,"effective_path_hmac_sha256":"a"}]}),
             directory.path(),
         )
         .unwrap();
         let second_settings = resolved_executables(
-            &json!({"steps":[{"binary":second.to_string_lossy(),"direct":true}]}),
+            &json!({"steps":[{"binary":second.to_string_lossy(),"direct":true,"effective_path_hmac_sha256":"a"}]}),
             directory.path(),
         )
         .unwrap();
@@ -434,6 +463,33 @@ mod tests {
             directory.path(),
         )
         .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("after a run-time environment change"));
+    }
+
+    #[test]
+    fn review_refuses_a_resolved_executable_after_environment_taint() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory
+            .path()
+            .join(if cfg!(windows) { "tool.exe" } else { "tool" });
+        fs::write(&executable, b"review fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let resolved_path = fs::canonicalize(executable).unwrap();
+        let plan = json!({"steps":[{
+            "binary":"tool",
+            "process":true,
+            "environment_tainted":true,
+            "environment_path_only":false,
+            "resolved_path":resolved_path,
+            "line":2
+        }]});
+        let error = resolved_executables(&plan, directory.path()).unwrap_err();
         assert!(error
             .to_string()
             .contains("after a run-time environment change"));

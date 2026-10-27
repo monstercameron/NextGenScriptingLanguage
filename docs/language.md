@@ -945,8 +945,9 @@ explain --json` shows the policy on the command's step as `retry`, with `attempt
 
 ### Direct executable calls
 
-A quoted command name is an executable, resolved through the inherited `PATH`
-or relative to the program's working directory when it contains `/`:
+A quoted command name is an executable. A bare name is resolved through the
+`PATH` in force for that command; a name containing `/` is resolved relative to
+the program's working directory:
 
 ```text
 run "git" with arguments ["status", "--short", "--branch"]
@@ -962,7 +963,29 @@ remain exact argument bytes. Executable names must be nonempty literal strings;
 NUL is forbidden in names and arguments. The runtime does not split a quoted
 command into words, expand globs or `$variables`, insert `--`, or invoke a shell.
 Use the tool's own option rules and a safe format such as `%s` when passing data
-to `printf`. Direct calls run with the caller's environment and privileges.
+to `printf`. Direct calls inherit the caller's environment and privileges.
+`and environment` and `and without environment` apply to one command. Use `use
+environment` to change values for the rest of the current program scope; called
+reusable programs inherit the caller's values and restore them when they return:
+
+```text
+use environment {"PATH": "/opt/tools/bin:/usr/bin:/bin", "LC_ALL": "C"}
+run "mytool" with arguments ["--version"]
+```
+
+`use without environment ["NAME"]` removes inherited values for the current
+program scope. Values are passed to child commands, never installed into the
+Execute process itself. Values supplied through either form are sensitive and
+redacted. Names beginning with `LD_` or `DYLD_` remain refused unless an
+applicable capability policy authorizes them.
+
+Checkpointed runs reconstruct completed workflow-scoped environment changes
+from the program rather than storing their values in the journal. For that
+reason, workflow environment changes must be top-level in a checkpointed
+program. A value may be a text binding computed at runtime; that binding is
+restored under the checkpoint persistence policy and must not be reassigned
+after the environment change. Completed command identities are rechecked using
+the restored PATH, while sensitive values are not persisted.
 
 Before a fresh finite run starts any command, Execute resolves every statically
 known native executable, including those in branches, loops, and task groups,

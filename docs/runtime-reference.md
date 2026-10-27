@@ -383,15 +383,19 @@ policy.
 
 **What-if and confirm.** `execute run FILE --what-if` prints the plan the run would
 execute, as the explain JSON, with its fingerprint (`execute.what_if/2`) and the
-settings the fingerprint covers. It runs no program; when sensitive inputs are present it may create the private review key described below. `execute run FILE
+settings the fingerprint covers. It runs no program; reviews with native process
+steps or sensitive inputs may create the private review key described below. `execute run FILE
 --confirm FINGERPRINT` runs only when the current fingerprint equals the one given.
 Otherwise it stops before any effect with `plan changed since --what-if`. The
 fingerprint is a SHA-256 over the explain plan and these settings: the resolved input
 names, types, and values; the working directory; the contents of the
 `--capability-policy` and `--data-flow-policy` files; the contents of each `.json`
 manifest in the `--manifest-dir` directory, or of the `--manifest-catalog` file; and
-the program's version. The bundled manifests are covered by that version only. A
-sensitive input (an environment value or a secret prompt answer) is a candidate secret.
+the program's version. The bundled manifests are covered by that version only. Each
+native process also binds a keyed HMAC of its effective PATH, including its inherited
+or overlaid tail. A changed secondary-tool search path therefore invalidates review
+even when the primary executable is unchanged; the raw PATH value is not reported.
+A sensitive input (an environment value or a secret prompt answer) is a candidate secret.
 The report shows it as
 `{"sensitive": true, "hmac_sha256": ...}`, an HMAC-SHA256 under a per-user key, and the
 fingerprint covers that HMAC. A changed secret therefore needs a new review, and an
@@ -797,3 +801,15 @@ permissions. Only execute trusted scripts and manifests.
 The default machine-readable `explain --json` emits `execute.explain/2`; `run --what-if` emits `execute.what_if/2` with that plan. The v2 schema is `docs/schemas/explain.v2.schema.json`. Consumers of the original closed `execute.explain/1` schema can select `--explain-version 1` with `explain --json` or `run --what-if`. Legacy plans omit direct argv and unresolved arguments, so migrate reviewers to v2 to inspect them. A legacy what-if emits `execute.what_if/1`; pass the same `--explain-version 1` to `run --confirm`, since protocol versions produce different fingerprints.
 
 Version 2 `explain --json` and `run --what-if` include an `argv` array for each invocation and a `parameters` object for named applets. Values known from inputs are shown; unresolved runtime bindings appear as `{"ref":"name"}`. Sensitive environment and secret-prompt inputs are represented by a keyed HMAC marker. The first such `explain --json` or what-if review creates a private per-user what-if key if one does not already exist (`$XDG_STATE_HOME/execute/what-if.key`, or `~/.local/state/execute/what-if.key` on Unix; `%LOCALAPPDATA%/execute/what-if.key` on Windows). Literal JSON records in parameters and structured templates are encoded as `{"record":{...}}` recursively, so a literal field named `ref` or `sensitive` cannot be mistaken for a marker. Some manifest argument forms use structured template entries when their final native argument cannot yet be rendered. The plan is static: bindings produced during execution and called-program inputs may remain unresolved.
+
+For executable resolution only, the walker can statically model a direct system
+`printf` that binds text using the literal `%s`/`%%` format subset. It never runs
+that command, and declines this inference when common dynamic-loader override
+variables are present. A dependent row includes `resolved_path_inferred: true` to show
+that its `resolved_path` came from this restricted static model rather than
+source literals. The marker records provenance; it is not a claim that the
+command was executed or that the executable will remain unchanged. When the
+modeled PATH includes sensitive environment bytes, only complete public PATH
+components before those bytes are searched; a possible match in the sensitive
+tail remains unresolved and is not exposed as a filesystem path. Other
+runtime-produced values remain unresolved.

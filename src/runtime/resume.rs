@@ -55,7 +55,13 @@ pub(super) fn node_end(program: &Program, start: usize) -> usize {
         return start + 2;
     }
     // An environment step is one node with the redirect and command it applies to.
-    if matches!(program.steps[start].kind, StepKind::Environment { .. }) {
+    if matches!(
+        program.steps[start].kind,
+        StepKind::Environment {
+            workflow_scope: false,
+            ..
+        }
+    ) {
         let redirect = matches!(
             program.steps.get(start + 1).map(|step| &step.kind),
             Some(StepKind::Redirect { .. })
@@ -221,6 +227,7 @@ fn manifest_identity(
     call: &Invocation,
     registry: &Registry,
     cwd: &Path,
+    path_override: Option<Option<&OsStr>>,
     binary_digests: &mut BinaryDigests,
     allow_absent: bool,
 ) -> Result<()> {
@@ -236,7 +243,14 @@ fn manifest_identity(
         return Ok(());
     }
     if manifest.builtin.is_none() {
-        let binary = match binary_path(manifest.binary_for(call), cwd) {
+        let binary_result = match path_override {
+            Some(None) => bail!(
+                "checkpoint executable identity cannot use a runtime-derived PATH; use a fresh checkpoint"
+            ),
+            Some(Some(path)) => binary_path_with_path(manifest.binary_for(call), cwd, Some(path)),
+            None => binary_path(manifest.binary_for(call), cwd),
+        };
+        let binary = match binary_result {
             Ok(binary) => binary,
             Err(_) if allow_absent => {
                 // A different branch may legitimately use a platform-specific
@@ -322,10 +336,19 @@ pub(super) fn module_body_call_identity(
         }
         hash_field(&mut hash, &manifest.checkpoint_identity(call)?);
     } else {
-        manifest_identity(&mut hash, call, registry, cwd, &mut HashMap::new(), false)?;
+        manifest_identity(
+            &mut hash,
+            call,
+            registry,
+            cwd,
+            None,
+            &mut HashMap::new(),
+            false,
+        )?;
     }
     Ok(Some(format!("{:x}", hash.finalize())))
 }
+#[cfg(test)]
 pub(super) fn node_fingerprint(
     program: &Program,
     start: usize,
@@ -333,18 +356,38 @@ pub(super) fn node_fingerprint(
     registry: &Registry,
     cwd: &Path,
 ) -> Result<String> {
-    node_fingerprint_with_digests(program, start, end, registry, cwd, &mut HashMap::new())
+    node_fingerprint_with_bindings(program, start, end, registry, cwd, &BTreeMap::new())
 }
 
-pub(super) fn node_fingerprint_with_modules(
+fn node_fingerprint_with_bindings(
+    program: &Program,
+    start: usize,
+    end: usize,
+    registry: &Registry,
+    cwd: &Path,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<String> {
+    node_fingerprint_with_digests_and_bindings(
+        program,
+        start,
+        end,
+        registry,
+        cwd,
+        &mut HashMap::new(),
+        bindings,
+    )
+}
+
+pub(super) fn node_fingerprint_with_modules_and_bindings(
     program: &Program,
     start: usize,
     end: usize,
     registry: &Registry,
     cwd: &Path,
     module_fingerprints: &BTreeMap<String, String>,
+    bindings: &BTreeMap<String, Value>,
 ) -> Result<String> {
-    let base = node_fingerprint(program, start, end, registry, cwd)?;
+    let base = node_fingerprint_with_bindings(program, start, end, registry, cwd, bindings)?;
     Ok(with_module_fingerprints(base, module_fingerprints))
 }
 
@@ -365,6 +408,101 @@ fn with_module_fingerprints(
     }
     format!("{:x}", hash.finalize())
 }
+
+/// The environment PATH in force at a call site, represented as `None` for the
+/// inherited process PATH, `Some(Some(path))` for a static override, and
+/// `Some(None)` for a value that depends on runtime output.
+fn workflow_path_at(
+    program: &Program,
+    target: usize,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<Option<Option<OsString>>> {
+    let mut workflow_path: Option<Option<OsString>> = None;
+    let mut command_path: Option<Option<OsString>> = None;
+    let mut scopes = Vec::new();
+    let mut control_depth = 0usize;
+    for (index, step) in program.steps.iter().enumerate().take(target + 1) {
+        match &step.kind {
+            StepKind::If { .. }
+            | StepKind::IfCommand { .. }
+            | StepKind::Loop { .. }
+            | StepKind::Try { .. }
+            | StepKind::CallProgram { .. } => control_depth += 1,
+            StepKind::EndIf | StepKind::EndLoop { .. } | StepKind::EndTry | StepKind::EndCall => {
+                control_depth = control_depth.saturating_sub(1)
+            }
+            _ => {}
+        }
+        match &step.kind {
+            StepKind::Environment {
+                set,
+                unset,
+                workflow_scope,
+            } => {
+                let update = if let Some((_, value)) = set.iter().rev().find(|(name, _)| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    Some(
+                        resolve_environment_value(value, bindings).and_then(|value| match value {
+                            Value::String(path) => Some(OsString::from(path)),
+                            _ => None,
+                        }),
+                    )
+                } else if unset.iter().any(|name| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    Some(Some(OsString::new()))
+                } else {
+                    None
+                };
+                if *workflow_scope {
+                    if let Some(update) = update {
+                        if control_depth > 0 && environment_changes_path(set, unset) {
+                            bail!(
+                                "line {}: checkpoint executable identity cannot replay a workflow PATH change inside conditional, loop, try, or reusable-program control flow; move it to top level",
+                                step.line
+                            );
+                        }
+                        workflow_path = Some(update);
+                    }
+                } else {
+                    command_path = update;
+                }
+            }
+            StepKind::CallProgram { .. } => scopes.push(workflow_path.clone()),
+            StepKind::EndCall => {
+                if let Some(saved) = scopes.pop() {
+                    workflow_path = saved;
+                }
+            }
+            StepKind::Invoke { .. } if index < target => command_path = None,
+            _ => {}
+        }
+    }
+    Ok(command_path.take().or(workflow_path))
+}
+
+fn environment_changes_path(set: &BTreeMap<String, Value>, unset: &[String]) -> bool {
+    set.keys()
+        .any(|name| name == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH")))
+        || unset
+            .iter()
+            .any(|name| name == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH")))
+}
+
+fn resolve_environment_value(value: &Value, bindings: &BTreeMap<String, Value>) -> Option<Value> {
+    let mut value = value;
+    let mut seen = HashSet::new();
+    while let Value::Reference(name) = value {
+        if !seen.insert(name.as_str()) {
+            return None;
+        }
+        value = bindings.get(name)?;
+    }
+    Some(value.clone())
+}
+
+#[cfg(test)]
 fn node_fingerprint_with_digests(
     program: &Program,
     start: usize,
@@ -373,10 +511,31 @@ fn node_fingerprint_with_digests(
     cwd: &Path,
     binary_digests: &mut BinaryDigests,
 ) -> Result<String> {
+    node_fingerprint_with_digests_and_bindings(
+        program,
+        start,
+        end,
+        registry,
+        cwd,
+        binary_digests,
+        &BTreeMap::new(),
+    )
+}
+
+fn node_fingerprint_with_digests_and_bindings(
+    program: &Program,
+    start: usize,
+    end: usize,
+    registry: &Registry,
+    cwd: &Path,
+    binary_digests: &mut BinaryDigests,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<String> {
     let mut hash = Sha256::new();
     hash_field(&mut hash, b"execute-node-semantics-v1");
     let mut serialized = Vec::with_capacity(128);
-    for step in &program.steps[start..end] {
+    for (offset, step) in program.steps[start..end].iter().enumerate() {
+        let step_index = start + offset;
         serialized.clear();
         if let StepKind::CallProgram {
             call,
@@ -415,7 +574,16 @@ fn node_fingerprint_with_digests(
             ..
         } = &step.kind
         {
-            manifest_identity(&mut hash, call, registry, cwd, binary_digests, true)?;
+            let path = workflow_path_at(program, step_index, bindings)?;
+            manifest_identity(
+                &mut hash,
+                call,
+                registry,
+                cwd,
+                path.as_ref().map(|path| path.as_deref()),
+                binary_digests,
+                true,
+            )?;
         }
         if let StepKind::Invoke { call, .. } = &step.kind {
             manifest_identity(
@@ -423,6 +591,9 @@ fn node_fingerprint_with_digests(
                 call,
                 registry,
                 cwd,
+                workflow_path_at(program, step_index, bindings)?
+                    .as_ref()
+                    .map(|path| path.as_deref()),
                 binary_digests,
                 matches!(
                     program.steps[start].kind,
@@ -436,7 +607,16 @@ fn node_fingerprint_with_digests(
         }
         if let StepKind::TaskGroup { tasks, .. } = &step.kind {
             for call in tasks {
-                manifest_identity(&mut hash, call, registry, cwd, binary_digests, false)?;
+                let path = workflow_path_at(program, step_index, bindings)?;
+                manifest_identity(
+                    &mut hash,
+                    call,
+                    registry,
+                    cwd,
+                    path.as_ref().map(|path| path.as_deref()),
+                    binary_digests,
+                    false,
+                )?;
             }
         }
     }
@@ -457,7 +637,15 @@ pub(crate) fn graph_node_fingerprint(
     hash_field(&mut hash, b"execute-graph-node-v1");
     hash_field(&mut hash, base);
     if let Some(call) = call {
-        manifest_identity(&mut hash, call, registry, cwd, &mut HashMap::new(), false)?;
+        manifest_identity(
+            &mut hash,
+            call,
+            registry,
+            cwd,
+            None,
+            &mut HashMap::new(),
+            false,
+        )?;
     }
     Ok(with_module_fingerprints(
         format!("{:x}", hash.finalize()),
@@ -622,7 +810,7 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
     // compound node, a try block or a reusable call would end partway through
     // a node that resume cannot re-enter, so only top-level exits are supported.
     let mut nested = 0usize;
-    for step in &program.steps {
+    for (step_index, step) in program.steps.iter().enumerate() {
         match &step.kind {
             StepKind::If { .. }
             | StepKind::IfCommand { .. }
@@ -637,6 +825,37 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
                     "line {}: checkpointed programs can exit or fail only at top level; move it out of if, loop, try and reusable-program bodies",
                     step.line
                 );
+            }
+            StepKind::Environment {
+                set,
+                workflow_scope: true,
+                ..
+            } => {
+                if nested > 0 {
+                    bail!(
+                        "line {}: checkpointed workflow environment changes must be at top level",
+                        step.line
+                    );
+                }
+                for (name, value) in set {
+                    if !matches!(value, Value::String(_) | Value::Reference(_)) {
+                        bail!(
+                            "line {}: checkpointed workflow environment value for {name:?} must be text or a text binding",
+                            step.line
+                        );
+                    }
+                    if let Value::Reference(binding) = value {
+                        if program.steps[step_index + 1..]
+                            .iter()
+                            .any(|later| step_writes_binding(&later.kind, binding))
+                        {
+                            bail!(
+                                "line {}: checkpointed workflow environment binding {binding:?} cannot be reassigned after it is used; its value is needed to verify completed executable identities on resume",
+                                step.line
+                            );
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -682,6 +901,120 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
     Ok(())
 }
 
+fn invocation_writes_binding(call: &Invocation, name: &str) -> bool {
+    call.binding.as_deref() == Some(name)
+        || call.status_binding.as_deref() == Some(name)
+        || call.result_binding.as_deref() == Some(name)
+}
+
+fn step_writes_binding(step: &StepKind, name: &str) -> bool {
+    match step {
+        StepKind::Invoke { call, .. }
+        | StepKind::IfCommand { call, .. }
+        | StepKind::CallProgram { call, .. } => invocation_writes_binding(call, name),
+        StepKind::Loop {
+            kind: crate::ast::LoopKind::WhileCommand { call, .. },
+            ..
+        } => invocation_writes_binding(call, name),
+        StepKind::TaskGroup { binding, tasks, .. } => {
+            binding == name
+                || tasks
+                    .iter()
+                    .any(|call| invocation_writes_binding(call, name))
+        }
+        StepKind::SpawnJob { stages, .. } => stages
+            .iter()
+            .any(|stage| invocation_writes_binding(&stage.call, name)),
+        StepKind::InspectJob { binding, .. }
+        | StepKind::Catch { binding, .. }
+        | StepKind::TempScope { binding, .. }
+        | StepKind::CaptureBytes { binding }
+        | StepKind::ParseJson { binding }
+        | StepKind::TakeJson { binding, .. }
+        | StepKind::TakeJsonDynamic { binding, .. } => binding == name,
+        StepKind::AwaitJob {
+            status_binding,
+            result_binding,
+            ..
+        } => status_binding.as_deref() == Some(name) || result_binding.as_deref() == Some(name),
+        StepKind::Read { binding, .. }
+        | StepKind::ReadStdin { binding }
+        | StepKind::ReadCallInput { binding } => binding.as_deref() == Some(name),
+        StepKind::BindValue { binding, .. } => binding == name,
+        _ => false,
+    }
+}
+
+/// Rebuilds the non-persisted workflow overlay from completed top-level source
+/// steps. Runtime references are resolved from the checkpoint's authorized
+/// binding snapshot; the overlay itself is never written to the journal.
+pub(super) fn restored_workflow_environment(
+    program: &Program,
+    target: usize,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<crate::capabilities::CommandEnvOverlay> {
+    let mut environment = crate::capabilities::CommandEnvOverlay::default();
+    let mut control_depth = 0usize;
+    for step in program.steps.iter().take(target) {
+        match &step.kind {
+            StepKind::If { .. }
+            | StepKind::IfCommand { .. }
+            | StepKind::Loop { .. }
+            | StepKind::Try { .. }
+            | StepKind::CallProgram { .. } => control_depth += 1,
+            StepKind::EndIf | StepKind::EndLoop { .. } | StepKind::EndTry | StepKind::EndCall => {
+                control_depth = control_depth.saturating_sub(1)
+            }
+            _ => {}
+        }
+        let StepKind::Environment {
+            set,
+            unset,
+            workflow_scope: true,
+        } = &step.kind
+        else {
+            continue;
+        };
+        if control_depth > 0 {
+            bail!(
+                "line {}: cannot restore a checkpoint after a workflow environment change inside conditional, loop, try, or reusable-program control flow; use a fresh checkpoint",
+                step.line
+            );
+        }
+        let mut update = crate::capabilities::CommandEnvOverlay {
+            set: BTreeMap::new(),
+            unset: unset
+                .iter()
+                .map(|name| normalize_environment_name(name))
+                .collect(),
+        };
+        for (name, value) in set {
+            let Some(Value::String(value)) = resolve_environment_value(value, bindings) else {
+                bail!(
+                    "line {}: checkpointed workflow environment value must resolve to text in the restored state",
+                    step.line
+                );
+            };
+            update
+                .set
+                .insert(normalize_environment_name(name), value.clone());
+        }
+        super::step_loop::merge_environment_overlay(&mut environment, update);
+    }
+    Ok(environment)
+}
+
+fn normalize_environment_name(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        name.to_ascii_uppercase()
+    }
+    #[cfg(not(windows))]
+    {
+        name.to_owned()
+    }
+}
+
 pub(super) fn prepare(program: &Program, registry: &Registry, journal: &Journal) -> Result<()> {
     prepare_with_modules(program, registry, journal, &BTreeMap::new())
 }
@@ -692,6 +1025,7 @@ pub(super) fn prepare_with_modules(
     journal: &Journal,
     module_fingerprints: &BTreeMap<String, String>,
 ) -> Result<()> {
+    let restored_bindings = journal.restored_state()?.bindings;
     let mut start = 0;
     // Reuse content digests only while selected path metadata still matches.
     // Never retain the memo across resume attempts or execution boundaries.
@@ -746,13 +1080,14 @@ pub(super) fn prepare_with_modules(
             || node.end != end
             || node.fingerprint
                 != with_module_fingerprints(
-                    node_fingerprint_with_digests(
+                    node_fingerprint_with_digests_and_bindings(
                         program,
                         start,
                         end,
                         registry,
                         &node.cwd_before,
                         &mut binary_digests,
+                        &restored_bindings,
                     )?,
                     module_fingerprints,
                 )
@@ -805,7 +1140,15 @@ pub(super) fn trigger_fingerprint(
         ..
     } = trigger
     {
-        manifest_identity(&mut hash, call, registry, cwd, &mut binary_digests, false)?;
+        manifest_identity(
+            &mut hash,
+            call,
+            registry,
+            cwd,
+            None,
+            &mut binary_digests,
+            false,
+        )?;
     }
     Ok(format!("{:x}", hash.finalize()))
 }
@@ -889,6 +1232,37 @@ mod tests {
     use crate::ast::{Connection, Invocation, Step};
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn checkpoint_path_reconstruction_rejects_nested_workflow_path_changes() {
+        let sources = [
+            "if true is true\n  use environment {\"PATH\": \"/first\"}\notherwise\n  use environment {\"PATH\": \"/second\"}\nrun \"true\"\n",
+            "repeat 2 times\n  use environment {\"PATH\": \"/loop\"}\nrun \"true\"\n",
+        ];
+        for source in sources {
+            let program = crate::parser::parse(source).unwrap();
+            let error = workflow_path_at(
+                &program,
+                program.steps.len().saturating_sub(1),
+                &BTreeMap::new(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("workflow PATH change"),
+                "{error}"
+            );
+
+            let error =
+                restored_workflow_environment(&program, program.steps.len(), &BTreeMap::new())
+                    .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("workflow environment change inside"),
+                "{error}"
+            );
+        }
+    }
 
     #[test]
     fn prefix_digest_reuse_preserves_identities_paths_and_fresh_validation() {
@@ -976,6 +1350,33 @@ mod tests {
                 node_fingerprint(&program, index, index + 1, &registry, &left).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn checkpoint_identity_resolves_executables_through_workflow_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let left = temp.path().join("left-bin");
+        let right = temp.path().join("right-bin");
+        std::fs::create_dir(&left).unwrap();
+        std::fs::create_dir(&right).unwrap();
+        for (directory, output) in [(&left, "left"), (&right, "right")] {
+            let executable = directory.join("checkpoint-path-tool");
+            std::fs::write(&executable, format!("#!/bin/sh\nprintf '%s' {output}\n")).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let registry = Registry::default();
+        let source = |path: &Path| {
+            format!(
+                "use environment {{\"PATH\": {}}}\nrun \"checkpoint-path-tool\"\n",
+                serde_json::to_string(path.to_str().unwrap()).unwrap()
+            )
+        };
+        let left_program = crate::parser::parse(&source(&left)).unwrap();
+        let right_program = crate::parser::parse(&source(&right)).unwrap();
+        let left_identity = node_fingerprint(&left_program, 1, 2, &registry, temp.path()).unwrap();
+        let right_identity =
+            node_fingerprint(&right_program, 1, 2, &registry, temp.path()).unwrap();
+        assert_ne!(left_identity, right_identity);
     }
 
     #[test]

@@ -307,7 +307,17 @@ impl Emitter<'_> {
         while index < end {
             let step = &self.steps[index];
             match &step.kind {
-                StepKind::Environment { set, unset } => {
+                StepKind::Environment {
+                    set,
+                    unset,
+                    workflow_scope,
+                } => {
+                    if *workflow_scope {
+                        bail!(
+                            "line {}: workflow-scoped environment cannot compile to sh",
+                            step.line
+                        );
+                    }
                     if !unset.is_empty() {
                         bail!(
                             "line {}: unsetting environment variables cannot compile to sh",

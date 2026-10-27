@@ -321,13 +321,19 @@ pub enum StepKind {
     Append {
         path: Value,
     },
-    /// Per-command environment for the next native command: `set` values are text
-    /// literals or text bindings, and `unset` names are removed first. It must
-    /// immediately precede a `Redirect` or the command itself.
+    /// Environment changes: `workflow_scope` marks `use environment`, which
+    /// lasts through the current reusable-program scope. Otherwise it is the
+    /// per-command suffix applied to the immediately following native command.
+    /// `set` values are text literals or text bindings, and `unset` names are
+    /// removed first.
     Environment {
         set: BTreeMap<String, Value>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         unset: Vec<String>,
+        /// `use environment` changes the environment through the current
+        /// reusable-program scope; suffix forms remain one-command overlays.
+        #[serde(default, skip_serializing_if = "is_false")]
+        workflow_scope: bool,
     },
     /// `interactively`: the next command takes the terminal for its run (terminal
     /// handoff). It must immediately precede one fresh, unpiped native command.

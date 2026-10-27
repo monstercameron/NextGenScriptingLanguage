@@ -171,6 +171,19 @@ fn region_changes_directory(registry: &Registry, steps: &[crate::ast::Step]) -> 
     Ok(false)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn region_changes_workflow_environment(steps: &[crate::ast::Step]) -> bool {
+    steps.iter().any(|step| {
+        matches!(
+            &step.kind,
+            StepKind::Environment {
+                workflow_scope: true,
+                ..
+            }
+        )
+    })
+}
+
 /// Skip a branch or loop body that may not run. Its executables are resolved when
 /// the run reaches it, so a missing one there is reported at that point. A
 /// working-directory change inside it still makes later relative names unknown.
@@ -223,9 +236,16 @@ pub(crate) fn preflight_executables(
     let mut current_cwd = cwd.to_path_buf();
     let mut cwd_scopes = Vec::<(PathBuf, bool)>::new();
     let mut missing = Vec::new();
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    // `None` means no per-command PATH change; `Some(None)` means PATH comes
+    // from a runtime binding and cannot be checked before that binding exists.
+    let mut command_path: Option<Option<std::ffi::OsString>> = None;
+    let mut workflow_path: Option<Option<std::ffi::OsString>> = None;
+    let mut workflow_path_scopes = Vec::new();
     let check = |call: &Invocation,
                  line: usize,
                  current_cwd: &Path,
+                 path: &std::ffi::OsStr,
                  missing: &mut Vec<String>|
      -> Result<()> {
         let manifest = registry.resolve_call(call)?;
@@ -238,7 +258,15 @@ pub(crate) fn preflight_executables(
         if binary.starts_with('@') {
             return Ok(());
         }
-        if let Err(error) = binary_path(binary, current_cwd) {
+        let resolution = if binary.contains('/')
+            || (cfg!(windows) && binary.contains('\\'))
+            || Path::new(binary).is_absolute()
+        {
+            binary_path(binary, current_cwd)
+        } else {
+            binary_path_from_path(binary, current_cwd, path)
+        };
+        if let Err(error) = resolution {
             let suggestion = if call.direct {
                 executable_suggestion(binary, current_cwd)
             } else {
@@ -279,22 +307,75 @@ pub(crate) fn preflight_executables(
                         known_cwd = false;
                     }
                 } else if known_cwd {
-                    check(call, step.line, &current_cwd, &mut missing)?;
+                    let effective_path = command_path.take().or_else(|| workflow_path.clone());
+                    if let Some(Some(path)) = effective_path.as_ref() {
+                        check(call, step.line, &current_cwd, path, &mut missing)?;
+                    } else if effective_path.is_none() {
+                        check(call, step.line, &current_cwd, &inherited_path, &mut missing)?;
+                    }
+                } else {
+                    command_path = None;
+                }
+                index + 1
+            }
+            StepKind::Environment {
+                set,
+                unset,
+                workflow_scope,
+            } => {
+                let path_update = if let Some((_, value)) = set.iter().rev().find(|(name, _)| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    Some(match value {
+                        crate::ast::Value::String(path) => Some(std::ffi::OsString::from(path)),
+                        _ => None,
+                    })
+                } else if unset.iter().any(|name| {
+                    name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
+                }) {
+                    Some(Some(std::ffi::OsString::new()))
+                } else {
+                    None
+                };
+                if *workflow_scope {
+                    if let Some(update) = path_update {
+                        workflow_path = Some(update);
+                    }
+                } else {
+                    command_path = path_update;
                 }
                 index + 1
             }
             StepKind::TaskGroup { tasks, .. } => {
                 if known_cwd {
-                    for call in tasks {
-                        check(call, step.line, &current_cwd, &mut missing)?;
+                    if let Some(Some(path)) = workflow_path.as_ref() {
+                        for call in tasks {
+                            check(call, step.line, &current_cwd, path, &mut missing)?;
+                        }
+                    } else if workflow_path.is_none() {
+                        for call in tasks {
+                            check(call, step.line, &current_cwd, &inherited_path, &mut missing)?;
+                        }
                     }
                 }
                 index + 1
             }
             StepKind::SpawnJob { stages, .. } => {
                 if known_cwd {
-                    for stage in stages {
-                        check(&stage.call, stage.line, &current_cwd, &mut missing)?;
+                    if let Some(Some(path)) = workflow_path.as_ref() {
+                        for stage in stages {
+                            check(&stage.call, stage.line, &current_cwd, path, &mut missing)?;
+                        }
+                    } else if workflow_path.is_none() {
+                        for stage in stages {
+                            check(
+                                &stage.call,
+                                stage.line,
+                                &current_cwd,
+                                &inherited_path,
+                                &mut missing,
+                            )?;
+                        }
                     }
                 }
                 index + 1
@@ -302,9 +383,19 @@ pub(crate) fn preflight_executables(
             // The command always runs; its branches depend on its outcome.
             StepKind::IfCommand { call, end, .. } => {
                 if known_cwd {
-                    check(call, step.line, &current_cwd, &mut missing)?;
+                    if let Some(Some(path)) = workflow_path.as_ref() {
+                        check(call, step.line, &current_cwd, path, &mut missing)?;
+                    } else if workflow_path.is_none() {
+                        check(call, step.line, &current_cwd, &inherited_path, &mut missing)?;
+                    }
                 }
-                skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
+                let region = &steps[index + 1..index + end];
+                let next =
+                    skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?;
+                if region_changes_workflow_environment(region) {
+                    workflow_path = Some(None);
+                }
+                next
             }
             StepKind::If {
                 condition,
@@ -314,35 +405,71 @@ pub(crate) fn preflight_executables(
                 Some(true) => index + 1,
                 Some(false) => index + otherwise,
                 None => {
-                    skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
+                    let region = &steps[index + 1..index + end];
+                    let next = skip_unknown_region(
+                        registry,
+                        steps,
+                        index + 1,
+                        index + end,
+                        &mut known_cwd,
+                    )?;
+                    if region_changes_workflow_environment(region) {
+                        workflow_path = Some(None);
+                    }
+                    next
                 }
             },
             // Reached only after a taken `then` body, so the `otherwise` body is not run.
             StepKind::Otherwise { end } => index + end,
             // The catch body runs only after a failure in the try body.
             StepKind::Catch { end, .. } => {
-                skip_unknown_region(registry, steps, index, index + end, &mut known_cwd)?
+                let region = &steps[index..index + end];
+                let next =
+                    skip_unknown_region(registry, steps, index, index + end, &mut known_cwd)?;
+                if region_changes_workflow_environment(region) {
+                    workflow_path = Some(None);
+                }
+                next
             }
             StepKind::Loop { kind, end } => {
                 if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
                     if known_cwd {
-                        check(call, step.line, &current_cwd, &mut missing)?;
+                        if let Some(Some(path)) = workflow_path.as_ref() {
+                            check(call, step.line, &current_cwd, path, &mut missing)?;
+                        } else if workflow_path.is_none() {
+                            check(call, step.line, &current_cwd, &inherited_path, &mut missing)?;
+                        }
                     }
                 }
                 if loop_runs_once(kind) {
                     index + 1
                 } else {
-                    skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
+                    let region = &steps[index + 1..index + end];
+                    let next = skip_unknown_region(
+                        registry,
+                        steps,
+                        index + 1,
+                        index + end,
+                        &mut known_cwd,
+                    )?;
+                    if region_changes_workflow_environment(region) {
+                        workflow_path = Some(None);
+                    }
+                    next
                 }
             }
             StepKind::CallProgram { .. } => {
                 cwd_scopes.push((current_cwd.clone(), known_cwd));
+                workflow_path_scopes.push(workflow_path.clone());
                 index + 1
             }
             StepKind::EndCall => {
                 if let Some((saved_cwd, saved_known)) = cwd_scopes.pop() {
                     current_cwd = saved_cwd;
                     known_cwd = saved_known;
+                }
+                if let Some(saved_path) = workflow_path_scopes.pop() {
+                    workflow_path = saved_path;
                 }
                 index + 1
             }
@@ -2414,7 +2541,11 @@ fn validate_range(
                         && !terminal_stdout_captured;
                     flow.started |= manifest.builtin.is_none();
                 }
-                StepKind::Environment { set, .. } => {
+                StepKind::Environment {
+                    set,
+                    workflow_scope,
+                    ..
+                } => {
                     for (name, value) in set {
                         if matches!(value, Value::Reference(binding) if flow.nul_text_bindings.contains(binding))
                         {
@@ -2426,34 +2557,37 @@ fn validate_range(
                             &format!("environment value for {name:?}"),
                         )?;
                     }
-                    let invoke = match steps.get(index + 1) {
-                        Some(crate::ast::Step {
-                            kind: StepKind::Redirect { .. },
+                    if !*workflow_scope {
+                        let invoke = match steps.get(index + 1) {
+                            Some(crate::ast::Step {
+                                kind: StepKind::Redirect { .. },
+                                ..
+                            }) => index + 2,
+                            _ => index + 1,
+                        };
+                        let Some(crate::ast::Step {
+                            kind: StepKind::Invoke { call, connection },
                             ..
-                        }) => index + 2,
-                        _ => index + 1,
-                    };
-                    let Some(crate::ast::Step {
-                        kind: StepKind::Invoke { call, connection },
-                        ..
-                    }) = steps.get(invoke)
-                    else {
-                        bail!(
-                            "environment must immediately precede a redirection or native command"
-                        );
-                    };
-                    if *connection == Connection::Pipe || pipe_in_steps(steps, invoke + 1) {
-                        bail!("environment applies to a single command, not a pipe stage");
-                    }
-                    if call.cache {
-                        bail!("command environment cannot be combined with cache");
-                    }
-                    let manifest = registry.resolve_call(call)?;
-                    if manifest.builtin.is_some() {
-                        bail!("a builtin cannot take a command environment");
-                    }
-                    if manifest.execution_backend() != crate::contracts::AppletBackend::Command {
-                        bail!("command environment applies to native commands only");
+                        }) = steps.get(invoke)
+                        else {
+                            bail!(
+                                "environment must immediately precede a redirection or native command"
+                            );
+                        };
+                        if *connection == Connection::Pipe || pipe_in_steps(steps, invoke + 1) {
+                            bail!("environment applies to a single command, not a pipe stage");
+                        }
+                        if call.cache {
+                            bail!("command environment cannot be combined with cache");
+                        }
+                        let manifest = registry.resolve_call(call)?;
+                        if manifest.builtin.is_some() {
+                            bail!("a builtin cannot take a command environment");
+                        }
+                        if manifest.execution_backend() != crate::contracts::AppletBackend::Command
+                        {
+                            bail!("command environment applies to native commands only");
+                        }
                     }
                 }
                 StepKind::Append { path } => {
@@ -2782,7 +2916,11 @@ pub fn explain_with_inputs(
                 Some(path) => format!("launch detached (output to {})", describe_value(path)),
                 None => "launch detached".into(),
             },
-            StepKind::Environment { set, unset } => {
+            StepKind::Environment {
+                set,
+                unset,
+                workflow_scope,
+            } => {
                 let mut parts = Vec::new();
                 if !set.is_empty() {
                     let names = set.keys().cloned().collect::<Vec<_>>().join(", ");
@@ -2793,7 +2931,12 @@ pub fn explain_with_inputs(
                 }
                 // Values are secrets for redaction, so only names are shown.
                 format!(
-                    "next command environment: {}; values are not shown",
+                    "{} environment: {}; values are not shown",
+                    if *workflow_scope {
+                        "workflow"
+                    } else {
+                        "next command"
+                    },
                     parts.join("; ")
                 )
             }

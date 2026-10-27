@@ -20,13 +20,14 @@ const MAX_JOB_HANDLES: usize = 32;
 const MAX_JOB_STAGES: usize = 16;
 
 /// The workflow state a background job is launched against.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct JobEnv<'a> {
     pub(super) registry: &'a Registry,
     pub(super) bindings: &'a BTreeMap<String, Value>,
     pub(super) cwd: &'a crate::working_dir::WorkingDirectory,
     pub(super) options: &'a RunOptions,
     pub(super) signals: &'a Signals,
+    pub(super) environment: Option<crate::capabilities::CommandEnvOverlay>,
 }
 
 #[derive(Default)]
@@ -316,6 +317,7 @@ impl Supervisor {
             cwd,
             options,
             signals: outer_signals,
+            environment,
         } = env;
         if stages.is_empty() || stages.len() > MAX_JOB_STAGES {
             return Err(not_started_failure(
@@ -424,6 +426,7 @@ impl Supervisor {
         let (sender, receiver) = mpsc::channel();
         let ack = LaunchAcknowledger::new(sender, Arc::clone(&snapshot));
         let worker_snapshot = Arc::clone(&snapshot);
+        let worker_environment = environment;
         let registry = registry.clone();
         let options = options.clone();
         let outer_cancelled = Arc::clone(&outer_signals.cancelled);
@@ -452,6 +455,8 @@ impl Supervisor {
 
             let result = match worker_signals {
                 Ok(mut signals) => {
+                    let _environment = worker_environment
+                        .map(|overlay| crate::capabilities::CommandEnvScope::enter(Some(overlay)));
                     signals.outer_cancelled.push(outer_cancelled);
                     signals.job_cancelled = Some(worker_job_cancelled);
                     signals.inherit_applet_context(&invocation_context)?;
@@ -1021,6 +1026,7 @@ mod tests {
                 cwd: &crate::working_dir::WorkingDirectory::plain(directory.path()),
                 options: &options,
                 signals: &signals,
+                environment: None,
             },
         )?;
 
@@ -1092,6 +1098,7 @@ mod tests {
                     cwd: &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
                     options: &options,
                     signals: &signals,
+                    environment: None,
                 },
             );
             sender

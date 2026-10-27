@@ -460,6 +460,8 @@ fn classified_parse_error(
     {
         "check.program.input.required"
     } else if lower.contains("outside the supported")
+        || lower.contains("must be between")
+        || lower.contains("interval must be")
         || lower.contains("must be a positive integer in range")
         || lower.contains("status must be")
         || lower.contains("retry count") && lower.contains("range")
@@ -705,6 +707,14 @@ fn collect_program_diagnostics(
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    collect_job_reference_diagnostics(source, &program.steps, line_starts, diagnostics);
+    collect_duplicate_call_bindings(source, &program.steps, line_starts, diagnostics);
+    collect_program_input_diagnostics(source, &program.steps, line_starts, diagnostics);
+    for definition in program.definitions.values() {
+        collect_job_reference_diagnostics(source, &definition.steps, line_starts, diagnostics);
+        collect_duplicate_call_bindings(source, &definition.steps, line_starts, diagnostics);
+        collect_program_input_diagnostics(source, &definition.steps, line_starts, diagnostics);
+    }
     let mut calls = Vec::new();
     collect_calls(&program.steps, &mut calls);
     if let Some(crate::ast::Trigger::Listen {
@@ -910,6 +920,182 @@ fn collect_program_diagnostics(
         line_starts,
         diagnostics,
     );
+}
+
+fn collect_job_reference_diagnostics(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut jobs = BTreeSet::new();
+    for step in steps {
+        let reference = match &step.kind {
+            StepKind::SpawnJob { name, .. } => {
+                jobs.insert(name.as_str());
+                None
+            }
+            StepKind::AwaitJob { name, .. }
+            | StepKind::CancelJob { name }
+            | StepKind::InspectJob { name, .. } => Some(name.as_str()),
+            _ => None,
+        };
+        let Some(name) = reference else { continue };
+        if jobs.contains(name) {
+            continue;
+        }
+        let span = line_words_from_start(source, line_starts.start(step.line))
+            .into_iter()
+            .find(|word| !word.3 && word.0 == name)
+            .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
+            .unwrap_or_else(|| line_starts.span(source, step.line));
+        diagnostics.push(Diagnostic::error(
+            "check.scope",
+            format!("job {name:?} must be spawned before it is inspected, awaited, or cancelled"),
+            span,
+        ));
+    }
+}
+
+fn collect_duplicate_call_bindings(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut seen = BTreeSet::new();
+    for step in steps {
+        let calls: Vec<&Invocation> = match &step.kind {
+            StepKind::Invoke { call, .. } | StepKind::CallProgram { call, .. } => vec![call],
+            StepKind::TaskGroup { tasks, .. } => tasks.iter().collect(),
+            StepKind::SpawnJob { stages, .. } => stages.iter().map(|stage| &stage.call).collect(),
+            _ => Vec::new(),
+        };
+        for call in calls {
+            for name in call
+                .binding
+                .iter()
+                .chain(call.status_binding.iter())
+                .chain(call.result_binding.iter())
+            {
+                if seen.insert(name.as_str()) {
+                    continue;
+                }
+                let words = line_words_from_start(source, line_starts.start(step.line));
+                let span = words
+                    .windows(2)
+                    .find(|pair| {
+                        !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name.as_str()
+                    })
+                    .map(|pair| {
+                        line_starts.span_at(source, pair[1].1, pair[1].2, SpanPrecision::Token)
+                    })
+                    .unwrap_or_else(|| line_starts.span(source, step.line));
+                diagnostics.push(Diagnostic::error(
+                    "check.duplicate_name",
+                    format!("result name {name:?} is bound more than once"),
+                    span,
+                ));
+            }
+        }
+    }
+}
+
+fn collect_program_input_diagnostics(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for step in steps {
+        let StepKind::CallProgram { call, inputs, .. } = &step.kind else {
+            continue;
+        };
+        for name in call.parameters.keys() {
+            if inputs.iter().any(|input| input.name == *name) {
+                continue;
+            }
+            let span = find_parameter_span_at(source, step.line, name, line_starts)
+                .unwrap_or_else(|| line_starts.span(source, step.line));
+            let mut diagnostic = Diagnostic::error(
+                "check.program.input.unknown",
+                format!("program {:?} has no input {name:?}", call.operation),
+                span.clone(),
+            );
+            if let Some(suggestion) = suggest::closest(
+                name,
+                inputs
+                    .iter()
+                    .map(|input| input.name.as_str())
+                    .filter(|candidate| !call.parameters.contains_key(*candidate)),
+            ) {
+                diagnostic
+                    .message
+                    .push_str(&format!("; did you mean {suggestion:?}?"));
+                if span.precision == SpanPrecision::Token {
+                    diagnostic.fixes.push(SuggestedFix::replace(
+                        format!("rename input {name:?} to {suggestion:?}"),
+                        span,
+                        suggestion,
+                    ));
+                }
+            }
+            diagnostics.push(diagnostic);
+        }
+        for input in inputs {
+            if call.parameters.contains_key(&input.name) || input.default.is_some() {
+                continue;
+            }
+            let span = find_phrase_span_at(source, step.line, &call.operation, line_starts)
+                .unwrap_or_else(|| line_starts.span(source, step.line));
+            let mut diagnostic = Diagnostic::error(
+                "check.program.input.required",
+                format!("program {:?} requires input {:?}", call.operation, input.name),
+                span,
+            );
+            if let Some(edit) = missing_program_input_edit(
+                source,
+                step.line,
+                &input.name,
+                input.kind,
+                !call.parameters.is_empty(),
+            ) {
+                diagnostic.fixes.push(SuggestedFix {
+                    message: format!("supply required input {:?}", input.name),
+                    edits: vec![edit],
+                });
+            }
+            diagnostics.push(diagnostic);
+        }
+    }
+}
+
+fn missing_program_input_edit(
+    source: &str,
+    line: usize,
+    name: &str,
+    kind: crate::ast::InputType,
+    already_has_inputs: bool,
+) -> Option<TextEdit> {
+    let starts = LineStarts::new(source);
+    let line_start = starts.start(line);
+    let line_end = starts.ends.get(line.saturating_sub(1)).copied()?;
+    let raw = source.get(line_start..line_end)?;
+    let content = parser::strip_comment(raw);
+    let offset_in_line = content.trim_end().len();
+    let offset = line_start + offset_in_line;
+    let placeholder = match kind {
+        crate::ast::InputType::Text => "\"\"",
+        crate::ast::InputType::Integer => "0",
+        crate::ast::InputType::Boolean => "false",
+        crate::ast::InputType::TextList => "[]",
+        crate::ast::InputType::Json => "null",
+        crate::ast::InputType::Bytes => return None,
+    };
+    let join = if already_has_inputs { " and " } else { " with " };
+    let replacement = format!("{join}{name} {placeholder}");
+    let span = starts.span_at(source, offset, offset, SpanPrecision::Token);
+    Some(TextEdit { span, replacement })
 }
 
 fn collect_non_call_bindings(steps: &[Step], known_names: &mut BTreeSet<String>) {

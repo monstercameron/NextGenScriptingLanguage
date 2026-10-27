@@ -167,10 +167,16 @@ fn diagnostics_without_a_fix_keep_their_json_shape() {
 fn semantic_parser_errors_have_specific_codes_and_token_spans() {
     for (source, code, token) in [
         ("break\n", "check.scope", "break"),
+        ("await job1\n", "check.scope", "job1"),
         (
             "step: run \"printf\" with arguments [\"x\"]\nstep: run \"printf\" with arguments [\"y\"]\n",
             "check.duplicate_name",
             "step",
+        ),
+        (
+            "run \"true\" as result\nrun \"true\" as result\n",
+            "check.duplicate_name",
+            "result",
         ),
         (
             "exit with status 300\n",
@@ -209,4 +215,62 @@ fn direct_executable_args_typo_has_a_machine_applicable_fix() {
     let fixed = apply(source, diagnostic.fixes.first().expect("rename fix"));
     assert_eq!(fixed, "run \"grep\" with arguments [\"needle\"]\n");
     assert!(analyze_source(&fixed, &Registry::default()).is_empty());
+}
+
+#[test]
+fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
+    let registry = Registry::default();
+    let definition = "define worker\n  accept input as text\n  use value input\n\n";
+    for (call, code, token) in [
+        (
+            "run program worker with typo \"value\"\n",
+            "check.program.input.unknown",
+            "typo",
+        ),
+        (
+            "run program worker\n",
+            "check.program.input.required",
+            "worker",
+        ),
+    ] {
+        let source = format!("{definition}{call}");
+        let diagnostics = analyze_source(&source, &registry);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("expected {code}: {diagnostics:#?}"));
+        assert_eq!(diagnostic.span.precision, flow::diagnostics::SpanPrecision::Token);
+        assert_eq!(
+            &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
+            token
+        );
+        if code == "check.program.input.unknown" {
+            let repaired = apply(&source, diagnostic.fixes.first().expect("input rename fix"));
+            assert!(repaired.contains("with input \"value\"\n"));
+            assert!(analyze_source(&repaired, &registry)
+                .iter()
+                .all(|item| item.code != code));
+        }
+        if code == "check.program.input.required" {
+            let repaired = apply(&source, diagnostic.fixes.first().expect("input insertion fix"));
+            assert!(repaired.contains("run program worker with input \"\"\n"));
+            assert!(analyze_source(&repaired, &registry)
+                .iter()
+                .all(|item| item.code != code));
+        }
+    }
+}
+
+#[test]
+fn one_hundred_invalid_sources_never_fall_back_to_check_failed() {
+    let registry = Registry::default();
+    for index in 0..100 {
+        let source = format!("use value missing_{index}\n");
+        let diagnostics = analyze_source(&source, &registry);
+        assert!(!diagnostics.is_empty(), "source unexpectedly checked clean: {source}");
+        assert!(
+            diagnostics.iter().all(|diagnostic| diagnostic.code != "check_failed"),
+            "generic failure code for {source}: {diagnostics:#?}"
+        );
+    }
 }

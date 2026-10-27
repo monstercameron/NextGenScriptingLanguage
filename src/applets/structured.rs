@@ -15,8 +15,6 @@ use serde_json::{Map, Value};
 use std::borrow::Cow;
 
 const MAX_JSON_BYTES: usize = super::shared::MAX_BYTES;
-const MAX_POINTER_BYTES: usize = 4096;
-const MAX_POINTER_SEGMENTS: usize = 256;
 const MAX_FILTER_CLAUSES: usize = 32;
 const MAX_DEPTH: usize = super::shared::MAX_DEPTH;
 const MAX_JSON_ITEMS: usize = 100_000;
@@ -890,9 +888,10 @@ fn optional_pointer<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a 
 }
 
 fn parse_pointer(pointer: &str) -> Result<Vec<String>, AppletError> {
-    if pointer.len() > MAX_POINTER_BYTES {
+    if pointer.len() > crate::contracts::JSON_POINTER_MAX_BYTES {
         return Err(invalid(format!(
-            "JSON Pointer exceeds the {MAX_POINTER_BYTES}-byte limit"
+            "JSON Pointer exceeds the {}-byte limit",
+            crate::contracts::JSON_POINTER_MAX_BYTES
         )));
     }
     if pointer.is_empty() {
@@ -917,9 +916,10 @@ fn parse_pointer(pointer: &str) -> Result<Vec<String>, AppletError> {
             }
         }
         segments.push(decoded);
-        if segments.len() > MAX_POINTER_SEGMENTS {
+        if segments.len() > crate::contracts::JSON_POINTER_MAX_SEGMENTS {
             return Err(invalid(format!(
-                "JSON Pointer exceeds the {MAX_POINTER_SEGMENTS}-segment limit"
+                "JSON Pointer exceeds the {}-segment limit",
+                crate::contracts::JSON_POINTER_MAX_SEGMENTS
             )));
         }
     }
@@ -1140,6 +1140,35 @@ fn json_type(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_pointer_parser_accepts_runtime_limits_and_rejects_the_next_byte_or_segment() {
+        let at_byte_limit = format!(
+            "/{}",
+            "x".repeat(crate::contracts::JSON_POINTER_MAX_BYTES - 1)
+        );
+        assert_eq!(
+            at_byte_limit.len(),
+            crate::contracts::JSON_POINTER_MAX_BYTES
+        );
+        assert!(parse_pointer(&at_byte_limit).is_ok());
+        let over_byte_limit = format!("{at_byte_limit}x");
+        assert!(parse_pointer(&over_byte_limit)
+            .unwrap_err()
+            .message
+            .contains("4096-byte limit"));
+
+        let at_segment_limit = "/x".repeat(crate::contracts::JSON_POINTER_MAX_SEGMENTS);
+        assert_eq!(
+            parse_pointer(&at_segment_limit).unwrap().len(),
+            crate::contracts::JSON_POINTER_MAX_SEGMENTS
+        );
+        let over_segment_limit = format!("{at_segment_limit}/x");
+        assert!(parse_pointer(&over_segment_limit)
+            .unwrap_err()
+            .message
+            .contains("256-segment limit"));
+    }
 
     #[test]
     fn typed_get_matches_the_json_value_path() {

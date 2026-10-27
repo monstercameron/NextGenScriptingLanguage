@@ -4639,6 +4639,107 @@ fn validate_call(
             ));
         }
     }
+
+    validate_static_json_container_selection(
+        source,
+        line,
+        call,
+        manifest,
+        line_starts,
+        diagnostics,
+    );
+}
+
+/// Check the selected JSON container only when both the operation dispatch and
+/// the selected value are statically known. Keep this tied to the effective
+/// runtime dispatch so unrelated or custom manifests do not inherit constraints
+/// merely from their display name.
+fn validate_static_json_container_selection(
+    source: &str,
+    line: usize,
+    call: &Invocation,
+    manifest: &Manifest,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let operation = if manifest.execution_backend() == AppletBackend::InProcess {
+        manifest.name_for(call)
+    } else if let Some(operation) = manifest.execute_applet_operation() {
+        operation
+    } else {
+        return;
+    };
+    let (container, expected) = match operation {
+        "json.keys" | "json.entries" | "json.values" => ("object", "an object"),
+        "json.first" | "json.last" | "json.filter" => ("array", "an array"),
+        _ => return,
+    };
+
+    let Some(document) = call.parameters.get("document") else {
+        // An omitted document (for example stdin) is dynamic.
+        return;
+    };
+    if matches!(document, Value::Reference(_)) {
+        // References may resolve to any JSON value at runtime.
+        return;
+    }
+    let pointer = match call.parameters.get("pointer") {
+        None => "",
+        Some(Value::String(pointer)) => pointer.as_str(),
+        // Dynamic pointers cannot select a statically known value.
+        Some(_) => return,
+    };
+    let Some(selected) = static_json_pointer_selection(document, pointer) else {
+        // Missing or invalid selections retain their established runtime
+        // diagnostics; this check is specifically about known container shape.
+        return;
+    };
+    if matches!(selected, Value::Reference(_)) {
+        return;
+    }
+    let matches = match container {
+        "object" => matches!(selected, Value::Record(_)),
+        "array" => matches!(selected, Value::List(_)),
+        _ => true,
+    };
+    if !matches {
+        diagnostics.push(Diagnostic::error(
+            "applet.parameter.constraint",
+            format!(
+                "applet {:?} operation {operation:?} requires the selected JSON value to be {expected}",
+                manifest.name
+            ),
+            parameter_value_span_at(source, line, "document", line_starts)
+                .unwrap_or_else(|| line_starts.span(source, line)),
+        ));
+    }
+}
+
+fn static_json_pointer_selection<'a>(document: &'a Value, pointer: &str) -> Option<&'a Value> {
+    if pointer.len() > crate::contracts::JSON_POINTER_MAX_BYTES {
+        return None;
+    }
+    let segments = crate::contracts::json_pointer_segments(pointer).ok()?;
+    if segments.len() > crate::contracts::JSON_POINTER_MAX_SEGMENTS {
+        return None;
+    }
+    let mut selected = document;
+    for segment in segments {
+        selected = match selected {
+            Value::Record(fields) => fields.get(&segment)?,
+            Value::List(items) => {
+                if segment.is_empty()
+                    || (segment.len() > 1 && segment.starts_with('0'))
+                    || !segment.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    return None;
+                }
+                items.get(segment.parse::<usize>().ok()?)?
+            }
+            _ => return None,
+        };
+    }
+    Some(selected)
 }
 
 /// Validate statically known pointers for applets that use the shared JSON
@@ -5327,6 +5428,22 @@ mod tests {
     use crate::contracts::{OutputType, ValueSchema};
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn static_json_pointer_selection_observes_runtime_segment_limit() {
+        let mut document = Value::Null;
+        for _ in 0..crate::contracts::JSON_POINTER_MAX_SEGMENTS {
+            document = Value::Record(BTreeMap::from([("a".to_owned(), document)]));
+        }
+        let at_limit = "/a".repeat(crate::contracts::JSON_POINTER_MAX_SEGMENTS);
+        assert!(matches!(
+            static_json_pointer_selection(&document, &at_limit),
+            Some(Value::Null)
+        ));
+
+        let over_limit = format!("{at_limit}/a");
+        assert!(static_json_pointer_selection(&document, &over_limit).is_none());
+    }
 
     #[test]
     fn inferred_integer_domains_must_fit_parameter_bounds() {

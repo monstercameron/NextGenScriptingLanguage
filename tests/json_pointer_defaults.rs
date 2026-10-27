@@ -65,6 +65,207 @@ fn check_and_runtime_agree_for_omitted_and_explicit_empty_pointers() {
 }
 
 #[test]
+fn container_applets_check_literal_pointer_selected_shapes_and_defer_dynamic_values() {
+    for (operation, args) in [
+        ("json.keys", json!({"document":[]})),
+        ("json.entries", json!({"document":[]})),
+        ("json.values", json!({"document":[]})),
+        ("json.first", json!({"document":{}})),
+        ("json.last", json!({"document":{}})),
+        ("json.filter", json!({"document":{},"where":[]})),
+        ("json.keys", json!({"document":{"a":[]},"pointer":"/a"})),
+        ("json.first", json!({"document":{"a":{}},"pointer":"/a"})),
+        (
+            "json.filter",
+            json!({"document":{"a":{}},"pointer":"/a","where":[]}),
+        ),
+    ] {
+        let args = args.as_object().unwrap().clone();
+        let error = applets::execute(operation, &args, b"").unwrap_err();
+        assert!(
+            error.message.contains("must be an object")
+                || error.message.contains("require an array")
+                || error.message.contains("must be an array"),
+            "{operation}: {}",
+            error.message
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("container-shape.program");
+    let execute = |action: &str, source: &str| {
+        fs::write(&path, source).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg(action)
+            .arg(&path)
+            .arg("--manifest-dir")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/manifests"))
+            .output()
+            .unwrap()
+    };
+
+    for (operation, document, pointer, expected) in [
+        ("json.keys", "[]", "", "object"),
+        ("json.entries", "[]", "", "object"),
+        ("json.values", "[]", "", "object"),
+        ("json.first", "{}", "", "array"),
+        ("json.last", "{}", "", "array"),
+        ("json.filter", "{}", " and where []", "array"),
+        ("json.keys", r#"{"a":[]}"#, " and pointer \"/a\"", "object"),
+        ("json.first", r#"{"a":{}}"#, " and pointer \"/a\"", "array"),
+        (
+            "json.filter",
+            r#"{"a":{}}"#,
+            " and pointer \"/a\" and where []",
+            "array",
+        ),
+    ] {
+        let source = format!("run {operation} with document {document}{pointer}\n");
+        let output = execute("check", &source);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success() && stderr.contains(expected),
+            "{operation} with {document}{pointer}: {stderr}"
+        );
+    }
+
+    for (operation, document, pointer, extra) in [
+        ("json.keys", r#"{"a":[]}"#, " and pointer \"\"", ""),
+        ("json.entries", r#"{"a":[]}"#, " and pointer \"\"", ""),
+        ("json.values", r#"{"a":[]}"#, " and pointer \"\"", ""),
+        ("json.first", r#"{"a":[1]}"#, " and pointer \"/a\"", ""),
+        ("json.last", r#"{"a":[1]}"#, " and pointer \"/a\"", ""),
+        (
+            "json.filter",
+            r#"{"a":[{"x":1}]}"#,
+            " and pointer \"/a\"",
+            " and where []",
+        ),
+    ] {
+        let source = format!("run {operation} with document {document}{pointer}{extra}\n");
+        for action in ["check", "run"] {
+            let output = execute(action, &source);
+            assert!(
+                output.status.success(),
+                "valid {operation} selection ({action}): {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    let dynamic_source =
+        "run json.parse with text \"[]\" as document\nrun json.keys with document document\n";
+    let dynamic = execute("check", dynamic_source);
+    assert!(
+        dynamic.status.success(),
+        "dynamic document should defer to runtime: {}",
+        String::from_utf8_lossy(&dynamic.stderr)
+    );
+    let dynamic_run = execute("run", dynamic_source);
+    assert!(
+        !dynamic_run.status.success()
+            && String::from_utf8_lossy(&dynamic_run.stderr)
+                .contains("the selected JSON value must be an object"),
+        "dynamic invalid selection should retain runtime validation: {}",
+        String::from_utf8_lossy(&dynamic_run.stderr)
+    );
+}
+
+#[test]
+fn static_container_check_observes_runtime_pointer_byte_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pointer-byte-limit.program");
+    let execute = |action: &str, source: &str| {
+        fs::write(&path, source).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg(action)
+            .arg(&path)
+            .arg("--manifest-dir")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/manifests"))
+            .output()
+            .unwrap()
+    };
+
+    // A 4096-byte pointer reaches a known list, so checking reports the
+    // applet's object requirement at the exact accepted runtime boundary.
+    let at_limit_key = "k".repeat(4095);
+    let at_limit_document = format!(r#"{{"{at_limit_key}":[]}}"#);
+    let at_limit_source = format!(
+        "run json.keys with document {at_limit_document} and pointer \"/{at_limit_key}\"\n"
+    );
+    let mut at_limit_args = serde_json::Map::new();
+    let mut document = serde_json::Map::new();
+    document.insert(at_limit_key.clone(), json!([]));
+    at_limit_args.insert("document".into(), serde_json::Value::Object(document));
+    at_limit_args.insert("pointer".into(), json!(format!("/{at_limit_key}")));
+    let runtime_at_limit = applets::execute("json.keys", &at_limit_args, b"").unwrap_err();
+    assert!(
+        runtime_at_limit
+            .message
+            .contains("the selected JSON value must be an object"),
+        "runtime accepts an at-limit pointer: {}",
+        runtime_at_limit.message
+    );
+    let at_limit = execute("check", &at_limit_source);
+    assert!(
+        !at_limit.status.success()
+            && String::from_utf8_lossy(&at_limit.stderr)
+                .contains("requires the selected JSON value to be an object"),
+        "pointer at runtime byte limit: {}",
+        String::from_utf8_lossy(&at_limit.stderr)
+    );
+
+    // A 4097-byte pointer is rejected before pointer traversal at runtime;
+    // static checking must leave that runtime diagnostic in control.
+    let over_limit_key = "k".repeat(4096);
+    let over_limit_document = format!(r#"{{"{over_limit_key}":[]}}"#);
+    let over_limit_source = format!(
+        "run json.keys with document {over_limit_document} and pointer \"/{over_limit_key}\"\n"
+    );
+    let mut over_limit_args = serde_json::Map::new();
+    let mut document = serde_json::Map::new();
+    document.insert(over_limit_key.clone(), json!([]));
+    over_limit_args.insert("document".into(), serde_json::Value::Object(document));
+    over_limit_args.insert("pointer".into(), json!(format!("/{over_limit_key}")));
+    let runtime_over_limit = applets::execute("json.keys", &over_limit_args, b"").unwrap_err();
+    assert!(runtime_over_limit.message.contains("4096-byte limit"));
+
+    let check = execute("check", &over_limit_source);
+    assert!(
+        !check.status.success()
+            && String::from_utf8_lossy(&check.stderr).contains("4096-byte limit")
+            && !String::from_utf8_lossy(&check.stderr)
+                .contains("requires the selected JSON value to be an object"),
+        "over-limit pointer should report its bound without a container-shape error: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let over_segment_limit = format!(
+        "run json.keys with document [] and pointer \"{}\"\n",
+        "/a".repeat(257)
+    );
+    let check = execute("check", &over_segment_limit);
+    assert!(
+        !check.status.success()
+            && String::from_utf8_lossy(&check.stderr).contains("256-segment limit")
+            && !String::from_utf8_lossy(&check.stderr)
+                .contains("requires the selected JSON value to be an object"),
+        "over-segment-limit pointer should report its bound without a shape error: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut over_segment_args = serde_json::Map::new();
+    over_segment_args.insert("document".into(), json!([]));
+    over_segment_args.insert("pointer".into(), json!("/a".repeat(257)));
+    let run = applets::execute("json.keys", &over_segment_args, b"").unwrap_err();
+    assert!(
+        run.message
+            .contains("JSON Pointer exceeds the 256-segment limit"),
+        "over-segment-limit pointer runtime error: {}",
+        run.message
+    );
+}
+
+#[test]
 fn has_defaults_to_root_and_delete_requires_a_non_root_path() {
     let document = json!({"document":{"a":1}});
     let mut args = document.as_object().unwrap().clone();

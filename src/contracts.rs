@@ -1390,6 +1390,12 @@ fn valid_port_name(name: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric() || ch == '-')
 }
 
+/// Runtime limits used by JSON Pointer applets. Keep static pointer selection
+/// within the same bounds so checking cannot report a value-shape error for a
+/// pointer that the applet rejects before traversal.
+pub(crate) const JSON_POINTER_MAX_BYTES: usize = 4096;
+pub(crate) const JSON_POINTER_MAX_SEGMENTS: usize = 256;
+
 /// Parse RFC 6901 JSON Pointer syntax, returning decoded path segments.
 pub(crate) fn json_pointer_segments(pointer: &str) -> Result<Vec<String>> {
     if pointer.is_empty() {

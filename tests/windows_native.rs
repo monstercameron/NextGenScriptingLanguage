@@ -606,13 +606,14 @@ struct ConptySession {
 impl Drop for ConptySession {
     fn drop(&mut self) {
         use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::HANDLE;
         use windows_sys::Win32::System::Console::ClosePseudoConsole;
         use windows_sys::Win32::System::Threading::TerminateProcess;
         // SAFETY: the process handle is live and owned; terminating an
         // already-exited process fails harmlessly, and ClosePseudoConsole runs
         // at most once via the Option take below and here.
         unsafe {
-            TerminateProcess(self.process.as_raw_handle() as isize, 1);
+            TerminateProcess(self.process.as_raw_handle() as HANDLE, 1);
             if let Some(hpc) = self.hpc.take() {
                 ClosePseudoConsole(hpc);
             }
@@ -647,7 +648,7 @@ fn quote_conpty_arg(arg: &str) -> String {
 /// child's exit code. Every wait is bounded: a hung child is terminated and an
 /// unreadable screen fails instead of hanging the suite.
 fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u32) {
-    use std::os::windows::io::{AsRawHandle, OwnedHandle};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::{
         Foundation::{FALSE, HANDLE, WAIT_OBJECT_0},
         Security::SECURITY_ATTRIBUTES,
@@ -668,10 +669,10 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         ..Default::default()
     };
-    let mut in_read: HANDLE = 0;
-    let mut in_write: HANDLE = 0;
-    let mut out_read: HANDLE = 0;
-    let mut out_write: HANDLE = 0;
+    let mut in_read: HANDLE = std::ptr::null_mut();
+    let mut in_write: HANDLE = std::ptr::null_mut();
+    let mut out_read: HANDLE = std::ptr::null_mut();
+    let mut out_write: HANDLE = std::ptr::null_mut();
     // SAFETY: CreatePipe writes two valid handles on success; the attribute
     // struct above outlives the call, and a zero nSize takes the default
     // buffer. The output is checked before use.

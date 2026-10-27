@@ -15,8 +15,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
-const MAX_ACTIVE_JOBS: usize = 16;
-const MAX_JOB_HANDLES: usize = 32;
+pub(super) const MAX_ACTIVE_JOBS: usize = 16;
+pub(super) const MAX_JOB_HANDLES: usize = 32;
 const MAX_JOB_STAGES: usize = 16;
 
 /// The workflow state a background job is launched against.
@@ -253,6 +253,20 @@ struct Job {
     _permit: HandlePermit,
 }
 
+struct JobBatch {
+    scopes: Vec<usize>,
+    resolved: bool,
+}
+
+impl Default for JobBatch {
+    fn default() -> Self {
+        Self {
+            scopes: Vec::new(),
+            resolved: true,
+        }
+    }
+}
+
 /// The caller gets this error only when `spawn` could not reach its all-stages
 /// start acknowledgement. The contained result distinguishes no process from
 /// a partially launched pipeline whose started stages were reaped.
@@ -274,10 +288,18 @@ impl std::error::Error for JobSpawnFailure {}
 pub(super) struct Supervisor {
     tasks: TaskScope,
     jobs: BTreeMap<(usize, String), Job>,
+    scope_parents: BTreeMap<usize, usize>,
+    batches: BTreeMap<(usize, String), JobBatch>,
     next_scope: usize,
     budget: Arc<RunBudget>,
     output_budget: Arc<AtomicUsize>,
     output_limit: usize,
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        let _ = self.cancel_scope(0);
+    }
 }
 
 impl Supervisor {
@@ -289,6 +311,8 @@ impl Supervisor {
         Ok(Self {
             tasks: TaskScope::new(MAX_ACTIVE_JOBS, signals.deadline)?,
             jobs: BTreeMap::new(),
+            scope_parents: BTreeMap::new(),
+            batches: BTreeMap::new(),
             next_scope: 1,
             output_budget: budget.retained_stdout(),
             budget,
@@ -296,12 +320,224 @@ impl Supervisor {
         })
     }
 
-    pub(super) fn enter_scope(&mut self) -> Result<usize> {
+    pub(super) fn enter_scope(&mut self, parent: usize) -> Result<usize> {
         let scope = self.next_scope;
         self.next_scope = scope
             .checked_add(1)
             .ok_or_else(|| anyhow!("background job scope identifiers exhausted"))?;
+        self.scope_parents.insert(scope, parent);
         Ok(scope)
+    }
+
+    pub(super) fn run_budget(&self) -> Arc<RunBudget> {
+        Arc::clone(&self.budget)
+    }
+
+    pub(super) fn collect_loop_iteration(&mut self, parent: usize, iteration: usize) -> Result<()> {
+        let direct = self
+            .jobs
+            .iter()
+            .filter(|((scope, _), job)| *scope == iteration && !job.resolved)
+            .map(|((_, name), _)| name.clone())
+            .collect::<Vec<_>>();
+        for name in direct {
+            let batch = self.batches.entry((parent, name)).or_default();
+            batch.scopes.push(iteration);
+            batch.resolved = false;
+        }
+
+        let nested = self
+            .batches
+            .keys()
+            .filter(|(scope, _)| *scope == iteration)
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in nested {
+            let Some(batch) = self.batches.remove(&key) else {
+                continue;
+            };
+            for scope in &batch.scopes {
+                if self.scope_parents.get(scope) == Some(&iteration) {
+                    self.scope_parents.insert(*scope, parent);
+                }
+            }
+            let destination = self.batches.entry((parent, key.1.clone())).or_default();
+            destination.scopes.extend(batch.scopes);
+            destination.resolved &= batch.resolved;
+        }
+
+        // A collected iteration scope remains alive until every source-level
+        // use of its collected handles has been retired.
+        if !self.scope_is_referenced(iteration) {
+            self.finish_scope(iteration)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn batch_scopes(&self, parent: usize, name: &str) -> Option<Vec<usize>> {
+        self.batches
+            .get(&(parent, name.to_owned()))
+            .map(|batch| batch.scopes.clone())
+    }
+
+    fn scope_is_referenced(&self, scope: usize) -> bool {
+        self.batches
+            .values()
+            .any(|batch| batch.scopes.contains(&scope))
+            || self.batches.keys().any(|(parent, _)| *parent == scope)
+    }
+
+    pub(super) fn inspect_batch(&self, parent: usize, name: &str) -> Result<Value> {
+        let scopes = self
+            .batch_scopes(parent, name)
+            .ok_or_else(|| anyhow!("unknown background job batch {name:?} in this scope"))?;
+        scopes
+            .iter()
+            .map(|scope| self.inspect(*scope, name))
+            .collect::<Result<Vec<_>>>()
+            .map(Value::List)
+    }
+
+    pub(super) fn await_batch(
+        &mut self,
+        parent: usize,
+        name: &str,
+    ) -> Result<Vec<(usize, execution_result::ExecutionResult)>> {
+        let scopes = self
+            .batch_scopes(parent, name)
+            .ok_or_else(|| anyhow!("unknown background job batch {name:?} in this scope"))?;
+        let mut results = Vec::with_capacity(scopes.len());
+        for scope in scopes {
+            results.push((scope, self.await_job(scope, name)?));
+        }
+        if let Some(batch) = self.batches.get_mut(&(parent, name.to_owned())) {
+            batch.resolved = true;
+        }
+        Ok(results)
+    }
+
+    pub(super) fn cancel_batch(&mut self, parent: usize, name: &str) -> Result<()> {
+        let scopes = self
+            .batch_scopes(parent, name)
+            .ok_or_else(|| anyhow!("unknown background job batch {name:?} in this scope"))?;
+        for scope in &scopes {
+            self.cancel(*scope, name)?;
+        }
+        if let Some(batch) = self.batches.get_mut(&(parent, name.to_owned())) {
+            batch.resolved = true;
+        }
+        Ok(())
+    }
+
+    pub(super) fn retire_batch(&mut self, parent: usize, name: &str) {
+        let Some(batch) = self.batches.remove(&(parent, name.to_owned())) else {
+            return;
+        };
+        let scopes = batch.scopes;
+        for scope in scopes {
+            self.retire_resolved(scope, name);
+            if !self.scope_is_referenced(scope) {
+                let _ = self.finish_scope(scope);
+            }
+        }
+    }
+
+    /// Validate a setup-owned job without starting it. Services preflight every
+    /// setup job before launching the first persistent worker.
+    pub(super) fn preflight_spawn(
+        &self,
+        scope: usize,
+        name: &str,
+        stages: &[JobStage],
+        env: JobEnv<'_>,
+    ) -> Result<()> {
+        let JobEnv {
+            registry,
+            bindings,
+            cwd,
+            ..
+        } = env;
+        if stages.is_empty() || stages.len() > MAX_JOB_STAGES {
+            bail!("background pipeline must contain between 1 and {MAX_JOB_STAGES} stages");
+        }
+        if self.jobs.contains_key(&(scope, name.to_owned())) {
+            bail!("background job {name:?} is already defined in this scope");
+        }
+        let cwd = cwd.duplicate()?;
+        let mut calls = Vec::with_capacity(stages.len());
+        for (index, stage) in stages.iter().enumerate() {
+            let mut call = stage.call.clone();
+            let manifest = registry.resolve_call(&call)?.clone();
+            if manifest.builtin.is_some() || manifest.execution_backend() != AppletBackend::Command
+            {
+                bail!(
+                    "line {}: background jobs support native command applets only",
+                    stage.line
+                );
+            }
+            if call.cache || call.binding.is_some() || call.result_binding.is_some() {
+                bail!(
+                    "line {}: background stages cannot cache or bind values",
+                    stage.line
+                );
+            }
+            if call.status_binding.is_some() {
+                bail!(
+                    "line {}: background stages cannot bind native status",
+                    stage.line
+                );
+            }
+            if index > 0 && !manifest.accepts_stdin {
+                bail!(
+                    "line {}: background pipeline receiver {:?} does not accept stdin",
+                    stage.line,
+                    manifest.name_for(&call)
+                );
+            }
+            if let Some(stdio) = manifest.stdio() {
+                if stdio
+                    .stderr
+                    .is_some_and(|mode| mode != invocation_io::StdioDisposition::Capture)
+                    || (index + 1 == stages.len()
+                        && stdio
+                            .stdout
+                            .is_some_and(|mode| mode != invocation_io::StdioDisposition::Capture))
+                {
+                    bail!(
+                        "line {}: background pipelines require captured stdout and stderr",
+                        stage.line
+                    );
+                }
+            }
+            let parameters = call
+                .parameters
+                .iter()
+                .map(|(parameter, value)| Ok((parameter.clone(), resolve(value, bindings)?)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let argv = manifest.build_arguments(&parameters).with_context(|| {
+                format!("line {}: validating resolved job arguments", stage.line)
+            })?;
+            call.parameters = parameters;
+            call.status_binding = Some("__execute_job_stage_status".into());
+            let binary = binary_path(manifest.binary_for(&call), &cwd)
+                .with_context(|| format!("line {}: resolving job executable", stage.line))?;
+            crate::capabilities::command_for(
+                &binary,
+                argv.iter().map(|argument| OsStr::new(argument.as_str())),
+                registry,
+                &manifest.name,
+                &cwd,
+            )
+            .with_context(|| format!("line {}: preflighting job command", stage.line))?;
+            calls.push((call, manifest, stage.line));
+        }
+        crate::capabilities::preflight_invocations(
+            calls.iter().map(|(call, _, _)| call),
+            registry,
+            &cwd,
+        )
+        .with_context(|| format!("preflighting background job {name:?}"))?;
+        Ok(())
     }
 
     pub(super) fn spawn(
@@ -706,6 +942,14 @@ impl Supervisor {
         }
     }
 
+    /// Resolve a statically visible handle name through its lexical scopes.
+    pub(super) fn scope_for_job(&self, name: &str, scopes: &[usize]) -> Option<usize> {
+        scopes
+            .iter()
+            .copied()
+            .find(|scope| self.jobs.contains_key(&(*scope, name.to_owned())))
+    }
+
     /// A normal lexical exit requires explicit observation through await or
     /// cancel, regardless of whether the worker completed on its own.
     pub(super) fn finish_scope(&mut self, scope: usize) -> Result<()> {
@@ -715,37 +959,92 @@ impl Supervisor {
             .filter(|((job_scope, _), job)| *job_scope == scope && !job.resolved)
             .map(|((_, name), _)| name.clone())
             .collect::<Vec<_>>();
-        if !unresolved.is_empty() {
+        let unresolved_batches = self
+            .batches
+            .iter()
+            .filter(|((parent, _), batch)| *parent == scope && !batch.resolved)
+            .map(|((_, name), _)| name.clone())
+            .collect::<Vec<_>>();
+        if !unresolved.is_empty() || !unresolved_batches.is_empty() {
+            let unresolved = unresolved
+                .into_iter()
+                .chain(unresolved_batches)
+                .collect::<Vec<_>>();
             bail!(
                 "background job handles must be explicitly awaited or cancelled before normal scope exit: {}",
                 unresolved.join(", ")
             );
         }
         self.jobs.retain(|(job_scope, _), _| *job_scope != scope);
+        self.batches.retain(|(parent, _), _| *parent != scope);
+        self.scope_parents.remove(&scope);
         Ok(())
     }
 
     /// Early return and error unwind cancel and reap every still-owned worker
     /// in the scope before its handles disappear.
     pub(super) fn cancel_scope(&mut self, scope: usize) -> Result<()> {
+        let mut scopes = vec![scope];
+        let mut cursor = 0;
+        while cursor < scopes.len() {
+            let parent = scopes[cursor];
+            cursor += 1;
+            scopes.extend(
+                self.scope_parents
+                    .iter()
+                    .filter_map(|(child, owner)| (*owner == parent).then_some(*child)),
+            );
+        }
+        let scope_set = scopes
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
         let keys = self
             .jobs
             .iter()
-            .filter(|((job_scope, _), job)| *job_scope == scope && !job.resolved)
+            .filter(|((job_scope, _), job)| scope_set.contains(job_scope) && !job.resolved)
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        for key in keys {
-            if let Some(job) = self.jobs.get(&key) {
+        for key in &keys {
+            if let Some(job) = self.jobs.get(key) {
                 job.cancelled
                     .store(true, std::sync::atomic::Ordering::Release);
                 job.cancel_wake.notify();
             }
-            self.join_job_result(&key)?;
+        }
+        let mut first_error = None;
+        for key in keys {
+            if let Err(error) = self.join_job_result(&key) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
             if let Some(job) = self.jobs.get_mut(&key) {
                 job.resolved = true;
             }
         }
-        self.jobs.retain(|(job_scope, _), _| *job_scope != scope);
+        self.jobs
+            .retain(|(job_scope, _), _| !scope_set.contains(job_scope));
+        self.batches.retain(|(parent, _), batch| {
+            !scope_set.contains(parent)
+                && !batch.scopes.iter().any(|child| scope_set.contains(child))
+        });
+        self.scope_parents
+            .retain(|child, parent| !scope_set.contains(child) && !scope_set.contains(parent));
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Cancel a try body's owned jobs before entering its catch while keeping
+    /// the active try scope available for jobs created by the catch body.
+    pub(super) fn cancel_scope_preserving(&mut self, scope: usize) -> Result<()> {
+        let parent = self.scope_parents.get(&scope).copied();
+        self.cancel_scope(scope)?;
+        if let Some(parent) = parent {
+            self.scope_parents.insert(scope, parent);
+        }
         Ok(())
     }
 

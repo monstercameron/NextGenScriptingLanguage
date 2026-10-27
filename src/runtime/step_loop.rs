@@ -67,7 +67,7 @@ fn value_references_sensitive(value: &Value, sensitive: &BTreeSet<String>) -> bo
 // Precompute each name's last possible source-level use once. Job operations
 // cannot occur directly in loops; repeated calls have fresh job scopes. Names in
 // nested scopes can only delay cleanup.
-fn job_last_uses(steps: &[crate::ast::Step]) -> BTreeMap<&str, usize> {
+fn job_last_uses(steps: &[crate::ast::Step]) -> BTreeMap<String, usize> {
     let mut last = BTreeMap::new();
     for (index, step) in steps.iter().enumerate() {
         let name = match &step.kind {
@@ -76,9 +76,37 @@ fn job_last_uses(steps: &[crate::ast::Step]) -> BTreeMap<&str, usize> {
             | StepKind::CancelJob { name } => name,
             _ => continue,
         };
-        last.insert(name.as_str(), index);
+        last.insert(name.clone(), index);
     }
     last
+}
+
+fn current_job_scope(
+    control_state: &control_flow::RuntimeState,
+    call_frames: &[calls::Frame<'_>],
+    loop_frames: &loops::LoopStack,
+) -> usize {
+    control_state
+        .job_scopes(call_frames.len())
+        .into_iter()
+        .chain(loop_frames.job_scopes())
+        .chain(call_frames.last().map(|frame| frame.job_scope))
+        .max()
+        .unwrap_or(0)
+}
+
+fn visible_job_scopes(
+    control_state: &control_flow::RuntimeState,
+    call_frames: &[calls::Frame<'_>],
+    loop_frames: &loops::LoopStack,
+) -> Vec<usize> {
+    let mut scopes = control_state.job_scopes(call_frames.len());
+    scopes.extend(loop_frames.job_scopes());
+    scopes.extend(call_frames.last().map(|frame| frame.job_scope));
+    if call_frames.is_empty() {
+        scopes.push(0);
+    }
+    scopes
 }
 
 /// Sync the directory entry after a checkpointed file write where the platform
@@ -157,6 +185,8 @@ pub(super) struct FiniteStart<'a> {
     pub(super) journal: Option<&'a mut checkpoint::Journal>,
     pub(super) state_source: FiniteStateSource,
     pub(super) state_out: Option<&'a mut live::NodeState>,
+    pub(super) job_supervisor: Option<&'a mut jobs::Supervisor>,
+    pub(super) job_last_uses: Option<BTreeMap<String, usize>>,
 }
 
 pub(super) fn run_finite(
@@ -206,6 +236,8 @@ pub(super) fn run_finite_inner(
             journal,
             state_source,
             state_out: None,
+            job_supervisor: None,
+            job_last_uses: None,
         },
     )
 }
@@ -230,6 +262,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         mut journal,
         state_source,
         state_out,
+        job_supervisor: external_job_supervisor,
+        job_last_uses: source_job_last_uses,
     } = start;
     // Literal components of explicitly secret-producing calls must be masked
     // before their invocation trace or any dynamic binding can be observed.
@@ -254,8 +288,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     if !resuming {
         preflight_executables(program, registry, &cwd)?;
     }
+    // Live snapshots contain bindings and data, not worker handles. A job is
+    // owned by this finite live execution: it may continue while the user has
+    // paused at a live breakpoint, and must be awaited or cancelled before the
+    // execution completes. Dropping the supervisor on stop or error reaps it.
     if (!signals.background_jobs_allowed
-        || state_out.is_some()
         || (journal.is_some() && !resume::checkpoint_jobs_supported(program)))
         && (has_job_operations(program) || module_session.has_background_job_operations())
     {
@@ -263,8 +300,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             "finite-scope background job handles are unsupported in this execution lifetime, including imported program modules"
         );
     }
-    let mut job_supervisor = jobs::Supervisor::new(signals, options.max_output_bytes)?;
-    let last_job_uses = job_last_uses(&program.steps);
+    let mut owned_job_supervisor = external_job_supervisor
+        .is_none()
+        .then(|| jobs::Supervisor::new(signals, options.max_output_bytes))
+        .transpose()?;
+    let mut job_supervisor = match external_job_supervisor {
+        Some(supervisor) => supervisor,
+        None => owned_job_supervisor
+            .as_mut()
+            .expect("new job supervisor was just installed"),
+    };
+    let last_job_uses = source_job_last_uses.unwrap_or_else(|| job_last_uses(&program.steps));
     let mut sensitivity_floor = workflow_sensitivity_floor(
         program,
         registry,
@@ -623,6 +669,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         || serde_json::json!({"event":"loop", "line":step.line, "entered":entered}),
                     )?;
                     if entered {
+                        let parent = current_job_scope(&control_state, &call_frames, &loop_frames);
+                        let scope = job_supervisor.enter_scope(parent)?;
+                        loop_frames.set_job_scope(index, parent, scope)?;
                         if let Some(journal) = journal.as_deref_mut() {
                             checkpoint::elements::for_each_element_begin(
                                 journal,
@@ -674,9 +723,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::EndLoop { back } => {
                     let header = index.checked_sub(*back).context("invalid loop back edge")?;
-                    loop_frames
+                    if let Some((parent, scope)) = loop_frames
                         .end_iteration(header, &mut bindings)
-                        .with_context(|| format!("line {}", step.line))?;
+                        .with_context(|| format!("line {}", step.line))?
+                    {
+                        job_supervisor.collect_loop_iteration(parent, scope)?;
+                    }
                     if let Some(journal) = journal.as_deref_mut() {
                         if checkpoint::elements::for_each_element_due(journal, program, header) {
                             // The same persistence gate as a node: an element's state reaches
@@ -789,7 +841,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let child = calls::bind(call, inputs, &bindings).with_context(|| {
                         format!("program {:?}, called at line {}", call.operation, step.line)
                     })?;
-                    let job_scope = job_supervisor.enter_scope()?;
+                    let parent = current_job_scope(&control_state, &call_frames, &loop_frames);
+                    let job_scope = job_supervisor.enter_scope(parent)?;
                     control_state.enter_call(index + end);
                     call_frames.push(calls::Frame {
                         name: &call.operation,
@@ -1023,11 +1076,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             Ok((marker, binding.clone()))
                         })
                         .transpose()?;
-                    control_state.enter_try(
+                    let parent = current_job_scope(&control_state, &call_frames, &loop_frames);
+                    let job_scope = job_supervisor.enter_scope(parent)?;
+                    control_state.enter_try_with_job_scope(
                         index,
                         catch,
                         finally.map(|offset| index + offset),
                         index + end,
+                        job_scope,
                     )?;
                 }
                 StepKind::Catch { .. } => {
@@ -1039,6 +1095,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                 }
                 StepKind::Finally => {
+                    if let Some(scope) = control_state.active_job_scope(call_frames.len()) {
+                        job_supervisor
+                            .cancel_scope_preserving(scope)
+                            .with_context(|| {
+                                format!("line {}: cancelling jobs before finally", step.line)
+                            })?;
+                    }
                     let action = control_state.finally_marker(index)?;
                     match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
@@ -1047,6 +1110,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                 }
                 StepKind::EndTry => {
+                    let scope = control_state.job_scope_at_end(index + 1)?;
+                    job_supervisor.finish_scope(scope).with_context(|| {
+                        format!("line {}: closing try-block job scope", step.line)
+                    })?;
                     // `Try.end` is a relative offset to the instruction after
                     // EndTry, so the runtime marker uses the same half-open
                     // boundary convention.
@@ -1436,7 +1503,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     };
                 }
                 StepKind::SpawnJob { name, stages } => {
-                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
+                    let scope = current_job_scope(&control_state, &call_frames, &loop_frames);
                     let _environment = (!workflow_env.set.is_empty()
                         || !workflow_env.unset.is_empty())
                     .then(|| workflow_env.clone())
@@ -1494,10 +1561,31 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     )?;
                 }
                 StepKind::InspectJob { name, binding } => {
-                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
-                    let value = job_supervisor
-                        .inspect(scope, name)
-                        .with_context(|| format!("line {}: inspecting job {name:?}", step.line))?;
+                    let scopes = visible_job_scopes(&control_state, &call_frames, &loop_frames);
+                    let scope = job_supervisor.scope_for_job(name, &scopes);
+                    let batch_scope = scopes
+                        .iter()
+                        .copied()
+                        .find(|scope| job_supervisor.batch_scopes(*scope, name).is_some());
+                    let (value, retire_scope) = if let Some(scope) = scope {
+                        (
+                            job_supervisor.inspect(scope, name).with_context(|| {
+                                format!("line {}: inspecting job {name:?}", step.line)
+                            })?,
+                            Some(scope),
+                        )
+                    } else if let Some(parent) = batch_scope {
+                        (
+                            job_supervisor
+                                .inspect_batch(parent, name)
+                                .with_context(|| {
+                                    format!("line {}: inspecting job batch {name:?}", step.line)
+                                })?,
+                            None,
+                        )
+                    } else {
+                        (Value::List(Vec::new()), None)
+                    };
                     let bytes = crate::structured::encode(&value, options.max_output_bytes)
                         .with_context(|| format!("line {}: job inspection output", step.line))?;
                     bindings.insert(binding.clone(), value);
@@ -1507,7 +1595,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         || serde_json::json!({"event":"job_inspect","line":step.line,"job":name,"output_bytes":bytes.len()}),
                     )?;
                     if last_job_uses.get(name.as_str()) == Some(&index) {
-                        job_supervisor.retire_resolved(scope, name);
+                        if let Some(scope) = retire_scope {
+                            job_supervisor.retire_resolved(scope, name);
+                        } else if let Some(parent) = batch_scope {
+                            job_supervisor.retire_batch(parent, name);
+                        }
                     }
                 }
                 StepKind::AwaitJob {
@@ -1515,38 +1607,75 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     status_binding,
                     result_binding,
                 } => {
-                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
-                    let mut terminal = job_supervisor
-                        .await_job(scope, name)
-                        .with_context(|| format!("line {}: awaiting job {name:?}", step.line))?;
-                    let stage_failure = terminal
-                        .stages
+                    let scopes = visible_job_scopes(&control_state, &call_frames, &loop_frames);
+                    let scope = job_supervisor.scope_for_job(name, &scopes);
+                    let batch_scope = scopes
                         .iter()
-                        .take(terminal.stages.len().saturating_sub(1))
-                        .find(|stage| {
-                            stage.kind.is_some_and(|kind| {
-                                kind != execution_result::ExecutionKind::Success
-                            })
-                        });
-                    if let Some(stage) = stage_failure {
-                        terminal.kind = execution_result::ExecutionKind::Failure;
-                        terminal.message = Some(format!(
-                            "background pipeline stage {:?} ended with {:?}",
-                            stage.applet, stage.kind
-                        ));
-                        return Err(execution_result::ExecutionFailure::new(terminal).into());
+                        .copied()
+                        .find(|scope| job_supervisor.batch_scopes(*scope, name).is_some());
+                    let mut batch_results = if let Some(scope) = batch_scope {
+                        job_supervisor.await_batch(scope, name).with_context(|| {
+                            format!("line {}: awaiting job batch {name:?}", step.line)
+                        })?
+                    } else if let Some(scope) = scope {
+                        vec![(
+                            scope,
+                            job_supervisor.await_job(scope, name).with_context(|| {
+                                format!("line {}: awaiting job {name:?}", step.line)
+                            })?,
+                        )]
+                    } else {
+                        Vec::new()
+                    };
+                    let mut aggregate_stdout = Vec::new();
+                    let mut aggregate_records = Vec::new();
+                    let mut aggregate_status = 0i32;
+                    let mut aggregate_failure = None;
+                    for (scope, mut terminal) in batch_results.drain(..) {
+                        let stage_failure = terminal
+                            .stages
+                            .iter()
+                            .take(terminal.stages.len().saturating_sub(1))
+                            .find(|stage| {
+                                stage.kind.is_some_and(|kind| {
+                                    kind != execution_result::ExecutionKind::Success
+                                })
+                            });
+                        let stage_failed = stage_failure.is_some();
+                        if let Some(stage) = stage_failure {
+                            terminal.kind = execution_result::ExecutionKind::Failure;
+                            terminal.message = Some(format!(
+                                "background pipeline stage {:?} ended with {:?}",
+                                stage.applet, stage.kind
+                            ));
+                        }
+                        let kept = status_binding.is_some()
+                            && terminal.status.is_some()
+                            && matches!(
+                                terminal.kind,
+                                execution_result::ExecutionKind::Absence
+                                    | execution_result::ExecutionKind::Failure
+                                    | execution_result::ExecutionKind::Retryable
+                            );
+                        if stage_failed
+                            || (terminal.kind != execution_result::ExecutionKind::Success && !kept)
+                        {
+                            if aggregate_failure.is_none() {
+                                aggregate_failure = Some(terminal.clone());
+                            }
+                        }
+                        let status = terminal.status.unwrap_or(1);
+                        if aggregate_status == 0 && status != 0 {
+                            aggregate_status = status;
+                        }
+                        if result_binding.is_some() {
+                            aggregate_records.push(
+                                job_supervisor.result_value(scope, name, step.line, &terminal)?,
+                            );
+                        }
+                        aggregate_stdout.extend(terminal.stdout.take().unwrap_or_default());
                     }
-                    let kept_terminal_failure = status_binding.is_some()
-                        && terminal.status.is_some()
-                        && matches!(
-                            terminal.kind,
-                            execution_result::ExecutionKind::Absence
-                                | execution_result::ExecutionKind::Failure
-                                | execution_result::ExecutionKind::Retryable
-                        );
-                    if terminal.kind != execution_result::ExecutionKind::Success
-                        && !kept_terminal_failure
-                    {
+                    if let Some(mut terminal) = aggregate_failure {
                         if terminal.message.is_none() && terminal.status.is_some() {
                             terminal.message = Some(format!(
                                 "background job {name:?} completed with {:?} outcome ({})",
@@ -1556,20 +1685,24 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         }
                         return Err(execution_result::ExecutionFailure::new(terminal).into());
                     }
-                    let status = terminal
-                        .status
-                        .context("background job finished without an exit status")?;
                     if let Some(binding) = status_binding {
-                        bindings.insert(binding.clone(), Value::Integer(i64::from(status)));
+                        bindings
+                            .insert(binding.clone(), Value::Integer(i64::from(aggregate_status)));
                     }
                     if let Some(binding) = result_binding {
-                        let value =
-                            job_supervisor.result_value(scope, name, step.line, &terminal)?;
+                        let value = if scope.is_some()
+                            && batch_scope.is_none()
+                            && aggregate_records.len() == 1
+                        {
+                            aggregate_records.remove(0)
+                        } else {
+                            Value::List(aggregate_records)
+                        };
                         crate::structured::encode(&value, options.max_output_bytes)
                             .with_context(|| format!("line {}: job result record", step.line))?;
                         bindings.insert(binding.clone(), value);
                     }
-                    data = Input::Bytes(terminal.stdout.take().unwrap_or_default());
+                    data = Input::Bytes(aggregate_stdout);
                     if stream_top
                         && status_binding.is_none()
                         && result_binding.is_none()
@@ -1580,28 +1713,51 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 write_streamed_stdout_owned(bytes, signals)?;
                             }
                         }
+                        data = Input::Empty;
                     }
+                    let status = aggregate_status;
                     lazy_event(
                         options.trace,
                         signals,
                         || serde_json::json!({"event":"job_await","line":step.line,"job":name,"status":status}),
                     )?;
                     if last_job_uses.get(name.as_str()) == Some(&index) {
-                        job_supervisor.retire_resolved(scope, name);
+                        if let Some(scope) = scope {
+                            job_supervisor.retire_resolved(scope, name);
+                        }
+                        if let Some(parent) = batch_scope {
+                            job_supervisor.retire_batch(parent, name);
+                        }
                     }
                 }
                 StepKind::CancelJob { name } => {
-                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
-                    job_supervisor
-                        .cancel(scope, name)
-                        .with_context(|| format!("line {}: cancelling job {name:?}", step.line))?;
+                    let scopes = visible_job_scopes(&control_state, &call_frames, &loop_frames);
+                    let scope = job_supervisor.scope_for_job(name, &scopes);
+                    let batch_scope = scopes
+                        .iter()
+                        .copied()
+                        .find(|scope| job_supervisor.batch_scopes(*scope, name).is_some());
+                    if let Some(scope) = scope {
+                        job_supervisor.cancel(scope, name).with_context(|| {
+                            format!("line {}: cancelling job {name:?}", step.line)
+                        })?;
+                    } else if let Some(parent) = batch_scope {
+                        job_supervisor.cancel_batch(parent, name).with_context(|| {
+                            format!("line {}: cancelling job batch {name:?}", step.line)
+                        })?;
+                    }
                     lazy_event(
                         options.trace,
                         signals,
                         || serde_json::json!({"event":"job_cancel","line":step.line,"job":name}),
                     )?;
                     if last_job_uses.get(name.as_str()) == Some(&index) {
-                        job_supervisor.retire_resolved(scope, name);
+                        if let Some(scope) = scope {
+                            job_supervisor.retire_resolved(scope, name);
+                        }
+                        if let Some(parent) = batch_scope {
+                            job_supervisor.retire_batch(parent, name);
+                        }
                     }
                 }
                 // A replayed run leaves files alone; the pipeline value still flows.
@@ -2623,7 +2779,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         job_supervisor
             .cancel_scope(0)
             .context("cancelling background jobs at program exit")?;
-    } else {
+    } else if state_out.is_none() {
         job_supervisor
             .finish_scope(0)
             .context("closing finite-program background job scope")?;

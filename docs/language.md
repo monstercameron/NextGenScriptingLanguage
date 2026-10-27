@@ -231,14 +231,31 @@ beyond each prefix. Inspection and result records report the limit and
 truncation flags. This limit applies to diagnostics; explicitly merged or
 redirected stderr uses a separate policy.
 
-This finite feature has no detach/disown, `fg`/`bg`, stopped or continued
-states, controlling-terminal handoff, or durable service lifetime. Job
-operations are rejected inside loops, inside a `try` that has a `catch`, in
-`finally` bodies and in `on exit` and `on interrupt` handler bodies, in services,
-live programs, TUI handlers and browser execution. A finite module called by one
-of those contexts cannot introduce job operations indirectly; the enclosing
-preflight rejects the imported source before effects. Those contexts do not yet
-provide a matching job-handle lifecycle.
+Jobs have no detach/disown, `fg`/`bg`, stopped or continued states, or
+controlling-terminal handoff. A loop may await or cancel a job during its
+iteration, reusing that name on the next iteration, or let an unresolved name
+escape as a batch for later use. `inspect` returns one snapshot per iteration;
+`await` joins every job and concatenates stdout in iteration order, with the
+first nonzero status (or zero when all succeed); a kept result is a list of
+execution records. `cancel` cancels and reaps every job in the batch. A loop
+cannot resolve a job from the surrounding scope. Nested loop batches are
+collected into the enclosing iteration's batch.
+
+Each `try` block owns a job scope. Jobs started by its body must be awaited or
+cancelled on the normal path. If the body fails, its remaining jobs are
+cancelled and reaped before `catch` runs. A catch body may start its own jobs,
+which must be resolved before the try ends. Job operations remain unavailable
+in `finally`, `on exit`, and `on interrupt` bodies.
+
+Scheduled and listener handlers, TUI handlers, and live executions use finite
+job scopes. Service and listener handlers must resolve their jobs before the
+handler returns; errors and service cancellation cancel and reap its remaining
+jobs. Service setup may also spawn service-owned jobs. Those handles are private
+to setup, remain alive across handlers, and are cancelled and reaped when the
+service stops. Jobs do not persist across live executions. In a live execution,
+jobs continue while execution is paused at a breakpoint and must be resolved
+before that execution completes. Browser execution does not support native
+background jobs.
 
 ### Job checkpoints
 

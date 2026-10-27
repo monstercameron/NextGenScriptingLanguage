@@ -357,6 +357,16 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
             trigger: None,
         };
         let context = state.doc.node_state();
+        let job_session = Arc::clone(&state.job_session);
+        let source_last_uses = runtime::live::job_last_uses(&state.plan.program.steps);
+        let job_last_uses = source_last_uses
+            .into_iter()
+            .filter_map(|(name, source_index)| {
+                (start <= source_index && source_index < end)
+                    .then_some((name, source_index - start))
+            })
+            .collect();
+        let final_node = end == state.plan.program.steps.len();
         let token = Arc::new(AtomicBool::new(false));
         state.active_cancel = token.clone();
         state.in_flight = true;
@@ -373,8 +383,18 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
                 cancel: token.clone(),
             });
         let result = runtime::statement_hook::with_statement_hook(hook, || {
-            let execute =
-                || runtime::live::execute_node(&node, &shared.registry, &options, context, token);
+            let execute = || {
+                runtime::live::execute_node_with_session(
+                    &node,
+                    &shared.registry,
+                    &options,
+                    context,
+                    token,
+                    job_session,
+                    job_last_uses,
+                    final_node,
+                )
+            };
             if shared.run_mode {
                 runtime::with_streamed_stdout(execute)
             } else {
@@ -438,6 +458,8 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
         shared.wake.notify_all();
     }
     join_producer(producer);
+    let job_session = Arc::clone(&shared.state.lock().unwrap().job_session);
+    job_session.cancel();
 }
 
 /// The process status a failed run reports. It mirrors the CLI's mapping for a

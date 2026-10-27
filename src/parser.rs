@@ -1391,6 +1391,7 @@ pub(crate) fn quoted_list(values: &[String]) -> String {
 
 fn is_trigger_setup(kind: &StepKind) -> bool {
     matches!(kind, StepKind::UseFolder { .. })
+        || matches!(kind, StepKind::SpawnJob { .. })
         || matches!(kind, StepKind::Invoke { call, connection: Connection::Start | Connection::Then } if call.operation == "cd")
 }
 

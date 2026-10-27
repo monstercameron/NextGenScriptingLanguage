@@ -1,6 +1,8 @@
 //! Opt-in execution adapter for live control. Ordinary runs retain their fast path.
 #[cfg(feature = "live")]
 use super::*;
+#[cfg(feature = "live")]
+use std::sync::{Arc, Mutex};
 
 #[cfg(all(test, feature = "live"))]
 mod tests;
@@ -15,6 +17,26 @@ pub(crate) struct NodeState {
     pub data: Vec<u8>,
 }
 
+#[cfg(feature = "live")]
+pub(crate) struct JobSession {
+    supervisor: Mutex<Option<jobs::Supervisor>>,
+}
+
+#[cfg(feature = "live")]
+impl JobSession {
+    pub(crate) fn new() -> Self {
+        Self {
+            supervisor: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        if let Ok(mut supervisor) = self.supervisor.lock() {
+            supervisor.take();
+        }
+    }
+}
+
 #[cfg(not(feature = "live"))]
 #[derive(Clone)]
 pub(crate) struct NodeState;
@@ -25,12 +47,36 @@ pub(crate) fn node_end(program: &Program, index: usize) -> usize {
 }
 
 #[cfg(feature = "live")]
+#[cfg(test)]
 pub(crate) fn execute_node(
     node: &Program,
     registry: &Registry,
     options: &RunOptions,
     state: NodeState,
     cancelled: Arc<AtomicBool>,
+) -> Result<(RunResult, NodeState)> {
+    execute_node_with_session(
+        node,
+        registry,
+        options,
+        state,
+        cancelled,
+        Arc::new(JobSession::new()),
+        job_last_uses(&node.steps),
+        true,
+    )
+}
+
+#[cfg(feature = "live")]
+pub(crate) fn execute_node_with_session(
+    node: &Program,
+    registry: &Registry,
+    options: &RunOptions,
+    state: NodeState,
+    cancelled: Arc<AtomicBool>,
+    job_session: Arc<JobSession>,
+    last_job_uses: BTreeMap<String, usize>,
+    final_node: bool,
 ) -> Result<(RunResult, NodeState)> {
     let signals = Signals::with_cancellation_and_deadline(
         cancelled,
@@ -47,6 +93,18 @@ pub(crate) fn execute_node(
         total_timeout: options.total_timeout,
         ..RunOptions::new(state.cwd)
     };
+    let mut supervisor = job_session
+        .supervisor
+        .lock()
+        .map_err(|_| anyhow!("live background job supervisor lock is poisoned"))?;
+    let _session_job_run = if let Some(supervisor) = supervisor.as_ref() {
+        signals.begin_job_run_with_budget(supervisor.run_budget())?
+    } else {
+        signals.begin_job_run(options.max_output_bytes)?
+    };
+    if supervisor.is_none() {
+        *supervisor = Some(jobs::Supervisor::new(&signals, options.max_output_bytes)?);
+    }
     crate::capabilities::preflight(node, registry, &options.working_directory)?;
     // run_finite_state replaces this slot on success; errors publish no state.
     // Copying the incoming bindings and bytes here only to discard them can
@@ -69,9 +127,41 @@ pub(crate) fn execute_node(
             journal: None,
             state_source: FiniteStateSource::Fresh,
             state_out: Some(&mut final_state),
+            job_supervisor: Some(supervisor.as_mut().expect("supervisor installed")),
+            job_last_uses: Some(last_job_uses),
         },
-    )?;
+    );
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            supervisor.take();
+            return Err(error);
+        }
+    };
+    if final_node {
+        supervisor
+            .as_mut()
+            .expect("supervisor installed")
+            .finish_scope(0)
+            .context("closing live-execution background job scope")?;
+        supervisor.take();
+    }
     Ok((result, final_state))
+}
+
+#[cfg(feature = "live")]
+pub(crate) fn job_last_uses(steps: &[crate::ast::Step]) -> BTreeMap<String, usize> {
+    let mut last = BTreeMap::new();
+    for (index, step) in steps.iter().enumerate() {
+        let name = match &step.kind {
+            StepKind::InspectJob { name, .. }
+            | StepKind::AwaitJob { name, .. }
+            | StepKind::CancelJob { name } => name,
+            _ => continue,
+        };
+        last.insert(name.clone(), index);
+    }
+    last
 }
 
 #[cfg(feature = "live")]

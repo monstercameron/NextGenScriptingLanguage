@@ -919,6 +919,30 @@ impl Signals {
         })
     }
 
+    fn begin_job_run_with_budget(&self, budget: Arc<jobs::RunBudget>) -> Result<JobRunGuard> {
+        let mut context = self
+            .job_run_context
+            .lock()
+            .map_err(|_| anyhow!("background job run context is poisoned"))?;
+        match context.as_mut() {
+            Some(frame) => {
+                if !Arc::ptr_eq(&frame.budget, &budget) {
+                    bail!("live background jobs cannot change their run-wide budget");
+                }
+                frame.depth = frame
+                    .depth
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("background job run nesting limit exceeded"))?;
+            }
+            None => {
+                *context = Some(JobRunFrame { depth: 1, budget });
+            }
+        }
+        Ok(JobRunGuard {
+            context: Arc::clone(&self.job_run_context),
+        })
+    }
+
     fn current_job_run_budget(&self) -> Option<Arc<jobs::RunBudget>> {
         self.job_run_context
             .lock()
@@ -4146,6 +4170,7 @@ fn apply_control_action<'a>(
     }
     fn unwind(
         unwind: control_flow::UnwindTo,
+        collect_loop_jobs: bool,
         state: &mut control_flow::RuntimeState,
         call_frames: &mut Vec<calls::Frame<'_>>,
         loop_frames: &mut loops::LoopStack,
@@ -4173,7 +4198,14 @@ fn apply_control_action<'a>(
             *bindings = frame.bindings;
             *cwd = frame.cwd;
         }
-        loop_frames.unwind_to(loop_depth, bindings)?;
+        let popped = loop_frames.unwind_to(loop_depth, bindings)?;
+        for (parent, scope) in popped {
+            if collect_loop_jobs {
+                job_supervisor.collect_loop_iteration(parent, scope)?;
+            } else {
+                job_supervisor.cancel_scope(scope)?;
+            }
+        }
         remove_bindings(bindings, drop_bindings);
         state.apply_unwind(&control_flow::UnwindTo::new(call_depth, loop_depth));
         Ok(())
@@ -4190,8 +4222,13 @@ fn apply_control_action<'a>(
             unwind: target_scope,
         } => {
             let continuing = transfer == Some(control_flow::TransferKind::Continue);
+            let collect_loop_jobs = matches!(
+                transfer,
+                Some(control_flow::TransferKind::Continue | control_flow::TransferKind::Break)
+            );
             unwind(
                 target_scope,
+                collect_loop_jobs,
                 state,
                 call_frames,
                 loop_frames,
@@ -4208,7 +4245,9 @@ fn apply_control_action<'a>(
                 let header = target
                     .checked_sub(*back)
                     .context("invalid continue loop edge")?;
-                loop_frames.end_iteration(header, bindings)?;
+                if let Some((parent, scope)) = loop_frames.end_iteration(header, bindings)? {
+                    job_supervisor.collect_loop_iteration(parent, scope)?;
+                }
             }
             Ok(AppliedControl::Jump(target))
         }
@@ -4216,10 +4255,15 @@ fn apply_control_action<'a>(
             target,
             binding,
             error,
+            job_scope,
             unwind: target_scope,
         } => {
+            job_supervisor
+                .cancel_scope_preserving(job_scope)
+                .context("cancelling background jobs before entering catch")?;
             unwind(
                 target_scope,
+                false,
                 state,
                 call_frames,
                 loop_frames,
@@ -4288,7 +4332,9 @@ pub fn run_with_context(
         true,
         deadline_after(options.total_timeout, "total timeout")?,
     )?;
-    signals.background_jobs_allowed = false;
+    // TUI handlers have finite executions. Jobs are scoped to the handler and
+    // must be awaited or cancelled before it returns.
+    signals.background_jobs_allowed = true;
     preload_program_modules(program, registry, &signals, &cwd)?;
     run_finite_state(
         FiniteRun {
@@ -4303,6 +4349,8 @@ pub fn run_with_context(
             journal: None,
             state_source: FiniteStateSource::Fresh,
             state_out: None,
+            job_supervisor: None,
+            job_last_uses: None,
         },
     )
 }

@@ -918,6 +918,7 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     validate_discard_stderr_usage(program)?;
     validate_secret_arguments(program, registry)?;
     crate::inputs::validate(&program.inputs)?;
+    #[cfg(target_arch = "wasm32")]
     let has_jobs = has_job_operations(program);
     #[cfg(target_arch = "wasm32")]
     if program
@@ -947,11 +948,6 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(trigger) = &program.trigger {
-        if has_jobs {
-            bail!(
-                "native background jobs are supported only in finite programs; services and listeners have separate lifetimes"
-            );
-        }
         let (setup, body) = service::split_program(program);
         if let Some(step) = body
             .steps
@@ -985,10 +981,11 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
                 step.line
             );
         }
-        validate_finite(&setup, registry, None)?;
+        let setup_validation = service::setup_for_validation(program);
+        validate_finite(&setup_validation, registry, None)?;
         for step in &setup.steps {
             match &step.kind {
-                StepKind::UseFolder { .. } => {}
+                StepKind::UseFolder { .. } | StepKind::SpawnJob { .. } => {}
                 StepKind::Invoke { call, .. }
                     if registry.resolve_call(call)?.builtin == Some(Builtin::Cd) => {}
                 _ => bail!(
@@ -1657,9 +1654,6 @@ pub(crate) fn validate_live(
             step.line
         );
     }
-    if has_job_operations(program) {
-        bail!("live programs do not support finite-scope background job handles");
-    }
     if let Some(step) = program.steps.iter().find(|step| {
         !allow_exit && matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. })
     }) {
@@ -1783,26 +1777,6 @@ fn validate_range(
         } = &step.kind
         {
             let finish = index + end;
-            // A catch could resume normal flow while a job spawned in the body still
-            // runs unobserved, so a try with a catch admits no job operations. Without a
-            // catch (as for `on exit`), an error in the body always ends the run after
-            // cleanup, and the run's end cancels and reaps every job it still owns.
-            if catch.is_some()
-                && steps[index + 1..finish - 1].iter().any(|step| {
-                    matches!(
-                        step.kind,
-                        StepKind::SpawnJob { .. }
-                            | StepKind::InspectJob { .. }
-                            | StepKind::AwaitJob { .. }
-                            | StepKind::CancelJob { .. }
-                    )
-                })
-            {
-                bail!(
-                    "line {}: background job operations are unsupported inside try blocks that have a catch",
-                    step.line
-                );
-            }
             let catch_at = catch.map(|offset| index + offset);
             let finally_at = finally.map(|offset| index + offset);
             let try_body_end = catch_at.or(finally_at).unwrap_or(finish - 1);
@@ -1818,6 +1792,17 @@ fn validate_range(
                 return_allowed,
             )
             .with_context(|| format!("try body at line {}", step.line))?;
+            if try_flow
+                .unresolved_jobs
+                .difference(&entry.jobs)
+                .next()
+                .is_some()
+            {
+                bail!(
+                    "line {}: jobs started in a try body must be awaited or cancelled before normal try exit",
+                    step.line
+                );
+            }
 
             let mut after_try = if let Some(catch_index) = catch_at {
                 let StepKind::Catch { binding: name, .. } = &steps[catch_index].kind else {
@@ -2025,9 +2010,15 @@ fn validate_range(
                 return_allowed,
             )
             .with_context(|| format!("loop at line {}", step.line))?;
-            if body.jobs != flow.jobs || body.unresolved_jobs != flow.unresolved_jobs {
+            // Newly spawned jobs may escape each iteration as a collected
+            // handle batch. An outer handle cannot be resolved by a loop body,
+            // because the loop may run zero times.
+            let outer_job_changed = flow.jobs.iter().any(|name| {
+                body.unresolved_jobs.contains(name) != flow.unresolved_jobs.contains(name)
+            });
+            if outer_job_changed {
                 bail!(
-                    "line {}: background job operations are unsupported inside loops",
+                    "line {}: jobs started outside a loop cannot be resolved inside its body",
                     step.line
                 );
             }
@@ -2038,6 +2029,14 @@ fn validate_range(
                 && !body_has_early_transfer
             {
                 let mut repeated_body = body.clone();
+                // Each source iteration gets fresh runtime job scopes. Reuse
+                // the incoming flow's visible names while checking a later
+                // iteration so a same-named handle resolved in the first pass
+                // can be spawned again.
+                repeated_body.jobs.clone_from(&flow.jobs);
+                repeated_body
+                    .unresolved_jobs
+                    .clone_from(&flow.unresolved_jobs);
                 validate_range(
                     steps,
                     registry,
@@ -2105,6 +2104,13 @@ fn validate_range(
             }
             // A loop may execute zero times. Only a statically exact single
             // iteration can replace an outer binding's value facts afterward.
+            let collected = body
+                .unresolved_jobs
+                .difference(&flow.jobs)
+                .cloned()
+                .collect::<Vec<_>>();
+            flow.jobs.extend(collected.iter().cloned());
+            flow.unresolved_jobs.extend(collected);
             flow.has_data = true;
             flow.stdout_unavailable |= body.stdout_unavailable;
             flow.started = true;
@@ -2667,9 +2673,6 @@ fn validate_range(
                     flow.started = true;
                 }
                 StepKind::SpawnJob { name, stages } => {
-                    if flow.loop_depth > 0 {
-                        bail!("background job operations are unsupported inside loops");
-                    }
                     if stages.is_empty() || stages.len() > 16 {
                         bail!("background pipeline must contain between 1 and 16 stages");
                     }
@@ -2752,9 +2755,6 @@ fn validate_range(
                     name,
                     binding: output,
                 } => {
-                    if flow.loop_depth > 0 {
-                        bail!("background job operations are unsupported inside loops");
-                    }
                     if !flow.jobs.contains(name) {
                         bail!("unknown or out-of-scope background job {name:?}");
                     }
@@ -2771,9 +2771,6 @@ fn validate_range(
                     status_binding,
                     result_binding,
                 } => {
-                    if flow.loop_depth > 0 {
-                        bail!("background job operations are unsupported inside loops");
-                    }
                     if !flow.jobs.contains(name) {
                         bail!("unknown or out-of-scope background job {name:?}");
                     }
@@ -2796,9 +2793,6 @@ fn validate_range(
                     flow.started = true;
                 }
                 StepKind::CancelJob { name } => {
-                    if flow.loop_depth > 0 {
-                        bail!("background job operations are unsupported inside loops");
-                    }
                     if !flow.jobs.contains(name) {
                         bail!("unknown or out-of-scope background job {name:?}");
                     }

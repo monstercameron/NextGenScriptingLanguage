@@ -537,6 +537,7 @@ fn dispatch(
         let initial_input = doc.input.clone();
         let state = State {
             doc,
+            job_session: Arc::new(crate::runtime::live::JobSession::new()),
             redactor: crate::security::secret_redactor(&registry),
             registry: registry.clone(),
             plan,

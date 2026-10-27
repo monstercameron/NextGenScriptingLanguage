@@ -1,6 +1,6 @@
 use flow::ast::StepKind;
 use flow::{manifest::Registry, parser, runtime};
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
@@ -135,6 +135,272 @@ fn parser_lowers_the_four_named_job_operations_without_changing_legacy_ast() {
 
 #[cfg(unix)]
 #[test]
+fn loop_iterations_can_spawn_and_await_the_same_named_job() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let program = parser::parse(
+        "repeat 3 times\n  spawn as item\n    run \"printf\" with arguments [\"item\"]\n  await item\n",
+    )?;
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+
+    assert_eq!(result.launched_processes, 3);
+    assert_eq!(result.output, b"item");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_iterations_can_collect_same_named_jobs_for_a_later_await() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let program = parser::parse(
+        "repeat 3 times\n  spawn as item\n    run \"printf\" with arguments [\"item\"]\nawait item and keep status as code and keep result as results\nthen encode [code, results] as json\n",
+    )?;
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+
+    let value: Json = serde_json::from_slice(&result.output)?;
+    assert_eq!(result.launched_processes, 3);
+    assert_eq!(value[0], json!(0));
+    assert_eq!(value[1].as_array().map(Vec::len), Some(3));
+    assert_eq!(value[1][0]["stdout"], json!([105, 116, 101, 109]));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn nested_loop_job_batches_are_collected_into_the_outer_batch() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let program = parser::parse(
+        "repeat 2 times\n  repeat 2 times\n    spawn as item\n      run \"printf\" with arguments [\"x\"]\nawait item\n",
+    )?;
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+
+    assert_eq!(result.launched_processes, 4);
+    assert_eq!(result.output, b"xxxx");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn continue_collects_current_iteration_job_for_later_await() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let program = parser::parse(
+        "repeat 3 times\n  spawn as item\n    run \"printf\" with arguments [\"x\"]\n  continue\nawait item\n",
+    )?;
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+
+    assert_eq!(result.launched_processes, 3);
+    assert_eq!(result.output, b"xxx");
+    Ok(())
+}
+
+#[test]
+fn loop_collected_job_batch_must_still_be_observed_before_scope_exit() {
+    let program = parser::parse("repeat 3 times\n  spawn as item\n    run \"true\"\n").unwrap();
+
+    let error = runtime::validate(&program, &Registry::default())
+        .expect_err("a collected loop batch must be observed before scope exit");
+    assert!(format!("{error:#}").contains("every background job must be awaited or cancelled"));
+}
+
+#[cfg(unix)]
+#[test]
+fn try_catch_cancels_and_reaps_jobs_owned_by_the_try_body() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let marker = directory.path().join("job-started");
+    let pid = directory.path().join("job.pid");
+    let program = parser::parse(&format!(
+        "try\n  spawn as worker\n    run \"sh\" with arguments [\"-c\", \"touch \\\"$1\\\"; echo $$ > \\\"$2\\\"; while :; do sleep 1; done\", \"job\", {}, {}]\n  run \"sh\" with arguments [\"-c\", \"while [ ! -f \\\"$1\\\" ]; do sleep 0.01; done\", \"wait\", {}]\n  run \"false\" with arguments []\n  cancel worker\ncatch failure\n  run \"sh\" with arguments [\"-c\", \"if kill -0 \\\"$(cat \\\"$1\\\")\\\" 2>/dev/null; then exit 1; fi\", \"check\", {}]\n  run \"printf\" with arguments [\"caught\"]\n",
+        quote(&marker.to_string_lossy()),
+        quote(&pid.to_string_lossy()),
+        quote(&marker.to_string_lossy()),
+        quote(&pid.to_string_lossy()),
+    ))?;
+
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+    assert_eq!(result.output, b"caught");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn catch_body_jobs_are_reaped_if_the_catch_fails_before_await() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let marker = directory.path().join("catch-job-started");
+    let pid = directory.path().join("catch-job.pid");
+    let program = parser::parse(&format!(
+        "try\n  run \"false\" with arguments []\ncatch failure\n  spawn as worker\n    run \"sh\" with arguments [\"-c\", \"echo $$ > \\\"$2\\\"; touch \\\"$1\\\"; exec sleep 30\", \"job\", {}, {}]\n  run \"sh\" with arguments [\"-c\", \"while [ ! -f \\\"$1\\\" ]; do sleep 0.01; done\", \"wait\", {}]\n  run \"false\" with arguments []\n  await worker\n",
+        quote(&marker.to_string_lossy()),
+        quote(&pid.to_string_lossy()),
+        quote(&marker.to_string_lossy()),
+    ))?;
+
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    );
+    assert!(
+        result.is_err(),
+        "the catch body deliberately fails before its await"
+    );
+    let job_pid: libc::pid_t = std::fs::read_to_string(&pid)?.trim().parse()?;
+    // SAFETY: this probes the child PID written by the catch-owned job above.
+    assert_eq!(
+        unsafe { libc::kill(job_pid, 0) },
+        -1,
+        "catch job remained alive"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn nested_call_failure_reaps_jobs_owned_by_the_caller_try() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let marker = directory.path().join("caller-try-job-started");
+    let pid = directory.path().join("caller-try-job.pid");
+    let program = parser::parse(&format!(
+        "define a program named failing\n  run \"false\" with arguments []\ntry\n  spawn as worker\n    run \"sh\" with arguments [\"-c\", \"echo $$ > \\\"$2\\\"; touch \\\"$1\\\"; exec sleep 30\", \"job\", {}, {}]\n  run \"sh\" with arguments [\"-c\", \"while [ ! -f \\\"$1\\\" ]; do sleep 0.01; done\", \"wait\", {}]\n  run program failing\n  await worker\ncatch failure\n  run \"sh\" with arguments [\"-c\", \"if kill -0 \\\"$(cat \\\"$1\\\")\\\" 2>/dev/null; then exit 1; fi\", \"check\", {}]\n  then encode \"caught\" as json\n",
+        quote(&marker.to_string_lossy()),
+        quote(&pid.to_string_lossy()),
+        quote(&marker.to_string_lossy()),
+        quote(&pid.to_string_lossy()),
+    ))?;
+
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+    assert_eq!(result.output, b"\"caught\"");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_to_service_reaps_service_setup_jobs() -> anyhow::Result<()> {
+    use std::process::{Command, Stdio};
+
+    let directory = tempfile::tempdir()?;
+    let pid_path = directory.path().join("service-job.pid");
+    let source = format!(
+        "spawn as service_worker\n  run \"sh\" with arguments [\"-c\", \"echo $$ > \\\"$1\\\"; exec sleep 30\", \"job\", {}]\nevery 10 milliseconds\n  run \"true\"\n",
+        quote(&pid_path.to_string_lossy()),
+    );
+    std::fs::write(directory.path().join("service.program"), source)?;
+    let mut service = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("run")
+        .arg("service.program")
+        .current_dir(directory.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    if !await_file(&pid_path) {
+        let _ = service.kill();
+        let _ = service.wait();
+        anyhow::bail!("service-owned setup job did not start");
+    }
+    let job_pid: libc::pid_t = std::fs::read_to_string(&pid_path)?.trim().parse()?;
+    // SAFETY: the PID is the child service process started by this test.
+    assert_eq!(
+        unsafe { libc::kill(service.id() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while service.try_wait()?.is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if service.try_wait()?.is_none() {
+        let _ = service.kill();
+        let _ = service.wait();
+        panic!("service did not stop after SIGTERM");
+    }
+    // SAFETY: this probes the PID written by the service-owned job started above.
+    assert_eq!(
+        unsafe { libc::kill(job_pid, 0) },
+        -1,
+        "service job remained alive"
+    );
+    Ok(())
+}
+
+#[test]
+fn listener_handler_can_spawn_and_await_a_named_job() -> anyhow::Result<()> {
+    use anyhow::Context;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let directory = tempfile::tempdir()?;
+    std::fs::write(
+        directory.path().join("listener.program"),
+        "listen to stdin\nwhenever a line arrives as record\n  spawn as worker\n    run \"printf\" with arguments [record]\n  await worker\n",
+    )?;
+    let mut process = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("run")
+        .arg("listener.program")
+        .arg("--max-runs")
+        .arg("1")
+        .current_dir(directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    process
+        .stdin
+        .take()
+        .context("opening listener stdin")?
+        .write_all(b"listener-output\n")?;
+    let output = process.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "listener failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"listener-output\n");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn tui_handler_jobs_are_owned_and_reaped_before_return() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let program = parser::parse(
+        "spawn as handler_job\n  run \"printf\" with arguments [\"handler\"]\nawait handler_job\n",
+    )?;
+    let result = runtime::run_with_context(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+        std::collections::BTreeMap::new(),
+        Vec::new(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )?;
+    assert_eq!(result.output, b"handler");
+    assert_eq!(result.launched_processes, 1);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn awaited_pipeline_keeps_exact_bytes_and_repeated_await_is_idempotent() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let registry = Registry::default();
@@ -232,7 +498,7 @@ fn finite_module_called_from_finally_after_retired_jobs_succeeds() -> anyhow::Re
 
 #[cfg(unix)]
 #[test]
-fn service_preflight_rejects_jobs_hidden_in_a_finite_module() -> anyhow::Result<()> {
+fn service_handlers_can_use_jobs_from_imported_finite_modules() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let catalog = directory.path().join("applets");
     std::fs::create_dir_all(&catalog)?;
@@ -269,7 +535,7 @@ fn service_preflight_rejects_jobs_hidden_in_a_finite_module() -> anyhow::Result<
     )?;
     let registry = Registry::load(&catalog)?;
     let service = parser::parse("every 10 milliseconds\n  run test.job\n")?;
-    let error = runtime::run_service(
+    let result = runtime::run_service(
         &service,
         &registry,
         &options(directory.path(), 1024),
@@ -278,13 +544,42 @@ fn service_preflight_rejects_jobs_hidden_in_a_finite_module() -> anyhow::Result<
             max_record_bytes: 1024,
         },
         |_| Ok(()),
+    )?;
+    assert_eq!(result.runs, 1);
+    assert!(
+        effect.exists(),
+        "the imported module's job should run within the handler"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn service_setup_preflights_all_jobs_before_starting_any() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let effect = directory.path().join("service-job-started");
+    let missing = directory.path().join("missing-service-command");
+    let program = parser::parse(&format!(
+        "spawn as first\n  run \"touch\" with arguments [{}]\nspawn as second\n  run {}\nevery 10 milliseconds\n  run \"true\"\n",
+        quote(&effect.to_string_lossy()),
+        quote(&missing.to_string_lossy()),
+    ))?;
+    let error = runtime::run_service(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024),
+        &runtime::ServiceLimits {
+            max_runs: Some(1),
+            max_record_bytes: 1024,
+        },
+        |_| Ok(()),
     )
     .err()
-    .expect("a service must reject job operations imported through a finite module");
-    assert!(format!("{error:#}").contains("including imported program modules"));
+    .expect("the missing setup executable must fail preflight");
+    assert!(format!("{error:#}").contains("executables unavailable"));
     assert!(
         !effect.exists(),
-        "rejection must precede the nested job effect"
+        "an earlier service-owned job must not start before all jobs preflight"
     );
     Ok(())
 }
@@ -754,7 +1049,10 @@ fn ten_thousand_sequential_jobs_complete() -> anyhow::Result<()> {
 fn retained_record_limit_is_shared_with_nested_programs() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let marker = directory.path().join("nested-started");
-    let mut source = format!("define a program named nested\n  spawn as child\n    run \"touch\" with arguments [{}]\n  await child\n", quote(&marker.to_string_lossy()));
+    let mut source = format!(
+        "define a program named nested\n  spawn as child\n    run \"touch\" with arguments [{}]\n  await child\n",
+        quote(&marker.to_string_lossy())
+    );
     for index in 0..32 {
         source.push_str(&format!(
             "spawn as job{index}\n  run \"true\"\nawait job{index}\n"
@@ -808,10 +1106,12 @@ await shared
 "#;
     let program = parser::parse(source)?;
     // Calls execute their inlined bodies in the same step array as the caller.
-    assert!(program
-        .steps
-        .iter()
-        .any(|step| matches!(&step.kind, StepKind::CallProgram { .. })));
+    assert!(
+        program
+            .steps
+            .iter()
+            .any(|step| matches!(&step.kind, StepKind::CallProgram { .. }))
+    );
     let result = runtime::run(
         &program,
         &Registry::default(),
@@ -941,7 +1241,8 @@ fn diagnostic_capture_limit_and_truncation_are_portable() -> anyhow::Result<()> 
     ] {
         let source = format!(
             "spawn as diagnostics\n  run {} with arguments [\"stderr-bytes\", \"{}\"]\nawait diagnostics and keep result as record\nthen encode record as json\n",
-            quote(&fixture.to_string_lossy()), count,
+            quote(&fixture.to_string_lossy()),
+            count,
         );
         let result = runtime::run(
             &parser::parse(&source)?,
@@ -952,9 +1253,11 @@ fn diagnostic_capture_limit_and_truncation_are_portable() -> anyhow::Result<()> 
         let stderr = record["stderr_by_stage"][0].as_array().unwrap();
         assert_eq!(record["stderr_limit_per_stage"], json!(65_536));
         assert_eq!(stderr.len(), retained, "input length {count}");
-        assert!(stderr
-            .iter()
-            .all(|byte| byte.as_u64() == Some(u64::from(b'e'))));
+        assert!(
+            stderr
+                .iter()
+                .all(|byte| byte.as_u64() == Some(u64::from(b'e')))
+        );
         assert_eq!(record["stderr_truncated"], json!([truncated]));
         assert_eq!(record["stages"][0]["stderr_truncated"], json!(truncated));
     }

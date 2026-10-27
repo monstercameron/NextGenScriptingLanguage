@@ -226,6 +226,8 @@ struct Frame {
     outer: BTreeSet<String>,
     iterations: Iterations,
     entered: usize,
+    job_parent: usize,
+    job_scope: Option<usize>,
 }
 pub(super) struct LoopStack {
     frames: Vec<Frame>,
@@ -308,6 +310,8 @@ impl LoopStack {
                 outer: bindings.keys().cloned().collect(),
                 iterations,
                 entered: 0,
+                job_parent: 0,
+                job_scope: None,
             });
         }
         let frame = self.frames.last_mut().expect("loop frame was pushed");
@@ -413,6 +417,8 @@ impl LoopStack {
                 taken: consumed,
                 current: None,
             },
+            job_parent: 0,
+            job_scope: None,
         });
         Ok(())
     }
@@ -421,13 +427,37 @@ impl LoopStack {
         &mut self,
         header: usize,
         bindings: &mut BTreeMap<String, Value>,
-    ) -> Result<()> {
-        let frame = self.frames.last().context("loop end without active loop")?;
+    ) -> Result<Option<(usize, usize)>> {
+        let frame = self
+            .frames
+            .last_mut()
+            .context("loop end without active loop")?;
         if frame.header != header {
             bail!("loop end does not match active loop");
         }
+        let scope = frame
+            .job_scope
+            .take()
+            .map(|scope| (frame.job_parent, scope));
         bindings.retain(|name, _| frame.outer.contains(name));
+        Ok(scope)
+    }
+
+    pub fn set_job_scope(&mut self, header: usize, parent: usize, scope: usize) -> Result<()> {
+        let frame = self
+            .frames
+            .last_mut()
+            .context("loop scope without active loop")?;
+        if frame.header != header || frame.job_scope.is_some() {
+            bail!("loop job scope does not match active iteration");
+        }
+        frame.job_parent = parent;
+        frame.job_scope = Some(scope);
         Ok(())
+    }
+
+    pub fn job_scopes(&self) -> impl Iterator<Item = usize> + '_ {
+        self.frames.iter().rev().filter_map(|frame| frame.job_scope)
     }
 
     /// Remove nested loop frames crossed by a lexical transfer. Each popped
@@ -436,15 +466,19 @@ impl LoopStack {
         &mut self,
         depth: usize,
         bindings: &mut BTreeMap<String, Value>,
-    ) -> Result<()> {
+    ) -> Result<Vec<(usize, usize)>> {
         if depth > self.frames.len() {
             bail!("control transfer targets an inactive loop scope");
         }
+        let mut scopes = Vec::new();
         while self.frames.len() > depth {
             let frame = self.frames.pop().expect("loop depth checked");
+            if let Some(scope) = frame.job_scope {
+                scopes.push((frame.job_parent, scope));
+            }
             bindings.retain(|name, _| frame.outer.contains(name));
         }
-        Ok(())
+        Ok(scopes)
     }
 }
 

@@ -68,6 +68,7 @@ pub(crate) enum ControlAction {
         target: usize,
         binding: String,
         error: Error,
+        job_scope: usize,
         unwind: UnwindTo,
     },
     Rethrow(Error),
@@ -143,6 +144,7 @@ struct TryFrame {
     end_marker: usize,
     call_depth: usize,
     loop_depth: usize,
+    job_scope: usize,
     phase: TryPhase,
     pending: Option<PendingExit>,
     catch_binding_active: bool,
@@ -267,6 +269,17 @@ impl RuntimeState {
         finally: Option<usize>,
         end_marker: usize,
     ) -> Result<()> {
+        self.enter_try_with_job_scope(header, catch, finally, end_marker, 0)
+    }
+
+    pub(crate) fn enter_try_with_job_scope(
+        &mut self,
+        header: usize,
+        catch: Option<(usize, String)>,
+        finally: Option<usize>,
+        end_marker: usize,
+        job_scope: usize,
+    ) -> Result<()> {
         if end_marker <= header
             || catch
                 .as_ref()
@@ -286,11 +299,36 @@ impl RuntimeState {
             end_marker,
             call_depth: self.calls.len(),
             loop_depth: self.loops.len(),
+            job_scope,
             phase: TryPhase::Body,
             pending: None,
             catch_binding_active: false,
         });
         Ok(())
+    }
+
+    pub(crate) fn active_job_scope(&self, call_depth: usize) -> Option<usize> {
+        self.tries
+            .last()
+            .filter(|frame| frame.call_depth == call_depth)
+            .map(|frame| frame.job_scope)
+    }
+
+    pub(crate) fn job_scopes(&self, call_depth: usize) -> Vec<usize> {
+        self.tries
+            .iter()
+            .rev()
+            .filter(|frame| frame.call_depth == call_depth)
+            .map(|frame| frame.job_scope)
+            .collect()
+    }
+
+    pub(crate) fn job_scope_at_end(&self, end_marker: usize) -> Result<usize> {
+        self.tries
+            .last()
+            .filter(|frame| frame.end_marker == end_marker)
+            .map(|frame| frame.job_scope)
+            .ok_or_else(|| anyhow!("try end does not match active job scope"))
     }
 
     /// Normal execution reaching Catch skips its body. An error transition
@@ -533,6 +571,7 @@ impl RuntimeState {
                             target,
                             binding,
                             error,
+                            job_scope: frame.job_scope,
                             unwind,
                         });
                     }
@@ -762,6 +801,7 @@ impl RuntimeState {
                 target,
                 binding,
                 error,
+                job_scope,
                 mut unwind,
             } => {
                 unwind.drop_bindings.extend(drops);
@@ -769,6 +809,7 @@ impl RuntimeState {
                     target,
                     binding,
                     error,
+                    job_scope,
                     unwind,
                 }
             }

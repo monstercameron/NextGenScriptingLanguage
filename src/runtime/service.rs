@@ -127,7 +127,7 @@ impl CalendarMinuteDedup {
 pub struct ServiceResult {
     pub runs: usize,
     pub cache_hits: usize,
-    /// Successful child/helper process spawns during completed handler runs.
+    /// Successful child/helper process spawns during service setup and completed handlers.
     /// Descendants spawned internally by those processes are not included.
     pub launched_processes: usize,
 }
@@ -157,6 +157,33 @@ pub(super) fn split_program(program: &Program) -> (Program, Program) {
             trigger: None,
         },
     )
+}
+
+/// Add synthetic awaits only for preflight, so service setup can start named
+/// jobs that remain owned by the service until shutdown. Setup cannot await,
+/// inspect, or cancel those service-lifetime handles itself.
+pub(super) fn setup_for_validation(program: &Program) -> Program {
+    let (mut setup, _) = split_program(program);
+    let setup_jobs = setup
+        .steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            StepKind::SpawnJob { name, .. } => Some((step.line, name.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    setup
+        .steps
+        .extend(setup_jobs.into_iter().map(|(line, name)| crate::ast::Step {
+            line,
+            label: None,
+            kind: StepKind::AwaitJob {
+                name,
+                status_binding: None,
+                result_binding: None,
+            },
+        }));
+    setup
 }
 
 fn stopped(signals: &Signals) -> Result<()> {
@@ -331,6 +358,8 @@ fn fire(
                 journal: Some(journal),
                 state_source,
                 state_out: None,
+                job_supervisor: None,
+                job_last_uses: None,
             },
         )?
     } else {
@@ -662,10 +691,11 @@ fn run_service_with_signals(
     stopped(&signals)?;
     let module_session =
         super::preload_program_modules(program, registry, &signals, &capability_cwd)?;
-    if module_session.has_background_job_operations() {
-        bail!("native background jobs are unsupported in services and listeners, including imported program modules");
-    }
-    signals.background_jobs_allowed = false;
+    // Every event handler gets a finite job supervisor of its own. All owned
+    // jobs must be awaited or cancelled before the handler returns; failures
+    // cancel and reap the handler's remaining jobs before the service continues
+    // or exits.
+    signals.background_jobs_allowed = true;
     let mut sensitivity_floor = super::workflow_sensitivity_floor(
         program,
         registry,
@@ -695,14 +725,26 @@ fn run_service_with_signals(
         bail!("service limits must be positive");
     }
     let (setup, body) = split_program(program);
+    let setup_validation = setup_for_validation(program);
     if body.steps.is_empty() {
         bail!("service body must contain a statement");
     }
+    if checkpoint.is_some()
+        && setup
+            .steps
+            .iter()
+            .any(|step| matches!(step.kind, StepKind::SpawnJob { .. }))
+    {
+        bail!("service-owned background jobs cannot be checkpointed");
+    }
     let configured_cwd = fs::canonicalize(&options.working_directory)?;
     stopped(&signals)?;
+    super::preflight_inputs(&setup_validation, registry, &options.inputs)?;
+    super::preflight_executables(&setup_validation, registry, &configured_cwd)?;
     let mut cwd = configured_cwd.clone();
-    for step in setup.steps {
-        match step.kind {
+    let mut setup_job_workdirs = Vec::new();
+    for step in &setup.steps {
+        match &step.kind {
             StepKind::UseFolder { path } => {
                 let folder = path_value(&path, &options.inputs, &cwd)?;
                 stopped(&signals)?;
@@ -739,6 +781,9 @@ fn run_service_with_signals(
                 if !cwd.is_dir() {
                     bail!("line {}: cd requires a directory", step.line);
                 }
+            }
+            StepKind::SpawnJob { .. } => {
+                setup_job_workdirs.push(fs::canonicalize(&cwd)?);
             }
             _ => bail!("service setup requires a folder directive or the cd builtin"),
         }
@@ -788,6 +833,89 @@ fn run_service_with_signals(
         None
     };
     let mut result = ServiceResult::default();
+    let service_job_count = setup
+        .steps
+        .iter()
+        .filter(|step| matches!(step.kind, StepKind::SpawnJob { .. }))
+        .count();
+    if service_job_count > jobs::MAX_ACTIVE_JOBS || service_job_count > jobs::MAX_JOB_HANDLES {
+        bail!(
+            "service setup declares {service_job_count} persistent jobs; the limit is {}",
+            jobs::MAX_ACTIVE_JOBS.min(jobs::MAX_JOB_HANDLES)
+        );
+    }
+    let has_service_jobs = service_job_count != 0;
+    // Keep the lifetime job budget alive for the whole service. Handler runs
+    // nest their own budget guards inside this one, so persistent workers and
+    // handler jobs share the same concurrency and retained-output limits.
+    let _service_job_run = has_service_jobs
+        .then(|| signals.begin_job_run(options.max_output_bytes))
+        .transpose()?;
+    let mut service_jobs = if has_service_jobs {
+        Some(jobs::Supervisor::new(&signals, options.max_output_bytes)?)
+    } else {
+        None
+    };
+    let service_job_entries = setup
+        .steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            StepKind::SpawnJob { name, stages } => Some((step, name, stages)),
+            _ => None,
+        })
+        .zip(setup_job_workdirs.iter())
+        .collect::<Vec<_>>();
+    if let Some(supervisor) = service_jobs.as_mut() {
+        // Preflight every job before starting any service-owned worker.
+        for ((step, name, stages), workdir) in &service_job_entries {
+            let job_cwd = crate::working_dir::WorkingDirectory::plain((*workdir).clone());
+            supervisor
+                .preflight_spawn(
+                    0,
+                    name,
+                    stages,
+                    jobs::JobEnv {
+                        registry,
+                        bindings: &options.inputs,
+                        cwd: &job_cwd,
+                        options: &options,
+                        signals: &signals,
+                        environment: None,
+                    },
+                )
+                .with_context(|| {
+                    format!(
+                        "line {}: preflighting service-owned job {name:?}",
+                        step.line
+                    )
+                })?;
+        }
+        for ((step, name, stages), workdir) in &service_job_entries {
+            let job_cwd = crate::working_dir::WorkingDirectory::plain((*workdir).clone());
+            let launched = supervisor
+                .spawn(
+                    0,
+                    name,
+                    stages,
+                    jobs::JobEnv {
+                        registry,
+                        bindings: &options.inputs,
+                        cwd: &job_cwd,
+                        options: &options,
+                        signals: &signals,
+                        environment: None,
+                    },
+                )
+                .with_context(|| {
+                    format!(
+                        "line {}: starting service-owned background job {name:?}",
+                        step.line
+                    )
+                })?;
+            signals.account_child_process_launches(launched);
+            result.launched_processes += launched;
+        }
+    }
 
     // A checkpointed handler is independent of the event that originally
     // triggered it. Finish it before starting a new listener or waiting for a
@@ -970,6 +1098,68 @@ include!("windows_listener.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn service_cancellation_reaps_setup_owned_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_path = directory.path().join("service-job.pid");
+        let pid_literal = serde_json::to_string(&pid_path.to_string_lossy()).unwrap();
+        let source = format!(
+            "spawn as service_worker\n  run \"sh\" with arguments [\"-c\", \"echo $$ > \\\"$1\\\"; while :; do sleep 1; done\", \"job\", {pid_literal}]\nevery 1 millisecond\n  run \"true\"\n"
+        );
+        let program = crate::parser::parse(&source).unwrap();
+        let registry = Registry::default();
+        let options = RunOptions {
+            max_output_bytes: 1024 * 1024,
+            total_timeout: Some(Duration::from_secs(10)),
+            ..RunOptions::new(directory.path().to_owned())
+        };
+        let limits = ServiceLimits {
+            max_runs: None,
+            max_record_bytes: 1024 * 1024,
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let service_cancelled = Arc::clone(&cancelled);
+        let signals = Signals::with_cancellation_and_deadline(cancelled, false, None).unwrap();
+        let signal_path = pid_path.clone();
+        let cancel_service = Arc::clone(&service_cancelled);
+        let signal_thread = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !signal_path.is_file() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            cancel_service.store(true, Ordering::Release);
+        });
+        let result = run_service_with_signals(
+            ServiceRequest {
+                program: &program,
+                registry: &registry,
+                options: &options,
+                limits: &limits,
+                checkpoint: None,
+                schedule_options: ScheduleOptions::default(),
+                signals,
+                additional_sensitivity: None,
+            },
+            |_, _, _| Ok(()),
+        );
+        signal_thread.join().unwrap();
+        assert!(result.is_err());
+        assert!(pid_path.is_file(), "handler job did not start");
+        let pid: i32 = std::fs::read_to_string(&pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        // SAFETY: this only probes the PID recorded by the child job process.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            !alive,
+            "handler child {pid} remained after service cancellation"
+        );
+    }
 
     #[test]
     fn record_segments_include_newlines_and_allow_chunk_continuation() {

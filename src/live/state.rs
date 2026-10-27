@@ -512,6 +512,7 @@ pub(crate) struct ExitRecord {
 
 pub(crate) struct State {
     pub doc: Document,
+    pub job_session: Arc<runtime::live::JobSession>,
     pub redactor: Arc<crate::security::SecretRedactor>,
     pub registry: Registry,
     /// Set by a run-mode program's `exit with`/`fail with`, or by a failed command.

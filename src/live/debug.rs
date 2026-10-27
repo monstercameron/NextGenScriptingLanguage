@@ -153,6 +153,7 @@ mod tests {
         let source = "accept token as text from secret prompt \"Token?\"\n";
         let program = crate::parser::parse(source).unwrap();
         let state = State {
+            job_session: std::sync::Arc::new(crate::runtime::live::JobSession::new()),
             redactor: std::sync::Arc::default(),
             registry: Default::default(),
             doc: Document {

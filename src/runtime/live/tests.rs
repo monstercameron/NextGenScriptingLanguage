@@ -70,6 +70,58 @@ fn live_empty_node_preserves_input_and_cancelled_node_returns_no_state() -> Resu
 }
 
 #[test]
+fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let program = parser::parse(
+        "repeat 2 times\n  spawn as item\n    run \"printf\" with arguments [\"x\"]\nawait item\n",
+    )?;
+    let StepKind::Loop { end, .. } = &program.steps[0].kind else {
+        panic!("fixture starts with a loop node");
+    };
+    let end = *end;
+    let first = Program {
+        definitions: program.definitions.clone(),
+        inputs: program.inputs.clone(),
+        steps: program.steps[..end].to_vec(),
+        trigger: None,
+    };
+    let second = Program {
+        definitions: program.definitions.clone(),
+        inputs: program.inputs.clone(),
+        steps: program.steps[end..].to_vec(),
+        trigger: None,
+    };
+    let jobs = Arc::new(JobSession::new());
+    let context = NodeState {
+        cwd: directory.path().into(),
+        bindings: BTreeMap::new(),
+        data: Vec::new(),
+    };
+    let (_, state) = execute_node_with_session(
+        &first,
+        &Registry::default(),
+        &options(directory.path()),
+        context,
+        Arc::new(AtomicBool::new(false)),
+        Arc::clone(&jobs),
+        BTreeMap::new(),
+        false,
+    )?;
+    let (result, _) = execute_node_with_session(
+        &second,
+        &Registry::default(),
+        &options(directory.path()),
+        state,
+        Arc::new(AtomicBool::new(false)),
+        jobs,
+        BTreeMap::from([("item".into(), 0)]),
+        true,
+    )?;
+    assert_eq!(result.output, b"xx");
+    Ok(())
+}
+
+#[test]
 #[ignore = "explicit paired release measurements; no child processes"]
 #[allow(clippy::assertions_on_constants)] // Build in debug; run only in release.
 fn live_state_handoff() -> Result<()> {

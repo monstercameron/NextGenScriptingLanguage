@@ -112,7 +112,7 @@ execute preview.program --input 'path=server log.txt' --input lines=10
 | `then parse json as data` | Parse JSON for typed field selection and encoding. |
 | `and cache` | Cache an explicitly cacheable named transformation. |
 | `then save to "output.txt"` | Atomically replace a file with the current output. |
-| `spawn as job` / `inspect job as state` / `await job` / `cancel job` | Own a bounded background native pipeline in a finite program or call. |
+| `spawn as job` / `inspect job as state` / `await job` / `cancel job` | Own a bounded background native pipeline in finite runs, handlers, or service setup. |
 
 Use one statement per line, double-quoted JSON strings, `#` comments and consistent
 space indentation. Computation stays in tools such as `jq`, `awk` and `sort`.

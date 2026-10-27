@@ -97,12 +97,7 @@ fn unresolved_direct_executable_is_false_in_json_plan() {
     )
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
-        .args([
-            "explain",
-            "plan.program",
-            "--json",
-            "--manifest-dir",
-        ])
+        .args(["explain", "plan.program", "--json", "--manifest-dir"])
         .arg(manifests)
         .current_dir(directory.path())
         .env("PATH", directory.path())

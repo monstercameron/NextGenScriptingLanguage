@@ -38,7 +38,11 @@ fn resolve_checks_direct_executables_only_and_suggests_path_names() {
     let bin = root.path().join("bin");
     fs::create_dir(&bin).unwrap();
     let printf = bin.join("printf");
-    fs::write(&printf, "placeholder; resolution must not execute this file\n").unwrap();
+    fs::write(
+        &printf,
+        "placeholder; resolution must not execute this file\n",
+    )
+    .unwrap();
     fs::set_permissions(&printf, fs::Permissions::from_mode(0o755)).unwrap();
     let path = bin.to_str().unwrap();
 
@@ -59,14 +63,23 @@ fn resolve_checks_direct_executables_only_and_suggests_path_names() {
     let diagnostic = &value["diagnostics"][0];
     assert_eq!(diagnostic["code"], "exec.not_found");
     assert_eq!(diagnostic["severity"], "warning");
-    assert!(diagnostic["message"].as_str().unwrap().contains("did you mean \"printf\""));
+    assert!(diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("did you mean \"printf\""));
     assert!(diagnostic["message"].as_str().unwrap().contains(path));
     assert_eq!(diagnostic["fixes"][0]["edits"][0]["replacement"], "printf");
 
     let denied = invoke_with_path(
         root.path(),
         &bin,
-        &["check", "job.program", "--resolve", "--deny-warnings", "--json"],
+        &[
+            "check",
+            "job.program",
+            "--resolve",
+            "--deny-warnings",
+            "--json",
+        ],
     );
     let denied = report(&denied, false);
     assert_eq!(denied["diagnostics"][0]["severity"], "warning");
@@ -110,7 +123,10 @@ fn resolve_checks_direct_executables_only_and_suggests_path_names() {
     );
     let applet_hint = report(&applet_hint, true);
     let diagnostic = &applet_hint["diagnostics"][0];
-    assert!(diagnostic["message"].as_str().unwrap().contains("catalog applet \"text.concat\""));
+    assert!(diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("catalog applet \"text.concat\""));
     assert!(diagnostic.get("fixes").is_none());
 
     let subdir_bin = root.path().join("subdir").join("bin");
@@ -118,7 +134,11 @@ fn resolve_checks_direct_executables_only_and_suggests_path_names() {
     let subdir_printf = subdir_bin.join("printf");
     fs::write(&subdir_printf, "placeholder\n").unwrap();
     fs::set_permissions(&subdir_printf, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(root.path().join("job.program"), "use folder \"subdir\"\nrun \"printf\"\n").unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "use folder \"subdir\"\nrun \"printf\"\n",
+    )
+    .unwrap();
     let relative_path = invoke_with_path(
         root.path(),
         Path::new("bin"),
@@ -133,7 +153,10 @@ fn resolve_checks_direct_executables_only_and_suggests_path_names() {
         Path::new("bin"),
         &["check", "job.program", "--resolve", "--json"],
     );
-    assert_eq!(report(&wrong_initial_cwd, true)["diagnostics"][0]["code"], "exec.not_found");
+    assert_eq!(
+        report(&wrong_initial_cwd, true)["diagnostics"][0]["code"],
+        "exec.not_found"
+    );
     fs::set_permissions(&subdir_printf, fs::Permissions::from_mode(0o755)).unwrap();
 
     fs::write(
@@ -151,11 +174,7 @@ fn resolve_checks_direct_executables_only_and_suggests_path_names() {
         .as_str()
         .unwrap()
         .contains("did you mean \"printf\""));
-    let relative_run = invoke_with_path(
-        root.path(),
-        Path::new("bin"),
-        &["run", "job.program"],
-    );
+    let relative_run = invoke_with_path(root.path(), Path::new("bin"), &["run", "job.program"]);
     assert!(!relative_run.status.success());
     assert!(String::from_utf8_lossy(&relative_run.stderr).contains("did you mean \"printf\""));
 
@@ -183,7 +202,11 @@ fn resolve_does_not_apply_called_file_fixes_to_the_caller_source() {
     let bin = root.path().join("bin");
     fs::create_dir(&bin).unwrap();
     let printf = bin.join("printf");
-    fs::write(&printf, "placeholder; resolution must not execute this file\n").unwrap();
+    fs::write(
+        &printf,
+        "placeholder; resolution must not execute this file\n",
+    )
+    .unwrap();
     fs::set_permissions(&printf, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(
         root.path().join("job.program"),

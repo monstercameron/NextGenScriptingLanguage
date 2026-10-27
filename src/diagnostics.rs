@@ -2339,9 +2339,9 @@ fn path_executable_names(path: &std::ffi::OsStr, cwd: &std::path::Path) -> BTree
         };
         for entry in entries.flatten() {
             let file_name = entry.file_name();
-            let executable = entry.metadata().is_ok_and(|metadata| {
-                metadata.is_file() && crate::platform::executable(&metadata)
-            });
+            let executable = entry
+                .metadata()
+                .is_ok_and(|metadata| metadata.is_file() && crate::platform::executable(&metadata));
             if !executable {
                 continue;
             }
@@ -2403,9 +2403,10 @@ fn collect_resolve_calls<'a>(
                 if let Some(current) = &cwd {
                     calls.push((step.line, call, current.clone()));
                 }
-                if registry.resolve_call(call).is_ok_and(|manifest| {
-                    manifest.builtin == Some(crate::manifest::Builtin::Cd)
-                }) {
+                if registry
+                    .resolve_call(call)
+                    .is_ok_and(|manifest| manifest.builtin == Some(crate::manifest::Builtin::Cd))
+                {
                     match call.parameters.get("path") {
                         Some(Value::String(folder)) => {
                             if let Some(current) = &cwd {
@@ -2468,7 +2469,6 @@ fn collect_resolve_calls<'a>(
         index += 1;
     }
 }
-
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {
     let word = |index: usize, expected: &str| matches!(tokens.get(index), Some(Token::Word(value)) if *value == expected);
@@ -4638,8 +4638,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn resolution_suggestions_skip_batch_files_and_match_exe_stems() {
-        assert_eq!(executable_candidate_name(std::ffi::OsStr::new("tool.bat")), None);
-        assert_eq!(executable_candidate_name(std::ffi::OsStr::new("tool.cmd")), None);
+        assert_eq!(
+            executable_candidate_name(std::ffi::OsStr::new("tool.bat")),
+            None
+        );
+        assert_eq!(
+            executable_candidate_name(std::ffi::OsStr::new("tool.cmd")),
+            None
+        );
         assert_eq!(
             executable_candidate_name(std::ffi::OsStr::new("printf.exe")),
             Some("printf".into())

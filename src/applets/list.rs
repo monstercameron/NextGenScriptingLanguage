@@ -3,7 +3,11 @@ use serde_json::{Map, Value};
 
 const LIMIT: usize = 100_000;
 
-fn list<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a [Value], AppletError> {
+fn list<'a>(
+    args: &'a Map<String, Value>,
+    name: &str,
+    context: &ExecutionContext<'_>,
+) -> Result<&'a [Value], AppletError> {
     let values = args
         .get(name)
         .and_then(Value::as_array)
@@ -11,7 +15,7 @@ fn list<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a [Value], App
     if values.len() > LIMIT {
         return Err(invalid(format!("list exceeds {LIMIT} items")));
     }
-    super::aggregation::check_values(values)?;
+    super::shared::check_values(values, context)?;
     Ok(values)
 }
 
@@ -81,14 +85,14 @@ pub(super) fn run(
         }
         "list.enumerate" => {
             let mut output = Vec::new();
-            for (index, item) in list(args, "items")?.iter().enumerate() {
+            for (index, item) in list(args, "items", context)?.iter().enumerate() {
                 checkpoint_work(context, index)?;
                 output.push(serde_json::json!({"index":index,"item":item}));
             }
             Ok(Value::Array(output))
         }
         "list.slice" => {
-            let values = list(args, "items")?;
+            let values = list(args, "items", context)?;
             let offset = args
                 .get("offset")
                 .and_then(Value::as_i64)
@@ -106,7 +110,7 @@ pub(super) fn run(
             Ok(Value::Array(values[start..end].to_vec()))
         }
         "list.first" | "list.last" | "list.rest" => {
-            let values = list(args, "items")?;
+            let values = list(args, "items", context)?;
             match operation {
                 "list.first" => values
                     .first()
@@ -120,12 +124,12 @@ pub(super) fn run(
             }
         }
         "list.reverse" => {
-            let mut result = list(args, "items")?.to_vec();
+            let mut result = list(args, "items", context)?.to_vec();
             result.reverse();
             Ok(Value::Array(result))
         }
         "list.concat" => {
-            let lists = list(args, "items")?;
+            let lists = list(args, "items", context)?;
             let mut out = Vec::new();
             for (idx, sublist) in lists.iter().enumerate() {
                 checkpoint_work(context, idx)?;
@@ -151,7 +155,7 @@ pub(super) fn run(
                     .ok_or_else(|| invalid("args.depth must be a nonnegative integer"))?,
             };
             let mut out = Vec::new();
-            let mut pending = list(args, "items")?
+            let mut pending = list(args, "items", context)?
                 .iter()
                 .rev()
                 .map(|value| (value, depth))
@@ -182,8 +186,8 @@ pub(super) fn run(
             Ok(Value::Array(out))
         }
         "list.zip" => {
-            let left = list(args, "left")?;
-            let right = list(args, "right")?;
+            let left = list(args, "left", context)?;
+            let right = list(args, "right", context)?;
             let mut output = Vec::with_capacity(left.len().min(right.len()));
             for (index, (a, b)) in left.iter().zip(right).enumerate() {
                 checkpoint_work(context, index)?;
@@ -192,7 +196,7 @@ pub(super) fn run(
             Ok(Value::Array(output))
         }
         "list.chunk" => {
-            let values = list(args, "items")?;
+            let values = list(args, "items", context)?;
             let size = args
                 .get("size")
                 .and_then(Value::as_u64)

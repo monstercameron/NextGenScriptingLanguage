@@ -3,16 +3,19 @@
 //! The predicates and paths accepted here are data, never executable source.
 //! JSON Pointer uses RFC 6901 escaping and indexes arrays by decimal position.
 
+#[cfg(test)]
+use super::shared::escaped_length;
+use super::shared::{check_size_and_depth, escaped_length_checked, number_length};
 use super::{absence, checkpoint_work, invalid, required_string, AppletError, ExecutionContext};
 use crate::ast::Value as TypedValue;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 
-const MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
+const MAX_JSON_BYTES: usize = super::shared::MAX_BYTES;
 const MAX_POINTER_BYTES: usize = 4096;
 const MAX_POINTER_SEGMENTS: usize = 256;
 const MAX_FILTER_CLAUSES: usize = 32;
-const MAX_DEPTH: usize = 128;
+const MAX_DEPTH: usize = super::shared::MAX_DEPTH;
 const MAX_JSON_ITEMS: usize = 100_000;
 
 pub(super) fn parse(
@@ -155,8 +158,16 @@ fn check_typed_size_and_depth(
             TypedValue::Bool(false) => 5,
             TypedValue::Integer(number) => number.to_string().len(),
             TypedValue::Number(number) => number_length(number),
-            TypedValue::String(text) => escaped_length(text),
+            TypedValue::String(text) => escaped_length_checked(text, context)?,
             TypedValue::List(items) => {
+                let minimum = 2usize
+                    .saturating_add(items.len().saturating_sub(1))
+                    .saturating_add(items.len());
+                if bytes.saturating_add(pending.len()).saturating_add(minimum) > MAX_JSON_BYTES {
+                    return Err(invalid(format!(
+                        "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
+                    )));
+                }
                 for item in items {
                     checkpoint_work(context, work)?;
                     work += 1;
@@ -166,10 +177,30 @@ fn check_typed_size_and_depth(
             }
             TypedValue::Record(fields) => {
                 let mut length = 2 + fields.len().saturating_sub(1);
+                if bytes
+                    .saturating_add(pending.len())
+                    .saturating_add(length)
+                    .saturating_add(fields.len().saturating_mul(4))
+                    > MAX_JSON_BYTES
+                {
+                    return Err(invalid(format!(
+                        "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
+                    )));
+                }
                 for (key, item) in fields {
                     checkpoint_work(context, work)?;
                     work += 1;
-                    length = length.saturating_add(escaped_length(key) + 1);
+                    length = length.saturating_add(escaped_length_checked(key, context)? + 1);
+                    if bytes
+                        .saturating_add(length)
+                        .saturating_add(pending.len())
+                        .saturating_add(1)
+                        > MAX_JSON_BYTES
+                    {
+                        return Err(invalid(format!(
+                            "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
+                        )));
+                    }
                     pending.push((item, depth + 1));
                 }
                 length
@@ -178,6 +209,11 @@ fn check_typed_size_and_depth(
                 return Err(invalid("JSON document contains an unresolved reference"));
             }
         });
+        if bytes.saturating_add(pending.len()) > MAX_JSON_BYTES {
+            return Err(invalid(format!(
+                "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
+            )));
+        }
     }
     context.checkpoint()?;
     if bytes > MAX_JSON_BYTES {
@@ -283,6 +319,7 @@ pub(super) fn filter(
     let mut predicates = Vec::with_capacity(clauses.len());
     for (index, clause) in clauses.iter().enumerate() {
         context.checkpoint()?;
+        check_size_and_depth(clause, context)?;
         predicates.push(parse_predicate(clause, index)?);
     }
     let mut selected = Vec::new();
@@ -295,7 +332,7 @@ pub(super) fn filter(
         for predicate in &predicates {
             checkpoint_work(context, work)?;
             work += 1;
-            if !predicate.matches(item)? {
+            if !predicate.matches(item, context, &mut work)? {
                 matches = false;
                 break;
             }
@@ -639,17 +676,43 @@ pub(super) fn group_by(
         return Err(invalid("JSON array exceeds the 100000 item limit"));
     }
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
-    let mut groups: std::collections::BTreeMap<String, Vec<Value>> =
-        std::collections::BTreeMap::new();
+    // Keep the existing serialized-key group order using the first representative.
+    let mut groups: std::collections::HashMap<Vec<u8>, (String, Vec<Value>)> =
+        std::collections::HashMap::new();
     for (index, item) in array.iter().enumerate() {
         checkpoint_work(context, index)?;
         let key = lookup(item, &pointer)?
             .ok_or_else(|| absence("not_found", "group_by pointer is absent from an item"))?;
-        let encoded = serde_json::to_string(key)
-            .map_err(|e| invalid(format!("group key cannot be serialized: {e}")))?;
-        groups.entry(encoded).or_default().push(item.clone());
+        let encoded = super::shared::equality_key(key, context)?;
+        if let Some((_, items)) = groups.get_mut(&encoded) {
+            items.push(item.clone());
+        } else {
+            let order = serde_json::to_string(key)
+                .map_err(|e| invalid(format!("group key cannot be serialized: {e}")))?;
+            groups.insert(encoded, (order, vec![item.clone()]));
+        }
     }
-    let result = Value::Array(groups.into_values().map(Value::Array).collect());
+    let mut groups: Vec<_> = groups.into_values().collect();
+    let mut comparisons = 0usize;
+    let mut failure = None;
+    groups.sort_unstable_by(|a, b| {
+        if failure.is_none() {
+            if let Err(error) = checkpoint_work(context, comparisons) {
+                failure = Some(error);
+            }
+            comparisons += 1;
+        }
+        a.0.cmp(&b.0)
+    });
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    let result = Value::Array(
+        groups
+            .into_iter()
+            .map(|(_, items)| Value::Array(items))
+            .collect(),
+    );
     check_size_and_depth(&result, context)?;
     Ok(result)
 }
@@ -673,8 +736,7 @@ pub(super) fn unique_by(
         checkpoint_work(context, index)?;
         let key = lookup(item, &pointer)?
             .ok_or_else(|| absence("not_found", "unique_by pointer is absent from an item"))?;
-        let encoded = serde_json::to_string(key)
-            .map_err(|e| invalid(format!("unique key cannot be serialized: {e}")))?;
+        let encoded = super::shared::equality_key(key, context)?;
         if seen.insert(encoded) {
             output.push(item.clone());
         }
@@ -714,7 +776,8 @@ pub(super) fn sort_by(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let mut items = array.clone();
-    for item in &items {
+    for (index, item) in items.iter().enumerate() {
+        checkpoint_work(context, index)?;
         let key = lookup(item, &pointer)?
             .ok_or_else(|| absence("not_found", "sort_by pointer is absent from an item"))?;
         if (numeric && !key.is_number()) || (!numeric && !key.is_string()) {
@@ -723,18 +786,29 @@ pub(super) fn sort_by(
             ));
         }
     }
+    let comparisons = std::cell::Cell::new(0usize);
+    let failure = std::cell::RefCell::new(None);
     items.sort_by(|a, b| {
+        if failure.borrow().is_none() {
+            let work = comparisons.get();
+            comparisons.set(work + 1);
+            if let Err(error) = checkpoint_work(context, work) {
+                *failure.borrow_mut() = Some(error);
+            }
+        }
         let av = lookup(a, &pointer).ok().flatten();
         let bv = lookup(b, &pointer).ok().flatten();
         match (av, bv, numeric) {
-            (Some(Value::Number(a)), Some(Value::Number(b)), true) => a
-                .as_f64()
-                .partial_cmp(&b.as_f64())
-                .unwrap_or(std::cmp::Ordering::Equal),
+            (Some(Value::Number(a)), Some(Value::Number(b)), true) => {
+                super::shared::numeric_order(a, b).unwrap_or(std::cmp::Ordering::Equal)
+            }
             (Some(Value::String(a)), Some(Value::String(b)), false) => a.cmp(b),
             _ => std::cmp::Ordering::Equal,
         }
     });
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
     context.checkpoint()?;
     Ok(Value::Array(items))
 }
@@ -769,9 +843,11 @@ fn document(
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     context.checkpoint()?;
-    let value = if let Some(value) = args.get("document") {
-        value.clone()
-    } else {
+    if let Some(value) = args.get("document") {
+        check_size_and_depth(value, context)?;
+        return Ok(value.clone());
+    }
+    let value = {
         if input.len() > MAX_JSON_BYTES {
             return Err(invalid(format!(
                 "JSON input exceeds the {MAX_JSON_BYTES}-byte limit"
@@ -803,92 +879,6 @@ fn document_ref<'a>(
         .map_err(|error| invalid(format!("stdin is not valid JSON: {error:#}")))?;
     check_size_and_depth(&value, context)?;
     Ok(Cow::Owned(value))
-}
-
-fn check_size_and_depth(
-    value: &Value,
-    context: &ExecutionContext<'_>,
-) -> Result<usize, AppletError> {
-    // One walk checks the depth and adds up the exact length of the compact JSON
-    // encoding, so the size limit needs no serialization pass over the document.
-    let mut pending = vec![(value, 0usize)];
-    let mut work = 0usize;
-    let mut bytes = 0usize;
-    while let Some((value, depth)) = pending.pop() {
-        checkpoint_work(context, work)?;
-        work += 1;
-        if depth > MAX_DEPTH {
-            return Err(invalid(format!(
-                "JSON value exceeds the {MAX_DEPTH}-level depth limit"
-            )));
-        }
-        bytes = bytes.saturating_add(match value {
-            Value::Null => 4,
-            Value::Bool(true) => 4,
-            Value::Bool(false) => 5,
-            Value::Number(number) => number_length(number),
-            Value::String(text) => escaped_length(text),
-            Value::Array(items) => {
-                for item in items {
-                    checkpoint_work(context, work)?;
-                    work += 1;
-                    pending.push((item, depth + 1));
-                }
-                // Brackets and the commas between items.
-                2 + items.len().saturating_sub(1)
-            }
-            Value::Object(fields) => {
-                let mut length = 2 + fields.len().saturating_sub(1);
-                for (key, item) in fields {
-                    checkpoint_work(context, work)?;
-                    work += 1;
-                    // The quoted key and its colon.
-                    length = length.saturating_add(escaped_length(key) + 1);
-                    pending.push((item, depth + 1));
-                }
-                length
-            }
-        });
-    }
-    context.checkpoint()?;
-    if bytes > MAX_JSON_BYTES {
-        return Err(invalid(format!(
-            "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
-        )));
-    }
-    Ok(bytes)
-}
-
-/// The length of `text` as a quoted JSON string in serde_json's compact encoding:
-/// `"` and `\` and the short control escapes take two bytes, other control bytes take
-/// six (`\u00XX`), and every other byte, including non-ASCII UTF-8, is copied.
-fn escaped_length(text: &str) -> usize {
-    let escapes: usize = text
-        .bytes()
-        .map(|byte| match byte {
-            b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 1,
-            0x00..=0x1f => 5,
-            _ => 0,
-        })
-        .sum();
-    text.len() + escapes + 2
-}
-
-/// The length of a number as serde_json writes it (integers in decimal, floats in
-/// the shortest round-trip form), which is its `Display` form.
-fn number_length(number: &serde_json::Number) -> usize {
-    use std::fmt::Write;
-    struct Counter(usize);
-    impl Write for Counter {
-        fn write_str(&mut self, text: &str) -> std::fmt::Result {
-            self.0 += text.len();
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    // Writing to a counter cannot fail.
-    let _ = write!(counter, "{number}");
-    counter.0
 }
 
 fn optional_pointer<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a str, AppletError> {
@@ -1048,71 +1038,29 @@ enum Predicate {
 }
 
 impl Predicate {
-    fn matches(&self, item: &Value) -> Result<bool, AppletError> {
+    fn matches(
+        &self,
+        item: &Value,
+        context: &ExecutionContext<'_>,
+        work: &mut usize,
+    ) -> Result<bool, AppletError> {
         Ok(match self {
             Self::Exists(pointer, expected) => lookup(item, pointer)?.is_some() == *expected,
-            Self::Equals(pointer, expected) => {
-                lookup(item, pointer)?.is_some_and(|actual| json_values_equal(actual, expected))
-            }
+            Self::Equals(pointer, expected) => match lookup(item, pointer)? {
+                Some(actual) => super::shared::json_equal(actual, expected, context, work)?,
+                None => false,
+            },
             // A missing value is not equal to any JSON value. This also means
             // an absent nested field naturally passes a `not_equals` filter.
-            Self::NotEquals(pointer, expected) => {
-                lookup(item, pointer)?.is_none_or(|actual| !json_values_equal(actual, expected))
-            }
+            Self::NotEquals(pointer, expected) => match lookup(item, pointer)? {
+                Some(actual) => !super::shared::json_equal(actual, expected, context, work)?,
+                None => true,
+            },
             Self::Type(pointer, expected) => {
                 lookup(item, pointer)?.is_some_and(|value| json_type(value) == expected)
             }
         })
     }
-}
-
-fn json_values_equal(left: &Value, right: &Value) -> bool {
-    match (left, right) {
-        (Value::Number(left), Value::Number(right)) => {
-            match (integer_value(left), integer_value(right)) {
-                (Some(left), Some(right)) => left == right,
-                (Some(integer), None) => float_matches_integer(right.as_f64(), integer),
-                (None, Some(integer)) => float_matches_integer(left.as_f64(), integer),
-                (None, None) => left.as_f64() == right.as_f64(),
-            }
-        }
-        (Value::Array(left), Value::Array(right)) => {
-            left.len() == right.len()
-                && left
-                    .iter()
-                    .zip(right)
-                    .all(|(left, right)| json_values_equal(left, right))
-        }
-        (Value::Object(left), Value::Object(right)) => {
-            left.len() == right.len()
-                && left.iter().all(|(key, value)| {
-                    right
-                        .get(key)
-                        .is_some_and(|other| json_values_equal(value, other))
-                })
-        }
-        _ => left == right,
-    }
-}
-
-fn integer_value(number: &serde_json::Number) -> Option<i128> {
-    number
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| number.as_u64().map(i128::from))
-}
-
-fn float_matches_integer(number: Option<f64>, integer: i128) -> bool {
-    let Some(number) = number else {
-        return false;
-    };
-    // JSON integer values fit in i64/u64. Reject rounded f64s at either bound
-    // before casting, then compare the integral f64 value without lossy integer
-    // to-float conversion.
-    number.fract() == 0.0
-        && number >= i64::MIN as f64
-        && number < 18_446_744_073_709_551_616.0
-        && number as i128 == integer
 }
 
 fn parse_predicate(value: &Value, index: usize) -> Result<Predicate, AppletError> {

@@ -18,6 +18,7 @@ mod ini;
 mod jsonc;
 mod list;
 mod path;
+mod shared;
 mod structured;
 mod template;
 mod text;

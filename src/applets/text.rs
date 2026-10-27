@@ -532,7 +532,7 @@ fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletEr
 }
 
 pub(super) fn check_text_size(length: usize) -> Result<(), AppletError> {
-    super::aggregation::check_bytes(length)
+    super::shared::check_bytes(length)
 }
 
 #[cfg(test)]

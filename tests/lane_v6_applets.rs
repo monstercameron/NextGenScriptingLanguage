@@ -47,6 +47,108 @@ fn aggregation_unique_and_group_use_numeric_equality() {
 }
 
 #[test]
+fn recursive_equality_is_shared_by_unique_group_and_filter() {
+    let items = json!([
+        {"v":[1,{"zero":0}]}, {"v":[1.0,{"zero":-0.0}]},
+        {"v":[9007199254740993u64]}, {"v":[9007199254740992.0]},
+        {"v":[18446744073709551615u64]}, {"v":[18446744073709551616.0]},
+        {"v":[true]}, {"v":["1"]}
+    ]);
+    let unique = run("list.unique", json!({"items":items})).unwrap();
+    assert_eq!(unique.as_array().unwrap().len(), 7);
+    let groups = run("list.group", json!({"items":items,"key":""})).unwrap();
+    assert_eq!(groups.as_array().unwrap().len(), 7);
+    assert_eq!(groups[0]["count"], 2);
+    let filtered = run(
+        "json.filter",
+        json!({"document":items,"where":[{"equals":{"v":[1.0,{"zero":0}]}}]}),
+    )
+    .unwrap();
+    assert_eq!(filtered.as_array().unwrap().len(), 2);
+    let boundary = run(
+        "json.filter",
+        json!({"document":items,"where":[{"equals":{"v":[9007199254740992.0]}}]}),
+    )
+    .unwrap();
+    assert_eq!(boundary.as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn integer_float_equality_is_exact_at_representable_boundaries() {
+    let items = json!([
+        9007199254740992u64,
+        9007199254740992.0,
+        9007199254740993u64,
+        i64::MIN,
+        -9223372036854775808.0,
+        u64::MAX,
+        18446744073709551616.0
+    ]);
+    let unique = run("list.unique", json!({"items":items})).unwrap();
+    assert_eq!(unique.as_array().unwrap().len(), 5);
+    let groups = run("list.group", json!({"items":items,"key":""})).unwrap();
+    assert_eq!(
+        groups
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["count"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![2, 1, 2, 1, 1]
+    );
+    let filtered = run(
+        "json.filter",
+        json!({"document":items,"where":[{"equals":9007199254740992.0}]}),
+    )
+    .unwrap();
+    assert_eq!(filtered.as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn recursive_equality_framing_keeps_values_distinct() {
+    let items = json!([["a","bc"],["ab","c"],{"a":"bc"},{"ab":"c"},[1],{"0":1},"n:1",1,1.0,0,-0.0]);
+    assert_eq!(
+        run("list.unique", json!({"items":items}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        9
+    );
+    assert_eq!(
+        run("list.group", json!({"items":items,"key":""}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        9
+    );
+}
+
+#[test]
+fn list_validation_checks_nested_work_for_cancellation() {
+    let calls = std::cell::Cell::new(0);
+    let callback = || {
+        calls.set(calls.get() + 1);
+        if calls.get() > 3 {
+            Err(ExecutionBudgetExceeded::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let args = json!({"items":[(0..5000).collect::<Vec<_>>() ]});
+    let error = applets::execute_with_context(
+        "list.unique",
+        args.as_object().unwrap(),
+        &[],
+        Path::new("."),
+        &ExecutionContext::new(&callback),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "cancelled");
+}
+
+#[test]
 fn mixed_integer_float_comparison_is_exact() {
     assert_eq!(
         run(
@@ -71,6 +173,69 @@ fn oversized_stdin_is_refused_before_list_and_text_work() {
     assert!(applets::execute("text.length", &serde_json::Map::new(), &input).is_err());
     let args = json!({"delimiter": ","});
     assert!(applets::execute("text.count_lines_by", args.as_object().unwrap(), &input).is_err());
+}
+
+#[test]
+fn aggregation_rejects_oversized_values_and_pipeline_line_counts() {
+    let input = vec![b'\n'; 1_000_001];
+    for name in ["list.count", "list.unique"] {
+        assert_eq!(
+            applets::execute(name, &serde_json::Map::new(), &input)
+                .unwrap_err()
+                .code,
+            "invalid_request"
+        );
+    }
+    let args = json!({"items":["x".repeat(16 * 1024 * 1024)]});
+    for name in ["list.count", "list.unique", "list.sort"] {
+        assert_eq!(
+            applets::execute(name, args.as_object().unwrap(), &[])
+                .unwrap_err()
+                .code,
+            "invalid_request"
+        );
+    }
+}
+
+#[test]
+fn oversized_nested_json_is_rejected_and_long_string_scans_can_cancel() {
+    let args = json!({"document":["x".repeat(9 * 1024 * 1024), "y".repeat(9 * 1024 * 1024)]});
+    let err = run("json.length", args).unwrap_err();
+    assert_eq!(err.code, "invalid_request");
+    let value = "x".repeat(1024 * 1024);
+    let args = json!({"document":[value]});
+    let calls = std::cell::Cell::new(0);
+    let callback = || {
+        calls.set(calls.get() + 1);
+        if calls.get() > 4 {
+            Err(ExecutionBudgetExceeded::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let err = applets::execute_with_context(
+        "json.length",
+        args.as_object().unwrap(),
+        &[],
+        Path::new("."),
+        &ExecutionContext::new(&callback),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "cancelled");
+    assert_eq!(calls.get(), 5);
+}
+
+#[test]
+fn deeply_nested_list_values_are_rejected_before_serialization() {
+    let mut value = json!(1);
+    for _ in 0..129 {
+        value = Value::Array(vec![value]);
+    }
+    let args = json!({"items":[value]});
+    assert_eq!(
+        run("list.unique", args).unwrap_err().code,
+        "invalid_request"
+    );
 }
 
 #[test]
@@ -123,7 +288,7 @@ fn aggregation_sort_observes_cancellation() {
     let callback = || {
         let count = calls.get() + 1;
         calls.set(count);
-        if count > 2 {
+        if count > 16 {
             Err(ExecutionBudgetExceeded::Cancelled)
         } else {
             Ok(())

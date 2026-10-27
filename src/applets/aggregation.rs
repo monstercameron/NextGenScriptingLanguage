@@ -3,63 +3,31 @@ use super::{checkpoint_work, invalid, AppletError, ExecutionContext};
 use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
 
-const MAX_ITEMS: usize = 1_000_000;
-const MAX_BYTES: usize = 16 * 1024 * 1024;
+use super::shared::{check_bytes, check_values, equality_key, numeric_order, MAX_BYTES, MAX_ITEMS};
 
-struct ByteBudget(usize);
-
-impl Write for ByteBudget {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
-        if self.0 > MAX_BYTES {
-            return Err(io::Error::other("input exceeds byte budget"));
-        }
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn fits_byte_budget(value: &(impl serde::Serialize + ?Sized)) -> bool {
-    serde_json::to_writer(ByteBudget(0), value).is_ok()
-}
-
-pub(super) fn check_values(values: &[Value]) -> Result<(), AppletError> {
-    if values.len() > MAX_ITEMS || !fits_byte_budget(values) {
-        return Err(invalid(format!(
-            "list exceeds the bounded {MAX_ITEMS}-item or {MAX_BYTES}-byte limit"
-        )));
-    }
-    Ok(())
-}
-
-pub(super) fn check_bytes(length: usize) -> Result<(), AppletError> {
-    if length > MAX_BYTES {
-        return Err(invalid(format!(
-            "input exceeds the bounded {MAX_BYTES}-byte limit"
-        )));
-    }
-    Ok(())
-}
-
-fn items(args: &Map<String, Value>, input: &[u8]) -> Result<Vec<Value>, AppletError> {
+fn items(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<Value>, AppletError> {
     if let Some(value) = args.get("items") {
         let array = value
             .as_array()
             .ok_or_else(|| invalid("args.items must be a list"))?;
-        check_values(array)?;
+        check_values(array, context)?;
         return Ok(array.clone());
     }
     let text = std::str::from_utf8(input)
         .map_err(|error| invalid(format!("stdin must be UTF-8: {error}")))?;
     check_bytes(input.len())?;
-    if text.lines().take(MAX_ITEMS + 1).count() > MAX_ITEMS {
-        return Err(invalid(format!(
-            "stdin exceeds the bounded {MAX_ITEMS}-line or {MAX_BYTES}-byte limit"
-        )));
+    for (index, _) in text.lines().enumerate() {
+        checkpoint_work(context, index)?;
+        if index >= MAX_ITEMS {
+            return Err(invalid(format!(
+                "stdin exceeds the bounded {MAX_ITEMS}-line or {MAX_BYTES}-byte limit"
+            )));
+        }
     }
     Ok(text
         .lines()
@@ -81,15 +49,18 @@ pub(super) fn run(
         for (index, _) in text.lines().enumerate() {
             checkpoint_work(context, index)?;
             count += 1;
-        }
-        if count > MAX_ITEMS {
-            return Err(invalid(format!(
-                "stdin exceeds the bounded {MAX_ITEMS}-line limit"
-            )));
+            if count > MAX_ITEMS {
+                return Err(invalid(format!(
+                    "stdin exceeds the bounded {MAX_ITEMS}-line limit"
+                )));
+            }
         }
         return Ok(Value::from(count));
     }
-    let mut values = items(args, input)?;
+    if name == "text.count_lines_by" {
+        return count_lines_by(input, args, context);
+    }
+    let mut values = items(args, input, context)?;
     match name {
         "list.count" => Ok(Value::from(values.len())),
         "list.sum" => {
@@ -142,7 +113,9 @@ pub(super) fn run(
                 }
                 if best.as_ref().is_none_or(|current| {
                     let ordering = match (value.as_number(), current.as_number()) {
-                        (Some(value), Some(current)) => numeric_compare(value, current),
+                        (Some(value), Some(current)) => {
+                            numeric_order(value, current).unwrap_or(Ordering::Equal)
+                        }
                         _ => Ordering::Equal,
                     };
                     (name == "list.min" && ordering == Ordering::Less)
@@ -158,7 +131,7 @@ pub(super) fn run(
             let mut seen = HashSet::new();
             for (index, value) in values.into_iter().enumerate() {
                 checkpoint_work(context, index)?;
-                let key = equality_key(&value)?;
+                let key = equality_key(&value, context)?;
                 if seen.insert(key) {
                     unique.push(value);
                 }
@@ -170,14 +143,12 @@ pub(super) fn run(
             let comparisons = std::cell::Cell::new(0usize);
             let checkpoint_error = std::cell::RefCell::new(None);
             values.sort_by(|left, right| {
-                if checkpoint_error.borrow().is_some() {
-                    return Ordering::Equal;
-                }
-                let next = comparisons.get() + 1;
-                comparisons.set(next);
-                if let Err(error) = checkpoint_work(context, next) {
-                    *checkpoint_error.borrow_mut() = Some(error);
-                    return Ordering::Equal;
+                if checkpoint_error.borrow().is_none() {
+                    let next = comparisons.get() + 1;
+                    comparisons.set(next);
+                    if let Err(error) = checkpoint_work(context, next) {
+                        *checkpoint_error.borrow_mut() = Some(error);
+                    }
                 }
                 let l = if pointer.is_empty() {
                     Some(left)
@@ -207,14 +178,15 @@ pub(super) fn run(
             Ok(Value::Array(values))
         }
         "list.group" => group(values, args, context),
-        "text.count_lines_by" => count_lines_by(input, args, context),
         _ => Err(invalid(format!("unknown aggregation {name:?}"))),
     }
 }
 
 fn compare(left: Option<&Value>, right: Option<&Value>) -> Ordering {
     match (left, right) {
-        (Some(Value::Number(a)), Some(Value::Number(b))) => numeric_compare(a, b),
+        (Some(Value::Number(a)), Some(Value::Number(b))) => {
+            numeric_order(a, b).unwrap_or(Ordering::Equal)
+        }
         (Some(Value::String(a)), Some(Value::String(b))) => a.cmp(b),
         (Some(a), Some(b)) => a.to_string().cmp(&b.to_string()),
         (None, None) => Ordering::Equal,
@@ -237,14 +209,13 @@ fn group(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let mut groups: Vec<(Value, usize, Vec<Value>)> = Vec::new();
-    let mut indexes: HashMap<String, usize> = HashMap::new();
+    let mut indexes: HashMap<Vec<u8>, usize> = HashMap::new();
     for (index, item) in values.into_iter().enumerate() {
         checkpoint_work(context, index)?;
         let key = item
             .pointer(pointer)
-            .cloned()
             .ok_or_else(|| invalid(format!("group key {pointer:?} is absent")))?;
-        let encoded_key = equality_key(&key)?;
+        let encoded_key = equality_key(key, context)?;
         if let Some(index) = indexes.get(&encoded_key).copied() {
             let (_, count, items) = &mut groups[index];
             *count += 1;
@@ -253,7 +224,11 @@ fn group(
             }
         } else {
             indexes.insert(encoded_key, groups.len());
-            groups.push((key, 1, if collect { vec![item] } else { Vec::new() }));
+            groups.push((
+                key.clone(),
+                1,
+                if collect { vec![item] } else { Vec::new() },
+            ));
         }
     }
     Ok(Value::Array(
@@ -271,85 +246,6 @@ fn group(
             })
             .collect(),
     ))
-}
-
-pub(super) fn numeric_order(a: &Number, b: &Number) -> Result<Ordering, AppletError> {
-    let ai = a
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| a.as_u64().map(i128::from));
-    let bi = b
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| b.as_u64().map(i128::from));
-    match (ai, bi) {
-        (Some(a), Some(b)) => Ok(a.cmp(&b)),
-        (Some(integer), None) => compare_integer_float(
-            integer,
-            b.as_f64()
-                .ok_or_else(|| invalid("numeric value must be finite"))?,
-        ),
-        (None, Some(integer)) => compare_integer_float(
-            integer,
-            a.as_f64()
-                .ok_or_else(|| invalid("numeric value must be finite"))?,
-        )
-        .map(Ordering::reverse),
-        (None, None) => a
-            .as_f64()
-            .zip(b.as_f64())
-            .and_then(|(a, b)| a.partial_cmp(&b))
-            .ok_or_else(|| invalid("numeric values must be finite")),
-    }
-}
-
-fn numeric_compare(a: &Number, b: &Number) -> Ordering {
-    numeric_order(a, b).unwrap_or(Ordering::Equal)
-}
-
-fn compare_integer_float(integer: i128, float: f64) -> Result<Ordering, AppletError> {
-    if !float.is_finite() {
-        return Err(invalid("numeric value must be finite"));
-    }
-    if float >= 18_446_744_073_709_551_616.0 {
-        return Ok(Ordering::Less);
-    }
-    if float < i64::MIN as f64 {
-        return Ok(Ordering::Greater);
-    }
-    let truncated = float.trunc() as i128;
-    Ok(match integer.cmp(&truncated) {
-        Ordering::Equal if float > truncated as f64 => Ordering::Less,
-        Ordering::Equal if float < truncated as f64 => Ordering::Greater,
-        ordering => ordering,
-    })
-}
-
-fn equality_key(value: &Value) -> Result<String, AppletError> {
-    if let Some(number) = value.as_number() {
-        if let Some(integer) = number
-            .as_i64()
-            .map(i128::from)
-            .or_else(|| number.as_u64().map(i128::from))
-        {
-            return Ok(format!("n:{integer}"));
-        }
-        if let Some(float) = number.as_f64() {
-            if float.fract() == 0.0 && float >= i64::MIN as f64 && float <= u64::MAX as f64 {
-                return Ok(format!("n:{float:.0}"));
-            }
-            return Ok(format!(
-                "f:{}",
-                if float == 0.0 {
-                    "0".to_owned()
-                } else {
-                    float.to_string()
-                }
-            ));
-        }
-    }
-    serde_json::to_string(value)
-        .map_err(|error| invalid(format!("cannot compare list value: {error}")))
 }
 
 fn count_lines_by(

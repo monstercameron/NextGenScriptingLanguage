@@ -9,7 +9,7 @@ use super::{checkpoint_work, invalid, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
-const MAX_CSV_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CSV_BYTES: usize = super::shared::MAX_BYTES;
 const MAX_CSV_ROWS: usize = 100_000;
 const MAX_CSV_COLUMNS: usize = 16_384;
 const MAX_CSV_CELLS: usize = 1_000_000;
@@ -566,10 +566,16 @@ fn check_json_size(
     context: &ExecutionContext<'_>,
     description: &str,
 ) -> Result<(), AppletError> {
-    context.checkpoint()?;
-    let encoded = serde_json::to_vec(value)
-        .map_err(|error| invalid(format!("CSV table cannot be serialized as JSON: {error}")))?;
-    if encoded.len().saturating_add(1) > MAX_CSV_BYTES {
+    let encoded_len = match super::shared::check_size_and_depth(value, context) {
+        Ok(length) => length,
+        Err(error) if error.code == "invalid_request" => {
+            return Err(invalid(format!(
+                "{description} and its output newline exceed the {MAX_CSV_BYTES}-byte JSON limit"
+            )));
+        }
+        Err(error) => return Err(error),
+    };
+    if encoded_len.saturating_add(1) > MAX_CSV_BYTES {
         return Err(invalid(format!(
             "{description} and its output newline exceed the {MAX_CSV_BYTES}-byte JSON limit"
         )));

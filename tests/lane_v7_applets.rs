@@ -214,3 +214,85 @@ fn injectable_clock_and_wait_deadline_work() {
     .unwrap();
     assert_eq!(result["ready"], false);
 }
+
+#[test]
+fn json_collection_equality_and_numeric_sort_match_shared_rules() {
+    let document = json!([
+        {"k":{"n":[1,0]},"id":"first"},
+        {"k":{"n":[1.0,-0.0]},"id":"second"},
+        {"k":{"n":[9007199254740993u64]},"id":"large"},
+        {"k":{"n":[9007199254740992.0]},"id":"float"},
+        {"k":1,"id":"integer"}, {"k":1.0,"id":"decimal"}
+    ]);
+    let unique = call(
+        "json.unique_by",
+        json!({"document":document,"pointer":"/k"}),
+    )
+    .unwrap();
+    assert_eq!(unique.as_array().unwrap().len(), 4);
+    assert_eq!(unique[0]["id"], "first");
+    let groups = call("json.group_by", json!({"document":document,"pointer":"/k"})).unwrap();
+    let groups = groups.as_array().unwrap();
+    assert_eq!(groups.len(), 4);
+    assert!(groups.iter().any(|group| group
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect::<Vec<_>>()
+        == vec!["first", "second"]));
+    assert!(groups.iter().any(|group| group
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect::<Vec<_>>()
+        == vec!["integer", "decimal"]));
+    let sorted = call("json.sort_by", json!({"document":[{"n":9007199254740993u64},{"n":9007199254740992.0},{"n":9007199254740992u64},{"n":u64::MAX},{"n":18446744073709551616.0}],"pointer":"/n","numeric":true})).unwrap();
+    assert_eq!(sorted[0]["n"], json!(9007199254740992.0));
+    assert_eq!(sorted[1]["n"], json!(9007199254740992u64));
+    assert_eq!(sorted[2]["n"], json!(9007199254740993u64));
+    assert_eq!(sorted[3]["n"], json!(u64::MAX));
+    assert_eq!(sorted[4]["n"], json!(18446744073709551616.0));
+}
+
+#[test]
+fn json_sort_cancellation_during_comparisons_returns_budget_error() {
+    use flow::applets::{execute_with_context, ExecutionBudgetExceeded, ExecutionContext};
+    let document: Vec<_> = (0..8192).map(|i| json!({"n":(i * 7919) % 8192})).collect();
+    let args = json!({"document":document,"pointer":"/n","numeric":true});
+    let calls = std::cell::Cell::new(0usize);
+    let measure = || {
+        calls.set(calls.get() + 1);
+        Ok(())
+    };
+    execute_with_context(
+        "json.sort_by",
+        args.as_object().unwrap(),
+        &[],
+        Path::new("."),
+        &ExecutionContext::new(&measure),
+    )
+    .unwrap();
+    let total = calls.get();
+    assert!(total > 4);
+    calls.set(0);
+    let cancel = || {
+        calls.set(calls.get() + 1);
+        if calls.get() >= total - 1 {
+            Err(ExecutionBudgetExceeded::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let error = execute_with_context(
+        "json.sort_by",
+        args.as_object().unwrap(),
+        &[],
+        Path::new("."),
+        &ExecutionContext::new(&cancel),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "cancelled");
+    assert_eq!(calls.get(), total - 1);
+}

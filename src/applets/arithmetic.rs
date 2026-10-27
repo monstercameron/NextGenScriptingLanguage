@@ -206,7 +206,7 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
             let candidate = value
                 .as_number()
                 .ok_or_else(|| invalid("args.values must contain numbers"))?;
-            let ordering = super::aggregation::numeric_order(candidate, best)?;
+            let ordering = super::shared::numeric_order(candidate, best)?;
             if (operation == "number.min" && ordering.is_lt())
                 || (operation == "number.max" && ordering.is_gt())
             {
@@ -284,13 +284,13 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
         let value = number(args, "value")?;
         let min = number(args, "min")?;
         let max = number(args, "max")?;
-        if super::aggregation::numeric_order(min, max)?.is_gt() {
+        if super::shared::numeric_order(min, max)?.is_gt() {
             return Err(invalid("args.min must not exceed args.max"));
         }
         return Ok(Value::Number(
-            if super::aggregation::numeric_order(value, min)?.is_lt() {
+            if super::shared::numeric_order(value, min)?.is_lt() {
                 min.clone()
-            } else if super::aggregation::numeric_order(value, max)?.is_gt() {
+            } else if super::shared::numeric_order(value, max)?.is_gt() {
                 max.clone()
             } else {
                 value.clone()
@@ -317,7 +317,7 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
     let right = number(args, "right")?;
 
     if operation == "number.compare" {
-        let ordering = super::aggregation::numeric_order(left, right)?;
+        let ordering = super::shared::numeric_order(left, right)?;
         return Ok(Value::from(match ordering {
             Ordering::Less => -1,
             Ordering::Equal => 0,

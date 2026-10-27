@@ -9,10 +9,12 @@
   "accepts_stdin": false,
   "parameters": {
     "start": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     },
     "stop": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     },
     "step": {
       "type": "integer"

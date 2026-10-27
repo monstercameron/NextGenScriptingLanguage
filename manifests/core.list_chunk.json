@@ -9,10 +9,12 @@
   "accepts_stdin": false,
   "parameters": {
     "items": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "size": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     }
   },
   "arguments": [

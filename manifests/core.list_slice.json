@@ -9,13 +9,16 @@
   "accepts_stdin": false,
   "parameters": {
     "items": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "offset": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     },
     "length": {
-      "type": "integer"
+      "type": "integer",
+      "required": true
     }
   },
   "arguments": [

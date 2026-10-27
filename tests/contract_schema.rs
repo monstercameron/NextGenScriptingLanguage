@@ -868,6 +868,7 @@ fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
         required: Vec::new(),
         enum_values: Some(vec!["red".into(), "blue".into()]),
         single_line: false,
+        minimum: None,
     };
     assert!(nullable.validate_value(&Value::Null).is_ok());
     assert!(nullable
@@ -896,9 +897,11 @@ fn single_line_text_schemas_reject_cr_and_lf_but_allow_empty_text() {
         required: Vec::new(),
         enum_values: None,
         single_line: true,
+        minimum: None,
     };
     let unrestricted = ValueSchema {
         single_line: false,
+        minimum: None,
         ..single_line.clone()
     };
 

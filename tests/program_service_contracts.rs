@@ -34,6 +34,7 @@ fn integer_schema() -> ValueSchema {
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     }
 }
 
@@ -64,6 +65,7 @@ fn decoded_output_port_schema() -> ValueSchema {
         required: vec!["count".into()],
         enum_values: None,
         single_line: false,
+        minimum: None,
     }
 }
 
@@ -99,6 +101,7 @@ fn result_envelope_port_schema() -> ValueSchema {
         ],
         enum_values: None,
         single_line: false,
+        minimum: None,
     }
 }
 
@@ -116,6 +119,7 @@ fn text_schema() -> ValueSchema {
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     }
 }
 

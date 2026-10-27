@@ -665,6 +665,7 @@ fn run_mixed_stress(total: usize, window_ms: u64, evidence: &mut Evidence) -> Re
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     };
     plan.add_node(GraphNode {
         id: "timer_collector".into(),
@@ -1866,6 +1867,7 @@ fn readiness_watchdog_cancels_a_stalled_terminal_graph_at_its_deadline() {
                 required: Vec::new(),
                 enum_values: None,
                 single_line: false,
+                minimum: None,
             }),
         )]),
         events: BTreeMap::new(),

@@ -35,6 +35,7 @@ fn text_schema() -> ValueSchema {
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     }
 }
 

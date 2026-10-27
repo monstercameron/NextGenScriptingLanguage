@@ -195,6 +195,9 @@ pub struct RendererRequest {
     pub body: RendererCommand,
 }
 
+// Keep the public command field types source-compatible; boxing the 304-byte
+// contract would silence this lint but break callers constructing Instantiate.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RendererCommand {

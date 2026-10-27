@@ -146,14 +146,15 @@ fn list_open_descriptors_with_libproc() -> io::Result<Vec<RawFd>> {
         }
         let written = written as usize;
         if written < capacity {
-            if written % PROC_FDINFO_SIZE != 0 {
+            let (records, remainder) = bytes[..written].as_chunks::<PROC_FDINFO_SIZE>();
+            if !remainder.is_empty() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "libproc returned a partial fd-info record",
                 ));
             }
-            return Ok(bytes[..written]
-                .chunks_exact(PROC_FDINFO_SIZE)
+            return Ok(records
+                .iter()
                 .map(|record| i32::from_ne_bytes([record[0], record[1], record[2], record[3]]))
                 .filter(|descriptor| *descriptor >= 3)
                 .collect());

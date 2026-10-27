@@ -160,7 +160,7 @@ then encode record as json
     assert_eq!(record["stdout"], json!([255, 120]));
     assert_eq!(record["stdout_truncated"], json!(false));
     assert_eq!(record["stderr_truncated"], json!([false, false]));
-    assert_eq!(record["stderr_limit_per_stage"], json!(8192));
+    assert_eq!(record["stderr_limit_per_stage"], json!(65536));
     assert_eq!(record["stages"].as_array().unwrap().len(), 2);
     Ok(())
 }
@@ -596,7 +596,7 @@ fn completed_unobserved_job_still_makes_normal_scope_exit_fail() -> anyhow::Resu
 
 #[cfg(unix)]
 #[test]
-fn diagnostic_capture_reports_the_exact_unix_limit_and_real_truncation() -> anyhow::Result<()> {
+fn diagnostic_capture_retains_twenty_kib_without_truncation() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let program = parser::parse(
         "spawn as diagnostics\n  run \"sh\" with arguments [\"-c\", \"head -c 20000 /dev/zero >&2\"]\nawait diagnostics and keep result as record\nthen encode record as json\n",
@@ -607,10 +607,13 @@ fn diagnostic_capture_reports_the_exact_unix_limit_and_real_truncation() -> anyh
         &options(directory.path(), 1024 * 1024),
     )?;
     let record: Json = serde_json::from_slice(&result.output)?;
-    assert_eq!(record["stderr_limit_per_stage"], json!(8192));
-    assert_eq!(record["stderr_truncated"], json!([true]));
-    assert_eq!(record["stderr_by_stage"][0].as_array().unwrap().len(), 8192);
-    assert_eq!(record["stages"][0]["stderr_truncated"], json!(true));
+    assert_eq!(record["stderr_limit_per_stage"], json!(65536));
+    assert_eq!(record["stderr_truncated"], json!([false]));
+    assert_eq!(
+        record["stderr_by_stage"][0].as_array().unwrap().len(),
+        20000
+    );
+    assert_eq!(record["stages"][0]["stderr_truncated"], json!(false));
     Ok(())
 }
 
@@ -656,6 +659,144 @@ fn native_windows_fixture_runs_as_an_owned_background_job() -> anyhow::Result<()
     assert_eq!(
         serde_json::from_slice::<Json>(&result.output)?,
         json!("done")
+    );
+    Ok(())
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn diagnostic_capture_limit_and_truncation_are_portable() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let fixture = Path::new(env!("CARGO_BIN_EXE_native-fixture"));
+    for (count, retained, truncated) in [
+        (20_000, 20_000, false),
+        (65_536, 65_536, false),
+        (65_537, 65_536, true),
+    ] {
+        let source = format!(
+            "spawn as diagnostics\n  run {} with arguments [\"stderr-bytes\", \"{}\"]\nawait diagnostics and keep result as record\nthen encode record as json\n",
+            quote(&fixture.to_string_lossy()), count,
+        );
+        let result = runtime::run(
+            &parser::parse(&source)?,
+            &Registry::default(),
+            &options(directory.path(), 2 * 1024 * 1024),
+        )?;
+        let record: Json = serde_json::from_slice(&result.output)?;
+        let stderr = record["stderr_by_stage"][0].as_array().unwrap();
+        assert_eq!(record["stderr_limit_per_stage"], json!(65_536));
+        assert_eq!(stderr.len(), retained, "input length {count}");
+        assert!(stderr
+            .iter()
+            .all(|byte| byte.as_u64() == Some(u64::from(b'e'))));
+        assert_eq!(record["stderr_truncated"], json!([truncated]));
+        assert_eq!(record["stages"][0]["stderr_truncated"], json!(truncated));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn foreground_result_keeps_twenty_kib_of_diagnostics() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let fixture = Path::new(env!("CARGO_BIN_EXE_native-fixture"));
+    let manifest = json!({
+        "name": "diagnostic.fixture",
+        "binary": fixture.to_string_lossy(),
+        "arguments": [{"literal": "stderr-bytes"}, {"literal": "20000"}],
+        "stdio": {"stderr": "capture"}
+    });
+    let registry = Registry::from_sources(&[manifest.to_string()])?;
+    let source = "run diagnostic.fixture and keep result as record\nthen encode record as json\n";
+    let result = runtime::run(
+        &parser::parse(source)?,
+        &registry,
+        &options(directory.path(), 2 * 1024 * 1024),
+    )?;
+    let record: Json = serde_json::from_slice(&result.output)?;
+    assert_eq!(record["stderr_captured"], json!(true));
+    assert_eq!(record["stderr"].as_array().unwrap().len(), 20_000);
+    assert_eq!(record["stages"][0]["stderr_bytes"], json!(20_000));
+
+    let mut failing_manifest = manifest;
+    failing_manifest["arguments"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"literal": "7"}));
+    let failing_registry = Registry::from_sources(&[failing_manifest.to_string()])?;
+    let failing_source =
+        "try\n  run diagnostic.fixture\ncatch failure\n  then encode failure as json\n";
+    let failure = runtime::run(
+        &parser::parse(failing_source)?,
+        &failing_registry,
+        &options(directory.path(), 2 * 1024 * 1024),
+    )?;
+    let caught: Json = serde_json::from_slice(&failure.output)?;
+    assert_eq!(caught["stderr_captured"], json!(true));
+    assert_eq!(caught["stderr"].as_array().unwrap().len(), 20_000);
+    Ok(())
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn merged_stderr_preserves_multi_megabyte_output() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let fixture = Path::new(env!("CARGO_BIN_EXE_native-fixture"));
+    let source = format!(
+        "run {} with arguments [\"stderr-bytes\", \"2097152\"] and stderr merged\n",
+        quote(&fixture.to_string_lossy()),
+    );
+    let result = runtime::run(
+        &parser::parse(&source)?,
+        &Registry::default(),
+        &options(directory.path(), 4 * 1024 * 1024),
+    )?;
+    assert_eq!(result.output.len(), 2 * 1024 * 1024);
+    assert!(result.output.iter().all(|byte| *byte == b'e'));
+
+    let redirected = format!(
+        "run {} with arguments [\"stderr-bytes\", \"2097152\"] and stderr to \"diagnostics.bin\"\n",
+        quote(&fixture.to_string_lossy()),
+    );
+    let redirected_result = runtime::run(
+        &parser::parse(&redirected)?,
+        &Registry::default(),
+        &options(directory.path(), 4 * 1024 * 1024),
+    )?;
+    assert!(redirected_result.output.is_empty());
+    let bytes = std::fs::read(directory.path().join("diagnostics.bin"))?;
+    assert_eq!(bytes.len(), 2 * 1024 * 1024);
+    assert!(bytes.iter().all(|byte| *byte == b'e'));
+    Ok(())
+}
+
+#[cfg(all(unix, feature = "test-fixtures"))]
+#[test]
+fn merged_stderr_does_not_wait_for_escaped_descendant_to_close_pipe() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let fixture = Path::new(env!("CARGO_BIN_EXE_native-fixture"));
+    let marker = directory.path().join("child-started");
+    let release = directory.path().join("release-child");
+    let done = directory.path().join("child-started.done");
+    let source = format!(
+        "run {} with arguments [\"hold-stderr-after-parent-exit\", {}, {}] and stderr merged\n",
+        quote(&fixture.to_string_lossy()),
+        quote(&marker.to_string_lossy()),
+        quote(&release.to_string_lossy()),
+    );
+    let mut run_options = options(directory.path(), 1024 * 1024);
+    run_options.command_timeout = Some(Duration::from_secs(2));
+    let started = std::time::Instant::now();
+    let result = runtime::run(&parser::parse(&source)?, &Registry::default(), &run_options);
+    let elapsed = started.elapsed();
+    // Release the escaped descendant even when the result is an error.
+    std::fs::write(&release, b"release")?;
+    assert!(await_file(&done), "descendant did not exit after release");
+    let result = result?;
+    assert!(result.output.is_empty());
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "waited {elapsed:?} for the inherited pipe"
     );
     Ok(())
 }

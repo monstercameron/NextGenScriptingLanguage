@@ -49,7 +49,7 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
                     let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
                         FORCED_STDERR_CAPTURE_LIMIT
                     } else {
-                        65536
+                        MAX_DIAGNOSTIC_BYTES_PER_STAGE
                     };
                     let remaining = limit.saturating_sub(child.diagnostic.len());
                     let keep = count.min(remaining);
@@ -98,6 +98,7 @@ fn windows_statuses(
             if let Some(status) = managed.child.try_wait()? {
                 managed.reaped = true;
                 managed.job.terminate();
+                drain_exited_diagnostic(managed, signals)?;
                 let code = status.code();
                 if index + 1 == calls.len() {
                     *last_status = code.map(|code| {

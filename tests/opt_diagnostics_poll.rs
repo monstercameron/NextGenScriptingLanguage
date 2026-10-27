@@ -134,8 +134,8 @@ fn large_failure_stderr_keeps_the_bounded_diagnostic_prefix() {
     assert!(error.contains("failed"), "{error}");
     assert!(error.contains("diagnostic-begin"), "{error}");
     assert!(
-        error.len() < 10_000,
-        "diagnostic was not truncated: {}",
+        error.len() >= 65_536 && error.len() < 67_000,
+        "diagnostic prefix did not match the 64 KiB bound: {}",
         error.len()
     );
 }

@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex};
 const MAX_ACTIVE_JOBS: usize = 16;
 const MAX_JOB_HANDLES: usize = 32;
 const MAX_JOB_STAGES: usize = 16;
-const MAX_DIAGNOSTIC_BYTES_PER_STAGE: usize = if cfg!(windows) { 65_536 } else { 8_192 };
 
 /// The workflow state a background job is launched against.
 #[derive(Clone, Copy)]

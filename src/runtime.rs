@@ -1474,6 +1474,9 @@ fn scan_child_statuses(
             };
             if let Some(status) = status {
                 managed.reaped = true;
+                // The process may have exited with more than one bounded scan's
+                // worth of stderr still buffered in its pipe.
+                drain_exited_diagnostic(managed, signals)?;
                 let code = status.code();
                 let stderr = captured_stage_stderr(calls[index].0, calls[index].1, signals)
                     .then(|| managed.diagnostic.clone());
@@ -1622,6 +1625,9 @@ pub(crate) fn current_step_id() -> Option<std::sync::Arc<str>> {
             .and_then(|ids| ids.get(STEP_INDEX.with(std::cell::Cell::get)).cloned())
     })
 }
+
+/// Maximum diagnostic stderr retained per native process stage on every platform.
+pub(crate) const MAX_DIAGNOSTIC_BYTES_PER_STAGE: usize = 64 * 1024;
 
 /// Stderr kept for a command whose stderr is merged (or redirected without a native
 /// process to hand the file to): it is the redirected output itself, not a
@@ -3863,6 +3869,29 @@ pub fn run_with_context(
         },
     )
 }
+/// After a process exits, drain already-available diagnostics before taking the
+/// stage snapshot. Stop when the pipe would block, even if another process has
+/// inherited the writer. Captured bytes remain bounded by the selected stderr
+/// policy, including the larger limit used for merged output.
+#[cfg(any(unix, windows))]
+fn drain_exited_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
+    loop {
+        if child.stderr.is_none() || child.diagnostic_truncated {
+            break;
+        }
+        check_deadline(signals.deadline)?;
+        if signals.is_cancelled() {
+            bail!("workflow cancelled while draining diagnostics");
+        }
+        let before = child.diagnostic.len();
+        drain_diagnostic(child)?;
+        if child.diagnostic.len() == before {
+            break;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
     let mut reached_eof = false;
@@ -3880,7 +3909,7 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
                 let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
                     FORCED_STDERR_CAPTURE_LIMIT
                 } else {
-                    8192
+                    MAX_DIAGNOSTIC_BYTES_PER_STAGE
                 };
                 let remaining = limit.saturating_sub(child.diagnostic.len());
                 let keep = count.min(remaining);

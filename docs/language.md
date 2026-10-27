@@ -221,11 +221,12 @@ captured stdout is limited by
 `--max-output-bytes`; all captured job stdout retained during the run shares the
 same aggregate byte limit. Exceeding either limit stops and reaps the job and
 reports an output-limit failure. Captured stderr is retained per stage up to
-8,192 bytes on Unix and 65,536 bytes on Windows. The result record's
+65,536 bytes on every platform. The result record's
 `stderr_by_stage` contains those exact retained byte prefixes, and its
 `stderr_truncated` list says whether the supervisor read additional bytes
-beyond each prefix. Inspection and result records report the platform limit and
-truncation flags.
+beyond each prefix. Inspection and result records report the limit and
+truncation flags. This limit applies to diagnostics; explicitly merged or
+redirected stderr uses a separate policy.
 
 This finite feature has no detach/disown, `fg`/`bg`, stopped or continued
 states, controlling-terminal handoff, or durable service lifetime. Job

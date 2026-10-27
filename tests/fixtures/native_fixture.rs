@@ -104,6 +104,60 @@ fn main() {
             }
             print!("{n}");
         }
+        "stderr-bytes" => {
+            let count: usize = args[1].parse().unwrap();
+            let bytes = [b'e'; 4096];
+            let mut remaining = count;
+            let mut sink = std::io::stderr().lock();
+            while remaining > 0 {
+                let next = remaining.min(bytes.len());
+                sink.write_all(&bytes[..next]).unwrap();
+                remaining -= next;
+            }
+            if let Some(status) = args.get(2) {
+                std::process::exit(status.parse().unwrap());
+            }
+        }
+        #[cfg(unix)]
+        "hold-stderr-after-parent-exit" => {
+            use std::os::unix::process::CommandExt;
+            let marker = &args[1];
+            let release = &args[2];
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["hold-stderr-child", marker, release])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::inherit());
+            // SAFETY: setsid is async-signal-safe and the closure uses no shared
+            // state in the forked child before exec.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let _child = command.spawn().unwrap();
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !std::path::Path::new(marker).exists() {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "descendant did not start"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        #[cfg(unix)]
+        "hold-stderr-child" => {
+            std::fs::write(&args[1], b"started").unwrap();
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !std::path::Path::new(&args[2]).exists() && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            std::fs::write(format!("{}.done", &args[1]), b"done").unwrap();
+        }
         "stderr-flood" => {
             let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
             let bytes = [b'e'; 8192];

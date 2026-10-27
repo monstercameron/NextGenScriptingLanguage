@@ -2010,6 +2010,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         bail!("program module service event output cannot contain raw bytes");
     }
     let value_schema = ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -2029,6 +2030,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         return Ok(value_schema);
     }
     let text_schema = || ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -2045,6 +2047,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         pattern: None,
     };
     let integer_schema = ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -2061,6 +2064,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         pattern: None,
     };
     Ok(ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -2073,6 +2077,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
             (
                 "value".into(),
                 ValueSchema {
+                    min_items: None,
                     nullable: true,
                     ..value_schema
                 },
@@ -2538,6 +2543,7 @@ mod tests {
                 (
                     "text".into(),
                     ValueSchema {
+                        min_items: None,
                         scalar_only: false,
                         additional_properties: None,
                         min_properties: None,
@@ -2557,6 +2563,7 @@ mod tests {
                 (
                     "length".into(),
                     ValueSchema {
+                        min_items: None,
                         scalar_only: false,
                         additional_properties: None,
                         min_properties: None,
@@ -2991,6 +2998,7 @@ mod tests {
     #[test]
     fn path_ports_supply_program_text_inputs() {
         let path_schema = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -3010,6 +3018,7 @@ mod tests {
         assert!(port_schema_accepts_input(&path_schema, InputType::Never));
 
         let path_list_schema = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -3031,6 +3040,7 @@ mod tests {
         ));
 
         let signed = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -3047,19 +3057,23 @@ mod tests {
             pattern: None,
         };
         let unsigned = ValueSchema {
+            min_items: None,
             kind: OutputType::UnsignedInteger,
             ..signed.clone()
         };
         let usize_schema = ValueSchema {
+            min_items: None,
             kind: OutputType::Usize,
             ..signed.clone()
         };
         let unsigned_list = ValueSchema {
+            min_items: None,
             kind: OutputType::List,
             items: Some(Box::new(unsigned.clone())),
             ..signed.clone()
         };
         let usize_list = ValueSchema {
+            min_items: None,
             kind: OutputType::List,
             items: Some(Box::new(usize_schema.clone())),
             ..signed.clone()

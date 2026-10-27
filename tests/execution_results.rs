@@ -600,6 +600,7 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
             "result".into(),
             AppletPort {
                 schema: ValueSchema {
+                    min_items: None,
                     scalar_only: false,
                     additional_properties: None,
                     min_properties: None,

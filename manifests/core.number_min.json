@@ -9,8 +9,10 @@
   "accepts_stdin": false,
   "parameters": {
     "values": {
-      "type": "json",
-      "required": true
+      "type": "list",
+      "items": "number",
+      "required": true,
+      "min_items": 1
     }
   },
   "arguments": [
@@ -40,7 +42,11 @@
         "values": {
           "delivery": "single",
           "schema": {
-            "type": "json"
+            "type": "list",
+            "items": {
+              "type": "number"
+            },
+            "min_items": 1
           }
         }
       },

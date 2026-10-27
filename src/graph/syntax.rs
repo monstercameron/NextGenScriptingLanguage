@@ -498,6 +498,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         required.push("enabled".into());
     }
     let properties = ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -515,6 +516,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
     };
     let mut inputs = BTreeMap::from([("properties".into(), PortSchema::single(properties))]);
     let updates = ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -535,6 +537,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         BTreeMap::from([(
             "clicked".into(),
             PortSchema::events(ValueSchema {
+                min_items: None,
                 scalar_only: false,
                 additional_properties: None,
                 min_properties: None,
@@ -656,6 +659,7 @@ fn node_for_call(
             .execution_contract()
             .and_then(|contract| contract.output.as_ref())
             .map(|schema| ValueSchema {
+                min_items: None,
                 scalar_only: false,
                 additional_properties: None,
                 min_properties: None,
@@ -829,6 +833,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
             let enum_values = parse_string_enum(value)?;
             let minimum = parse_numeric_minimum(value)?;
             return Ok(ValueSchema {
+                min_items: None,
                 scalar_only: false,
                 additional_properties: None,
                 min_properties: None,
@@ -858,6 +863,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
     let enum_values = parse_string_enum(value)?;
     let minimum = parse_numeric_minimum(value)?;
     Ok(ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -885,6 +891,7 @@ fn parse_numeric_minimum(value: &serde_json::Value) -> Result<Option<serde_json:
 
 fn leaf_schema(kind: OutputType) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

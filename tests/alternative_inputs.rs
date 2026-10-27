@@ -1,3 +1,4 @@
+use flow::manifest::Registry;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -667,4 +668,64 @@ fn bundled_catalog_applies_alternatives() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn number_min_max_require_nonempty_numeric_lists_but_defer_json_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry =
+        Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
+    for operation in ["number.min", "number.max"] {
+        let manifest = registry.resolve(operation).unwrap();
+        assert!(!manifest.accepts_stdin);
+        assert_eq!(
+            manifest.contract()["parameters_schema"]["properties"]["values"],
+            serde_json::json!({
+                "type":"array", "items":{"type":"number"}, "minItems":1
+            })
+        );
+        for values in ["{}", "[]", "[1, \"x\"]"] {
+            let source = format!("run {operation} with values {values} as result\n");
+            let output = invoke(dir.path(), &source, "check", &[]);
+            assert!(
+                !output.status.success(),
+                "{operation} accepted invalid literal list {values}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        for values in ["[1, 2]", "[1.25, 2]"] {
+            let source = format!("run {operation} with values {values} as result\n");
+            let output = invoke(dir.path(), &source, "check", &[]);
+            assert!(
+                output.status.success(),
+                "{operation} rejected numeric list {values}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let dynamic =
+            format!("accept values as json\nrun {operation} with values values as result\n");
+        let output = invoke(dir.path(), &dynamic, "check", &[]);
+        assert!(
+            output.status.success(),
+            "{operation} rejected dynamic JSON input: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let invalid_dynamic = format!(
+            "run json.parse with text \"[1, \\\"x\\\"]\" as values\nrun {operation} with values values\n"
+        );
+        let checked = invoke(dir.path(), &invalid_dynamic, "check", &[]);
+        assert!(
+            checked.status.success(),
+            "{operation} rejected a deferred JSON shape: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        let run = invoke(dir.path(), &invalid_dynamic, "run", &[]);
+        assert!(
+            !run.status.success(),
+            "{operation} did not validate dynamic values at execution"
+        );
+    }
 }

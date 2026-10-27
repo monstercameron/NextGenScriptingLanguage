@@ -53,6 +53,7 @@ fn graph_parser_enforces_the_default_node_limit_during_static_validation() {
 
 fn leaf(kind: OutputType) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -159,6 +160,7 @@ fn schema_mismatch_is_reported_before_any_node_can_start() {
 fn required_inputs_and_record_items_are_validated_recursively() {
     let item = leaf(OutputType::Integer);
     let list = ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -176,6 +178,7 @@ fn required_inputs_and_record_items_are_validated_recursively() {
     };
     assert!(list.validate().is_ok());
     let invalid = ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

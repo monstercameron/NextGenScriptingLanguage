@@ -184,6 +184,7 @@ fn remote_config(url: String) -> RemoteEndpointConfig {
 
 fn schema(kind: OutputType) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

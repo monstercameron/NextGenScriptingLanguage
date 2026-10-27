@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 fn leaf(kind: OutputType) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -39,6 +40,7 @@ fn leaf(kind: OutputType) -> ValueSchema {
 
 fn record(fields: BTreeMap<String, ValueSchema>, required: &[&str]) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

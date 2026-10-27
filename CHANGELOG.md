@@ -26,6 +26,8 @@ original version labels.
 
 - Program inputs now support `list of integer` and `list of json`; integer list
   values are statically typed when iterated and invalid items fail before execution.
+- `number.min` and `number.max` declare a required, nonempty list of numbers, so
+  invalid literal shapes fail static checking while dynamic JSON remains checked at runtime.
 
 - Measured comparison with bash and dash. `tools/bash_compare.py` pairs a bash
   command line with an Execute program for eight scenarios and reports median wall

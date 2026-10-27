@@ -63,6 +63,7 @@ impl PortSchema {
 
 pub(crate) fn value_schema_from_output(output: &OutputSchema) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -818,6 +819,7 @@ impl GraphPlan {
                         crate::ast::ListenSource::Stdin => BTreeMap::from([(
                             "line".to_owned(),
                             PortSchema::events(ValueSchema {
+                                min_items: None,
                                 scalar_only: false,
                                 additional_properties: None,
                                 min_properties: None,
@@ -860,6 +862,7 @@ impl GraphPlan {
                         crate::ast::ListenSource::Applet(_) => BTreeMap::from([(
                             "line".to_owned(),
                             PortSchema::events(ValueSchema {
+                                min_items: None,
                                 scalar_only: false,
                                 additional_properties: None,
                                 min_properties: None,
@@ -1610,6 +1613,7 @@ fn validate_result_event_node(
         value_schema_from_output(output)
     } else {
         ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,

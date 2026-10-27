@@ -166,6 +166,7 @@ impl GraphExecutor for StressExecutor {
 
 fn integer_schema() -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

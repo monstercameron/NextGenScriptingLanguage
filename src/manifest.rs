@@ -4716,6 +4716,7 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
         let item_type = spec.item_type.expect("list parameter validated");
         let item = parameter_field_value_schema(item_type, None, None, None, None, false)?;
         return Ok(ValueSchema {
+            min_items: spec.min_items,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -4833,6 +4834,7 @@ fn parameter_field_value_schema(
         })
         .transpose()?;
     Ok(ValueSchema {
+        min_items: None,
         scalar_only,
         additional_properties,
         min_properties,
@@ -4852,6 +4854,7 @@ fn parameter_field_value_schema(
 
 fn output_value_schema(output: &OutputSchema) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -4871,6 +4874,7 @@ fn output_value_schema(output: &OutputSchema) -> ValueSchema {
 
 fn leaf_value_schema(kind: OutputType) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -5349,6 +5353,7 @@ mod tests {
         let unsigned_schema = leaf_value_schema(OutputType::UnsignedInteger);
         assert!(schema_accepts_reference(&unsigned_schema, InputType::Usize));
         let unsigned_list_schema = ValueSchema {
+            min_items: None,
             kind: OutputType::List,
             items: Some(Box::new(unsigned_schema)),
             ..schema.clone()

@@ -5544,6 +5544,7 @@ mod tests {
     #[test]
     fn schema_mismatches_explain_nested_types() {
         let output = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5555,6 +5556,7 @@ mod tests {
             fields: BTreeMap::from([(
                 "count".into(),
                 ValueSchema {
+                    min_items: None,
                     scalar_only: false,
                     additional_properties: None,
                     min_properties: None,
@@ -5578,6 +5580,7 @@ mod tests {
             pattern: None,
         };
         let input = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5589,6 +5592,7 @@ mod tests {
             fields: BTreeMap::from([(
                 "count".into(),
                 ValueSchema {
+                    min_items: None,
                     scalar_only: false,
                     additional_properties: None,
                     min_properties: None,
@@ -5620,6 +5624,7 @@ mod tests {
     #[test]
     fn nested_string_patterns_are_directional_compatibility_refinements() {
         let text = |pattern| ValueSchema {
+            min_items: None,
             kind: OutputType::Text,
             scalar_only: false,
             additional_properties: None,
@@ -5636,6 +5641,7 @@ mod tests {
             minimum: None,
         };
         let record = |mode| ValueSchema {
+            min_items: None,
             kind: OutputType::Record,
             scalar_only: false,
             additional_properties: None,
@@ -5652,6 +5658,7 @@ mod tests {
             minimum: None,
         };
         let list = |item| ValueSchema {
+            min_items: None,
             kind: OutputType::List,
             scalar_only: false,
             additional_properties: None,
@@ -5676,6 +5683,7 @@ mod tests {
         assert!(schemas_compatible(&octal, &unconstrained));
         assert!(!schemas_compatible(&octal, &hex));
         let octal_enum = list(record(ValueSchema {
+            min_items: None,
             kind: OutputType::Text,
             scalar_only: false,
             additional_properties: None,
@@ -5693,6 +5701,7 @@ mod tests {
         }));
         assert!(schemas_compatible(&octal_enum, &octal));
         let invalid_octal_enum = list(record(ValueSchema {
+            min_items: None,
             kind: OutputType::Text,
             scalar_only: false,
             additional_properties: None,
@@ -5725,6 +5734,7 @@ mod tests {
     #[test]
     fn nullable_output_flows_only_to_nullable_or_nonnullable_inputs_safely() {
         let nonnullable = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5741,6 +5751,7 @@ mod tests {
             pattern: None,
         };
         let nullable = ValueSchema {
+            min_items: None,
             nullable: true,
             ..nonnullable.clone()
         };
@@ -5757,6 +5768,7 @@ mod tests {
     #[test]
     fn compatibility_uses_directional_json_subtypes_and_record_width_variance() {
         let text = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5773,6 +5785,7 @@ mod tests {
             pattern: None,
         };
         let json = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5782,6 +5795,7 @@ mod tests {
             ..text.clone()
         };
         let bytes = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5795,6 +5809,7 @@ mod tests {
         assert!(!schemas_compatible(&bytes, &json));
 
         let text_list = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5805,6 +5820,7 @@ mod tests {
             ..text.clone()
         };
         let json_list = ValueSchema {
+            min_items: None,
             items: Some(Box::new(json)),
             ..text_list.clone()
         };
@@ -5812,6 +5828,7 @@ mod tests {
         assert!(!schemas_compatible(&json_list, &text_list));
 
         let output_record = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -5823,6 +5840,7 @@ mod tests {
             ..text.clone()
         };
         let input_record = ValueSchema {
+            min_items: None,
             fields: BTreeMap::from([
                 ("name".into(), text.clone()),
                 ("optional".into(), text.clone()),
@@ -5835,6 +5853,7 @@ mod tests {
         assert!(schemas_compatible(&output_record, &output_record));
 
         let input_requires_unproduced = ValueSchema {
+            min_items: None,
             required: vec!["optional".into()],
             ..input_record.clone()
         };
@@ -5845,6 +5864,7 @@ mod tests {
         ));
 
         let output_with_optional = ValueSchema {
+            min_items: None,
             fields: BTreeMap::from([
                 ("name".into(), text.clone()),
                 ("optional".into(), text.clone()),
@@ -5859,6 +5879,7 @@ mod tests {
     #[test]
     fn diagnostics_compatibility_matches_assignability_for_schema_constraints() {
         let base = |kind| ValueSchema {
+            min_items: None,
             kind,
             scalar_only: false,
             additional_properties: None,
@@ -5875,10 +5896,12 @@ mod tests {
             pattern: None,
         };
         let list = |items| ValueSchema {
+            min_items: None,
             items: Some(Box::new(items)),
             ..base(OutputType::List)
         };
         let record_with = |field| ValueSchema {
+            min_items: None,
             fields: BTreeMap::from([("value".into(), field)]),
             required: vec!["value".into()],
             ..base(OutputType::Record)
@@ -5887,6 +5910,7 @@ mod tests {
             (
                 base(OutputType::Integer),
                 ValueSchema {
+                    min_items: None,
                     minimum: Some(serde_json::json!(10).as_number().unwrap().clone()),
                     ..base(OutputType::Integer)
                 },
@@ -5894,10 +5918,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     minimum: Some(serde_json::json!(10).as_number().unwrap().clone()),
                     ..base(OutputType::Integer)
                 },
                 ValueSchema {
+                    min_items: None,
                     minimum: Some(serde_json::json!(5).as_number().unwrap().clone()),
                     ..base(OutputType::Integer)
                 },
@@ -5906,6 +5932,7 @@ mod tests {
             (
                 base(OutputType::Number),
                 ValueSchema {
+                    min_items: None,
                     minimum: Some(serde_json::json!(0.5).as_number().unwrap().clone()),
                     ..base(OutputType::Number)
                 },
@@ -5914,6 +5941,7 @@ mod tests {
             (
                 base(OutputType::Text),
                 ValueSchema {
+                    min_items: None,
                     single_line: true,
                     ..base(OutputType::Text)
                 },
@@ -5921,6 +5949,7 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     single_line: true,
                     nonempty: true,
                     ..base(OutputType::Text)
@@ -5931,6 +5960,7 @@ mod tests {
             (
                 base(OutputType::Text),
                 ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     ..base(OutputType::Text)
                 },
@@ -5938,10 +5968,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     enum_values: Some(vec!["ready".into()]),
                     ..base(OutputType::Text)
                 },
                 ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     ..base(OutputType::Text)
                 },
@@ -5949,10 +5981,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     enum_values: Some(vec![" ".into()]),
                     ..base(OutputType::Text)
                 },
                 ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     ..base(OutputType::Text)
                 },
@@ -5960,10 +5994,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     enum_values: Some(vec!["ready".into()]),
                     ..base(OutputType::Text)
                 },
                 ValueSchema {
+                    min_items: None,
                     single_line: true,
                     ..base(OutputType::Text)
                 },
@@ -5971,10 +6007,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     enum_values: Some(vec!["two\nlines".into()]),
                     ..base(OutputType::Text)
                 },
                 ValueSchema {
+                    min_items: None,
                     single_line: true,
                     ..base(OutputType::Text)
                 },
@@ -5982,10 +6020,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     pattern: Some(StringPattern::OctalMode),
                     ..base(OutputType::Text)
                 },
                 ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     single_line: true,
                     ..base(OutputType::Text)
@@ -5994,10 +6034,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     pattern: Some(StringPattern::HexColorOptionalHash),
                     ..base(OutputType::Text)
                 },
                 ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     single_line: true,
                     ..base(OutputType::Text)
@@ -6006,6 +6048,7 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     additional_properties: Some(Box::new(base(OutputType::Text))),
                     ..base(OutputType::Record)
                 },
@@ -6014,10 +6057,12 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     additional_properties: Some(Box::new(base(OutputType::Text))),
                     ..base(OutputType::Record)
                 },
                 ValueSchema {
+                    min_items: None,
                     additional_properties: Some(Box::new(base(OutputType::Text))),
                     ..base(OutputType::Record)
                 },
@@ -6026,6 +6071,7 @@ mod tests {
             (
                 base(OutputType::Record),
                 ValueSchema {
+                    min_items: None,
                     additional_properties: Some(Box::new(base(OutputType::Text))),
                     ..base(OutputType::Record)
                 },
@@ -6033,11 +6079,13 @@ mod tests {
             ),
             (
                 ValueSchema {
+                    min_items: None,
                     min_properties: Some(1),
                     fields: BTreeMap::from([("value".into(), base(OutputType::Text))]),
                     ..base(OutputType::Record)
                 },
                 ValueSchema {
+                    min_items: None,
                     max_properties: Some(0),
                     fields: BTreeMap::from([("value".into(), base(OutputType::Text))]),
                     ..base(OutputType::Record)
@@ -6047,6 +6095,7 @@ mod tests {
             (
                 list(record_with(base(OutputType::Integer))),
                 list(record_with(ValueSchema {
+                    min_items: None,
                     minimum: Some(serde_json::json!(1).as_number().unwrap().clone()),
                     ..base(OutputType::Integer)
                 })),
@@ -6054,10 +6103,12 @@ mod tests {
             ),
             (
                 list(record_with(ValueSchema {
+                    min_items: None,
                     nonempty: false,
                     ..base(OutputType::Text)
                 })),
                 list(record_with(ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     ..base(OutputType::Text)
                 })),
@@ -6065,10 +6116,12 @@ mod tests {
             ),
             (
                 list(record_with(ValueSchema {
+                    min_items: None,
                     pattern: Some(StringPattern::OctalMode),
                     ..base(OutputType::Text)
                 })),
                 list(record_with(ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     single_line: true,
                     ..base(OutputType::Text)
@@ -6077,10 +6130,12 @@ mod tests {
             ),
             (
                 list(record_with(ValueSchema {
+                    min_items: None,
                     enum_values: Some(vec!["ready".into()]),
                     ..base(OutputType::Text)
                 })),
                 list(record_with(ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     ..base(OutputType::Text)
                 })),
@@ -6088,10 +6143,12 @@ mod tests {
             ),
             (
                 list(record_with(ValueSchema {
+                    min_items: None,
                     enum_values: Some(vec!["".into(), "ready".into()]),
                     ..base(OutputType::Text)
                 })),
                 list(record_with(ValueSchema {
+                    min_items: None,
                     nonempty: true,
                     ..base(OutputType::Text)
                 })),
@@ -6110,6 +6167,7 @@ mod tests {
     #[test]
     fn numeric_and_enum_schemas_are_directional_refinements() {
         let schema = |kind, enum_values| ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,

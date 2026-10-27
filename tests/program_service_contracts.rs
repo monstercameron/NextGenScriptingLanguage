@@ -22,6 +22,7 @@ fn digest(bytes: &[u8]) -> String {
 
 fn integer_schema() -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -54,6 +55,7 @@ fn output_schema() -> OutputSchema {
 
 fn decoded_output_port_schema() -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -75,10 +77,12 @@ fn result_envelope_port_schema() -> ValueSchema {
     let text = text_schema();
     let integer = integer_schema();
     let value = ValueSchema {
+        min_items: None,
         nullable: true,
         ..decoded_output_port_schema()
     };
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -110,6 +114,7 @@ fn result_envelope_port_schema() -> ValueSchema {
 
 fn text_schema() -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

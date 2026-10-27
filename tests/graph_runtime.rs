@@ -29,6 +29,7 @@ fn options(cwd: &Path) -> RunOptions {
 
 fn bytes() -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -48,6 +49,7 @@ fn bytes() -> ValueSchema {
 
 fn int() -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -129,6 +131,7 @@ fn fanout_merges_record_ports_in_order_with_lossless_bounded_queues() {
         BTreeMap::from([(
             "joined".into(),
             PortSchema::single(ValueSchema {
+                min_items: None,
                 scalar_only: false,
                 additional_properties: None,
                 min_properties: None,
@@ -390,6 +393,7 @@ impl GraphExecutor for SecretFlowExecutor {
 #[test]
 fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
     let mut secret = PortSchema::single(ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -407,6 +411,7 @@ fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
     });
     secret.sensitivity = flow::contracts::Sensitivity::Secret;
     let mut declared_public_in = PortSchema::single(ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -516,6 +521,7 @@ fn runtime_provenance_union_denies_remote_before_invocation() {
     };
 
     let mut source = PortSchema::single(ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

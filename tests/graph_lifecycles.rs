@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 #[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn text_schema() -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,

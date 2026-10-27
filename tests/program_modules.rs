@@ -55,6 +55,7 @@ fn record_output() -> OutputSchema {
             (
                 "name".into(),
                 ValueSchema {
+                    min_items: None,
                     scalar_only: false,
                     additional_properties: None,
                     min_properties: None,
@@ -74,6 +75,7 @@ fn record_output() -> OutputSchema {
             (
                 "count".into(),
                 ValueSchema {
+                    min_items: None,
                     scalar_only: false,
                     additional_properties: None,
                     min_properties: None,

@@ -645,6 +645,9 @@ pub struct ValueSchema {
         skip_serializing_if = "Option::is_none"
     )]
     pub items: Option<Box<ValueSchema>>,
+    /// Minimum number of entries in a list. `None` leaves cardinality open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<usize>,
     #[serde(
         default,
         deserialize_with = "deserialize_unique_map",
@@ -776,6 +779,7 @@ where
 impl ValueSchema {
     /// Validate recursive record/list structure and semantic path constraints.
     pub fn validate(&self) -> Result<()> {
+        validate_min_items(self)?;
         validate_schema_parts(
             self.kind,
             self.additional_properties.as_deref(),
@@ -811,6 +815,7 @@ impl ValueSchema {
             self.pattern,
             self.nullable,
             self.minimum.as_ref(),
+            self.min_items,
         )
     }
 
@@ -826,8 +831,65 @@ impl ValueSchema {
     /// example, Integer is assignable to Number, while Number is not
     /// assignable to Integer.
     pub fn is_assignable_to(&self, target: &Self) -> bool {
-        schema_is_assignable(self, target)
+        schema_cardinality_assignable(self, target) && schema_is_assignable(self, target)
     }
+}
+
+fn validate_min_items(schema: &ValueSchema) -> Result<()> {
+    if schema.min_items.is_some() && schema.kind != OutputType::List {
+        bail!("min_items applies only to list schemas");
+    }
+    for field in schema.fields.values() {
+        validate_min_items(field)?;
+    }
+    if let Some(additional) = schema.additional_properties.as_deref() {
+        validate_min_items(additional)?;
+    }
+    if let Some(item) = schema.items.as_deref() {
+        validate_min_items(item)?;
+    }
+    Ok(())
+}
+
+fn schema_cardinality_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
+    if source.kind == OutputType::List
+        && target.kind == OutputType::List
+        && target.min_items.is_some_and(|minimum| {
+            minimum > 0
+                && !source
+                    .min_items
+                    .is_some_and(|source_min| source_min >= minimum)
+        })
+    {
+        return false;
+    }
+    target.fields.iter().all(|(name, target_field)| {
+        source
+            .fields
+            .get(name)
+            .or(source.additional_properties.as_deref())
+            .is_none_or(|source_field| schema_cardinality_assignable(source_field, target_field))
+    }) && source
+        .additional_properties
+        .as_deref()
+        .is_none_or(|source_value| {
+            target
+                .fields
+                .values()
+                .all(|target_field| schema_cardinality_assignable(source_value, target_field))
+                && target
+                    .additional_properties
+                    .as_deref()
+                    .is_none_or(|target_value| {
+                        schema_cardinality_assignable(source_value, target_value)
+                    })
+        })
+        && match (source.items.as_deref(), target.items.as_deref()) {
+            (Some(source_item), Some(target_item)) => {
+                schema_cardinality_assignable(source_item, target_item)
+            }
+            _ => true,
+        }
 }
 
 fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
@@ -1146,6 +1208,12 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
             Ok(())
         }
         (OutputType::List, Value::List(values)) => {
+            if schema
+                .min_items
+                .is_some_and(|minimum| values.len() < minimum)
+            {
+                bail!("list requires at least {} items", schema.min_items.unwrap());
+            }
             let item_schema = schema
                 .items
                 .as_deref()
@@ -1467,6 +1535,12 @@ pub(crate) fn schema_at_pointer(root: &ValueSchema, pointer: &str) -> Result<Opt
 
 impl OutputSchema {
     pub(crate) fn validate(&self) -> Result<()> {
+        for field in self.fields.values() {
+            validate_min_items(field)?;
+        }
+        if let Some(item) = self.items.as_deref() {
+            validate_min_items(item)?;
+        }
         validate_schema_parts(
             self.kind,
             None,
@@ -1687,6 +1761,7 @@ impl OutputSchema {
             None,
             false,
             None,
+            None,
         );
         let object = schema
             .as_object_mut()
@@ -1874,6 +1949,7 @@ fn schema_json(
     pattern: Option<StringPattern>,
     nullable: bool,
     minimum: Option<&serde_json::Number>,
+    min_items: Option<usize>,
 ) -> serde_json::Value {
     let mut schema = match kind {
         OutputType::Bytes => serde_json::json!({"type":"bytes"}),
@@ -1942,6 +2018,7 @@ fn schema_json(
                             schema.pattern,
                             schema.nullable,
                             schema.minimum.as_ref(),
+                            schema.min_items,
                         ),
                     )
                 })
@@ -1963,6 +2040,7 @@ fn schema_json(
                         schema.pattern,
                         schema.nullable,
                         schema.minimum.as_ref(),
+                        schema.min_items,
                     )
                 });
             let mut object = serde_json::json!({
@@ -1996,6 +2074,7 @@ fn schema_json(
                     item.pattern,
                     item.nullable,
                     item.minimum.as_ref(),
+                    item.min_items,
                 )
             });
             list
@@ -2003,6 +2082,9 @@ fn schema_json(
     };
     if let Some(minimum) = minimum {
         schema["minimum"] = serde_json::Value::Number(minimum.clone());
+    }
+    if let Some(minimum) = min_items {
+        schema["minItems"] = serde_json::json!(minimum);
     }
     if nullable && kind != OutputType::Json {
         if enum_values.is_some() || pattern.is_some() {
@@ -2633,6 +2715,7 @@ impl AppletContract {
         }
         let output = self.output.as_ref()?;
         let value_schema = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -2649,6 +2732,7 @@ impl AppletContract {
             pattern: None,
         };
         let text_schema = || ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -2665,6 +2749,7 @@ impl AppletContract {
             pattern: None,
         };
         let integer_schema = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -2688,6 +2773,7 @@ impl AppletContract {
             ("status".into(), integer_schema),
         ]);
         Some(ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -3232,6 +3318,7 @@ mod numeric_minimum_tests {
 
     fn schema(kind: OutputType, minimum: Option<serde_json::Number>) -> ValueSchema {
         ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,

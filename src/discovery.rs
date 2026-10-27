@@ -937,6 +937,7 @@ fn endpoint(manifest: &Manifest, name: &str, port: &AppletPort) -> Endpoint {
 
 fn schema_from_output(output: &OutputSchema) -> ValueSchema {
     ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -1048,6 +1049,7 @@ mod tests {
     #[test]
     fn nested_schema_similarity_ranks_matching_list_item_types() {
         let text_items = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -1064,6 +1066,7 @@ mod tests {
             pattern: None,
         };
         let integer_items = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -1073,6 +1076,7 @@ mod tests {
             ..text_items.clone()
         };
         let text_list = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -1083,6 +1087,7 @@ mod tests {
             ..integer_items.clone()
         };
         let integer_list = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -1368,6 +1373,7 @@ mod tests {
         ])
         .unwrap();
         let source_schema = ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,
@@ -1384,6 +1390,7 @@ mod tests {
             pattern: None,
         };
         let wrong_input_schema = ValueSchema {
+            min_items: None,
             fields: [("right".to_owned(), text_schema())].into(),
             required: vec!["right".into()],
             ..source_schema.clone()
@@ -1951,6 +1958,7 @@ mod tests {
 
     fn text_schema() -> ValueSchema {
         ValueSchema {
+            min_items: None,
             scalar_only: false,
             additional_properties: None,
             min_properties: None,

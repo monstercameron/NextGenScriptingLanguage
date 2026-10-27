@@ -856,6 +856,7 @@ fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
     );
 
     let nullable = ValueSchema {
+        min_items: None,
         scalar_only: false,
         additional_properties: None,
         min_properties: None,
@@ -886,6 +887,7 @@ fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
 #[test]
 fn single_line_text_schemas_reject_cr_and_lf_but_allow_empty_text() {
     let single_line = ValueSchema {
+        min_items: None,
         kind: OutputType::Text,
         scalar_only: false,
         additional_properties: None,
@@ -902,6 +904,7 @@ fn single_line_text_schemas_reject_cr_and_lf_but_allow_empty_text() {
         pattern: None,
     };
     let unrestricted = ValueSchema {
+        min_items: None,
         single_line: false,
         minimum: None,
         ..single_line.clone()
@@ -979,6 +982,34 @@ fn new_optional_schema_fields_do_not_change_legacy_serialized_shapes() {
     })));
     let serialized = serde_json::to_value(manifest).unwrap();
     assert!(serialized["contract"]["output"].get("enum").is_none());
+}
+
+#[test]
+fn numeric_list_schemas_enforce_minimum_length_without_rejecting_floats() {
+    let schema: ValueSchema = serde_json::from_value(json!({
+        "type":"list",
+        "items":{"type":"number"},
+        "min_items":1
+    }))
+    .unwrap();
+    assert_eq!(schema.json_schema()["minItems"], 1);
+    assert!(schema
+        .validate_value(&Value::List(vec![
+            Value::Integer(1),
+            Value::Number("2.5".parse().unwrap())
+        ]))
+        .is_ok());
+    assert!(schema.validate_value(&Value::List(Vec::new())).is_err());
+    assert!(schema
+        .validate_value(&Value::List(vec![Value::String("bad".into())]))
+        .is_err());
+
+    let unconstrained: ValueSchema = serde_json::from_value(json!({
+        "type":"list", "items":{"type":"number"}
+    }))
+    .unwrap();
+    assert!(!unconstrained.is_assignable_to(&schema));
+    assert!(schema.is_assignable_to(&unconstrained));
 }
 
 #[cfg(unix)]

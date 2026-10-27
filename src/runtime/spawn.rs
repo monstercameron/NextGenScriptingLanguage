@@ -3,6 +3,8 @@
 
 #[cfg(windows)]
 use super::execute_group_with_sink;
+#[cfg(windows)]
+use super::observe;
 // The Unix supervision path (pidfd and epoll, process groups, stdin prefill) uses many
 // runtime-private helpers; it reads them from the parent module rather than listing each.
 #[cfg(unix)]

@@ -170,15 +170,25 @@ fn json_redaction_preserves_protocol_keys_and_redacts_marker_containing_secrets(
         .contains(marker_secret));
 }
 
-#[cfg(unix)]
 #[test]
 fn json_repl_frames_manifest_inherited_stdout_as_response_output() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
+            serde_json::json!([{"literal":"/C"},{"literal":"echo FRAME-SENTINEL&echo ERR-SENTINEL 1>&2"}]),
+        )
+    } else {
+        (
+            "/bin/sh".to_owned(),
+            serde_json::json!([{"literal":"-c"},{"literal":"printf FRAME-SENTINEL; printf ERR-SENTINEL >&2"}]),
+        )
+    };
     let manifest = serde_json::json!({
-        "name":"fixture.inherit", "binary":"/bin/sh",
-        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"-c"},{"literal":"printf FRAME-SENTINEL; printf ERR-SENTINEL >&2"}],
+        "name":"fixture.inherit", "binary":binary,
+        "accepts_stdin":false, "parameters":{}, "arguments":arguments,
         "stdio":{"stdout":"inherit","stderr":"inherit"}
     });
     std::fs::write(manifests.join("fixture.inherit.json"), manifest.to_string()).unwrap();
@@ -203,8 +213,21 @@ fn json_repl_frames_manifest_inherited_stdout_as_response_output() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert_eq!(responses[0]["status"], "ran");
-    assert_eq!(responses[0]["stdout"], "FRAME-SENTINEL");
-    assert_eq!(responses[0]["stderr_tail"], "ERR-SENTINEL");
+    let framed_stdout = responses[0]["stdout"].as_str().unwrap();
+    assert!(
+        framed_stdout == "FRAME-SENTINEL"
+            || (cfg!(windows)
+                && matches!(framed_stdout, "FRAME-SENTINEL\r\n" | "FRAME-SENTINEL\n")),
+        "unexpected framed stdout: {framed_stdout:?}"
+    );
+    assert!(
+        responses[0]["stderr_tail"]
+            .as_str()
+            .unwrap()
+            .contains("ERR-SENTINEL"),
+        "unexpected framed stderr: {}",
+        responses[0]
+    );
     assert!(
         output.stderr.is_empty(),
         "child stderr escaped the protocol: {}",

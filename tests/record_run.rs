@@ -4,6 +4,7 @@
 //! appear in it.
 
 #[path = "support/private_answers.rs"]
+#[cfg(unix)]
 mod private_answers;
 
 use serde_json::Value;
@@ -627,9 +628,7 @@ fn successful_secret_pipeline_redacts_earlier_stage_stderr_from_the_record() {
     let canary = "PIPELINE-STDERR-CANARY-315";
     fs::write(
         work.path().join("secret.program"),
-        format!(
-            "accept token as text from secret prompt \"Token?\"\nuse value token\npipe to \"sh\" with arguments [\"-c\", \"head -c 16 >&2; cat\"]\npipe to \"cat\" as echoed\n"
-        ),
+        "accept token as text from secret prompt \"Token?\"\nuse value token\npipe to \"sh\" with arguments [\"-c\", \"head -c 16 >&2; cat\"]\npipe to \"cat\" as echoed\n",
     )
     .unwrap();
     let record = work.path().join("record");

@@ -633,10 +633,7 @@ pub(super) fn run_group(
         }
         for completion in receiver.try_iter() {
             update_record(
-                completion.index,
-                completion.result,
-                completion.cancelled,
-                completion.launched_processes,
+                completion,
                 &mut records,
                 &prepared,
                 &mut total_output_bytes,
@@ -1084,10 +1081,7 @@ pub(super) fn run_each(
         }
         active = active.saturating_sub(1);
         update_record(
-            index,
-            completion.result,
-            completion.cancelled,
-            completion.launched_processes,
+            completion,
             &mut records,
             &prepared,
             &mut total_output_bytes,
@@ -1148,10 +1142,7 @@ pub(super) fn run_each(
         }
         for completion in receiver.try_iter() {
             update_record(
-                completion.index,
-                completion.result,
-                completion.cancelled,
-                completion.launched_processes,
+                completion,
                 &mut records,
                 &prepared,
                 &mut total_output_bytes,
@@ -1277,15 +1268,18 @@ fn completion_was_cancelled(token: &CancellationToken, inherited: &[Arc<AtomicBo
 }
 
 fn update_record(
-    index: usize,
-    result: Result<AppletInvocationResult>,
-    cancelled: bool,
-    launched_processes: usize,
+    completion: Completion,
     records: &mut [TaskRecord],
     tasks: &[PreparedTask],
     total_output_bytes: &mut usize,
     secret_redactor: &crate::security::SecretRedactor,
 ) {
+    let Completion {
+        index,
+        result,
+        cancelled,
+        launched_processes,
+    } = completion;
     let Some(record) = records.get_mut(index) else {
         return;
     };
@@ -1765,10 +1759,12 @@ mod cancellation_tests {
         let mut total_output_bytes = 0;
 
         update_record(
-            0,
-            Err(anyhow!("in-process applet observed parent cancellation")),
-            cancelled,
-            0,
+            Completion {
+                index: 0,
+                result: Err(anyhow!("in-process applet observed parent cancellation")),
+                cancelled,
+                launched_processes: 0,
+            },
             &mut records,
             &tasks,
             &mut total_output_bytes,

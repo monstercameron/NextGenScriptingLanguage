@@ -162,7 +162,7 @@ impl Recorder {
         #[cfg(unix)]
         let directory_handle = create_private_directory(start.directory)?;
         #[cfg(not(unix))]
-        let _ = create_private_directory(start.directory)?;
+        create_private_directory(start.directory)?;
         // Install all known masks before writing either the source copy or plan.
         let environment = std::env::vars_os().collect::<Vec<_>>();
         security::register_declared_environment_secrets(start.registry, &environment)

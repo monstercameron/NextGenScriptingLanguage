@@ -282,14 +282,14 @@ fn system_boot_id() -> Option<String> {
 fn is_valid_boot_id(boot_id: &str) -> bool {
     // The kernel exposes a UUID. Reject malformed values so an unreadable or
     // unexpected procfs cannot accidentally make an owner appear stale.
-    (boot_id.len() == 36
+    boot_id.len() == 36
         && boot_id
             .bytes()
             .enumerate()
             .all(|(index, byte)| match index {
                 8 | 13 | 18 | 23 => byte == b'-',
                 _ => byte.is_ascii_hexdigit(),
-            }))
+            })
 }
 
 #[cfg(target_os = "linux")]

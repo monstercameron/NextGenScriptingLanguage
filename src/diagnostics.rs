@@ -817,17 +817,11 @@ fn analyze_source_impl(
                                     captured_snapshot
                                         .as_ref()
                                         .and_then(|snapshot| snapshot.loaded_source(&caller_path))
-                                })
-                                .or_else(|| {
-                                    #[cfg(feature = "lsp")]
-                                    {
-                                        scope.and_then(|scope| scope.loaded_source(&caller_path))
-                                    }
-                                    #[cfg(not(feature = "lsp"))]
-                                    {
-                                        None
-                                    }
                                 });
+                            #[cfg(feature = "lsp")]
+                            let caller_source = caller_source.or_else(|| {
+                                scope.and_then(|scope| scope.loaded_source(&caller_path))
+                            });
                             let Some(caller_source) = caller_source else {
                                 continue;
                             };

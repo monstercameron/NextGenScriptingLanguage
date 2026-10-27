@@ -2543,9 +2543,12 @@ fn parse_invocation_with_layout(
 
 /// Parser-derived byte spans for a single invocation, used by structured edits.
 pub(crate) struct RepairInvocationLayout {
+    #[cfg(feature = "records")]
     pub(crate) parameters: BTreeMap<String, Range<usize>>,
+    #[cfg(feature = "records")]
     pub(crate) retry_insert: usize,
     pub(crate) parameter_insert: usize,
+    #[cfg(feature = "records")]
     pub(crate) has_retry: bool,
 }
 
@@ -2614,16 +2617,20 @@ pub(crate) fn repair_invocation_layout(source: &str) -> Result<RepairInvocationL
         }
     }
     let mut layout = InvocationLayout::default();
-    let StepKind::Invoke { call, .. } = parse_invocation_with_layout(&kept, Some(&mut layout))?
+    let StepKind::Invoke { call: _call, .. } =
+        parse_invocation_with_layout(&kept, Some(&mut layout))?
     else {
         bail!("structured edits require an invocation");
     };
+    #[cfg(feature = "records")]
     let mut parameters = BTreeMap::new();
+    #[cfg(feature = "records")]
     for (name, token_span) in layout.parameters {
         let first = indices[token_span.start];
         let last = indices[token_span.end - 1];
         parameters.insert(name, ranges[first].start..ranges[last].end);
     }
+    #[cfg(feature = "records")]
     let insert = if layout.retry_insert_token == 0 {
         bail!("no invocation suffix position");
     } else {
@@ -2635,10 +2642,13 @@ pub(crate) fn repair_invocation_layout(source: &str) -> Result<RepairInvocationL
         ranges[indices[layout.parameter_insert_token - 1]].end
     };
     Ok(RepairInvocationLayout {
+        #[cfg(feature = "records")]
         parameters,
+        #[cfg(feature = "records")]
         retry_insert: insert,
         parameter_insert,
-        has_retry: call.retry.is_some(),
+        #[cfg(feature = "records")]
+        has_retry: _call.retry.is_some(),
     })
 }
 

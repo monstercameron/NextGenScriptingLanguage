@@ -360,14 +360,17 @@ fn interrupted_stdin_checkpoint_requires_explicit_retry_before_consuming_again()
 #[test]
 fn services_and_screen_handlers_reject_process_stdin_before_prior_effects() {
     let root = tempfile::tempdir().unwrap();
-    for source in [
-        "every 1 second\n  run \"sh\" with arguments [\"-c\", \"touch forbidden\"]\n  read from stdin\n",
-        #[cfg(feature = "screens")]
-        "open a screen titled \"Test\"\nplace app on the left\ndefine a program named app\n  show a text panel named output with text \"ready\"\n  whenever the program opens\n    run \"sh\" with arguments [\"-c\", \"touch forbidden\"]\n    read from stdin\n",
-    ] {
+    let assert_rejected = |source| {
         let result = run(root.path(), source, b"data", &[]);
         assert!(!result.status.success());
         assert!(String::from_utf8_lossy(&result.stderr).contains("stdin"));
         assert!(!root.path().join("forbidden").exists());
-    }
+    };
+    assert_rejected(
+        "every 1 second\n  run \"sh\" with arguments [\"-c\", \"touch forbidden\"]\n  read from stdin\n",
+    );
+    #[cfg(feature = "screens")]
+    assert_rejected(
+        "open a screen titled \"Test\"\nplace app on the left\ndefine a program named app\n  show a text panel named output with text \"ready\"\n  whenever the program opens\n    run \"sh\" with arguments [\"-c\", \"touch forbidden\"]\n    read from stdin\n",
+    );
 }

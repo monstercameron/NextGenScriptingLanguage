@@ -1767,8 +1767,13 @@ The harmless [`examples/repair.program`](../examples/repair.program) intentional
 ```sh
 execute repair.program --checkpoint .execute-state/repair --trace
 # Fix the failed command in repair.program, then:
-execute resume repair.program --checkpoint .execute-state/repair --trace
+execute resume repair.program --checkpoint .execute-state/repair --retry-uncertain --trace
 ```
+
+The first run fails intentionally. Inspect any external effects before retrying;
+a failed command may have completed part of its work. Even after editing the failed
+node, resume requires `--retry-uncertain` to authorize repeating it. Use a fresh
+checkpoint directory when starting the example again.
 
 Resume restores the latest completed node's output, named results, and working
 directory. It skips completed commands and saves, including commands that are not

@@ -147,11 +147,11 @@ are permitted. The stable semantics hash version must change when runtime semant
 change incompatibly. Global environment and upstream files are intentionally not
 re-evaluated: this is continuation of frozen work, not a fresh dependency build.
 
-A failed command retains the last completed snapshot. Retrying a known failure is
-explicitly authorized by `resume`; partial effects remain possible. An interrupted
-or abandoned running intent for a non-cacheable command requires
-`--retry-uncertain`. Persistence failures preserve the earlier intent rather than
-marking an uncertain effect as an ordinary failed command. Commands declared
+A failed command retains the last completed snapshot. A failed, interrupted, or
+abandoned non-retry-safe node may have partial effects, so `resume` requires
+`--retry-uncertain` to authorize repeating it, even if the failed node was edited.
+Inspect external effects before choosing to retry. Persistence failures preserve
+the earlier intent rather than marking an uncertain effect as an ordinary failed command. Commands declared
 cacheable are trusted to be safe to repeat; manifest declarations are a contract.
 Builtins and reads are repeatable nodes. Interrupted saves also require explicit
 uncertain retry, since an outside process may have changed the target afterward. No external

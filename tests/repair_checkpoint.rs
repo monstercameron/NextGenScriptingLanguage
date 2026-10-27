@@ -66,6 +66,76 @@ fn repair(work: &Path, checkpoint: &Path, op: &str, extra: &[&str]) -> Output {
 }
 
 #[test]
+fn documented_repair_example_requires_explicit_retry_and_recovers() {
+    let work = tempfile::tempdir().unwrap();
+    let source = include_str!("../examples/repair.program");
+    assert!(source.contains("then false"));
+    let program = work.path().join("repair.program");
+    fs::write(&program, source).unwrap();
+    let run_args = [
+        "repair.program",
+        "--checkpoint",
+        ".execute-state/repair",
+        "--trace",
+    ];
+    let resume_args = [
+        "resume",
+        "repair.program",
+        "--checkpoint",
+        ".execute-state/repair",
+        "--retry-uncertain",
+        "--trace",
+    ];
+    for docs in [
+        include_str!("../README.md"),
+        include_str!("../docs/language.md"),
+    ] {
+        assert!(docs.contains("execute repair.program --checkpoint .execute-state/repair --trace"));
+        assert!(docs.contains("execute resume repair.program --checkpoint .execute-state/repair --retry-uncertain --trace"));
+    }
+    let failed = execute(work.path(), &run_args);
+    assert!(!failed.status.success(), "the example must fail initially");
+    assert!(
+        text(&failed.stderr).contains("applet \"false\" failed"),
+        "{}",
+        text(&failed.stderr)
+    );
+    assert!(!work.path().join("recovered.txt").exists());
+    fs::write(&program, source.replace("then false", "then cat")).unwrap();
+    let refused = execute(
+        work.path(),
+        &[
+            "resume",
+            "repair.program",
+            "--checkpoint",
+            ".execute-state/repair",
+            "--trace",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(
+        text(&refused.stderr).contains("--retry-uncertain"),
+        "{}",
+        text(&refused.stderr)
+    );
+    assert!(
+        !work.path().join("recovered.txt").exists(),
+        "refused resume must not execute the repaired suffix"
+    );
+    let resumed = execute(work.path(), &resume_args);
+    assert!(resumed.status.success(), "{}", text(&resumed.stderr));
+    assert!(
+        text(&resumed.stderr).contains("\"restored_nodes\":2"),
+        "{}",
+        text(&resumed.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(work.path().join("recovered.txt")).unwrap(),
+        "RECOVER THIS RESULT\n"
+    );
+}
+
+#[test]
 fn a_repaired_suffix_resumes_and_the_journal_is_never_modified() {
     let work = tempfile::tempdir().unwrap();
     let (program, checkpoint) = failed_checkpoint(work.path());

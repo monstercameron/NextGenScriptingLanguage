@@ -198,18 +198,29 @@ needs the `live` feature (part of `full`; `tui` implies it).
 Explicit caches avoid repeating deterministic transformations. Checkpoints record
 completed nodes so a repaired script can resume its remaining work:
 
+From the repository root, copy the intentionally failing example into a temporary
+working directory and run it there:
+
 ```sh
+repair_dir=$(mktemp -d)
+cp examples/repair.program "$repair_dir/repair.program"
+cd "$repair_dir"
 execute repair.program --checkpoint .execute-state/repair --trace
-execute resume repair.program --checkpoint .execute-state/repair --trace
+# Inspect any external effects, then replace `then false` with `then cat`.
+execute resume repair.program --checkpoint .execute-state/repair --retry-uncertain --trace
 ```
+
+Use a fresh working directory and checkpoint for each attempt. The first command
+fails intentionally. Its failed node can have partial effects, so even after editing
+it, resume requires explicit `--retry-uncertain` before repeating it.
 
 A top-level `for each` or `parallel for each` is recorded element by element, so a
 resume continues after the committed elements instead of rerunning the loop. Resume
 matches completed nodes by step id, so comments and edits below the last completed
 node do not force a rerun. Retry safety follows declared effects: an in-process applet
 that only reads, or declares nothing, can run again without the override, while a
-native command is uncertain after a crash. The journal is version 5 (finite graphs
-checkpoint too), input digests are keyed, and `execute checkpoint status DIR` reports
+failed or interrupted native command can have uncertain effects. The journal is
+version 5 (finite graphs checkpoint too), input digests are keyed, and `execute checkpoint status DIR` reports
 what a resume would do.
 
 Checkpointing does not make external effects transactional. Uncertain effects

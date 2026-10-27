@@ -1050,8 +1050,9 @@ fn compare_numbers(
     match (integer_number(left), integer_number(right)) {
         (Some(left), Some(right)) => Some(left.cmp(&right)),
         (Some(left), None) => compare_integer_to_float(left, right.as_f64()?),
-        (None, Some(right)) => compare_integer_to_float(right, left.as_f64()?)
-            .map(std::cmp::Ordering::reverse),
+        (None, Some(right)) => {
+            compare_integer_to_float(right, left.as_f64()?).map(std::cmp::Ordering::reverse)
+        }
         (None, None) => {
             let left = left.as_f64()?;
             let right = right.as_f64()?;
@@ -2935,17 +2936,23 @@ mod numeric_minimum_tests {
             Some(serde_json::Number::from(9_007_199_254_740_993_u64)),
         );
         assert!(above_f64_integer_range
-            .validate_value(&Value::Number(serde_json::Number::from(9_007_199_254_740_992_u64)))
+            .validate_value(&Value::Number(serde_json::Number::from(
+                9_007_199_254_740_992_u64
+            )))
             .is_err());
         assert!(above_f64_integer_range
-            .validate_value(&Value::Number(serde_json::Number::from(9_007_199_254_740_993_u64)))
+            .validate_value(&Value::Number(serde_json::Number::from(
+                9_007_199_254_740_993_u64
+            )))
             .is_ok());
 
         let beyond_i64 = schema(
             OutputType::Number,
             Some(serde_json::Number::from(9_223_372_036_854_775_808_u64)),
         );
-        assert!(beyond_i64.validate_value(&Value::Integer(i64::MAX)).is_err());
+        assert!(beyond_i64
+            .validate_value(&Value::Integer(i64::MAX))
+            .is_err());
 
         let mixed_integer_float_minimum = schema(
             OutputType::Number,

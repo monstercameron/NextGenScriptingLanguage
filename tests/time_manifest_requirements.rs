@@ -154,6 +154,43 @@ fn time_format_leaves_dynamic_zones_to_runtime_validation() {
 }
 
 #[test]
+fn time_format_resolved_dynamic_zones_are_validated_at_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    let valid = "accept zone as text with default \"+3600\"\nrun time.format with epoch 0 and format \"%H:%M\" and zone zone\n";
+    let checked = execute(root.path(), "check", valid, false);
+    assert!(
+        checked.status.success(),
+        "valid dynamic zone was rejected statically: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let output = execute(root.path(), "run", valid, false);
+    assert!(
+        output.status.success(),
+        "valid dynamic zone failed at runtime: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "01:00");
+
+    let invalid = "accept zone as text with default \"90000\"\nrun time.format with epoch 0 and format \"%Y\" and zone zone\n";
+    let checked = execute(root.path(), "check", invalid, false);
+    assert!(
+        checked.status.success(),
+        "invalid dynamic zone should be deferred to runtime: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let output = execute(root.path(), "run", invalid, false);
+    assert!(
+        !output.status.success(),
+        "invalid resolved dynamic zone unexpectedly ran"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("zone offset is outside +/-24 hours"),
+        "unexpected runtime diagnostic: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn similarly_named_custom_manifest_does_not_inherit_time_format_zone_rules() {
     let root = tempfile::tempdir().unwrap();
     let manifest_dir = root.path().join("custom-manifests");

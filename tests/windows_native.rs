@@ -3,7 +3,7 @@
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
 };
@@ -37,6 +37,28 @@ fn native(args: &[&str]) -> String {
         serde_json::to_string(args).unwrap()
     )
 }
+fn find_msys_printf(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|path| {
+        path.is_file()
+            && path
+                .parent()
+                .is_some_and(|directory| directory.join("msys-2.0.dll").is_file())
+    })
+}
+fn git_for_windows_printf() -> Option<PathBuf> {
+    let candidates = ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(|key| std::env::var_os(key))
+        .map(|root| Path::new(&root).join("Git/usr/bin/printf.exe"))
+        .chain(
+            std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+                .map(|directory| directory.join("printf.exe")),
+        );
+    find_msys_printf(candidates.collect::<Vec<_>>())
+}
+
 #[test]
 fn native_argv_is_literal_unicode_and_round_trips_windows_quoting() {
     let folder = tempfile::tempdir().unwrap();
@@ -50,6 +72,10 @@ fn native_argv_is_literal_unicode_and_round_trips_windows_quoting() {
         "$(touch forbidden); & | >",
         "--help",
         "a\nb",
+        "x\ny\n",
+        "a\rb",
+        "a\u{b}b",
+        "a\u{c}b",
     ];
     let mut args = vec!["argv"];
     args.extend(values);
@@ -60,6 +86,36 @@ fn native_argv_is_literal_unicode_and_round_trips_windows_quoting() {
         serde_json::json!(values)
     );
     assert!(!folder.path().join("forbidden").exists());
+}
+
+#[test]
+fn git_for_windows_printf_keeps_newline_inside_one_argument() {
+    let git_printf = git_for_windows_printf();
+    let Some(git_printf) = git_printf else {
+        eprintln!("skipping MSYS regression: Git for Windows printf.exe was not found");
+        return;
+    };
+
+    let folder = tempfile::tempdir().unwrap();
+    let source = format!(
+        "run {} with arguments [{}]\n",
+        quoted(git_printf.to_str().unwrap()),
+        quoted("x\ny\n")
+    );
+    let output = invoke(folder.path(), &source, &[]);
+    ok(&output);
+    assert_eq!(output.stdout, b"x\ny\n");
+}
+
+#[test]
+fn msys_printf_lookup_rejects_unrelated_printf_executables() {
+    let folder = tempfile::tempdir().unwrap();
+    let printf = folder.path().join("printf.exe");
+    fs::write(&printf, b"not an executable").unwrap();
+    assert_eq!(find_msys_printf([printf.clone()]), None);
+
+    fs::write(folder.path().join("msys-2.0.dll"), b"MSYS runtime marker").unwrap();
+    assert_eq!(find_msys_printf([printf.clone()]), Some(printf));
 }
 #[test]
 fn direct_byte_pipelines_and_inherited_stdin_preserve_binary_data() {

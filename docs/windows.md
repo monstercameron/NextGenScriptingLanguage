@@ -17,8 +17,9 @@ then parse json as result
 then encode result as json
 ```
 
-Use quoted executable paths or named applet manifests. Arguments are passed
-literally to the executable using Rust's native Windows quoting. `.cmd` and
+Use quoted executable paths or named applet manifests. Arguments are quoted
+with Windows CRT rules, including ASCII whitespace such as line breaks, so the
+argument boundaries are preserved for MSVC and MSYS-family executables. `.cmd` and
 `.bat` are rejected as executable targets because Windows executes them through
 an implicit command shell. Invoke a shell explicitly when its semantics are
 needed; shell code then has that shell's quoting and security properties.

@@ -20,6 +20,43 @@ use windows_sys::Win32::{
     System::{Diagnostics::ToolHelp::*, JobObjects::*, Pipes::*, Threading::*, IO::*},
 };
 
+/// Add arguments with a command-line representation accepted by both the MSVC
+/// CRT and MSYS-family parsers. Rust's default quoting only quotes spaces and
+/// tabs, while MSYS also treats CR/LF/VT/FF as argument separators.
+pub(crate) fn add_arguments<I, S>(command: &mut Command, arguments: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::process::CommandExt;
+
+    for argument in arguments {
+        let units: Vec<u16> = argument.as_ref().encode_wide().collect();
+        let mut quoted = Vec::with_capacity(units.len() + 2);
+        quoted.push(b'"' as u16);
+        let mut slashes = 0usize;
+        for unit in units {
+            match unit {
+                x if x == b'\\' as u16 => slashes += 1,
+                x if x == b'"' as u16 => {
+                    quoted.extend(std::iter::repeat(b'\\' as u16).take(slashes * 2 + 1));
+                    quoted.push(x);
+                    slashes = 0;
+                }
+                x => {
+                    quoted.extend(std::iter::repeat(b'\\' as u16).take(slashes));
+                    quoted.push(x);
+                    slashes = 0;
+                }
+            }
+        }
+        quoted.extend(std::iter::repeat(b'\\' as u16).take(slashes * 2));
+        quoted.push(b'"' as u16);
+        command.raw_arg(std::ffi::OsString::from_wide(&quoted));
+    }
+}
+
 pub(crate) fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }

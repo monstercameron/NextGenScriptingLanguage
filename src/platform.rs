@@ -2,6 +2,7 @@
 use anyhow::Result;
 use std::fs::{Metadata, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{atomic::AtomicBool, Arc};
 
 pub(crate) mod sandbox;
@@ -9,6 +10,20 @@ pub(crate) mod sandbox;
 pub(crate) mod unix_ffi;
 #[cfg(windows)]
 pub(crate) mod windows;
+
+/// Append native arguments without changing their argv boundaries. Windows' default
+/// `Command::args` quoting only quotes spaces and tabs, but some Windows runtimes
+/// (notably MSYS) also split on line breaks and other ASCII whitespace.
+pub(crate) fn add_arguments<I, S>(command: &mut Command, arguments: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    #[cfg(windows)]
+    windows::add_arguments(command, arguments);
+    #[cfg(not(windows))]
+    command.args(arguments);
+}
 
 pub(crate) fn executable_path(path: PathBuf) -> Result<PathBuf> {
     #[cfg(unix)]

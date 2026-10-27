@@ -982,8 +982,9 @@ or booleans; integers become decimal strings and booleans become `true`/`false`
 at the native argv boundary. Named results and declared scalar inputs can supply
 individual items. A declared list of text can supply the complete argument list.
 Nested lists are rejected. An omitted or empty list passes
-zero arguments. Empty strings, spaces, Unicode, newlines, and shell-looking text
-remain exact argument bytes. Executable names must be nonempty literal strings;
+zero arguments. Empty strings, spaces, Unicode, ASCII whitespace (including
+newlines), and shell-looking text remain exact argument bytes. Executable names
+must be nonempty literal strings;
 NUL is forbidden in names and arguments. The runtime does not split a quoted
 command into words, expand globs or `$variables`, insert `--`, or invoke a shell.
 Use the tool's own option rules and a safe format such as `%s` when passing data

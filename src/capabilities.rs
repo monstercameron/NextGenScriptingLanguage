@@ -1419,7 +1419,7 @@ where
             // the registry. Keep their legacy launch path when no strict
             // capability policy is active.
             let mut command = Command::new(binary);
-            command.args(arguments);
+            crate::platform::add_arguments(&mut command, arguments);
             apply_child_environment(registry, applet_name, &mut command, environment)?;
             cwd.apply(&mut command);
             return Ok(command);
@@ -1439,7 +1439,7 @@ where
     validate_environment_backend(manifest)?;
     let Some(policy) = configured.as_ref() else {
         let mut command = Command::new(binary);
-        command.args(arguments);
+        crate::platform::add_arguments(&mut command, arguments);
         apply_child_environment(registry, applet_name, &mut command, environment)?;
         cwd.apply(&mut command);
         return Ok(command);
@@ -1484,7 +1484,7 @@ where
             .map_err(|error| SandboxRefused(format!("{error:#}")))?
     } else {
         let mut command = Command::new(binary);
-        command.args(arguments);
+        crate::platform::add_arguments(&mut command, arguments);
         command
     };
     apply_child_environment(registry, applet_name, &mut command, environment)?;

@@ -182,6 +182,8 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
         let remainder = left
             .checked_rem(right)
             .ok_or_else(|| failed("overflow", "integer arithmetic overflowed"))?;
+        let quotient = from_integer(quotient)?;
+        let remainder = from_integer(remainder)?;
         return Ok(serde_json::json!({"quotient":quotient,"remainder":remainder}));
     }
     if matches!(operation, "number.min" | "number.max") {

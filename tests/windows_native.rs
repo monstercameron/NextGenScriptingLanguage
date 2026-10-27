@@ -841,9 +841,8 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         panic!("ConPTY child did not exit within {timeout:?}");
     }
     let mut status = 0u32;
-    // SAFETY: the process handle is live with a live exit-code out-pointer; the
-    // result is checked before the code is used.
     let exited =
+        // SAFETY: the process handle and exit-code pointer are live; the result is checked.
         unsafe { GetExitCodeProcess(session.process.as_raw_handle() as HANDLE, &mut status) };
     assert!(
         exited != FALSE,

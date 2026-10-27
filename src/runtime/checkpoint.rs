@@ -1063,7 +1063,7 @@ impl Journal {
             node.fingerprint != fingerprint || node.start != start || node.end != end
         });
         if identity_changed && !same_element_node {
-            if let Err(error) = self.reset_elements(fingerprint, start, end) {
+            if let Err(error) = self.reset_elements(fingerprint, start, end, true) {
                 self.data.in_flight = previous_in_flight;
                 self.data.status = previous_status;
                 self.data.error = previous_error;
@@ -1147,7 +1147,7 @@ impl Journal {
         self.preloaded_state = None;
         // The durable snapshot supersedes this node's element log. A crash before
         // this truncation leaves its references intact for the collector to retain.
-        let _ = self.reset_elements("", 0, 0);
+        let _ = self.reset_elements("", 0, 0, false);
         self.collect_unreferenced_blobs();
         Ok(())
     }

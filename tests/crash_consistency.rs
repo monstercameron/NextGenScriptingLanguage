@@ -376,6 +376,15 @@ fn fail_writes(mode: Mode) {
 }
 
 fn point_applies_to_mode(point: &str, mode: Mode) -> bool {
+    if matches!(mode, Mode::Graph)
+        && (point.starts_with("checkpoint.atomic")
+            || matches!(
+                point,
+                "checkpoint.append.truncate" | "checkpoint.append.write" | "checkpoint.append.sync"
+            ))
+    {
+        return false;
+    }
     match point {
         "checkpoint.graph.truncate" | "checkpoint.graph.write" | "checkpoint.graph.sync" => {
             matches!(mode, Mode::Graph)

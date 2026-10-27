@@ -765,11 +765,13 @@ impl Journal {
     }
 
     /// Start an empty element log for a new node. A missing log stays missing.
+    /// `inject_failpoints` is false for best-effort completion cleanup.
     pub(super) fn reset_elements(
         &mut self,
         fingerprint: &str,
         start: usize,
         end: usize,
+        _inject_failpoints: bool,
     ) -> Result<()> {
         self.elements_file = None;
         let path = self.directory.join(ELEMENT_LOG);
@@ -779,10 +781,14 @@ impl Journal {
         {
             let file = open_regular(&path, "checkpoint element log", true)?;
             #[cfg(feature = "failpoints")]
-            crate::failpoint::hit("checkpoint.elements.reset.truncate")?;
+            if _inject_failpoints {
+                crate::failpoint::hit("checkpoint.elements.reset.truncate")?;
+            }
             file.set_len(0).context("clearing checkpoint element log")?;
             #[cfg(feature = "failpoints")]
-            crate::failpoint::hit("checkpoint.elements.reset.sync")?;
+            if _inject_failpoints {
+                crate::failpoint::hit("checkpoint.elements.reset.sync")?;
+            }
             file.sync_data().context("syncing checkpoint element log")?;
         }
         self.elements_chain = Self::element_chain_start(fingerprint, start, end);

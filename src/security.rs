@@ -2182,4 +2182,88 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(DataFlowPolicy::load(&path).is_err());
     }
+
+    /// The joint snapshot/total read must stay consistent while other threads
+    /// are still recording. Separate reads can observe a push in between and
+    /// claim a total past the snapshot's last sequence; the joint read holds
+    /// one lock so the last sequence always equals the total and the window
+    /// stays contiguous.
+    #[test]
+    fn decision_snapshot_with_total_stays_consistent_under_concurrency() {
+        const WRITERS: usize = 8;
+        const PER_WRITER: usize = 200;
+        const READERS: usize = 2;
+        const READS_PER_READER: usize = 500;
+
+        fn assert_consistent(snapshot: &[PolicyDecision], total: u64) {
+            assert!(
+                snapshot.len() <= MAX_DECISION_RECORDS,
+                "window exceeded its bound: {}",
+                snapshot.len()
+            );
+            assert!(
+                snapshot.len() as u64 <= total,
+                "window {} runs past total {total}",
+                snapshot.len()
+            );
+            if snapshot.is_empty() {
+                assert_eq!(total, 0, "empty window must mean an empty log");
+                return;
+            }
+            assert_eq!(
+                snapshot.last().expect("non-empty window").sequence,
+                total,
+                "joint snapshot/total disagreed under concurrency"
+            );
+            assert_eq!(
+                snapshot.first().expect("non-empty window").sequence,
+                total - snapshot.len() as u64 + 1,
+                "window prefix was dropped without lifetime accounting"
+            );
+            for window in snapshot.windows(2) {
+                assert_eq!(
+                    window[1].sequence,
+                    window[0].sequence + 1,
+                    "concurrent snapshot left a sequence gap"
+                );
+            }
+        }
+
+        let registry = Registry::default();
+        std::thread::scope(|scope| {
+            for _ in 0..WRITERS {
+                scope.spawn(|| {
+                    for _ in 0..PER_WRITER {
+                        record_policy_decision(
+                            &registry,
+                            "audit.concurrent",
+                            "effect:text.transform",
+                            None,
+                            PolicyRisk::Low,
+                            PolicyDecisionOutcome::Approved,
+                            PolicyDecisionReason::PolicyMatched,
+                        );
+                    }
+                });
+            }
+            for _ in 0..READERS {
+                scope.spawn(|| {
+                    for _ in 0..READS_PER_READER {
+                        let (snapshot, total) = policy_decisions_with_total(&registry);
+                        assert_consistent(&snapshot, total);
+                    }
+                });
+            }
+        });
+
+        let expected = (WRITERS * PER_WRITER) as u64;
+        let (snapshot, total) = policy_decisions_with_total(&registry);
+        assert_eq!(total, expected, "every concurrent push must be counted");
+        assert_eq!(
+            snapshot.len(),
+            std::cmp::min(total as usize, MAX_DECISION_RECORDS),
+            "the bounded window must keep the newest decisions"
+        );
+        assert_consistent(&snapshot, total);
+    }
 }

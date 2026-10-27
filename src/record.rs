@@ -3220,4 +3220,239 @@ mod policy_audit_tests {
         assert_eq!(report["error"], json!("forged failure"));
         assert_eq!(report["audit_scope"], "policy-decisions-only");
     }
+
+    /// Restores a process environment variable when it goes out of scope, so
+    /// a test that must fail the ambient allowlist cannot leak into parallel
+    /// tests.
+    struct EnvGuard {
+        key: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prior = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, prior }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// A malformed ambient allowlist denies before any child exists, and that
+    /// denial is persisted in a real run record. The raw value never reaches
+    /// the record: the canary proves the audit names the denial without
+    /// carrying the malformed material.
+    #[test]
+    fn malformed_allowlist_denial_is_persisted_to_the_run_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
+        })
+        .unwrap();
+        // The space makes the entry invalid; the loader-sensitive prefix
+        // would also fail. Either way the parser reports a generic reason
+        // without echoing the value.
+        let guard = EnvGuard::set("EXECUTE_CHILD_ENV_ALLOW", "CANARY MALFORMED,ALLOWLIST");
+        let error =
+            crate::capabilities::effective_environment(&registry, "audit.allowlist").unwrap_err();
+        assert!(
+            error.to_string().contains("invalid or loader-sensitive"),
+            "{error:?}"
+        );
+        assert!(!error.to_string().contains("CANARY"), "{error:?}");
+        drop(guard);
+        recorder
+            .finish(&RunSummary {
+                ok: false,
+                exit_status: Some(1),
+                error: Some("capability policy denies environment".to_owned()),
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("CANARY"),
+            "the malformed allowlist value reached the record"
+        );
+        let document = run_document(&directory);
+        let decisions = document["decisions"].as_array().unwrap();
+        let denied = decisions
+            .iter()
+            .find(|decision| {
+                decision["subject"] == "audit.allowlist"
+                    && decision["action"] == "environment.read"
+            })
+            .expect("the malformed allowlist denial is in the persisted log");
+        assert_eq!(denied["outcome"], "denied");
+        assert_eq!(denied["reason"], "capability_not_granted");
+        assert_eq!(denied["risk"], "high");
+        assert_eq!(document["decisions_truncated"], false);
+
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["audit_error"], Value::Null);
+        assert!(
+            report["decisions"].as_array().unwrap().iter().any(|decision| {
+                decision["subject"] == "audit.allowlist"
+                    && decision["outcome"] == "denied"
+                    && decision["reason"] == "capability_not_granted"
+            }),
+            "{report}"
+        );
+    }
+
+    /// An invalid capability policy denies before any grant is consulted, and
+    /// that denial is persisted in a real run record. The validation detail
+    /// stays in the returned error while the audit keeps only the denial
+    /// outcome, so policy material never reaches the record.
+    #[test]
+    fn invalid_policy_denial_is_persisted_to_the_run_record() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        registry.set_host_state(Some(crate::capabilities::CapabilityPolicy {
+            version: crate::capabilities::CAPABILITY_POLICY_VERSION,
+            applets: BTreeMap::new(),
+            host: None,
+            host_environment: BTreeSet::from(["CANARY_INVALID_HOST_ENV!".to_owned()]),
+            deny_privileged: false,
+            allow_wrappers: BTreeSet::new(),
+        }));
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
+        })
+        .unwrap();
+        let error =
+            crate::capabilities::authorize_environment_variable(&registry, "audit.probe", "SOME_VAR")
+                .unwrap_err();
+        assert!(error.to_string().contains("host_environment"), "{error:?}");
+        assert!(!error.to_string().contains("CANARY"), "{error:?}");
+        recorder
+            .finish(&RunSummary {
+                ok: false,
+                exit_status: Some(1),
+                error: Some("capability policy is invalid".to_owned()),
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("CANARY"),
+            "invalid policy material reached the record"
+        );
+        let document = run_document(&directory);
+        let decisions = document["decisions"].as_array().unwrap();
+        let denied = decisions
+            .iter()
+            .find(|decision| {
+                decision["subject"] == "audit.probe" && decision["action"] == "environment.read"
+            })
+            .expect("the invalid-policy denial is in the persisted log");
+        assert_eq!(denied["outcome"], "denied");
+        assert_eq!(denied["reason"], "missing_grant");
+        assert_eq!(denied["risk"], "high");
+
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["audit_error"], Value::Null);
+    }
+
+    /// Pushing past the in-memory window still persists an honest bounded
+    /// audit: the newest decisions survive, the lifetime total accounts for
+    /// the dropped prefix, and the truncated chain still verifies.
+    #[test]
+    fn persisted_audit_over_in_memory_overflow_keeps_newest_and_verifies() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
+        })
+        .unwrap();
+        // Six times the persisted bound also exceeds the larger in-memory
+        // window, so the dropped prefix spans both bounds.
+        for _ in 0..MAX_AUDIT_DECISIONS * 6 {
+            security::record_policy_decision(
+                &registry,
+                "audit.noise",
+                "effect:text.transform",
+                None,
+                PolicyRisk::Low,
+                PolicyDecisionOutcome::Approved,
+                PolicyDecisionReason::PolicyMatched,
+            );
+        }
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let total = security::policy_decision_total(&registry);
+        assert!(
+            total >= (MAX_AUDIT_DECISIONS * 6) as u64,
+            "the lifetime total must count every push, got {total}"
+        );
+        let document = run_document(&directory);
+        let decisions = document["decisions"].as_array().unwrap();
+        assert_eq!(decisions.len(), MAX_AUDIT_DECISIONS);
+        assert_eq!(document["decision_count"].as_u64().unwrap(), total);
+        assert_eq!(document["decisions_truncated"], true);
+        let first = decisions.first().unwrap()["sequence"].as_u64().unwrap();
+        let last = decisions.last().unwrap()["sequence"].as_u64().unwrap();
+        assert_eq!(last, total, "the persisted tail must end at the lifetime total");
+        assert_eq!(
+            first,
+            total - MAX_AUDIT_DECISIONS as u64 + 1,
+            "the persisted tail must be the newest decisions"
+        );
+        for window in decisions.windows(2) {
+            assert_eq!(
+                window[1]["sequence"].as_u64().unwrap(),
+                window[0]["sequence"].as_u64().unwrap() + 1,
+                "the persisted tail must stay contiguous"
+            );
+        }
+        let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
+        assert!(bytes.len() < MAX_RUN_BYTES, "{}", bytes.len());
+
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["decision_count"], total);
+    }
 }

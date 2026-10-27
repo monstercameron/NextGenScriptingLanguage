@@ -30,7 +30,7 @@ use crate::ast::{
 use crate::manifest::{Builtin, Registry};
 use crate::privilege::is_privileged_invocation;
 use anyhow::Result;
-use serde_json::{Value as Json, json};
+use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Protocol identifier of the `--json` object.

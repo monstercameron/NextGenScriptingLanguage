@@ -1,6 +1,6 @@
 //! Runtime state for lexical loop/call exits and `try` cleanup.
 use super::ProgramExit;
-use anyhow::{Context, Error, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Error, Result};
 use std::time::{Duration, Instant};
 
 const CLEANUP_STEP_BUDGET: usize = 16_384;

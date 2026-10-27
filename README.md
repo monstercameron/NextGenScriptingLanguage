@@ -419,7 +419,8 @@ advantage over Bash recorded in `catalog.json`, and a test that runs them all.
 
 ## Performance, with receipts
 
-Execute is not yet faster than Bash at the basics, and optimisation is ongoing. At
+The numeric table below is an earlier eight-case Linux snapshot. In that run, Execute
+was not faster than Bash at the basics. At
 startup, per external command, per pipeline, per megabyte of text or JSON handled by
 its in-process applets (except JSON lookup), in memory and in binary size, Bash is
 ahead, by 2-20% in time. Execute is ahead on a loop of builtin calls, a loop of process
@@ -444,21 +445,24 @@ core-musl-min build). Binary size: Execute 7.48 MB default and 3.50 MB core-musl
 (x86_64), bash 1.45 MB, dash 130 KB. An arm64 runner shows the same pattern. Work to
 close the remaining gaps is tracked in #305.
 
-**Method.** [`tools/bash_compare.py`](tools/bash_compare.py) pairs a bash command line
-with an Execute program that does the same job, gives both the same stdin, and takes the
-median of 20 timed runs after 2 warmups (10 runs for the spawn loop, 5 for the 100 MB
-pipe). Bash runs with `--norc --noprofile`; dash runs only the scenarios that are plain
-`sh`. Execute runs with no `--manifest-dir`, the way an installed binary does. Peak RSS
-comes from GNU `time`. The [`bash-compare.yml`](.github/workflows/bash-compare.yml)
-workflow repeats it on x86_64 and arm64 Linux for every push to `main` and keeps a JSON
-report. The table above is its default release build; since commit `e2c6861` it also
-builds and compares an `opt-level = "s"` variant, a static musl build and a musl build
-with the size-first `min` profile, which this table does not cover. The latest run, not
-this table, is the current state. These are shared runners,
-the medians have no confidence intervals, and the comparison covers neither Omarchy
-scripts, I/O-bound work nor Windows and macOS. The text and JSON rows compare an
-in-process applet with the usual external tool, not like with like.
+**Method.** The [benchmark runner](tools/bash_compare.py) pairs 22 workloads grouped
+as startup, processes, text, files and data. Every shell/runtime arm must pass an exact
+stdout oracle before timing; the small-file scenario also verifies its output tree.
+All 22 workloads have dash counterparts; the here-string case uses an explicit pipeline
+equivalent for its dash arm. The Bash/dash contract test covers the inventory, pairs, and
+shell output oracles.
 
+The default is 2 warmups and 20 measured runs (10 for spawn, 10,000-line and
+command-substitution cases; 5 for the 100 MB pipe and 1 MB capture; 4 for file tests).
+GNU time reports peak
+RSS, and the runner enforces a 285-second end-to-end limit with a 300-second hard cap.
+Each scenario uses temporary input fixtures and fresh output/checkpoint state. CI checks
+the contract and compares every release/profile build on x86_64 and arm64 Linux, saving
+grouped JSON reports. The [expanded macOS arm64 report](benchmarks/bash-compare-macos-arm64-20261027.json)
+contains current 22-scenario medians and raw samples; the table above remains the earlier
+Linux release snapshot. Use the latest grouped workflow report for current Linux values.
+The compared operations use
+natural tools and applets, so these jobs do not isolate interpreter overhead.
 **What it means.** Execute pays a fixed start-up cost (about 0.6 ms over bash here)
 that dominates short programs. It wins where it replaces a process with an in-process
 call. For a program that starts many processes, the work is in those processes, and the

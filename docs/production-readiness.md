@@ -133,10 +133,47 @@ correctness.
 
 ## Performance against Bash and dash
 
-Optimisation is ongoing. Today Execute is 2-20% slower than Bash on startup, on a
-single external command, on pipelines and on uppercase text, at parity on a 100 MB
-pipe, uses more memory at startup and has a larger binary. It is ahead on a loop of
-builtin calls, a loop of process spawns and a JSON pointer lookup.
+The expanded suite has a local diagnostic run on macOS arm64. It completed all 22
+scenarios in 111.161 seconds. Execute was faster on three scenarios (uppercase 1 MB,
+10,000-line processing and 1 MB output capture) and slower on the other 19.
+These are job-level comparisons, not a general interpreter-speed claim.
+
+Measured 2026-10-27 on macOS 26.6.2 arm64, using the default release executable built
+from Rust source commit `d86b7ca4`, explicit `manifests`, Python 3.9.6, two warmups and
+20 samples by default (scenario-specific reductions are in the runner). The executable
+SHA-256 is `54c1874744ab78b2998984d868d2abee5e6f13e6b51d3a3d8268d7e17d949929`. GNU
+time was unavailable on this host, so this run contains no peak-RSS data. The
+[raw per-run report](../benchmarks/bash-compare-macos-arm64-20261027.json) retains
+individual timings, host details, and executable/runner hashes.
+
+| Group | Scenario | bash ms | dash ms | Execute ms | Execute / bash |
+| --- | --- | ---: | ---: | ---: | ---: |
+| startup | startup (no work) | 2.52 | 2.18 | 10.90 | 4.32x |
+| startup | checkpoint creation for a 100-step loop | 3.42 | 2.54 | 169.22 | 49.45x |
+| processes | one external command | 3.97 | 3.53 | 12.31 | 3.10x |
+| processes | 5-stage pipeline | 6.20 | 5.56 | 13.78 | 2.22x |
+| processes | 1000-iteration builtin loop | 7.13 | 4.97 | 11.93 | 1.67x |
+| processes | 100-spawn loop | 50.24 | 46.35 | 129.21 | 2.57x |
+| processes | uppercase 1 MB (tr vs text.upper) | 45.35 | 45.19 | 11.68 | 0.26x |
+| processes | JSON pointer lookup (jq vs json.get) | 9.67 | 9.00 | 13.81 | 1.43x |
+| processes | 100 MB through a pipe | 26.54 | 25.82 | 34.21 | 1.29x |
+| processes | command substitution in a 1,000-iteration loop | 466.55 | 404.01 | 1335.61 | 2.86x |
+| processes | capture 1 MB command output | 33.66 | 8.58 | 13.49 | 0.40x |
+| text | while read 10,000 lines | 166.15 | 83.58 | 11.63 | 0.07x |
+| text | grep/cut/sort/uniq chain | 6.51 | 5.89 | 14.27 | 2.19x |
+| text | parameter suffix removal | 2.70 | 2.26 | 11.07 | 4.09x |
+| text | here-string scalar input | 3.00 | 2.93 | 11.02 | 3.67x |
+| text | string split and rejoin | 2.72 | 2.29 | 11.00 | 4.04x |
+| files | glob count over 1,000 files and one matching directory | 5.61 | 3.82 | 11.94 | 2.13x |
+| files | file-test every match in a 1,000-file glob | 9.64 | 6.11 | 16.69 | 1.73x |
+| files | find piped to xargs | 411.12 | 412.24 | 420.65 | 1.02x |
+| files | write 100 small files | 69.88 | 60.89 | 1216.77 | 17.41x |
+| data | parse a 1,000-row CSV file | 6.41 | 5.94 | 11.28 | 1.76x |
+| data | environment variable selection | 5.20 | 4.99 | 13.80 | 2.65x |
+
+Historical eight-scenario snapshot from Linux x86_64 GitHub-hosted runners follows; it is
+kept for its original platform and source context, and is separate from the expanded local
+measurement above.
 
 Measured on Linux x86_64 GitHub-hosted runners (Ubuntu 24.04, CI run 39133435292 at commit `7320bb6`),
 default lean build, default manifest path, medians in milliseconds:
@@ -157,32 +194,41 @@ for the static core-musl-min build). Binary size is 7.48 MB for the default x86_
 build and 3.50 MB for core-musl-min, 1.45 MB for bash and 130 KB for dash. The arm64
 runner shows the same pattern. Remaining gaps are tracked in #305.
 
-How it is measured. [`tools/bash_compare.py`](../tools/bash_compare.py) pairs a bash
-command line with an Execute program that does the same job and gives both the same
-stdin file. Wall time is taken around each process from Python, with stdout discarded.
-Each scenario runs 2 warmups and then 20 timed runs (10 for the spawn loop and 5 for
-the 100 MB pipe), and the report is the median. Bash runs as
-`bash --norc --noprofile -c`; dash runs `dash -c` only for scenarios that are plain
-`sh`, which excludes the two loops (they use bash arithmetic loops). Execute runs
-`execute run FILE` with no `--manifest-dir`, so it takes the default manifest
-path an installed binary uses, including the bundled index. A run that exits nonzero
-fails the comparison. Peak RSS comes from GNU `/usr/bin/time -f %M` (the maximum of
-three runs), because `wait4` from Python reports the parent's high-water mark. The
-[`bash-compare.yml`](../.github/workflows/bash-compare.yml) workflow runs it for every
-push to `main`, on `ubuntu-24.04` and `ubuntu-24.04-arm`, and keeps a JSON report. The
-table above is the default release build. Since commit `e2c6861` the workflow also builds
-and compares an `opt-level = "s"` variant, a static musl build and a musl build with the
-size-first `min` profile; those results are in the workflow runs, not in this table.
+How it is measured. [tools/bash_compare.py](../tools/bash_compare.py) pairs 22
+workloads in the startup, processes, text, files and data groups. Each scenario has an
+independent exact-stdout oracle; the 100-file writer also checks the complete output
+tree, including the applet's lock files. Bash and Execute receive the same named stdin
+fixture where applicable. The file fixture contains 1,000 regular `.dat` files and a
+matching directory: glob-count returns 1,001 entries, while file-test counts 1,000
+regular files. The glob-count Execute arm encodes and reparses `fs.glob`'s
+`list<text>` result because `list.count` currently accepts only generic JSON lists; that
+adapter work is included in its timing. A preflight runs every shell/runtime arm and rejects
+status or output mismatches before timing. The Python contract test checks the inventory,
+all 22 Bash/dash pairs and all shell output oracles. The here-string case uses an explicit
+pipeline equivalent for the dash arm.
 
-What it does not show. The pairs use each runtime's natural tool (`tr` and `jq`
-against in-process applets), so they compare jobs, not one tool. The runners are shared
-machines, files are warm in the page cache, and the 20-run medians have no confidence
-intervals, so differences of a few percent are within noise. It does not measure
-Omarchy scripts, network or disk-bound work, or Windows and macOS. Numbers change as
-optimisation lands; read the latest workflow run, not this table, for the current
-state. The measurements that predate this comparison, with their own methods and
-boundaries, are indexed in [benchmarks/README.md](../benchmarks/README.md).
-
+Each timed scenario has 2 warmups and 20 samples (10 for the spawn, 10,000-line,
+command-substitution cases; 5 for the 100 MB pipe and 1 MB capture; 4 for the 1,000-file
+file-test case), reported as medians.
+Bash uses --norc --noprofile; dash runs for all 22 scenarios. Execute runs
+execute run FILE with the workflow's explicit manifest directory. Peak RSS uses GNU
+/usr/bin/time -f %M, at most three runs per arm, with the same temporary working
+directory and fresh output/checkpoint fixtures. Every child has a 30-second timeout and
+the harness stops at a 285-second end-to-end budget (hard maximum 300 seconds).
+[bash-compare.yml](../.github/workflows/bash-compare.yml) runs the workload-contract
+test and comparison for each release/profile variant on ubuntu-24.04 and
+ubuntu-24.04-arm, retaining a grouped JSON report. The local macOS expanded table above
+is diagnostic; the Linux eight-scenario table below is a historical snapshot. The
+latest Linux workflow artifacts remain the source for per-profile CI results.
+What it does not show. The pairs use each runtime's natural operation, so they compare
+jobs rather than isolating interpreter overhead. The runners are shared machines, files
+are warm in the page cache, and the 20-run medians have no confidence intervals; small
+differences are within noise. The 100 MB case checks the byte count through a pipe; the
+1 MB case compares command substitution with a captured Execute binding. The checkpoint
+case compares checkpoint creation for a finite Execute loop with shell recomputation.
+These workloads do not measure Omarchy scripts, network or disk-bound work, Windows or
+macOS. Read the latest workflow run for current results; other retained measurements and
+their boundaries are indexed in [benchmarks/README.md](../benchmarks/README.md).
 ## Research and evidence
 
 These pages hold the supporting write-ups. They apply to their recorded versions.

@@ -32,6 +32,8 @@ jobs:
         with:
           key: ${{ matrix.variant }}
       - run: sudo apt-get install -y --no-install-recommends time strace musl-tools
+      - name: Check benchmark workload contracts
+        run: python3 -m unittest tests/test_bash_compare.py -v
       - name: Build
         env:
           VARIANT: ${{ matrix.variant }}
@@ -48,7 +50,8 @@ jobs:
           echo "EXECUTE_BIN=$bin" >> "$GITHUB_ENV"
       - run: bash --version | head -1 && jq --version && ls -l /usr/bin/dash "$EXECUTE_BIN"
       - name: Compare
-        run: python3 tools/bash_compare.py "$EXECUTE_BIN" --manifest-dir manifests --json-out target/bash-compare.json
+        timeout-minutes: 5
+        run: python3 tools/bash_compare.py "$EXECUTE_BIN" --manifest-dir manifests --max-runtime-seconds 285 --json-out target/bash-compare.json
       # Where the startup time goes, for the optimisation lanes: syscalls, the
       # dynamic loader's own cost, and the binary's sections.
       - name: Profile startup

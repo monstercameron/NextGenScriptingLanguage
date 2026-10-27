@@ -1,10 +1,10 @@
-# Benchmark results index — October 17, 2026
+# Benchmark results index — October 27, 2026
 
 These reports cover separate, source-pinned workloads and timing boundaries. Read each report for its platform, paired samples, and retained losses. The results are not combined into an overall speedup or readiness claim.
 
 | Measurement | Result | Scope and status |
 | --- | --- | --- |
-| [Execute against bash and dash](#execute-against-bash-and-dash) | Execute is slower than bash in six of eight scenarios, uses more memory and has a larger binary; it is faster on a 1,000-iteration builtin loop and, marginally, on a 100-spawn loop. | Linux x86_64 and arm64 GitHub runners, default lean build, measured by `tools/bash_compare.py` on every push to `main`. Optimisation is ongoing. |
+| [Execute against bash and dash](#execute-against-bash-and-dash) | The expanded local [macOS arm64 report](bash-compare-macos-arm64-20261027.json) retains raw samples for 22 scenarios; the eight-case table is a historical snapshot. | Linux x86_64 and arm64 workflow reports contain current per-profile results from tools/bash_compare.py. Optimisation is ongoing. |
 | [`recv_any`, hosted Linux](graph-recv-any-ci-38851233022/README.md) | 288/288 paired comparisons favored the candidate. | Preloaded bounded-queue `NodeIo::recv_any` on x86_64 Linux; this does not measure whole-graph or end-to-end execution. |
 | [`emit`, local macOS and hosted Linux](graph-emit-paired-macos-linux-20261016/README.md) | macOS: three case ratios favored the candidate; `fanout_8_integer` regressed about 2.0% (median paired ratio 1.02012; 21 wins/27 losses). Linux: all four case ratios were below 1.0. Overall, 52/192 macOS and 19/192 Linux comparisons lost. | Separate ARM64 macOS and x86_64 Linux `NodeIo::emit` runs. Platform results remain separate. |
 | [Named receive operations, local macOS](graph-named-recv-macos-arm64-20261016/README.md) | 566 improvements and 10 losses across 576 paired comparisons. | Preloaded bounded-queue `recv` and zero-duration `recv_timeout`; in-process operation only. |
@@ -23,27 +23,30 @@ Pair counts, ratios, and deltas use each report's stated denominator. Do not sum
 
 ## Execute against bash and dash
 
-`tools/bash_compare.py` pairs a bash command line with an Execute program that does the
-same job, feeds both the same stdin, and reports the median wall time, the peak resident
-set size and the binary sizes. The `bash-compare.yml` workflow runs it for every push to
-`main` on `ubuntu-24.04` and `ubuntu-24.04-arm` and writes the table to the job summary
-and a JSON artifact. Each run builds four variants: the default release build (the one the
-published table uses), an `opt-level = "s"` build, a static musl build and a musl build
-with the size-first `min` profile. The headline table, with its method and limits, is in the
-[README](../README.md#performance-with-receipts) and under
-[Performance against Bash and dash](../docs/production-readiness.md#performance-against-bash-and-dash)
-in the production gates. Run it yourself with a release build of the default feature set:
+The tools/bash_compare.py runner pairs 22 Bash/Execute workloads in startup,
+processes, text, files and data groups. Every available shell/runtime arm must pass an
+exact stdout oracle before timing; the file-writing case checks the complete output
+tree. All 22 workloads have dash counterparts; the here-string case uses an explicit
+pipeline equivalent for its dash arm. The tests/test_bash_compare.py contract test checks
+the inventory, grouping and shell oracles.
 
-```sh
+The bash-compare.yml workflow runs the contract test and then compares all configured
+release/profile variants on ubuntu-24.04 and ubuntu-24.04-arm. The report includes
+scenario group, medians, peak RSS when GNU time is available, and binary sizes. Defaults
+are two warmups and twenty samples, with fewer samples for the larger workloads. A
+285-second end-to-end budget (300-second maximum) bounds each run. Scenarios that write
+files or checkpoint state reset their temporary outputs between invocations. Each report
+is an artifact output from CI; README keeps the earlier eight-case Linux snapshot, while
+production-readiness adds the expanded local result and retains that Linux table as history.
+
+Run with a release build of the default feature set:
 cargo build --locked --release --bin execute
-python3 tools/bash_compare.py target/release/execute --json-out target/bash-compare.json
-```
+python3 tools/bash_compare.py target/release/execute --manifest-dir manifests --json-out target/bash-compare.json
 
-It needs `bash`, `jq` (the JSON scenario is skipped without it), GNU `time` at
-`/usr/bin/time` (for peak RSS) and, optionally, `dash`. `--runs`, `--warmup` and `--only`
-select repetitions and scenarios; `--require-win` exits 1 when Execute loses any
-scenario, and CI does not pass it. Do not run it while building or testing, and compare
-numbers within one run rather than across runs on shared runners.
+The workflow supplies jq and GNU time; dash is optional in local runs. The harness has a
+validate-only mode for checking output and filesystem oracles without collecting timing
+samples. Do not run it while building or testing, and compare timing results within one
+run rather than across shared runners.
 
 ## Earlier benchmark records (preserved)
 

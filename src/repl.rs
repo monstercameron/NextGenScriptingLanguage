@@ -138,9 +138,10 @@ pub struct Session<'a> {
     source: String,
     steps: Vec<SessionStep>,
     observer: Arc<SessionObserver>,
-    history: Vec<(String, Vec<SessionStep>, BTreeMap<String, &'static str>)>,
+    history: Vec<(String, Vec<SessionStep>, BTreeMap<String, &'static str>, Vec<u8>)>,
     machine_protocol: bool,
     binding_types: BTreeMap<String, &'static str>,
+    last_output: Vec<u8>,
 }
 
 /// What one submitted block did.
@@ -162,6 +163,7 @@ impl<'a> Session<'a> {
             history: Vec::new(),
             machine_protocol: false,
             binding_types: BTreeMap::new(),
+            last_output: Vec::new(),
         }
     }
 
@@ -212,8 +214,9 @@ impl<'a> Session<'a> {
         let fresh = self.observer.finish();
         match result {
             Ok(run_result) => {
-                self.history.push((self.source.clone(), self.steps.clone(), self.binding_types.clone()));
+                self.history.push((self.source.clone(), self.steps.clone(), self.binding_types.clone(), self.last_output.clone()));
                 self.binding_types = run_result.binding_types;
+                self.last_output = run_result.output;
                 self.source = candidate;
                 self.steps.extend(fresh);
                 Ok(BlockOutcome::Ran)
@@ -229,10 +232,11 @@ impl<'a> Session<'a> {
             bail!("undo count must be between 1 and {}", self.history.len());
         }
         for _ in 0..blocks {
-            let (source, steps, binding_types) = self.history.pop().expect("validated history length");
+            let (source, steps, binding_types, last_output) = self.history.pop().expect("validated history length");
             self.source = source;
             self.steps = steps;
             self.binding_types = binding_types;
+            self.last_output = last_output;
         }
         Ok(())
     }
@@ -260,7 +264,7 @@ impl<'a> Session<'a> {
             self.registry,
             crate::agent::explain::explain_json(&program, self.registry, &plan_path)?,
         )?;
-        self.history.push((self.source.clone(), self.steps.clone(), self.binding_types.clone()));
+        self.history.push((self.source.clone(), self.steps.clone(), self.binding_types.clone(), self.last_output.clone()));
         self.source = candidate;
         Ok(serde_json::json!({"status":"planned", "plan":plan}))
     }
@@ -269,12 +273,13 @@ impl<'a> Session<'a> {
     /// characters of the value its statement last produced.
     pub fn bindings(&self) -> Result<Vec<(String, String)>> {
         let program = crate::parser::parse(&self.source)?;
+        let redactor = crate::security::secret_redactor(self.registry);
         Ok(top_level_bindings(&program)
             .into_iter()
             .map(|(line, name, kind)| {
                 let value = self.steps.iter().rev().find(|step| step.line == line)
                     .map(|step| match kind {
-                        BindingPreview::Output => preview(&step.result.stdout),
+                        BindingPreview::Output => preview(&redactor.redact_bytes(&step.result.stdout)),
                         BindingPreview::Status => step.result.status.map(|status| status.to_string()).unwrap_or_else(|| "(no status)".into()),
                         BindingPreview::Result => "(execution result)".into(),
                     })
@@ -288,6 +293,10 @@ impl<'a> Session<'a> {
     /// retained by the session protocol.
     pub fn binding_types(&self) -> &BTreeMap<String, &'static str> {
         &self.binding_types
+    }
+
+    pub fn last_output(&self) -> &[u8] {
+        &self.last_output
     }
 
     /// The explain text for the accumulated program.
@@ -486,10 +495,10 @@ pub fn run_json(
                     }
                     BlockOutcome::Ran => {
                         let fresh = &session.steps[before..];
-                        let mut stdout = Vec::new(); let mut stderr = Vec::new(); let mut exit = 0;
-                        for step in fresh { stdout.extend_from_slice(&step.result.stdout); stderr.extend_from_slice(&step.result.stderr); if let Some(code) = step.result.status { exit = code; } }
+                        let mut stderr = Vec::new(); let mut exit = 0;
+                        for step in fresh { stderr.extend_from_slice(&step.result.stderr); if let Some(code) = step.result.status { exit = code; } }
                         let redactor = crate::security::secret_redactor(session.registry);
-                        let stdout = String::from_utf8_lossy(&redactor.redact_bytes(&stdout)).into_owned();
+                        let stdout = String::from_utf8_lossy(&redactor.redact_bytes(session.last_output())).into_owned();
                         let stderr = String::from_utf8_lossy(&redactor.redact_bytes(&stderr)).into_owned();
                         let types = session.binding_types().clone();
                         let bindings = session.bindings()?.into_iter().map(|(name, preview)| { let kind = types.get(&name).copied().unwrap_or("unknown"); (name, serde_json::json!({"type":kind,"preview":redactor.redact_text(&preview)})) }).collect::<serde_json::Map<_,_>>();

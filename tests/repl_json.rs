@@ -9,9 +9,11 @@ fn json_repl_returns_one_response_per_request_and_reports_block_spans() {
     std::fs::create_dir(&manifests).unwrap();
     let manifest = serde_json::json!({
         "name":"ok.helper", "binary":env!("CARGO_BIN_EXE_execute-model"),
-        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"--version"}]
+        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"--version"}],
+        "contract":{"version":1,"output":{"type":"text","encoding":"raw"}}
     });
     std::fs::write(manifests.join("ok.helper.json"), manifest.to_string()).unwrap();
+    std::fs::write(directory.path().join("notes.txt"), "from-read").unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--manifest-dir"])
         .arg(manifests)
@@ -21,19 +23,23 @@ fn json_repl_returns_one_response_per_request_and_reports_block_spans() {
     let mut input = child.stdin.take().unwrap();
     writeln!(input, "{{\"submit\":\"run ok.helper as value and keep status as exit_code\"}}").unwrap();
     writeln!(input, "{{\"submit\":\"run missing.helper\"}}").unwrap();
+    writeln!(input, "{{\"submit\":\"use value \\\"from-use-value\\\"\"}}").unwrap();
+    writeln!(input, "{{\"submit\":\"read file \\\"notes.txt\\\"\"}}").unwrap();
     writeln!(input, "{{\"source\":true}}").unwrap();
     drop(input);
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let responses = String::from_utf8(output.stdout).unwrap().lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
-    assert_eq!(responses.len(), 3);
-    assert_eq!(responses[0]["status"], "ran");
+    assert_eq!(responses.len(), 5);
+    assert_eq!(responses[0]["status"], "ran", "{responses:?}");
     assert_eq!(responses[0]["bindings"]["value"]["type"], "string");
     assert_eq!(responses[0]["bindings"]["exit_code"]["type"], "integer");
     assert_eq!(responses[1]["status"], "rejected");
     assert!(responses[1]["diagnostics"][0]["span"]["block"].is_object());
-    assert_eq!(responses[2]["source"], "run ok.helper as value and keep status as exit_code\n");
+    assert_eq!(responses[2]["stdout"], "from-use-value");
+    assert_eq!(responses[3]["stdout"], "from-read");
+    assert_eq!(responses[4]["source"], "run ok.helper as value and keep status as exit_code\nuse value \"from-use-value\"\nread file \"notes.txt\"\n");
 }
 
 #[test]
@@ -80,8 +86,8 @@ fn five_step_session_repairs_rejection_saves_checks_and_matches_output() {
     // The rejection is intentionally partway through the session. The following
     // valid block repairs it; five valid statements end up in the saved source.
     let requests = [
-        r#"{"submit":"run ok.helper as true"}"#,
         r#"{"submit":"run ok.helper as first"}"#,
+        r#"{"submit":"run ok.helper as true"}"#,
         r#"{"submit":"run ok.helper as second"}"#,
         r#"{"submit":"run ok.helper as third"}"#,
         r#"{"submit":"run ok.helper as fourth"}"#,
@@ -94,7 +100,7 @@ fn five_step_session_repairs_rejection_saves_checks_and_matches_output() {
     assert!(repl_output.status.success(), "{}", String::from_utf8_lossy(&repl_output.stderr));
     let responses = parse_lines(&repl_output.stdout);
     assert_eq!(responses.len(), 7);
-    assert_eq!(responses[0]["status"], "ran");
+    assert_eq!(responses[0]["status"], "ran", "{responses:?}");
     assert_eq!(responses[1]["status"], "rejected");
     assert!(responses[1]["diagnostics"][0]["span"]["block"].is_object());
     assert_eq!(responses[2]["status"], "ran");
@@ -122,7 +128,7 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
-    let secret = "repl-protocol-secret-value";
+    let secret = "repl-protocol-secret-value-that-is-well-over-sixty-characters-and-would-leak-with-a-prefix";
     let (binary, arguments) = if cfg!(windows) {
         ("cmd", serde_json::json!([{"literal":"/c"},{"literal":"echo %REPL_SECRET%"}]))
     } else {
@@ -130,7 +136,7 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
     };
     let manifest = serde_json::json!({
         "name":"secret.echo", "binary":binary, "arguments":arguments,
-        "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":{"REPL_SECRET":secret}}}
+        "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":{"REPL_SECRET":secret}},"output":{"type":"text","encoding":"raw"}}
     });
     std::fs::write(manifests.join("secret.echo.json"), manifest.to_string()).unwrap();
     let policy = directory.path().join("policy.json");
@@ -159,8 +165,10 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let responses = parse_lines(&output.stdout);
     assert_eq!(responses.len(), 8);
-    assert_eq!(responses[0]["status"], "ran");
-    let expected_stdout = if cfg!(windows) { "[REDACTED]\r\n" } else { "[REDACTED]" };
+    assert_eq!(responses[0]["status"], "ran", "{responses:?}");
+    // A typed binding consumes applet stdout; it is exposed only as a redacted
+    // binding preview, not as terminal stdout.
+    let expected_stdout = "";
     assert_eq!(responses[0]["stdout"], expected_stdout);
     assert_eq!(responses[0]["bindings"]["secret_value"]["type"], "string");
     assert_eq!(responses[1]["status"], "ok");
@@ -179,6 +187,7 @@ fn oversized_request_is_rejected_and_the_next_line_is_still_processed() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
+    write_version_manifest(&manifests);
     let mut child = repl_child(directory.path(), &manifests, false);
     let mut input = child.stdin.take().unwrap();
     input.write_all(&vec![b' '; 1024 * 1024 + 1]).unwrap();
@@ -195,7 +204,8 @@ fn oversized_request_is_rejected_and_the_next_line_is_still_processed() {
 fn write_version_manifest(manifests: &std::path::Path) {
     let manifest = serde_json::json!({
         "name":"ok.helper", "binary":env!("CARGO_BIN_EXE_execute-model"),
-        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"--version"}]
+        "accepts_stdin":false, "parameters":{}, "arguments":[{"literal":"--version"}],
+        "contract":{"version":1,"output":{"type":"text","encoding":"raw"}}
     });
     std::fs::write(manifests.join("ok.helper.json"), manifest.to_string()).unwrap();
 }

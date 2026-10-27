@@ -235,12 +235,7 @@ impl WatchedChild {
 /// file poll, this also watches the run: when the child exits first, the wait
 /// fails at once with its status and output instead of burning the budget
 /// after a dead run.
-fn wait_for_marker(
-    watched: &WatchedChild,
-    path: &Path,
-    what: &str,
-    diagnose: &dyn Fn() -> String,
-) {
+fn wait_for_marker(watched: &WatchedChild, path: &Path, what: &str, diagnose: &dyn Fn() -> String) {
     let deadline = Instant::now() + MARKER_BUDGET;
     while !path.exists() {
         if let Some(status) = watched.poll_exit() {
@@ -308,7 +303,12 @@ fn wait_for_exit(watched: &WatchedChild, limit: Duration) -> Option<RunEnd> {
 /// gone, and whether a kill could have missed it.
 fn process_snapshot(pid: u32) -> String {
     let mut child = match Command::new("ps")
-        .args(["-o", "pid,ppid,pgid,sid,stat,command", "-p", &pid.to_string()])
+        .args([
+            "-o",
+            "pid,ppid,pgid,sid,stat,command",
+            "-p",
+            &pid.to_string(),
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -517,10 +517,18 @@ fn single_interrupt_still_runs_on_exit_cleanup() {
     wait_for_marker(&watched, &started, "its main sleep", &diagnose);
     interrupt(&watched);
     let Some(end) = wait_for_exit(&watched, EXIT_BUDGET) else {
-        abort_stuck(&watched, &diagnose, "a single interrupt never finished cleanup")
+        abort_stuck(
+            &watched,
+            &diagnose,
+            "a single interrupt never finished cleanup",
+        )
     };
     let RunEnd::Exited(status) = end else {
-        abort_stuck(&watched, &diagnose, "the run is gone without reporting a status")
+        abort_stuck(
+            &watched,
+            &diagnose,
+            "the run is gone without reporting a status",
+        )
     };
     let stderr = drain_stderr(&watched);
     watched.finish();
@@ -662,9 +670,8 @@ impl PtyDrain {
                     while !stop.load(Ordering::SeqCst) {
                         // SAFETY: chunk is a live buffer of its length; the
                         // reader is the nonblocking dup owned by this thread.
-                        let read = unsafe {
-                            libc::read(reader, chunk.as_mut_ptr().cast(), chunk.len())
-                        };
+                        let read =
+                            unsafe { libc::read(reader, chunk.as_mut_ptr().cast(), chunk.len()) };
                         if read > 0 {
                             if let Ok(mut output) = output.lock() {
                                 output.extend_from_slice(&chunk[..read as usize]);

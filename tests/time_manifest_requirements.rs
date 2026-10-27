@@ -106,9 +106,7 @@ fn complete_time_calls_check_and_run_with_optional_zone() {
 fn time_format_checks_literal_zones_against_runtime_domain() {
     let root = tempfile::tempdir().unwrap();
     for zone in ["utc", "local", "+3600", "-3600", "86399", "-86399", "+0001"] {
-        let source = format!(
-            "run time.format with epoch 0 and format \"%Y\" and zone {zone:?}\n"
-        );
+        let source = format!("run time.format with epoch 0 and format \"%Y\" and zone {zone:?}\n");
         let result = execute(root.path(), "check", &source, false);
         assert!(
             result.status.success(),
@@ -125,14 +123,9 @@ fn time_format_checks_literal_zones_against_runtime_domain() {
         "2147483648",
         " 3600",
     ] {
-        let source = format!(
-            "run time.format with epoch 0 and format \"%Y\" and zone {zone:?}\n"
-        );
+        let source = format!("run time.format with epoch 0 and format \"%Y\" and zone {zone:?}\n");
         let result = execute(root.path(), "check", &source, false);
-        assert!(
-            !result.status.success(),
-            "accepted invalid zone {zone:?}"
-        );
+        assert!(!result.status.success(), "accepted invalid zone {zone:?}");
         assert!(
             String::from_utf8_lossy(&result.stderr).contains("valid signed offset"),
             "unexpected diagnostic for {zone:?}: {}",

@@ -6,7 +6,10 @@
 #[cfg(test)]
 use super::shared::escaped_length;
 use super::shared::{check_size_and_depth, escaped_length_checked, number_length};
-use super::{absence, checkpoint_work, invalid, required_string, AppletError, ExecutionContext};
+use super::{
+    absence, checkpoint_work, invalid, optional_bool, required_string, AppletError,
+    ExecutionContext,
+};
 use crate::ast::Value as TypedValue;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -771,10 +774,7 @@ pub(super) fn sort_by(
         return Err(invalid("JSON array exceeds the 100000 item limit"));
     }
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
-    let numeric = args
-        .get("numeric")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let numeric = optional_bool(args, "numeric", false)?;
     let mut items = array.clone();
     for (index, item) in items.iter().enumerate() {
         checkpoint_work(context, index)?;

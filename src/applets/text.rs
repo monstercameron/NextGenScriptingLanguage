@@ -1,4 +1,6 @@
-use super::{checkpoint_work, invalid, required_string, AppletError, ExecutionContext};
+use super::{
+    checkpoint_work, invalid, optional_string, required_string, AppletError, ExecutionContext,
+};
 use serde_json::{Map, Value};
 
 const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
@@ -339,7 +341,7 @@ pub(super) fn shape(
                 .and_then(Value::as_u64)
                 .ok_or_else(|| invalid("args.width must be a nonnegative integer"))?
                 as usize;
-            let ellipsis = args.get("ellipsis").and_then(Value::as_str).unwrap_or("…");
+            let ellipsis = optional_string(args, "ellipsis", "…")?;
             let chars = text.chars().collect::<Vec<_>>();
             if chars.len() <= width {
                 return Ok(Value::String(text.to_owned()));
@@ -413,8 +415,8 @@ pub(super) fn shape(
                 .and_then(Value::as_u64)
                 .ok_or_else(|| invalid("args.width must be a nonnegative integer"))?
                 as usize;
-            let side = args.get("side").and_then(Value::as_str).unwrap_or("right");
-            let fill = args.get("fill").and_then(Value::as_str).unwrap_or(" ");
+            let side = optional_string(args, "side", "right")?;
+            let fill = optional_string(args, "fill", " ")?;
             let fill_chars = fill.chars().collect::<Vec<_>>();
             if fill_chars.is_empty() {
                 return Err(invalid("args.fill cannot be empty"));

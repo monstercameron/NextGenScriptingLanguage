@@ -1,4 +1,4 @@
-use super::{invalid, required_string, AppletError, ExecutionContext};
+use super::{invalid, optional_string, required_string, AppletError, ExecutionContext};
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 use serde_json::{Map, Number, Value};
 use std::fmt::Write as _;
@@ -23,10 +23,7 @@ pub(super) fn run(
         "time.format" => {
             let epoch = integer(args, "epoch")?;
             let format = required_string(args, "format")?;
-            let dt = at_epoch(
-                epoch,
-                args.get("zone").and_then(Value::as_str).unwrap_or("utc"),
-            )?;
+            let dt = at_epoch(epoch, optional_string(args, "zone", "utc")?)?;
             // Chrono reports invalid or unsupported directives through fmt::Error.
             // Display::to_string panics on that error; write into a String fallibly.
             let mut output = String::new();

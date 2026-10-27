@@ -358,6 +358,48 @@ pub(crate) fn required_string<'a>(
         .ok_or_else(|| AppletError::invalid(format!("args.{name} must be a string")))
 }
 
+/// Read an optional string, defaulting only when the field is absent.
+pub(crate) fn optional_string<'a>(
+    args: &'a Map<String, Value>,
+    name: &str,
+    default: &'a str,
+) -> Result<&'a str, AppletError> {
+    match args.get(name) {
+        None => Ok(default),
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| invalid(format!("args.{name} must be a string"))),
+    }
+}
+
+/// Read an optional boolean, defaulting only when the field is absent.
+pub(crate) fn optional_bool(
+    args: &Map<String, Value>,
+    name: &str,
+    default: bool,
+) -> Result<bool, AppletError> {
+    match args.get(name) {
+        None => Ok(default),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| invalid(format!("args.{name} must be a boolean"))),
+    }
+}
+
+/// Read an optional unsigned integer, defaulting only when the field is absent.
+pub(crate) fn optional_u64(
+    args: &Map<String, Value>,
+    name: &str,
+    default: u64,
+) -> Result<u64, AppletError> {
+    match args.get(name) {
+        None => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| invalid(format!("args.{name} must be a nonnegative integer"))),
+    }
+}
+
 pub(crate) fn io_error(error: std::io::Error, context: impl fmt::Display) -> AppletError {
     if error.kind() == std::io::ErrorKind::NotFound {
         AppletError::absence("not_found", format!("{context}: {error}"))

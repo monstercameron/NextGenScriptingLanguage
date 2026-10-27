@@ -1,4 +1,4 @@
-use super::{invalid, required_string, AppletError, ExecutionContext};
+use super::{invalid, optional_u64, required_string, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::Path;
@@ -19,6 +19,17 @@ pub(super) fn run(
     }
 }
 fn sleep(args: &Map<String, Value>, context: &ExecutionContext<'_>) -> Result<Value, AppletError> {
+    // Validate supplied JSON types without changing the existing precedence or
+    // the fallback from a negative milliseconds value to valid seconds.
+    if args
+        .get("milliseconds")
+        .is_some_and(|value| !value.is_i64() && !value.is_u64())
+    {
+        return Err(invalid("args.milliseconds must be an integer"));
+    }
+    if args.get("seconds").is_some_and(|value| !value.is_number()) {
+        return Err(invalid("args.seconds must be a number"));
+    }
     let ms = args
         .get("milliseconds")
         .and_then(Value::as_u64)
@@ -59,10 +70,7 @@ fn wait(
         .get("timeout_ms")
         .and_then(Value::as_u64)
         .ok_or_else(|| invalid("args.timeout_ms must be an integer"))?;
-    let interval = args
-        .get("interval_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(50);
+    let interval = optional_u64(args, "interval_ms", 50)?;
     if timeout > MAX_WAIT_MS || interval == 0 || interval > 10_000 {
         return Err(invalid(
             "timeout_ms must be at most 24 hours and interval_ms must be 1..10000",

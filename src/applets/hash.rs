@@ -1,4 +1,4 @@
-use super::{invalid, required_string, AppletError};
+use super::{invalid, optional_bool, required_string, AppletError};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256, Sha512};
 
@@ -22,30 +22,23 @@ pub(super) fn run(
         )),
         "encode.base64" => {
             let mut encoded = base64(bytes);
-            if args
-                .get("url_safe")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            if optional_bool(args, "url_safe", false)? {
                 encoded = encoded.replace('+', "-").replace('/', "_");
             }
-            if !args.get("padding").and_then(Value::as_bool).unwrap_or(true) {
+            if !optional_bool(args, "padding", true)? {
                 encoded.truncate(encoded.trim_end_matches('=').len());
             }
             Ok(Value::String(encoded))
         }
         "decode.base64" => {
             let text = required_string(args, "text")?;
-            let url_safe = args
-                .get("url_safe")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+            let url_safe = optional_bool(args, "url_safe", false)?;
             let mut normalized = if url_safe {
                 text.replace('-', "+").replace('_', "/")
             } else {
                 text.to_owned()
             };
-            if args.get("padding").and_then(Value::as_bool) == Some(false) {
+            if !optional_bool(args, "padding", true)? {
                 if normalized.len() % 4 == 1 {
                     return Err(invalid("base64 input has an impossible unpadded length"));
                 }
@@ -61,7 +54,7 @@ pub(super) fn run(
         "encode.url" | "encode.form" => Ok(Value::String(url_encode(operation, args, bytes)?)),
         "decode.url" => Ok(Value::String(url_decode(
             required_string(args, "text")?,
-            args.get("form").and_then(Value::as_bool).unwrap_or(false),
+            optional_bool(args, "form", false)?,
         )?)),
         _ => Err(invalid("unsupported hash or encoding operation")),
     }
@@ -183,7 +176,7 @@ fn url_encode(op: &str, args: &Map<String, Value>, bytes: &[u8]) -> Result<Strin
         }
         return Ok(pairs.join("&"));
     }
-    let form = args.get("form").and_then(Value::as_bool).unwrap_or(false);
+    let form = optional_bool(args, "form", false)?;
     Ok(percent_encode(bytes, form))
 }
 fn form_encode(bytes: &[u8]) -> String {

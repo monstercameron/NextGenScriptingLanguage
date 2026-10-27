@@ -1,4 +1,4 @@
-use super::{failed, invalid, required_string, AppletError};
+use super::{failed, invalid, optional_bool, optional_string, required_string, AppletError};
 use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 
@@ -119,14 +119,12 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
     if operation == "number.format" {
         let value = number(args, "value")?;
         let precision = precision(args, 0, 15)?;
+        let grouping = optional_bool(args, "grouping", false)?;
+        let percent = optional_bool(args, "percent", false)?;
         let mut text = if let Some(integer) = as_integer(value) {
             let negative = integer < 0;
             let digits = integer.unsigned_abs().to_string();
-            let grouped = match args
-                .get("grouping")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            let grouped = match grouping {
                 true => group_digits(&digits),
                 false => digits,
             };
@@ -142,21 +140,13 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
                 .filter(|value| value.is_finite())
                 .ok_or_else(|| invalid("args.value must be finite"))?;
             let formatted = format!("{value:.precision$}");
-            if args
-                .get("grouping")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            if grouping {
                 group_formatted(&formatted)
             } else {
                 formatted
             }
         };
-        if args
-            .get("percent")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if percent {
             text.push('%');
         }
         return Ok(Value::String(text));
@@ -166,7 +156,7 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
             .as_f64()
             .filter(|value| value.is_finite() && *value >= 0.0)
             .ok_or_else(|| invalid("args.value must be a nonnegative finite number"))?;
-        let system = args.get("system").and_then(Value::as_str).unwrap_or("iec");
+        let system = optional_string(args, "system", "iec")?;
         let (base, units): (f64, &[&str]) = match system {
             "iec" => (1024.0, &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"]),
             "si" => (1000.0, &["B", "kB", "MB", "GB", "TB", "PB", "EB"]),

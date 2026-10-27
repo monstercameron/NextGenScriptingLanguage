@@ -1,5 +1,7 @@
 //! Small typed list and line aggregation operations.
-use super::{checkpoint_work, invalid, AppletError, ExecutionContext};
+use super::{
+    checkpoint_work, invalid, optional_bool, optional_string, AppletError, ExecutionContext,
+};
 use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -41,6 +43,17 @@ pub(super) fn run(
     input: &[u8],
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
+    // These options are declared across the aggregation family, including
+    // operations which do not currently use them. Direct calls should still
+    // reject a supplied value whose JSON type violates the manifest contract.
+    if name.starts_with("list.") {
+        if args.contains_key("key") {
+            optional_string(args, "key", "")?;
+        }
+        if args.contains_key("collect") {
+            optional_bool(args, "collect", false)?;
+        }
+    }
     if name == "list.count" && !args.contains_key("items") {
         let text = std::str::from_utf8(input)
             .map_err(|error| invalid(format!("stdin must be UTF-8: {error}")))?;
@@ -139,7 +152,7 @@ pub(super) fn run(
             Ok(Value::Array(unique))
         }
         "list.sort" | "list.top" => {
-            let pointer = args.get("key").and_then(Value::as_str).unwrap_or("");
+            let pointer = optional_string(args, "key", "")?;
             let comparisons = std::cell::Cell::new(0usize);
             let checkpoint_error = std::cell::RefCell::new(None);
             values.sort_by(|left, right| {
@@ -204,10 +217,7 @@ fn group(
         .get("key")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("list.group requires a JSON Pointer in args.key"))?;
-    let collect = args
-        .get("collect")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let collect = optional_bool(args, "collect", false)?;
     let mut groups: Vec<(Value, usize, Vec<Value>)> = Vec::new();
     let mut indexes: HashMap<Vec<u8>, usize> = HashMap::new();
     for (index, item) in values.into_iter().enumerate() {

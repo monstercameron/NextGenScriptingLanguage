@@ -31,7 +31,9 @@ The rebased candidate was built with `CARGO_BUILD_JOBS=1 cargo build --release
 above. Three runs exited successfully with peaks of 65,110,016, 65,421,312,
 and 65,224,704 bytes against the 67,108,864-byte limit. The benchmark passed
 on this Mac; Windows and Linux measurements remain unverified. A Windows
-native-child regression is included in the explicit Windows CI test list.
+native-child test in the explicit Windows CI list checks all 10 encoded results
+at 58,990 aggregate raw bytes under a 65,536-byte cap, the 90%-of-limit case,
+and a limit failure after a completed first element.
 
 Completed buffers from in-process, worker and remote backends are still
 admitted after their effects finish; providing incremental shared admission

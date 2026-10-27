@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 const STEPS: usize = 6;
 /// Checkpoint boundaries exercised by the write-failure matrix. Blob collection is
 /// exercised separately during resume, since it cannot run during a normal `run`.
-const WRITE_POINTS: [&str; 19] = [
+const WRITE_POINTS: [&str; 24] = [
     "checkpoint.atomic",
     "checkpoint.atomic.write",
     "checkpoint.atomic.sync",
@@ -39,10 +39,15 @@ const WRITE_POINTS: [&str; 19] = [
     "checkpoint.append.truncate",
     "checkpoint.append.write",
     "checkpoint.append.sync",
+    "checkpoint.journal.header.write",
+    "checkpoint.journal.body.write",
+    "checkpoint.graph.journal.write",
+    "checkpoint.blob.write",
     "checkpoint.graph.truncate",
     "checkpoint.graph.write",
     "checkpoint.graph.sync",
-    "checkpoint.elements.write",
+    "checkpoint.elements.begin.write",
+    "checkpoint.elements.commit.write",
     "checkpoint.elements.truncate",
     "checkpoint.elements.sync",
     "checkpoint.elements.reset.truncate",
@@ -115,7 +120,7 @@ fn write_count_applet(manifests: &Path, log: &Path) {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\necho run >> '{}'\nprintf '%s\\n' \"$1\"\n",
+                "#!/bin/sh\necho run >> '{}'\nprintf '%s-counted-output-for-blob\\n' \"$1\"\n",
                 log.display()
             ),
         )
@@ -136,7 +141,7 @@ fn write_count_applet(manifests: &Path, log: &Path) {
         let log = log.to_string_lossy().replace('"', "\"\"");
         fs::write(
             &script,
-            format!("@echo off\r\n>>\"{log}\" echo run\r\necho %~1\r\n"),
+            format!("@echo off\r\n>>\"{log}\" echo run\r\necho %~1-counted-output-for-blob\r\n"),
         )
         .unwrap();
         (
@@ -386,26 +391,35 @@ fn point_applies_to_mode(point: &str, mode: Mode) -> bool {
         && (point.starts_with("checkpoint.atomic")
             || matches!(
                 point,
-                "checkpoint.append.truncate" | "checkpoint.append.write" | "checkpoint.append.sync"
+                "checkpoint.append.truncate"
+                    | "checkpoint.append.write"
+                    | "checkpoint.append.sync"
+                    | "checkpoint.journal.header.write"
+                    | "checkpoint.journal.body.write"
             ))
     {
         return false;
     }
     match point {
-        "checkpoint.graph.truncate" | "checkpoint.graph.write" | "checkpoint.graph.sync" => {
+        "checkpoint.graph.journal.write"
+        | "checkpoint.graph.truncate"
+        | "checkpoint.graph.write"
+        | "checkpoint.graph.sync" => {
             matches!(mode, Mode::Graph)
         }
-        "checkpoint.elements.write"
+        "checkpoint.elements.begin.write"
+        | "checkpoint.elements.commit.write"
         | "checkpoint.elements.truncate"
         | "checkpoint.elements.sync"
         | "checkpoint.elements.reset.truncate"
         | "checkpoint.elements.reset.sync" => matches!(mode, Mode::Elements),
+        "checkpoint.blob.write" => !matches!(mode, Mode::Graph),
         _ => true,
     }
 }
 
 #[test]
-fn atomic_and_append_boundaries_survive_abort_and_torn_write_actions() {
+fn atomic_and_append_boundaries_survive_abort_actions() {
     let (expected, _) = baseline(Mode::Sequential);
     let points = [
         "checkpoint.atomic.write",
@@ -418,31 +432,23 @@ fn atomic_and_append_boundaries_survive_abort_and_torn_write_actions() {
         "checkpoint.append.sync",
     ];
     for point in points {
-        // `partial:3` means a prefix write only for write failpoints; at sync,
-        // rename, and directory boundaries it is just an abort action.
-        let actions: &[&str] = match point {
-            "checkpoint.atomic.write" | "checkpoint.append.write" => &["abort", "partial:3"],
-            _ => &["abort"],
-        };
-        for &action in actions {
-            let fixture = fixture(Mode::Sequential);
-            let output = checkpointed_run(&fixture)
-                .env("EXECUTE_FAILPOINT", format!("{point}:1:{action}"))
-                .output()
-                .unwrap();
-            assert!(
-                !output.status.success(),
-                "{point}:{action} did not terminate the checkpointed run"
-            );
-            check_resume(&fixture, &expected, &format!("{point}:{action}"));
-        }
+        let fixture = fixture(Mode::Sequential);
+        let output = checkpointed_run(&fixture)
+            .env("EXECUTE_FAILPOINT", format!("{point}:1:abort"))
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{point}:abort did not terminate the checkpointed run"
+        );
+        check_resume(&fixture, &expected, &format!("{point}:abort"));
     }
 }
 
 #[test]
 fn silently_lost_atomic_and_append_writes_recover_or_refuse_clearly() {
     let (expected, _) = baseline(Mode::Sequential);
-    for point in ["checkpoint.atomic.write", "checkpoint.append.write"] {
+    for point in ["checkpoint.blob.write", "checkpoint.append.write"] {
         let fixture = fixture(Mode::Sequential);
         let _ = checkpointed_run(&fixture)
             .env("EXECUTE_FAILPOINT", format!("{point}:1:lost"))
@@ -515,24 +521,43 @@ fn graph_runs_killed_at_random_points_resume_to_the_uninterrupted_run() {
 }
 
 #[test]
-fn element_log_boundaries_survive_abort_and_torn_write_actions() {
+fn element_log_boundaries_survive_abort_actions() {
     let (expected, _) = baseline(Mode::Elements);
     for point in [
         "checkpoint.elements.reset.truncate",
         "checkpoint.elements.reset.sync",
         "checkpoint.elements.truncate",
-        "checkpoint.elements.write",
         "checkpoint.elements.sync",
     ] {
-        // Only the append site can inject an actual prefix write. Truncate and
-        // sync boundaries exercise abort recovery, not torn-write recovery.
-        let actions: &[&str] = if point == "checkpoint.elements.write" {
-            &["abort", "partial:3"]
-        } else {
-            &["abort"]
-        };
-        for &action in actions {
-            let fixture = fixture(Mode::Elements);
+        let fixture = fixture(Mode::Elements);
+        let output = checkpointed_run(&fixture)
+            .env("EXECUTE_FAILPOINT", format!("{point}:1:abort"))
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{point}:abort did not terminate the checkpointed run"
+        );
+        check_resume(&fixture, &expected, &format!("{point}:abort"));
+    }
+}
+
+#[test]
+fn eight_named_write_points_survive_abort_and_torn_write_actions() {
+    let cases = [
+        (Mode::Sequential, "checkpoint.journal.header.write"),
+        (Mode::Sequential, "checkpoint.journal.body.write"),
+        (Mode::Graph, "checkpoint.graph.journal.write"),
+        (Mode::Sequential, "checkpoint.blob.write"),
+        (Mode::Sequential, "checkpoint.append.write"),
+        (Mode::Graph, "checkpoint.graph.write"),
+        (Mode::Elements, "checkpoint.elements.begin.write"),
+        (Mode::Elements, "checkpoint.elements.commit.write"),
+    ];
+    for (mode, point) in cases {
+        let (expected, _) = baseline(mode);
+        for action in ["abort", "partial:3"] {
+            let fixture = fixture(mode);
             let output = checkpointed_run(&fixture)
                 .env("EXECUTE_FAILPOINT", format!("{point}:1:{action}"))
                 .output()

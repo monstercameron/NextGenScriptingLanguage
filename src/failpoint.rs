@@ -28,6 +28,65 @@ struct Plan {
     action: Action,
 }
 
+/// A writer that can inject an interruption into a streaming atomic write. The
+/// selected prefix is flushed through the wrapped writer before the hard abort, so
+/// `partial:N` represents bytes written to the file rather than bytes buffered in
+/// `BufWriter`.
+#[cfg(feature = "failpoints")]
+pub(crate) struct Writer<W> {
+    point: &'static str,
+    inner: W,
+    armed: bool,
+}
+
+#[cfg(feature = "failpoints")]
+impl<W> Writer<W> {
+    pub(crate) fn new(point: &'static str, inner: W) -> Self {
+        Self {
+            point,
+            inner,
+            armed: true,
+        }
+    }
+}
+
+#[cfg(feature = "failpoints")]
+impl<W: Write> Write for Writer<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.armed {
+            if let Some(action) = action(self.point) {
+                self.armed = false;
+                match action {
+                    Action::Error => {
+                        return Err(io::Error::other(format!(
+                            "injected failure at {}",
+                            self.point
+                        )))
+                    }
+                    Action::Abort => std::process::abort(),
+                    Action::Lost => return Ok(bytes.len()),
+                    Action::Partial(count) => {
+                        self.inner.write_all(&bytes[..count.min(bytes.len())])?;
+                        self.inner.flush()?;
+                        std::process::abort()
+                    }
+                    Action::PartialWait(count) => {
+                        self.inner.write_all(&bytes[..count.min(bytes.len())])?;
+                        self.inner.flush()?;
+                        wait_for_release()?;
+                        std::process::abort()
+                    }
+                }
+            }
+        }
+        self.inner.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 static PLAN: OnceLock<Option<Plan>> = OnceLock::new();
 static CALLS: AtomicUsize = AtomicUsize::new(0);
 

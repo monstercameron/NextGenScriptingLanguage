@@ -699,7 +699,13 @@ impl Journal {
                 // The log is written before the journal that counts its lines, so a
                 // crash in between leaves the inline journal valid.
                 let (lines, _) = encode_completed_log(&journal.data.completed)?;
-                atomic_write(&journal.directory, COMPLETED_LOG, "", &lines)?;
+                atomic_write(
+                    &journal.directory,
+                    COMPLETED_LOG,
+                    "",
+                    &lines,
+                    "checkpoint.completed_log.migration.write",
+                )?;
             }
             // A legacy match replaces the stored digest with the keyed one, so the upgrade
             // is written even when the version is already current.
@@ -1359,7 +1365,13 @@ impl Journal {
             error: &self.data.error,
             listener_cursor: &self.data.listener_cursor,
         };
-        if let Err(error) = write_envelope(&self.directory, &body, "checkpoint journal") {
+        if let Err(error) = write_envelope(
+            &self.directory,
+            &body,
+            "checkpoint journal",
+            "checkpoint.journal.body.write",
+            Some("checkpoint.journal.header.write"),
+        ) {
             self.persistence_failed = true;
             return Err(error);
         }
@@ -1367,7 +1379,15 @@ impl Journal {
     }
 }
 
-fn write_envelope(directory: &Path, body: &impl Serialize, label: &str) -> Result<()> {
+fn write_envelope(
+    directory: &Path,
+    body: &impl Serialize,
+    label: &str,
+    write_point: &'static str,
+    header_point: Option<&'static str>,
+) -> Result<()> {
+    #[cfg(not(feature = "failpoints"))]
+    let _ = write_point;
     let mut digest = DigestWriter::default();
     let mut counter = CountingWriter {
         writer: &mut digest,
@@ -1383,8 +1403,25 @@ fn write_envelope(directory: &Path, body: &impl Serialize, label: &str) -> Resul
     atomic_write_with(directory, "journal", "json", &[], |file, _| {
         // A second serialization pass avoids both journal-sized byte buffers.
         // The borrowed body cannot change between the digest and write passes.
+        if let Some(header_point) = header_point {
+            #[cfg(feature = "failpoints")]
+            crate::failpoint::write_all(header_point, file, br#"{"checksum":""#)?;
+            #[cfg(not(feature = "failpoints"))]
+            {
+                let _ = header_point;
+                file.write_all(br#"{"checksum":""#)?;
+            }
+        }
+        #[cfg(feature = "failpoints")]
+        let mut writer = io::BufWriter::with_capacity(
+            buffer_capacity,
+            crate::failpoint::Writer::new(write_point, &mut *file),
+        );
+        #[cfg(not(feature = "failpoints"))]
         let mut writer = io::BufWriter::with_capacity(buffer_capacity, &mut *file);
-        writer.write_all(br#"{"checksum":""#)?;
+        if header_point.is_none() {
+            writer.write_all(br#"{"checksum":""#)?;
+        }
         writer.write_all(checksum.as_bytes())?;
         writer.write_all(br#"","data":"#)?;
         serde_json::to_writer(&mut writer, body).map_err(io::Error::other)?;
@@ -2061,7 +2098,12 @@ fn store_blob(directory: &Path, bytes: &[u8], limit: usize) -> Result<BlobRef> {
         verify_existing_blob(directory, &reference, bytes, limit)?;
         return Ok(reference);
     }
-    atomic_write(directory, &digest, "blob", bytes)?;
+    let write_point = if bytes.is_empty() {
+        "checkpoint.atomic.write"
+    } else {
+        "checkpoint.blob.write"
+    };
+    atomic_write(directory, &digest, "blob", bytes, write_point)?;
     Ok(BlobRef {
         sha256: digest,
         length: bytes.len().try_into()?,
@@ -2265,10 +2307,18 @@ fn clean_checkpoint_temporaries(directory: &Path, blobs: &Path, acquired: std::t
     }
 }
 
-fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Result<()> {
+fn atomic_write(
+    directory: &Path,
+    stem: &str,
+    suffix: &str,
+    bytes: &[u8],
+    write_point: &'static str,
+) -> Result<()> {
+    #[cfg(not(feature = "failpoints"))]
+    let _ = write_point;
     atomic_write_with(directory, stem, suffix, bytes, |file, bytes| {
         #[cfg(feature = "failpoints")]
-        crate::failpoint::write_all("checkpoint.atomic.write", file, bytes)?;
+        crate::failpoint::write_all(write_point, file, bytes)?;
         #[cfg(not(feature = "failpoints"))]
         file.write_all(bytes)?;
         #[cfg(feature = "failpoints")]

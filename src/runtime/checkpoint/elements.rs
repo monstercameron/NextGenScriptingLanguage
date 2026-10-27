@@ -1037,8 +1037,16 @@ impl Journal {
         // Frame in the existing serialization allocation, then restore the exact
         // line before hashing it. This also keeps one file write per element.
         line.push(b'\n');
+        // Begin records are durable before effects; commits are group-synced. Keep
+        // their partial-write points distinct so each protocol transition is tested.
         #[cfg(feature = "failpoints")]
-        let written = crate::failpoint::write_all("checkpoint.elements.write", file, line);
+        let write_point = if durable {
+            "checkpoint.elements.begin.write"
+        } else {
+            "checkpoint.elements.commit.write"
+        };
+        #[cfg(feature = "failpoints")]
+        let written = crate::failpoint::write_all(write_point, file, line);
         #[cfg(not(feature = "failpoints"))]
         let written = file.write_all(line);
         line.pop();

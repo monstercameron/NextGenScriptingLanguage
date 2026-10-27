@@ -272,7 +272,13 @@ fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
 
 /// Write the journal atomically, with a checksum over its body.
 fn write_disk(directory: &Path, disk: &GraphJournalDisk) -> Result<()> {
-    write_envelope(directory, disk, "graph checkpoint journal")
+    write_envelope(
+        directory,
+        disk,
+        "graph checkpoint journal",
+        "checkpoint.graph.journal.write",
+        None,
+    )
 }
 
 struct GraphLog {

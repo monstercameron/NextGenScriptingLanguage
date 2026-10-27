@@ -9,11 +9,13 @@
 
 #[cfg(any(unix, windows))]
 use anyhow::Context;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 #[cfg(any(unix, windows))]
 use serde::{Deserialize, Serialize};
 #[cfg(any(unix, windows))]
 use sha2::{Digest, Sha256};
+#[cfg(any(unix, windows))]
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 #[cfg(any(unix, windows))]
 use std::collections::HashSet;
@@ -31,11 +33,11 @@ use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsHandle;
 use std::path::PathBuf;
+#[cfg(any(unix, windows))]
+use std::sync::Condvar;
 use std::sync::atomic::AtomicBool;
 #[cfg(any(unix, windows))]
 use std::sync::atomic::Ordering;
-#[cfg(any(unix, windows))]
-use std::sync::Condvar;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -65,6 +67,8 @@ pub(crate) struct WorkerLaunch {
     policy_fingerprint: Option<[u8; 32]>,
     pub startup_arguments: Vec<OsString>,
     #[cfg(any(unix, windows))]
+    pub protocol_version: u32,
+    #[cfg(any(unix, windows))]
     pub timeout: Duration,
     #[cfg(any(unix, windows))]
     pub max_frame_bytes: usize,
@@ -74,6 +78,7 @@ pub(crate) struct WorkerLaunch {
 
 /// The lifecycle limits a worker is launched under.
 pub(crate) struct WorkerLimits {
+    pub(crate) protocol_version: u32,
     pub(crate) timeout: Duration,
     pub(crate) max_frame_bytes: usize,
     pub(crate) max_stderr_bytes: usize,
@@ -89,6 +94,7 @@ impl WorkerLaunch {
         limits: WorkerLimits,
     ) -> Result<Self> {
         let WorkerLimits {
+            protocol_version,
             timeout,
             max_frame_bytes,
             max_stderr_bytes,
@@ -99,7 +105,7 @@ impl WorkerLaunch {
             bail!("applet capability policy changed while preparing worker launch");
         }
         #[cfg(not(any(unix, windows)))]
-        let _ = (timeout, max_frame_bytes, max_stderr_bytes);
+        let _ = (protocol_version, timeout, max_frame_bytes, max_stderr_bytes);
         Ok(Self {
             #[cfg(any(unix, windows))]
             registry,
@@ -109,6 +115,8 @@ impl WorkerLaunch {
             environment,
             policy_fingerprint,
             startup_arguments,
+            #[cfg(any(unix, windows))]
+            protocol_version,
             #[cfg(any(unix, windows))]
             timeout,
             #[cfg(any(unix, windows))]
@@ -126,6 +134,10 @@ impl WorkerLaunch {
 pub(crate) struct WorkerRequest {
     pub arguments: Vec<String>,
     pub input: Vec<u8>,
+    /// Values mapped through JSON argument nodes in v2 worker requests.
+    pub value: Option<serde_json::Value>,
+    /// JSON encoded outputs use the v2 `value` member instead of output bytes.
+    pub json_output: bool,
     pub max_output_bytes: usize,
     /// Immutable sensitivity floor for the enclosing runtime invocation.
     /// The worker pool checks this against retained state before reusing a
@@ -144,6 +156,7 @@ pub(crate) struct WorkerRequest {
 pub(crate) struct WorkerResponse {
     pub status: i32,
     pub output: Vec<u8>,
+    pub typed_json: Option<serde_json::Value>,
     pub stderr: Vec<u8>,
     /// True when this explicit call launched the helper process.
     pub spawned_process: bool,
@@ -229,6 +242,7 @@ struct WorkerKey {
     applet_name: String,
     binary: PathBuf,
     content_identity: [u8; 32],
+    protocol_version: u32,
     policy_fingerprint: Option<[u8; 32]>,
     cwd: PathBuf,
     environment: Vec<(OsString, OsString)>,
@@ -242,6 +256,7 @@ impl fmt::Debug for WorkerKey {
             .field("applet_name", &self.applet_name)
             .field("binary", &self.binary)
             .field("content_identity", &self.content_identity)
+            .field("protocol_version", &self.protocol_version)
             .field("policy_fingerprint", &self.policy_fingerprint)
             .field("cwd", &self.cwd)
             .field(
@@ -265,6 +280,7 @@ impl WorkerKey {
     ) -> bool {
         self.applet_name == launch.applet_name
             && self.binary == launch.binary
+            && self.protocol_version == launch.protocol_version
             && self.policy_fingerprint == launch.policy_fingerprint
             && self.cwd == launch.cwd
             && self.environment == environment
@@ -290,6 +306,7 @@ impl WorkerKey {
             applet_name: launch.applet_name.clone(),
             binary: launch.binary.clone(),
             content_identity,
+            protocol_version: launch.protocol_version,
             policy_fingerprint: launch.policy_fingerprint,
             cwd: launch.cwd.clone(),
             environment,
@@ -439,7 +456,7 @@ impl WorkerPool {
                 .context("worker timeout is too large")?;
             let deadline = min_deadline(request.deadline, Some(worker_deadline));
             check_cancel_deadline(&request.cancelled, deadline)?;
-            validate_request(&launch, &request)
+            let request_frame = validate_request(&launch, &request)
                 .map_err(|error| as_worker_error(error, WorkerErrorKind::UnknownError))?;
             ensure_policy_unchanged(&launch)
                 .map_err(|error| as_worker_error(error, WorkerErrorKind::UnknownError))?;
@@ -535,7 +552,7 @@ impl WorkerPool {
                 .worker
                 .as_mut()
                 .expect("worker is spawned before exchange");
-            match worker.exchange(&request, launch.max_frame_bytes, deadline) {
+            match worker.exchange(&request, request_frame, launch.max_frame_bytes, deadline) {
                 Ok(mut response) => {
                     let raw_stderr_bytes = response.stderr.len();
                     if raw_stderr_bytes > launch.max_stderr_bytes {
@@ -772,6 +789,18 @@ struct RequestFrame<'a> {
     input: &'a [u8],
 }
 
+#[derive(Serialize)]
+#[cfg(any(unix, windows))]
+struct RequestFrameV2<'a> {
+    version: u32,
+    id: u64,
+    arguments: &'a [String],
+    input_base64: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<&'a serde_json::Value>,
+    json_output: bool,
+}
+
 #[derive(Deserialize)]
 #[cfg(any(unix, windows))]
 #[serde(deny_unknown_fields)]
@@ -782,6 +811,171 @@ struct ResponseFrame {
     #[serde(default)]
     stderr: Option<String>,
 }
+
+#[cfg(any(unix, windows))]
+fn parse_worker_json_strict(bytes: &[u8]) -> Result<serde_json::Value> {
+    #[cfg(test)]
+    STRICT_JSON_PARSE_CALLS.with(|calls| calls.set(calls.get() + 1));
+    use serde::Deserialize;
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = WorkerJsonValue::deserialize(&mut deserializer).context("parsing worker JSON")?;
+    deserializer.end().context("parsing worker JSON")?;
+    Ok(value.into_json())
+}
+
+#[cfg(test)]
+thread_local! {
+    static STRICT_JSON_PARSE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // Used by a unit test in the parent runtime module.
+pub(crate) fn reset_strict_json_parse_calls() {
+    STRICT_JSON_PARSE_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // Used by a unit test in the parent runtime module.
+pub(crate) fn strict_json_parse_calls() -> usize {
+    STRICT_JSON_PARSE_CALLS.with(std::cell::Cell::get)
+}
+
+#[cfg(any(unix, windows))]
+enum WorkerJsonValue {
+    Null,
+    Boolean(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<Self>),
+    Object(BTreeMap<String, Self>),
+}
+
+#[cfg(any(unix, windows))]
+impl WorkerJsonValue {
+    fn into_json(self) -> serde_json::Value {
+        match self {
+            Self::Null => serde_json::Value::Null,
+            Self::Boolean(value) => serde_json::Value::Bool(value),
+            Self::Number(value) => serde_json::Value::Number(value),
+            Self::String(value) => serde_json::Value::String(value),
+            Self::Array(values) => {
+                serde_json::Value::Array(values.into_iter().map(Self::into_json).collect())
+            }
+            Self::Object(values) => serde_json::Value::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| (key, value.into_json()))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+impl<'de> Deserialize<'de> for WorkerJsonValue {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct WorkerJsonVisitor;
+        impl<'de> serde::de::Visitor<'de> for WorkerJsonVisitor {
+            type Value = WorkerJsonValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON value with unique object keys")
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WorkerJsonValue::Null)
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WorkerJsonValue::Null)
+            }
+
+            fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WorkerJsonValue::Boolean(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WorkerJsonValue::Number(value.into()))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WorkerJsonValue::Number(value.into()))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(WorkerJsonValue::Number)
+                    .ok_or_else(|| E::custom("non-finite JSON number"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WorkerJsonValue::String(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WorkerJsonValue::String(value))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = sequence.next_element()? {
+                    values.push(value);
+                }
+                Ok(WorkerJsonValue::Array(values))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut values = BTreeMap::new();
+                while let Some((key, value)) = map.next_entry::<String, WorkerJsonValue>()? {
+                    if values.insert(key.clone(), value).is_some() {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate worker JSON object key {key:?}"
+                        )));
+                    }
+                }
+                Ok(WorkerJsonValue::Object(values))
+            }
+        }
+        deserializer.deserialize_any(WorkerJsonVisitor)
+    }
+}
+
+#[cfg(any(unix, windows))]
+const WORKER_HANDSHAKE: &[u8] =
+    b"{\"type\":\"handshake\",\"protocol\":\"ngsl.json-lines-worker\",\"versions\":[2]}\n";
 
 #[cfg(unix)]
 type WorkerOutput = std::process::ChildStdout;
@@ -796,6 +990,8 @@ struct WorkerProcess {
     #[cfg(windows)]
     job: crate::platform::windows::Job,
     next_request_id: u64,
+    protocol_version: u32,
+    negotiated: bool,
 }
 
 #[cfg(any(unix, windows))]
@@ -886,6 +1082,8 @@ impl WorkerProcess {
             #[cfg(windows)]
             job,
             next_request_id: 1,
+            protocol_version: launch.protocol_version,
+            negotiated: launch.protocol_version == 1,
         })
     }
 
@@ -987,9 +1185,13 @@ impl WorkerProcess {
     fn exchange(
         &mut self,
         request: &WorkerRequest,
+        mut frame: Vec<u8>,
         max_frame_bytes: usize,
         deadline: Option<Instant>,
     ) -> std::result::Result<WorkerResponse, ExchangeFailure> {
+        if self.protocol_version == 2 && !self.negotiated {
+            self.negotiate_v2(request, max_frame_bytes, deadline)?;
+        }
         let id = self.next_request_id;
         let Some(next_id) = id.checked_add(1) else {
             return Err(ExchangeFailure {
@@ -998,27 +1200,13 @@ impl WorkerProcess {
                 transmitted: false,
             });
         };
-        let mut frame = CappedBuffer::new(max_frame_bytes);
-        serde_json::to_writer(
-            &mut frame,
-            &RequestFrame {
-                id,
-                arguments: &request.arguments,
-                input: &request.input,
-            },
-        )
-        .map_err(|error| ExchangeFailure {
-            kind: WorkerErrorKind::OutputLimit,
-            message: format!("encoding worker request frame: {error}"),
-            transmitted: false,
-        })?;
-        frame.push_newline().map_err(|error| ExchangeFailure {
-            kind: WorkerErrorKind::OutputLimit,
-            message: format!("worker request frame exceeds {max_frame_bytes} bytes: {error}"),
+        patch_request_id(&mut frame, id).map_err(|error| ExchangeFailure {
+            kind: WorkerErrorKind::ProtocolError,
+            message: format!("patching persistent worker request id: {error}"),
             transmitted: false,
         })?;
 
-        let transmitted = self.write_frame(frame.bytes, request, deadline)?;
+        let transmitted = self.write_frame(frame, request, deadline)?;
         self.next_request_id = next_id;
 
         let response_bytes = match read_frame(
@@ -1030,29 +1218,205 @@ impl WorkerProcess {
             Ok(bytes) => bytes,
             Err(error) => return Err(exchange_failure(error, transmitted)),
         };
-        let response: ResponseFrame =
-            serde_json::from_slice(&response_bytes).map_err(|error| ExchangeFailure {
+        let (response_id, status, output, typed_json, stderr) = if self.protocol_version == 1 {
+            let response: ResponseFrame =
+                serde_json::from_slice(&response_bytes).map_err(|error| ExchangeFailure {
+                    kind: WorkerErrorKind::ProtocolError,
+                    message: format!("invalid persistent worker JSON response: {error}"),
+                    transmitted,
+                })?;
+            (
+                response.id,
+                response.status,
+                response.output,
+                None,
+                response.stderr.unwrap_or_default().into_bytes(),
+            )
+        } else {
+            let value =
+                parse_worker_json_strict(&response_bytes).map_err(|error| ExchangeFailure {
+                    kind: WorkerErrorKind::ProtocolError,
+                    message: format!("invalid persistent worker v2 JSON response: {error}"),
+                    transmitted,
+                })?;
+            let object = value.as_object().ok_or_else(|| ExchangeFailure {
                 kind: WorkerErrorKind::ProtocolError,
-                message: format!("invalid persistent worker JSON response: {error}"),
+                message: "persistent worker v2 response must be a JSON object".into(),
                 transmitted,
             })?;
-        if response.id != id {
+            let allowed = [
+                "version",
+                "id",
+                "status",
+                "output_base64",
+                "value",
+                "stderr",
+            ];
+            if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+                return Err(ExchangeFailure {
+                    kind: WorkerErrorKind::ProtocolError,
+                    message: "persistent worker v2 response contains an unknown field".into(),
+                    transmitted,
+                });
+            }
+            if object.get("version").and_then(serde_json::Value::as_u64) != Some(2) {
+                return Err(ExchangeFailure {
+                    kind: WorkerErrorKind::ProtocolError,
+                    message: "persistent worker response did not use negotiated frame version 2"
+                        .into(),
+                    transmitted,
+                });
+            }
+            let response_id = object
+                .get("id")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| ExchangeFailure {
+                    kind: WorkerErrorKind::ProtocolError,
+                    message: "persistent worker v2 response id must be an unsigned integer".into(),
+                    transmitted,
+                })?;
+            let status = object
+                .get("status")
+                .and_then(serde_json::Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| ExchangeFailure {
+                    kind: WorkerErrorKind::ProtocolError,
+                    message: "persistent worker v2 response status must be a signed 32-bit integer"
+                        .into(),
+                    transmitted,
+                })?;
+            let stderr = match object.get("stderr") {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(serde_json::Value::String(value)) => value.as_bytes().to_vec(),
+                _ => {
+                    return Err(ExchangeFailure {
+                        kind: WorkerErrorKind::ProtocolError,
+                        message: "persistent worker v2 stderr must be a string".into(),
+                        transmitted,
+                    });
+                }
+            };
+            let (output, typed_json) = if request.json_output {
+                let Some(value) = object.get("value") else {
+                    return Err(ExchangeFailure {
+                        kind: WorkerErrorKind::ProtocolError,
+                        message: "persistent worker v2 JSON output requires a value field".into(),
+                        transmitted,
+                    });
+                };
+                if object.contains_key("output_base64") {
+                    return Err(ExchangeFailure {
+                        kind: WorkerErrorKind::ProtocolError,
+                        message:
+                            "persistent worker v2 JSON output cannot also include output_base64"
+                                .into(),
+                        transmitted,
+                    });
+                }
+                let mut output = serde_json::to_vec(value).map_err(|error| ExchangeFailure {
+                    kind: WorkerErrorKind::ProtocolError,
+                    message: format!("encoding persistent worker typed JSON output: {error}"),
+                    transmitted,
+                })?;
+                output.push(b'\n');
+                (output, Some(value.clone()))
+            } else {
+                if object.contains_key("value") {
+                    return Err(ExchangeFailure {
+                        kind: WorkerErrorKind::ProtocolError,
+                        message: "persistent worker v2 byte output cannot include a value field"
+                            .into(),
+                        transmitted,
+                    });
+                }
+                let encoded = object
+                    .get("output_base64")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| ExchangeFailure {
+                        kind: WorkerErrorKind::ProtocolError,
+                        message: "persistent worker v2 byte output requires output_base64".into(),
+                        transmitted,
+                    })?;
+                let output =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+                        .map_err(|error| ExchangeFailure {
+                            kind: WorkerErrorKind::ProtocolError,
+                            message: format!("invalid persistent worker base64 output: {error}"),
+                            transmitted,
+                        })?;
+                (output, None)
+            };
+            (response_id, status, output, typed_json, stderr)
+        };
+        if response_id != id {
             return Err(ExchangeFailure {
                 kind: WorkerErrorKind::ProtocolError,
                 message: format!(
                     "persistent worker response id {} did not match request id {id}",
-                    response.id
+                    response_id
                 ),
                 transmitted,
             });
         }
-        let stderr = response.stderr.unwrap_or_default().into_bytes();
         Ok(WorkerResponse {
-            status: response.status,
-            output: response.output,
+            status,
+            output,
+            typed_json,
             stderr,
             spawned_process: false,
         })
+    }
+
+    fn negotiate_v2(
+        &mut self,
+        request: &WorkerRequest,
+        max_frame_bytes: usize,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<(), ExchangeFailure> {
+        if WORKER_HANDSHAKE.len() > max_frame_bytes {
+            return Err(ExchangeFailure {
+                kind: WorkerErrorKind::OutputLimit,
+                message: format!("worker v2 handshake exceeds {max_frame_bytes} bytes"),
+                transmitted: false,
+            });
+        }
+        if let Err(mut failure) = self.write_frame(WORKER_HANDSHAKE.to_vec(), request, deadline) {
+            // The handshake cannot have run the user's request, so it does not
+            // make the invocation's effect uncertain.
+            failure.transmitted = false;
+            return Err(failure);
+        }
+        let response = read_frame(
+            &mut self.output,
+            max_frame_bytes,
+            &request.cancelled,
+            deadline,
+        )
+        .map_err(|error| exchange_failure(error, false))?;
+        let value = parse_worker_json_strict(&response).map_err(|error| ExchangeFailure {
+            kind: WorkerErrorKind::ProtocolError,
+            message: format!("invalid persistent worker v2 handshake response: {error}"),
+            transmitted: false,
+        })?;
+        let object = value.as_object().ok_or_else(|| ExchangeFailure {
+            kind: WorkerErrorKind::ProtocolError,
+            message: "persistent worker v2 handshake response must be a JSON object".into(),
+            transmitted: false,
+        })?;
+        if object.len() != 3
+            || object.get("type").and_then(serde_json::Value::as_str) != Some("handshake")
+            || object.get("protocol").and_then(serde_json::Value::as_str)
+                != Some("ngsl.json-lines-worker")
+            || object.get("version").and_then(serde_json::Value::as_u64) != Some(2)
+        {
+            return Err(ExchangeFailure {
+                kind: WorkerErrorKind::ProtocolError,
+                message: "persistent worker did not acknowledge JSON-lines frame version 2".into(),
+                transmitted: false,
+            });
+        }
+        self.negotiated = true;
+        Ok(())
     }
 
     fn write_frame(
@@ -1481,6 +1845,9 @@ impl Write for CappedBuffer {
 
 #[cfg(any(unix, windows))]
 fn validate_launch(launch: &WorkerLaunch) -> Result<()> {
+    if !(1..=2).contains(&launch.protocol_version) {
+        bail!("persistent worker protocol version must be 1 or 2");
+    }
     if launch.applet_name.trim().is_empty() || launch.applet_name.contains('\0') {
         bail!("persistent worker applet name must be nonempty and contain no NUL byte");
     }
@@ -1515,7 +1882,7 @@ fn validate_launch(launch: &WorkerLaunch) -> Result<()> {
 }
 
 #[cfg(any(unix, windows))]
-fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<()> {
+fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<Vec<u8>> {
     if request
         .arguments
         .iter()
@@ -1535,18 +1902,52 @@ fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<()
         )
         .into());
     }
+    if launch.protocol_version == 2 {
+        let encoded_input_len = request
+            .input
+            .len()
+            .checked_add(2)
+            .and_then(|length| length.checked_div(3))
+            .and_then(|blocks| blocks.checked_mul(4));
+        if encoded_input_len.is_none_or(|length| length > launch.max_frame_bytes) {
+            return Err(WorkerError::new(
+                WorkerErrorKind::OutputLimit,
+                false,
+                None,
+                format!(
+                    "persistent worker request input exceeds the {} byte frame limit after base64 encoding",
+                    launch.max_frame_bytes
+                ),
+            )
+            .into());
+        }
+    }
     let mut frame = CappedBuffer::new(launch.max_frame_bytes);
-    if serde_json::to_writer(
-        &mut frame,
-        &RequestFrame {
-            id: u64::MAX,
-            arguments: &request.arguments,
-            input: &request.input,
-        },
-    )
-    .is_err()
-        || frame.push_newline().is_err()
-    {
+    let encoded = if launch.protocol_version == 1 {
+        serde_json::to_writer(
+            &mut frame,
+            &RequestFrame {
+                id: u64::MAX,
+                arguments: &request.arguments,
+                input: &request.input,
+            },
+        )
+    } else {
+        let input_base64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &request.input);
+        serde_json::to_writer(
+            &mut frame,
+            &RequestFrameV2 {
+                version: 2,
+                id: u64::MAX,
+                arguments: &request.arguments,
+                input_base64: &input_base64,
+                value: request.value.as_ref(),
+                json_output: request.json_output,
+            },
+        )
+    };
+    if encoded.is_err() || frame.push_newline().is_err() {
         return Err(WorkerError::new(
             WorkerErrorKind::OutputLimit,
             false,
@@ -1558,6 +1959,23 @@ fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<()
         )
         .into());
     }
+    Ok(frame.bytes)
+}
+
+#[cfg(any(unix, windows))]
+fn patch_request_id(frame: &mut Vec<u8>, id: u64) -> std::io::Result<()> {
+    const PREFIX: &[u8] = b"\"id\":18446744073709551615";
+    let Some(start) = frame
+        .windows(PREFIX.len())
+        .position(|window| window == PREFIX)
+        .map(|offset| offset + b"\"id\":".len())
+    else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "request frame has no reserved id field",
+        ));
+    };
+    frame.splice(start..start + 20, id.to_string().bytes());
     Ok(())
 }
 
@@ -1650,6 +2068,12 @@ mod tests {
     }
 
     #[test]
+    fn v2_json_parser_rejects_duplicate_keys_at_every_depth() {
+        assert!(parse_worker_json_strict(br#"{"value":{"count":1,"count":2}}"#).is_err());
+        assert!(parse_worker_json_strict(br#"{"value":[{"count":1,"count":2}]}"#).is_err());
+    }
+
+    #[test]
     fn deadline_is_the_earlier_constraint() {
         let earlier = Instant::now() + Duration::from_secs(1);
         let later = earlier + Duration::from_secs(1);
@@ -1666,6 +2090,7 @@ mod tests {
                     applet_name: "test".to_owned(),
                     binary: PathBuf::from("worker"),
                     content_identity: [0; 32],
+                    protocol_version: 1,
                     policy_fingerprint: None,
                     cwd: PathBuf::from("."),
                     environment: Vec::new(),

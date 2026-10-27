@@ -53,16 +53,16 @@ use flow::{parser, runtime};
 use serde_json::json;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
 use worker_backend::{WorkerLaunch, WorkerPool, WorkerRequest};
 
@@ -102,6 +102,7 @@ fn launch(directory: &TempDir, mode: &str) -> WorkerLaunch {
             effects.into_os_string(),
         ],
         worker_backend::WorkerLimits {
+            protocol_version: 1,
             timeout: Duration::from_secs(5),
             max_frame_bytes: MAX_FRAME,
             max_stderr_bytes: MAX_STDERR,
@@ -114,6 +115,8 @@ fn request(input: &[u8]) -> WorkerRequest {
     WorkerRequest {
         arguments: Vec::new(),
         input: input.to_vec(),
+        value: None,
+        json_output: false,
         max_output_bytes: MAX_FRAME,
         sensitivity: security::SensitivitySet::from_label(Sensitivity::Unknown),
         deadline: None,

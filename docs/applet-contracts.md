@@ -446,14 +446,47 @@ inputs once. It exposes one event port and no stdout output ports. Each
 completed handler's full decoded result becomes one event, with bounded graph
 queue and cancellation behavior described in the [graph guide](graph.md).
 
-The worker protocol uses one newline-delimited JSON object per request:
+The worker protocol uses one newline-delimited JSON object per request. The
+default `protocol_version` is `1`, which preserves the original worker wire
+format. A helper that implements the compact v2 protocol opts in with
+`lifecycle: {"kind":"json_lines","protocol_version":2}`; Execute confirms
+support with a handshake before sending any applet invocation.
+
+Version 1 request and response frames use JSON arrays of byte values:
 
 ```json
 {"id":1,"arguments":["text.matches","--args","{\"needle\":\"TODO\",\"text\":\"TODO\"}"],"input":[]}
 ```
 
 The response is `{"id":1,"status":0,"output":[123, ...]}` with optional
-`stderr`. `output` and `input` are JSON arrays of byte values, not base64.
+`stderr`. Responses must match the outstanding request id. Version 2 starts
+with this handshake:
+
+```json
+{"type":"handshake","protocol":"ngsl.json-lines-worker","versions":[2]}
+```
+
+The helper acknowledges with
+`{"type":"handshake","protocol":"ngsl.json-lines-worker","version":2}`.
+Version 2 invocation frames add `version: 2`, encode `input` as padded
+standard-base64 `input_base64`, and include `json_output` to select the output
+shape. Byte output uses padded standard-base64 `output_base64`; JSON output
+uses a typed JSON `value` field. When present, the request's `value` is an object
+whose keys are the parameter names selected by the manifest's `json_parameter`
+and `json_arguments` argument nodes; those values are omitted from textual
+`arguments`. Other argument nodes keep their usual argv representation. For
+example, `{"version":2,"id":1,"arguments":["fixture.echo","--args"],"input_base64":"","value":{"payload":{"count":7}},"json_output":true}` carries `payload` as a JSON value instead of stringifying it into argv.
+The runtime rejects duplicate object keys in negotiated v2 frames, validates
+typed JSON output against the declared output schema, and retains it for
+following steps without parsing serialized output bytes. It also reconstructs
+the worker's stdout representation by compact-serializing that value as JSON
+followed by LF. Typed output can use the no-reparse path through 64 nested
+object or array levels. Deeper values use the existing strict byte decoder to
+preserve its recursion-limit behavior. The built-in `execute-applet --worker`
+helper accepts lines up to 64 MiB, matching the maximum lifecycle frame size.
+A 1 MiB byte input or output occupies about 1.34 MiB of base64 text plus a
+small frame envelope.
+
 Responses must match the outstanding request id. A malformed, truncated,
 oversized or mismatched frame, worker crash, timeout or cancellation kills and
 reaps that worker; Execute does not retry a transmitted request because its

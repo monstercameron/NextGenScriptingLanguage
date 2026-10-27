@@ -6,11 +6,11 @@
 //! runtime session.
 
 use super::{
-    configured_inputs, run_finite_inner, CallSite, FiniteRun, GroupOutput, Input, LaunchEnv,
-    Program, RunOptions,
+    CallSite, FiniteRun, GroupOutput, Input, LaunchEnv, Program, RunOptions, configured_inputs,
+    run_finite_inner,
 };
 use crate::modules::LoadedProgramSource;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::BTreeMap;
 
 /// Execute one prevalidated module export as a private child scope.
@@ -137,12 +137,30 @@ pub(super) fn execute(
     let status = manifest
         .success_status()
         .ok_or_else(|| anyhow!("program module applet must declare a success outcome"))?;
-    contract
-        .decode_output(&child.output, status)
-        .with_context(|| format!("line {line}: validating program module output"))?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let typed_json = if manifest.has_json_encoded_output_schema() {
+        let value = crate::contracts::parse_json_strict(&child.output)
+            .with_context(|| format!("line {line}: validating program module output"))?;
+        contract
+            .decode_json_output_value(value.clone(), &child.output, status)
+            .with_context(|| format!("line {line}: validating program module output"))?;
+        Some(value)
+    } else {
+        contract
+            .decode_output(&child.output, status)
+            .with_context(|| format!("line {line}: validating program module output"))?;
+        None
+    };
+    #[cfg(target_arch = "wasm32")]
+    let typed_json = {
+        contract
+            .decode_output(&child.output, status)
+            .with_context(|| format!("line {line}: validating program module output"))?;
+        None
+    };
     Ok(GroupOutput {
         bytes: child.output,
-        typed_json: None,
+        typed_json,
         status: Some(status),
         diagnostic: Vec::new(),
         stdout_captured: true,

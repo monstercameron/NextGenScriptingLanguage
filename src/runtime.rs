@@ -4,7 +4,7 @@ use crate::ast::{
 };
 use crate::contracts::{AppletBackend, Lifecycle, OutcomeKind};
 use crate::manifest::{AppletOutput, Builtin, Manifest, Registry};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -45,8 +45,8 @@ mod step_loop;
 #[cfg(unix)]
 use spawn::execute_group_with_sink;
 use spawn::{
-    captured_stage_stderr, collect_native_stages, execute_group, redact_command_failure,
-    GroupOutput, GroupRequest,
+    GroupOutput, GroupRequest, captured_stage_stderr, collect_native_stages, execute_group,
+    redact_command_failure,
 };
 // Used by the Windows process path (windows_process.rs) through this module.
 #[cfg(windows)]
@@ -54,8 +54,8 @@ use spawn::{
     check_native_abort, native_output_limit_failure, native_spawn_failure, resolved_call_stdio,
 };
 use step_loop::{
-    run_finite, run_finite_inner, run_finite_inner_with_state_source, run_finite_state, FiniteRun,
-    FiniteStart, FiniteStateSource,
+    FiniteRun, FiniteStart, FiniteStateSource, run_finite, run_finite_inner,
+    run_finite_inner_with_state_source, run_finite_state,
 };
 pub(crate) mod statement_hook;
 mod temp;
@@ -63,8 +63,8 @@ mod terminal;
 use crate::working_dir::enter_directory;
 use observe::execute_call_group;
 use redirect::{
-    append_to_open_file, open_output_file, open_redirect_target, verify_opened_identity,
-    ForceStderrCapture, PendingRedirect, StreamScope,
+    ForceStderrCapture, PendingRedirect, StreamScope, append_to_open_file, open_output_file,
+    open_redirect_target, verify_opened_identity,
 };
 mod program_backend;
 pub(crate) mod resume;
@@ -73,8 +73,8 @@ mod streaming;
 pub mod tasks;
 pub mod worker_backend;
 #[cfg(feature = "graph")]
-pub(crate) use checkpoint::graph::{open_graph_checkpoint, PersistenceAuthorizer};
-pub use checkpoint::{read_repair_state, CheckpointOptions, RepairState};
+pub(crate) use checkpoint::graph::{PersistenceAuthorizer, open_graph_checkpoint};
+pub use checkpoint::{CheckpointOptions, RepairState, read_repair_state};
 pub use resume::run_checkpointed;
 
 /// Mark descriptors inherited by this process close-on-exec before starting runtime work.
@@ -90,20 +90,20 @@ pub fn mark_inherited_descriptors_close_on_exec() -> Result<()> {
 #[cfg(feature = "graph")]
 pub(crate) use streaming::run_stream_with_context_and_process_observer;
 pub use streaming::{
-    run_stream, run_stream_with_cancellation, run_stream_with_context, StreamExecutionContext,
-    StreamResult,
+    StreamExecutionContext, StreamResult, run_stream, run_stream_with_cancellation,
+    run_stream_with_context,
 };
 #[cfg_attr(windows, path = "runtime/windows_stdio.rs")]
 mod stdio;
 #[cfg(feature = "live")]
 pub(crate) use service::next_interval;
-#[cfg(feature = "graph")]
-pub(crate) use service::{run_program_module_service, ProgramServiceContext};
 pub use service::{
+    CalendarDedupPolicy, MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
     run_service, run_service_checkpointed, run_service_checkpointed_with_schedule_options,
-    run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
-    MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
+    run_service_with_cancellation, run_service_with_schedule_options,
 };
+#[cfg(feature = "graph")]
+pub(crate) use service::{ProgramServiceContext, run_program_module_service};
 pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
 
 pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
@@ -1329,9 +1329,9 @@ pub fn bundled_model_applet() -> Result<PathBuf> {
     } else {
         "execute-model"
     });
-    let metadata = fs::metadata(&helper).with_context(|| {
-        "bundled execute-model helper missing; build both binaries with cargo build --release"
-    })?;
+    let metadata = fs::metadata(&helper).with_context(
+        || "bundled execute-model helper missing; build both binaries with cargo build --release",
+    )?;
     if !metadata.is_file() || !crate::platform::executable(&metadata) {
         bail!("bundled execute-model helper is not an executable file");
     }
@@ -2838,6 +2838,7 @@ fn execute_json_lines_worker(
         line,
     } = site;
     let LaunchEnv {
+        bindings,
         cwd,
         options,
         signals,
@@ -2860,9 +2861,30 @@ fn execute_json_lines_worker(
         (None, None) => None,
     };
     let spawned = Arc::new(AtomicBool::new(false));
+    #[cfg(not(target_arch = "wasm32"))]
+    let json_output = manifest.has_json_encoded_output_schema();
+    #[cfg(target_arch = "wasm32")]
+    let json_output = false;
+    let (arguments, value) = if launch.protocol_version == 2 {
+        let resolved = call
+            .parameters
+            .iter()
+            .map(|(name, value)| {
+                Ok((
+                    name.clone(),
+                    resolve_borrowed(value, bindings)?.into_owned(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        manifest.build_worker_arguments(&resolved)?
+    } else {
+        (argv, None)
+    };
     let request = worker_backend::WorkerRequest {
-        arguments: argv,
+        arguments,
         input,
+        value,
+        json_output,
         max_output_bytes: options.max_output_bytes,
         sensitivity: signals.sensitivity_floor(),
         deadline,
@@ -2923,7 +2945,7 @@ fn execute_json_lines_worker(
     )?;
     Ok(GroupOutput {
         bytes: response.output,
-        typed_json: None,
+        typed_json: response.typed_json,
         status: Some(response.status),
         diagnostic: response.stderr.clone(),
         stdout_captured: true,
@@ -3088,7 +3110,17 @@ fn execute_call_group_unobserved_inner(group: GroupRequest<'_>) -> Result<GroupO
             }
         );
     }
-    let argv = if backend == AppletBackend::JsonLinesWorker {
+    let worker_uses_typed_v2 = backend == AppletBackend::JsonLinesWorker
+        && manifest.execution_contract().is_some_and(|contract| {
+            matches!(
+                &contract.lifecycle,
+                Lifecycle::JsonLines {
+                    protocol_version: 2,
+                    ..
+                }
+            )
+        });
+    let argv = if backend == AppletBackend::JsonLinesWorker && !worker_uses_typed_v2 {
         match prepared_first_call {
             Some((_, argv)) => argv,
             None => arguments_for_call(call, manifest, bindings)?,
@@ -3505,6 +3537,7 @@ fn worker_launch_for_call(
         .execution_contract()
         .context("json_lines_worker requires a versioned applet contract")?;
     let Lifecycle::JsonLines {
+        protocol_version,
         startup_arguments,
         timeout_ms,
         max_frame_bytes,
@@ -3520,6 +3553,7 @@ fn worker_launch_for_call(
         cwd.to_path_buf(),
         startup_arguments.iter().map(OsString::from).collect(),
         worker_backend::WorkerLimits {
+            protocol_version: *protocol_version,
             timeout: Duration::from_millis(*timeout_ms),
             max_frame_bytes: *max_frame_bytes,
             max_stderr_bytes: *max_stderr_bytes,
@@ -4928,11 +4962,13 @@ mod opt_manifest_binary_path_tests {
             split.as_os_str().as_encoded_bytes(),
             non_utf8.as_os_str().as_encoded_bytes()
         );
-        assert!(double_slash
-            .as_os_str()
-            .as_bytes()
-            .windows(2)
-            .any(|pair| pair == b"//"));
+        assert!(
+            double_slash
+                .as_os_str()
+                .as_bytes()
+                .windows(2)
+                .any(|pair| pair == b"//")
+        );
     }
 
     #[test]
@@ -5092,7 +5128,7 @@ mod input_writer_drop_tests {
     use std::io::{PipeWriter, Write};
     use std::os::fd::AsRawFd;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -5501,6 +5537,82 @@ mod resolved_json_argument_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod typed_worker_json_reuse_tests {
+    use super::*;
+
+    #[test]
+    fn typed_worker_result_reaches_take_without_a_second_json_parse() {
+        let directory = tempfile::tempdir().expect("temporary worker directory");
+        let worker_fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/json_lines_worker.py");
+        let manifest = serde_json::json!({
+            "name": "worker.typed_reuse",
+            "binary": "python3",
+            "parameters": {
+                "payload": {
+                    "type": "record",
+                    "required": true,
+                    "fields": {
+                        "count": {"type": "integer"},
+                        "label": {"type": "string"}
+                    }
+                }
+            },
+            "arguments": [
+                {"literal": "fixture.echo"},
+                {"literal": "--args"},
+                {"json_parameter": "payload"}
+            ],
+            "contract": {
+                "version": 1,
+                "backend": "json_lines_worker",
+                "output": {
+                    "type": "record",
+                    "encoding": "json",
+                    "fields": {
+                        "count": {"type": "integer"},
+                        "label": {"type": "text"}
+                    },
+                    "required": ["count", "label"]
+                },
+                "lifecycle": {
+                    "kind": "json_lines",
+                    "protocol_version": 2,
+                    "startup_arguments": [
+                        worker_fixture.to_string_lossy(),
+                        "--worker",
+                        "echo_value",
+                        directory.path().join("launches").to_string_lossy(),
+                        directory.path().join("effects").to_string_lossy()
+                    ]
+                }
+            }
+        });
+        let registry =
+            Registry::from_sources(&[manifest.to_string()]).expect("valid v2 worker manifest");
+        let program = crate::parser::parse(
+            "run worker.typed_reuse with payload {\"count\":7,\"label\":\"typed\"} as result\ntake integer at \"/count\" from result as count\nthen encode count as json\n",
+        )
+        .expect("valid typed worker program");
+        let options = RunOptions {
+            max_output_bytes: 1024 * 1024,
+            command_timeout: Some(Duration::from_secs(5)),
+            ..RunOptions::new(directory.path().to_path_buf())
+        };
+
+        worker_backend::reset_strict_json_parse_calls();
+        let result = run(&program, &registry, &options)
+            .expect("typed worker result should feed the following take");
+        assert_eq!(result.output, b"7");
+        assert_eq!(
+            worker_backend::strict_json_parse_calls(),
+            2,
+            "the handshake and worker response each require one parse; the following `take` must reuse the retained response value without allocating a third parse tree"
+        );
+    }
+}
+
 #[cfg(test)]
 mod output_limit_message_tests {
     use super::*;
@@ -5591,10 +5703,12 @@ mod atomic_write_target_tests {
 
         assert!(format!("{error:#}").contains("symbolic link"));
         assert_eq!(fs::read(&target).unwrap(), b"old");
-        assert!(fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 }
 
@@ -5989,7 +6103,7 @@ mod lane_v2_path_tests {
     #[cfg(unix)]
     #[test]
     fn lane_v2_path_cache_preserves_symlink_alias_and_permission_changes() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::os::unix::fs::{PermissionsExt, symlink};
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("target");
         fs::write(&target, b"fixture").unwrap();

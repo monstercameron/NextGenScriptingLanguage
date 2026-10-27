@@ -6,7 +6,7 @@ pub use crate::contracts::{
     OutputEncoding, OutputSchema, OutputType, PortDelivery, ProgramModule, RemoteAuthSource,
     RemoteEndpointConfig, Sensitivity, StdioContract, StdioDisposition, StringPattern, ValueSchema,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
@@ -1433,7 +1433,11 @@ impl Registry {
         if !bundled_manifests::directory_matches(path, index)
             .with_context(|| format!("checking default manifest directory {}", path.display()))?
         {
-            bail!("default manifest directory {} differs from the bundled file set; pass --manifest-dir {} to load custom manifests as files", path.display(), path.display());
+            bail!(
+                "default manifest directory {} differs from the bundled file set; pass --manifest-dir {} to load custom manifests as files",
+                path.display(),
+                path.display()
+            );
         }
         let canonical_root = fs::canonicalize(path)
             .with_context(|| format!("canonicalizing manifest root {}", path.display()))?;
@@ -2129,11 +2133,11 @@ impl Manifest {
             return None;
         }
         match self.arguments.as_slice() {
-            [ArgumentNode::Literal { literal: operation }, ArgumentNode::Literal { literal: flag }, ArgumentNode::JsonArguments]
-                if flag == "--args" =>
-            {
-                Some(operation)
-            }
+            [
+                ArgumentNode::Literal { literal: operation },
+                ArgumentNode::Literal { literal: flag },
+                ArgumentNode::JsonArguments,
+            ] if flag == "--args" => Some(operation),
             _ => None,
         }
     }
@@ -2363,7 +2367,7 @@ impl Manifest {
             values: &BTreeMap<String, serde_json::Value>,
             out: &mut Vec<serde_json::Value>,
         ) {
-            use serde_json::{json, Value as J};
+            use serde_json::{Value as J, json};
             fn scalar(value: &J) -> J {
                 match value {
                     J::String(_) | J::Object(_) => value.clone(),
@@ -2424,6 +2428,25 @@ impl Manifest {
             append_arguments(node, &values, &mut argv)?;
         }
         Ok(argv)
+    }
+
+    /// Build v2 worker arguments without stringifying JSON parameter values.
+    /// The returned object contains parameters mapped through `json_parameter`
+    /// and `json_arguments` nodes; ordinary arguments retain their usual argv
+    /// representation.
+    pub(crate) fn build_worker_arguments(
+        &self,
+        values: &BTreeMap<String, Value>,
+    ) -> Result<(Vec<String>, Option<serde_json::Value>)> {
+        let values = self.home_expanded_values(values)?;
+        self.validate_argument_values(values.as_ref())?;
+        let mut arguments = Vec::with_capacity(self.arguments.len());
+        let mut typed_values = serde_json::Map::new();
+        for node in &self.arguments {
+            append_worker_arguments(node, &values, &mut arguments, &mut typed_values)?;
+        }
+        let value = (!typed_values.is_empty()).then_some(serde_json::Value::Object(typed_values));
+        Ok((arguments, value))
     }
 
     /// Return the supplied, already-resolved parameters as a JSON object for
@@ -3405,6 +3428,60 @@ fn append_arguments(
     Ok(())
 }
 
+fn append_worker_arguments(
+    node: &ArgumentNode,
+    values: &BTreeMap<String, Value>,
+    arguments: &mut Vec<String>,
+    typed_values: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    match node {
+        ArgumentNode::Literal { literal } => arguments.push(literal.clone()),
+        ArgumentNode::Parameter { parameter } => {
+            let value = values
+                .get(parameter)
+                .ok_or_else(|| anyhow!("missing parameter {parameter:?}"))?;
+            arguments.push(value_to_string(value)?);
+        }
+        ArgumentNode::Spread { spread } => {
+            let value = values
+                .get(spread)
+                .ok_or_else(|| anyhow!("missing parameter {spread:?}"))?;
+            let Value::List(items) = value else {
+                bail!("parameter {spread:?} must be a list")
+            };
+            arguments.reserve(items.len());
+            for item in items {
+                arguments.push(value_to_string(item)?);
+            }
+        }
+        ArgumentNode::JsonParameter { json_parameter } => {
+            let value = values
+                .get(json_parameter)
+                .ok_or_else(|| anyhow!("missing parameter {json_parameter:?}"))?;
+            typed_values.insert(json_parameter.clone(), crate::structured::to_json(value)?);
+        }
+        ArgumentNode::JsonArguments => {
+            for (name, value) in values {
+                typed_values.insert(name.clone(), crate::structured::to_json(value)?);
+            }
+        }
+        ArgumentNode::PrefixedParameter { prefix, parameter } => {
+            arguments.push(prefixed_argument(prefix, values, parameter)?);
+        }
+        ArgumentNode::WhenPresent {
+            when_present,
+            append,
+        } => {
+            if values.contains_key(when_present) {
+                for child in append {
+                    append_worker_arguments(child, values, arguments, typed_values)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn append_arguments_borrowed<'a>(
     node: &'a ArgumentNode,
@@ -3897,7 +3974,9 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
             bail!("parameter names must be nonempty");
         }
         if spec.kind == ParameterType::Scalar {
-            bail!("parameter {name:?}: scalar is only valid as a parameter-list item or record field type");
+            bail!(
+                "parameter {name:?}: scalar is only valid as a parameter-list item or record field type"
+            );
         }
         if let Some(values) = &spec.enum_values {
             if spec.kind != ParameterType::String {
@@ -3915,7 +3994,9 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
             }
         }
         if (spec.min_length.is_some() || spec.nonempty) && spec.kind != ParameterType::String {
-            bail!("parameter {name:?}: min_length and nonempty constraints apply only to string parameters");
+            bail!(
+                "parameter {name:?}: min_length and nonempty constraints apply only to string parameters"
+            );
         }
         if spec.pattern.is_some() {
             if spec.kind != ParameterType::String {
@@ -4038,7 +4119,9 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
                 || spec.min_length.is_some()
                 || spec.nonempty
             {
-                bail!("parameter {name:?}: schema cannot be combined with legacy list, record, object, or enum constraints");
+                bail!(
+                    "parameter {name:?}: schema cannot be combined with legacy list, record, object, or enum constraints"
+                );
             }
             schema.validate_schema(&format!("parameter {name:?}"))?;
         }
@@ -4299,7 +4382,9 @@ fn validate_parameter_fields(
                         maximum < fields.values().filter(|field| field.required).count()
                     }))
             {
-                bail!("parameter {name:?}: property-count constraints cannot be satisfied by its fields");
+                bail!(
+                    "parameter {name:?}: property-count constraints cannot be satisfied by its fields"
+                );
             }
             for (field_name, field) in fields {
                 if field_name.trim().is_empty() {
@@ -5115,18 +5200,24 @@ mod tests {
 
         let fraction = serde_json::Number::from_f64(0.25).unwrap();
         let invocation = |value| schema_invocation("number.test", "temperature", value);
-        assert!(manifest
-            .validate(&invocation(Value::Number(fraction)))
-            .is_ok());
+        assert!(
+            manifest
+                .validate(&invocation(Value::Number(fraction)))
+                .is_ok()
+        );
         assert!(manifest.validate(&invocation(Value::Integer(2))).is_ok());
-        assert!(manifest
-            .validate(&invocation(Value::String("warm".into())))
-            .is_err());
-        assert!(manifest
-            .validate(&invocation(Value::Number(
-                serde_json::Number::from_f64(2.5).unwrap()
-            )))
-            .is_err());
+        assert!(
+            manifest
+                .validate(&invocation(Value::String("warm".into())))
+                .is_err()
+        );
+        assert!(
+            manifest
+                .validate(&invocation(Value::Number(
+                    serde_json::Number::from_f64(2.5).unwrap()
+                )))
+                .is_err()
+        );
         let resolved = BTreeMap::from([(
             "temperature".into(),
             Value::Number(serde_json::Number::from_f64(2.5).unwrap()),
@@ -5142,9 +5233,11 @@ mod tests {
             Value::Reference("count".into()),
         );
         let bindings = BTreeMap::from([("count".into(), InputType::Usize)]);
-        assert!(manifest
-            .validate_with_types(&integer_binding, &bindings)
-            .is_ok());
+        assert!(
+            manifest
+                .validate_with_types(&integer_binding, &bindings)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -5272,28 +5365,34 @@ mod tests {
             {"not_equals":null},
             {"pointer":"/items","type":"array"}
         ]));
-        assert!(manifest
-            .validate(&schema_invocation("json.filter", "where", valid))
-            .is_ok());
+        assert!(
+            manifest
+                .validate(&schema_invocation("json.filter", "where", valid))
+                .is_ok()
+        );
 
         let deferred = Value::List(vec![Value::Record(BTreeMap::from([
             ("pointer".into(), Value::Reference("dynamic_pointer".into())),
             ("exists".into(), Value::Bool(true)),
         ]))]);
-        assert!(manifest
-            .validate(&schema_invocation("json.filter", "where", deferred))
-            .is_ok());
+        assert!(
+            manifest
+                .validate(&schema_invocation("json.filter", "where", deferred))
+                .is_ok()
+        );
         let dynamic_list = schema_invocation(
             "json.filter",
             "where",
             Value::Reference("dynamic_predicates".into()),
         );
-        assert!(manifest
-            .validate_with_types(
-                &dynamic_list,
-                &BTreeMap::from([("dynamic_predicates".into(), InputType::JsonList)]),
-            )
-            .is_ok());
+        assert!(
+            manifest
+                .validate_with_types(
+                    &dynamic_list,
+                    &BTreeMap::from([("dynamic_predicates".into(), InputType::JsonList)]),
+                )
+                .is_ok()
+        );
         let too_many = serde_json::Value::Array(
             (0..33)
                 .map(|_| serde_json::json!({"exists":true}))
@@ -5394,9 +5493,11 @@ mod tests {
             &unsigned_list_schema,
             InputType::UnsignedIntegerList
         ));
-        assert!(schema
-            .validate_value(&Value::Number(serde_json::Number::from(usize::MAX as u64)))
-            .is_ok());
+        assert!(
+            schema
+                .validate_value(&Value::Number(serde_json::Number::from(usize::MAX as u64)))
+                .is_ok()
+        );
         assert_eq!(
             parameter_schema(ParameterType::UnsignedInteger, None)["maximum"],
             usize::MAX as u64
@@ -5512,12 +5613,14 @@ mod tests {
             manifest.contract()["parameters_schema"]["properties"]["text"]["minLength"],
             2
         );
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([(
-                "text".into(),
-                Value::String("éa".into())
-            )]))
-            .is_ok());
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([(
+                    "text".into(),
+                    Value::String("éa".into())
+                )]))
+                .is_ok()
+        );
         let error = manifest
             .build_arguments(&BTreeMap::from([(
                 "text".into(),
@@ -5565,18 +5668,22 @@ mod tests {
                 .to_string();
             assert!(error.contains("must be nonempty text"), "{error}");
         }
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([(
-                "text".into(),
-                Value::String("é".into())
-            )]))
-            .is_ok());
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([(
-                "text".into(),
-                Value::String("\u{FEFF}".into())
-            )]))
-            .is_ok());
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([(
+                    "text".into(),
+                    Value::String("é".into())
+                )]))
+                .is_ok()
+        );
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([(
+                    "text".into(),
+                    Value::String("\u{FEFF}".into())
+                )]))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -5592,9 +5699,11 @@ mod tests {
                 Value::Record(BTreeMap::from([("ok".into(), Value::Bool(true))])),
             ),
         ]));
-        assert!(dynamic
-            .validate_argument_values(&BTreeMap::from([("value".into(), dynamic_value)]))
-            .is_ok());
+        assert!(
+            dynamic
+                .validate_argument_values(&BTreeMap::from([("value".into(), dynamic_value)]))
+                .is_ok()
+        );
         assert_eq!(
             dynamic.contract()["parameters_schema"]["properties"]["value"]["additionalProperties"],
             serde_json::json!({})
@@ -5604,55 +5713,67 @@ mod tests {
             r#"{"name":"scalars","binary":"echo","parameters":{"values":{"type":"record","required":true,"fields":{},"additional_properties":{"type":"scalar"}}},"arguments":[{"json_parameter":"values"}]}"#,
         )
         .unwrap();
-        assert!(scalars
-            .validate_argument_values(&BTreeMap::from([(
-                "values".into(),
-                Value::Record(BTreeMap::from([
-                    ("text".into(), Value::String("hello".into())),
-                    ("integer".into(), Value::Integer(1)),
-                    (
-                        "number".into(),
-                        Value::Number(serde_json::Number::from_f64(1.5).unwrap()),
-                    ),
-                    ("boolean".into(), Value::Bool(true)),
-                ]))
-            )]))
-            .is_ok());
-        assert!(scalars
-            .validate_argument_values(&BTreeMap::from([(
-                "values".into(),
-                Value::Record(BTreeMap::from([("bad".into(), Value::Null)]))
-            )]))
-            .is_err());
+        assert!(
+            scalars
+                .validate_argument_values(&BTreeMap::from([(
+                    "values".into(),
+                    Value::Record(BTreeMap::from([
+                        ("text".into(), Value::String("hello".into())),
+                        ("integer".into(), Value::Integer(1)),
+                        (
+                            "number".into(),
+                            Value::Number(serde_json::Number::from_f64(1.5).unwrap()),
+                        ),
+                        ("boolean".into(), Value::Bool(true)),
+                    ]))
+                )]))
+                .is_ok()
+        );
+        assert!(
+            scalars
+                .validate_argument_values(&BTreeMap::from([(
+                    "values".into(),
+                    Value::Record(BTreeMap::from([("bad".into(), Value::Null)]))
+                )]))
+                .is_err()
+        );
 
         let criteria = parse_manifest(
             r#"{"name":"criteria","binary":"echo","parameters":{"values":{"type":"record","required":true,"fields":{},"additional_properties":{"type":"string","nonempty":true},"min_properties":2,"max_properties":3}},"arguments":[{"json_parameter":"values"}]}"#,
         )
         .unwrap();
         let values = |entries| BTreeMap::from([("values".into(), Value::Record(entries))]);
-        assert!(criteria
-            .validate_argument_values(&values(BTreeMap::from([
-                ("first".into(), Value::String("description".into())),
-                ("second".into(), Value::String("another".into())),
-            ])))
-            .is_ok());
-        assert!(criteria
-            .validate_argument_values(&values(BTreeMap::new()))
-            .is_err());
-        assert!(criteria
-            .validate_argument_values(&values(BTreeMap::from([
-                ("first".into(), Value::String(" ".into())),
-                ("second".into(), Value::String("another".into())),
-            ])))
-            .is_err());
-        assert!(criteria
-            .validate_argument_values(&values(BTreeMap::from([
-                ("first".into(), Value::String("one".into())),
-                ("second".into(), Value::String("two".into())),
-                ("third".into(), Value::String("three".into())),
-                ("fourth".into(), Value::String("four".into())),
-            ])))
-            .is_err());
+        assert!(
+            criteria
+                .validate_argument_values(&values(BTreeMap::from([
+                    ("first".into(), Value::String("description".into())),
+                    ("second".into(), Value::String("another".into())),
+                ])))
+                .is_ok()
+        );
+        assert!(
+            criteria
+                .validate_argument_values(&values(BTreeMap::new()))
+                .is_err()
+        );
+        assert!(
+            criteria
+                .validate_argument_values(&values(BTreeMap::from([
+                    ("first".into(), Value::String(" ".into())),
+                    ("second".into(), Value::String("another".into())),
+                ])))
+                .is_err()
+        );
+        assert!(
+            criteria
+                .validate_argument_values(&values(BTreeMap::from([
+                    ("first".into(), Value::String("one".into())),
+                    ("second".into(), Value::String("two".into())),
+                    ("third".into(), Value::String("three".into())),
+                    ("fourth".into(), Value::String("four".into())),
+                ])))
+                .is_err()
+        );
     }
 
     #[test]
@@ -5677,21 +5798,27 @@ mod tests {
             retry: None,
         };
         let bytes = BTreeMap::from([("raw".into(), InputType::Bytes)]);
-        assert!(manifest
-            .validate_with_types(&invocation(Value::Reference("raw".into())), &bytes)
-            .is_err());
-        assert!(manifest
-            .validate_with_types(
-                &invocation(Value::List(vec![Value::Reference("raw".into())])),
-                &bytes,
-            )
-            .is_err());
+        assert!(
+            manifest
+                .validate_with_types(&invocation(Value::Reference("raw".into())), &bytes)
+                .is_err()
+        );
+        assert!(
+            manifest
+                .validate_with_types(
+                    &invocation(Value::List(vec![Value::Reference("raw".into())])),
+                    &bytes,
+                )
+                .is_err()
+        );
 
         for kind in [InputType::Text, InputType::Json] {
             let bindings = BTreeMap::from([("valid".into(), kind)]);
-            assert!(manifest
-                .validate_with_types(&invocation(Value::Reference("valid".into())), &bindings,)
-                .is_ok());
+            assert!(
+                manifest
+                    .validate_with_types(&invocation(Value::Reference("valid".into())), &bindings,)
+                    .is_ok()
+            );
         }
     }
 
@@ -5945,11 +6072,13 @@ mod tests {
         assert!(open_regular_manifest(&link, true).is_err());
         assert!(open_regular_manifest(&link, false).is_ok());
         let fifo = directory.path().join("fifo.json");
-        assert!(std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
         assert!(open_regular_manifest(&fifo, true).is_err());
         assert!(open_regular_manifest(&fifo, false).is_err());
     }
@@ -6145,15 +6274,19 @@ mod tests {
                 "--flag"
             ]
         );
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([
-                ("message".into(), Value::String("ok".into())),
-                ("files".into(), Value::List(vec![]))
-            ]))
-            .is_err());
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([("message".into(), Value::Integer(7))]))
-            .is_err());
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([
+                    ("message".into(), Value::String("ok".into())),
+                    ("files".into(), Value::List(vec![]))
+                ]))
+                .is_err()
+        );
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([("message".into(), Value::Integer(7))]))
+                .is_err()
+        );
     }
 
     #[test]
@@ -6226,18 +6359,22 @@ mod tests {
             retry: None,
         };
         assert!(manifest.validate(&invocation).is_ok());
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([(
-                "paths".into(),
-                Value::List(vec![Value::Reference("path".into())]),
-            )]))
-            .is_err());
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([(
-                "paths".into(),
-                Value::List(vec![Value::String("valid.txt".into())]),
-            )]))
-            .is_ok());
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([(
+                    "paths".into(),
+                    Value::List(vec![Value::Reference("path".into())]),
+                )]))
+                .is_err()
+        );
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([(
+                    "paths".into(),
+                    Value::List(vec![Value::String("valid.txt".into())]),
+                )]))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -6266,15 +6403,19 @@ mod tests {
             retry: None,
         };
 
-        assert!(manifest
-            .validate(&invocation("text", Value::Reference("result".into())))
-            .is_ok());
-        assert!(manifest
-            .validate(&invocation(
-                "strings",
-                Value::List(vec![Value::Reference("result".into())]),
-            ))
-            .is_ok());
+        assert!(
+            manifest
+                .validate(&invocation("text", Value::Reference("result".into())))
+                .is_ok()
+        );
+        assert!(
+            manifest
+                .validate(&invocation(
+                    "strings",
+                    Value::List(vec![Value::Reference("result".into())]),
+                ))
+                .is_ok()
+        );
         for (name, value) in [
             ("number", Value::Reference("result".into())),
             ("flag", Value::Reference("result".into())),
@@ -6286,12 +6427,14 @@ mod tests {
         ] {
             assert!(manifest.validate(&invocation(name, value)).is_err());
         }
-        assert!(manifest
-            .build_arguments(&BTreeMap::from([(
-                "text".into(),
-                Value::Reference("result".into()),
-            )]))
-            .is_err());
+        assert!(
+            manifest
+                .build_arguments(&BTreeMap::from([(
+                    "text".into(),
+                    Value::Reference("result".into()),
+                )]))
+                .is_err()
+        );
     }
 
     #[test]
@@ -6364,12 +6507,14 @@ mod tests {
                 .unwrap(),
             ["folder with spaces"]
         );
-        assert!(registry
-            .resolve("pwd")
-            .unwrap()
-            .build_arguments(&BTreeMap::new())
-            .unwrap()
-            .is_empty());
+        assert!(
+            registry
+                .resolve("pwd")
+                .unwrap()
+                .build_arguments(&BTreeMap::new())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             registry
                 .resolve("ls")
@@ -6502,9 +6647,11 @@ mod tests {
                 retry: None,
             };
             assert!(manifest.validate(&invocation).is_err());
-            assert!(manifest
-                .build_arguments(&BTreeMap::from([(parameter.into(), value)]))
-                .is_err());
+            assert!(
+                manifest
+                    .build_arguments(&BTreeMap::from([(parameter.into(), value)]))
+                    .is_err()
+            );
         }
     }
     #[test]
@@ -6821,13 +6968,15 @@ mod first_token_rule_tests {
         assert!(
             check_option_items("a", &spec, &items(&["resizeactive", "-10", "0"]), false).is_ok()
         );
-        assert!(check_option_items(
-            "a",
-            &spec,
-            &items(&["resizeactive", "-10%", "10.5%"]),
-            false
-        )
-        .is_ok());
+        assert!(
+            check_option_items(
+                "a",
+                &spec,
+                &items(&["resizeactive", "-10%", "10.5%"]),
+                false
+            )
+            .is_ok()
+        );
         assert!(
             check_option_items("a", &spec, &items(&["workspace", "--batch", "x"]), false).is_err()
         );

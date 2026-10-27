@@ -42,8 +42,8 @@ use flow::{parser, runtime};
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -116,6 +116,15 @@ fn launch_for_registry(
     mode: &str,
     registry: manifest::Registry,
 ) -> WorkerLaunch {
+    launch_with_protocol(directory, mode, registry, 1)
+}
+
+fn launch_with_protocol(
+    directory: &TempDir,
+    mode: &str,
+    registry: manifest::Registry,
+    protocol_version: u32,
+) -> WorkerLaunch {
     WorkerLaunch::inherited(
         registry,
         "worker.fixture".to_owned(),
@@ -129,6 +138,7 @@ fn launch_for_registry(
             directory.path().join("effects").into_os_string(),
         ],
         worker_backend::WorkerLimits {
+            protocol_version,
             timeout: Duration::from_secs(5),
             max_frame_bytes: MAX_FRAME,
             max_stderr_bytes: MAX_STDERR,
@@ -144,6 +154,8 @@ fn request(arguments: &[&str], input: &[u8]) -> WorkerRequest {
             .map(|argument| (*argument).to_owned())
             .collect(),
         input: input.to_vec(),
+        value: None,
+        json_output: false,
         max_output_bytes: MAX_FRAME,
         sensitivity: security::SensitivitySet::from_label(flow::contracts::Sensitivity::Unknown),
         deadline: None,
@@ -234,6 +246,175 @@ fn one_worker_serves_multiple_requests_and_preserves_input_bytes() {
         )
         .expect("binary input response");
     assert_eq!(echo.output, [0, 10, 13, 34, 92, 127, 128, 255]);
+}
+
+#[test]
+fn v2_base64_frames_carry_megabyte_bytes_under_the_1_4_mb_limit() {
+    let _guard = lock_worker_tests();
+    let payload = vec![0xA5; 1024 * 1024];
+    let legacy_directory = TempDir::new().expect("temporary legacy worker directory");
+    let mut legacy_launch = launch(&legacy_directory, "echo_input");
+    legacy_launch.max_frame_bytes = 1_400_000;
+    let error = WorkerPool::default()
+        .invoke(legacy_launch, request(&[], &payload))
+        .expect_err("version 1 integer arrays exceed the compact frame limit");
+    assert_eq!(
+        worker_error(&error).kind,
+        worker_backend::WorkerErrorKind::OutputLimit
+    );
+    assert!(
+        !legacy_directory.path().join("launches").exists(),
+        "oversized legacy frames must be rejected before spawning"
+    );
+
+    let directory = TempDir::new().expect("temporary v2 worker directory");
+    let mut v2_launch = launch_with_protocol(&directory, "echo_input", fixture_registry(), 2);
+    v2_launch.max_frame_bytes = 1_400_000;
+    let response = WorkerPool::default()
+        .invoke(v2_launch, request(&[], &payload))
+        .expect("base64 frames should fit the 1.4 MB limit in both directions");
+    assert_eq!(response.output, payload);
+    assert!(response.typed_json.is_none());
+}
+
+#[test]
+fn v2_typed_json_response_is_retained_for_the_next_program_step() {
+    let _guard = lock_worker_tests();
+    let directory = TempDir::new().expect("temporary typed worker directory");
+    let manifest_source = serde_json::json!({
+        "name": "worker.fixture",
+        "binary": python3().to_string_lossy(),
+        "parameters": {
+            "payload": {
+                "type": "record",
+                "required": true,
+                "fields": {
+                    "count": {"type": "integer"},
+                    "label": {"type": "string"}
+                }
+            }
+        },
+        "arguments": [
+            {"literal":"fixture.echo"},
+            {"literal":"--args"},
+            {"json_parameter":"payload"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "json_lines_worker",
+            "output": {
+                "type": "record",
+                "encoding": "json",
+                "fields": {
+                    "count": {"type": "integer"},
+                    "label": {"type": "text"}
+                },
+                "required": ["count", "label"]
+            },
+            "lifecycle": {
+                "kind": "json_lines",
+                "protocol_version": 2,
+                "startup_arguments": [
+                    fixture().to_string_lossy(),
+                    "--worker",
+                    "echo_value",
+                    directory.path().join("launches").to_string_lossy(),
+                    directory.path().join("effects").to_string_lossy()
+                ]
+            }
+        }
+    });
+    let registry = manifest::Registry::from_sources(&[manifest_source.to_string()])
+        .expect("valid v2 typed worker manifest");
+    let options = runtime::RunOptions {
+        max_output_bytes: MAX_FRAME,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let program = parser::parse(
+        "run worker.fixture with payload {\"count\":7,\"label\":\"typed\"} as result\ntake integer at \"/count\" from result as count\nthen encode count as json\n",
+    )
+    .expect("valid typed worker program");
+    let result = runtime::run(&program, &registry, &options)
+        .expect("typed worker value should flow to the next step");
+    assert_eq!(result.output, b"7");
+}
+
+#[test]
+fn v2_typed_json_rejects_duplicate_keys_before_binding_the_value() {
+    let _guard = lock_worker_tests();
+    let directory = TempDir::new().expect("temporary duplicate JSON worker directory");
+    let mut worker_request = request(&[], &[]);
+    worker_request.json_output = true;
+    let error = WorkerPool::default()
+        .invoke(
+            launch_with_protocol(&directory, "duplicate_json", fixture_registry(), 2),
+            worker_request,
+        )
+        .expect_err("duplicate JSON keys must remain invalid in v2 responses");
+    assert_eq!(
+        worker_error(&error).kind,
+        worker_backend::WorkerErrorKind::ProtocolError
+    );
+}
+
+#[test]
+#[ignore = "paired 1 MiB v1/v2 JSON-lines latency acceptance; run in release mode"]
+#[allow(clippy::assertions_on_constants)] // Keep the explicit release-only probe buildable in debug.
+fn v2_worker_round_trip_is_at_least_three_times_faster_than_v1() {
+    assert!(
+        !cfg!(debug_assertions),
+        "run this paired latency probe with --release"
+    );
+    let _guard = lock_worker_tests();
+    let payload = vec![b'x'; 1024 * 1024];
+    let v1_directory = TempDir::new().expect("temporary v1 benchmark worker directory");
+    let v2_directory = TempDir::new().expect("temporary v2 benchmark worker directory");
+    let mut v1_launch = launch(&v1_directory, "echo_input");
+    v1_launch.max_frame_bytes = 8 * 1024 * 1024;
+    let mut v2_launch = launch_with_protocol(&v2_directory, "echo_input", fixture_registry(), 2);
+    v2_launch.max_frame_bytes = 1_400_000;
+    let v1_pool = WorkerPool::default();
+    let v2_pool = WorkerPool::default();
+    for _ in 0..3 {
+        let v1 = v1_pool
+            .invoke(v1_launch.clone(), request(&[], &payload))
+            .expect("v1 warmup");
+        let v2 = v2_pool
+            .invoke(v2_launch.clone(), request(&[], &payload))
+            .expect("v2 warmup");
+        assert_eq!(v1.output, payload);
+        assert_eq!(v2.output, payload);
+    }
+    let mut v1_samples = Vec::with_capacity(15);
+    let mut v2_samples = Vec::with_capacity(15);
+    for _ in 0..15 {
+        let v1_request = request(&[], &payload);
+        let started = Instant::now();
+        let v1 = v1_pool
+            .invoke(v1_launch.clone(), v1_request)
+            .expect("v1 measured round trip");
+        v1_samples.push(started.elapsed().as_micros());
+        assert_eq!(v1.output, payload);
+
+        let v2_request = request(&[], &payload);
+        let started = Instant::now();
+        let v2 = v2_pool
+            .invoke(v2_launch.clone(), v2_request)
+            .expect("v2 measured round trip");
+        v2_samples.push(started.elapsed().as_micros());
+        assert_eq!(v2.output, payload);
+    }
+    v1_samples.sort_unstable();
+    v2_samples.sort_unstable();
+    let v1_median = v1_samples[v1_samples.len() / 2];
+    let v2_median = v2_samples[v2_samples.len() / 2];
+    let speedup = v1_median as f64 / v2_median as f64;
+    eprintln!(
+        "paired worker round-trip medians: v1={}us v2={}us speedup={speedup:.2}x; v1_samples={v1_samples:?}; v2_samples={v2_samples:?}",
+        v1_median, v2_median
+    );
+    assert!(speedup >= 3.0, "v2 round-trip speedup was {speedup:.2}x");
 }
 
 #[test]
@@ -457,10 +638,11 @@ fn serialized_reuse_rechecks_worker_history_before_sending_a_request() {
         thread::sleep(Duration::from_millis(5));
     }
     assert!(effects.exists(), "secret request reached the worker");
-    assert!(pool
-        .sensitivity_history_for_launch(&worker_launch)
-        .unwrap()
-        .contains(&flow::contracts::Sensitivity::Secret));
+    assert!(
+        pool.sensitivity_history_for_launch(&worker_launch)
+            .unwrap()
+            .contains(&flow::contracts::Sensitivity::Secret)
+    );
 
     let mut public = request(&[], b"public");
     public.sensitivity = security::SensitivitySet::from_label(flow::contracts::Sensitivity::Public);
@@ -507,9 +689,11 @@ fn output_and_stderr_limits_are_enforced() {
     let error = pool
         .invoke(launch(&directory, "large_output"), output_request)
         .expect_err("oversized output must be rejected");
-    assert!(error
-        .to_string()
-        .contains("exceeding the maximum of 8 bytes"));
+    assert!(
+        error
+            .to_string()
+            .contains("exceeding the maximum of 8 bytes")
+    );
     assert!(!worker_error(&error).uncertain_effect);
     assert_eq!(worker_error(&error).completed_status, Some(0));
     assert_eq!(
@@ -546,9 +730,11 @@ fn output_and_stderr_limits_are_enforced() {
         .invoke(stderr_launch.clone(), request(&[], &[]))
         .expect_err("oversized diagnostic must be rejected");
     assert!(error.to_string().contains("stderr was 128 bytes"));
-    assert!(error
-        .to_string()
-        .contains("request completed with status 0"));
+    assert!(
+        error
+            .to_string()
+            .contains("request completed with status 0")
+    );
     assert!(!worker_error(&error).uncertain_effect);
     assert_eq!(worker_error(&error).completed_status, Some(0));
     assert_eq!(

@@ -5,7 +5,7 @@
 //! permit.
 
 use crate::ast::{InputType, Value};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -165,6 +165,12 @@ pub enum Lifecycle {
     ProgramService,
     #[serde(rename = "json_lines")]
     JsonLines {
+        /// Highest JSON-lines framing version this worker implements. Existing
+        /// manifests default to version 1; version 2 uses a startup handshake
+        /// before sending compact base64 bytes and typed JSON values.
+        #[serde(default = "default_worker_protocol_version")]
+        #[serde(skip_serializing_if = "is_default_worker_protocol_version")]
+        protocol_version: u32,
         /// Arguments passed when the worker process starts.
         #[serde(default = "default_worker_startup_arguments")]
         startup_arguments: Vec<String>,
@@ -196,6 +202,14 @@ fn default_worker_max_stderr_bytes() -> usize {
     64 * 1_024
 }
 
+fn default_worker_protocol_version() -> u32 {
+    1
+}
+
+fn is_default_worker_protocol_version(value: &u32) -> bool {
+    *value == default_worker_protocol_version()
+}
+
 fn default_remote_timeout_ms() -> u64 {
     30_000
 }
@@ -207,12 +221,16 @@ fn default_remote_frame_bytes() -> usize {
 impl Lifecycle {
     pub fn validate(&self) -> Result<()> {
         if let Self::JsonLines {
+            protocol_version,
             startup_arguments,
             timeout_ms,
             max_frame_bytes,
             max_stderr_bytes,
         } = self
         {
+            if !(1..=2).contains(protocol_version) {
+                bail!("json_lines protocol_version must be 1 or 2");
+            }
             if *timeout_ms == 0 || *timeout_ms > 300_000 {
                 bail!("json_lines timeout_ms must be between 1 and 300000");
             }
@@ -2301,7 +2319,7 @@ fn json_kind(value: &serde_json::Value) -> &'static str {
 /// Parse JSON while rejecting duplicate object keys. A normal `Value` parse
 /// silently keeps the last duplicate key, which could change a validated
 /// record after an applet's bytes cross the contract boundary.
-fn parse_json_strict(bytes: &[u8]) -> Result<serde_json::Value> {
+pub fn parse_json_strict(bytes: &[u8]) -> Result<serde_json::Value> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value = StrictJsonValue::deserialize(&mut deserializer).context("parsing JSON")?;
     deserializer.end().context("parsing JSON")?;
@@ -3082,13 +3100,17 @@ mod typed_json_decode_tests {
             usize::MAX as u128 >= u64::MAX as u128
         );
         assert!(!signed.is_assignable_to(&usize_schema));
-        assert!(usize_schema
-            .validate_value(&Value::Number(usize::MAX.into()))
-            .is_ok());
+        assert!(
+            usize_schema
+                .validate_value(&Value::Number(usize::MAX.into()))
+                .is_ok()
+        );
         if (usize::MAX as u128) < u64::MAX as u128 {
-            assert!(usize_schema
-                .validate_value(&Value::Number((usize::MAX as u64 + 1).into()))
-                .is_err());
+            assert!(
+                usize_schema
+                    .validate_value(&Value::Number((usize::MAX as u64 + 1).into()))
+                    .is_err()
+            );
         }
     }
 
@@ -3342,39 +3364,49 @@ mod numeric_minimum_tests {
             OutputType::Number,
             Some(serde_json::Number::from(9_007_199_254_740_993_u64)),
         );
-        assert!(above_f64_integer_range
-            .validate_value(&Value::Number(serde_json::Number::from(
-                9_007_199_254_740_992_u64
-            )))
-            .is_err());
-        assert!(above_f64_integer_range
-            .validate_value(&Value::Number(serde_json::Number::from(
-                9_007_199_254_740_993_u64
-            )))
-            .is_ok());
+        assert!(
+            above_f64_integer_range
+                .validate_value(&Value::Number(serde_json::Number::from(
+                    9_007_199_254_740_992_u64
+                )))
+                .is_err()
+        );
+        assert!(
+            above_f64_integer_range
+                .validate_value(&Value::Number(serde_json::Number::from(
+                    9_007_199_254_740_993_u64
+                )))
+                .is_ok()
+        );
 
         let beyond_i64 = schema(
             OutputType::Number,
             Some(serde_json::Number::from(9_223_372_036_854_775_808_u64)),
         );
-        assert!(beyond_i64
-            .validate_value(&Value::Integer(i64::MAX))
-            .is_err());
+        assert!(
+            beyond_i64
+                .validate_value(&Value::Integer(i64::MAX))
+                .is_err()
+        );
 
         let mixed_integer_float_minimum = schema(
             OutputType::Number,
             Some(serde_json::Number::from_f64(9_007_199_254_740_994.0).unwrap()),
         );
-        assert!(mixed_integer_float_minimum
-            .validate_value(&Value::Integer(9_007_199_254_740_993))
-            .is_err());
+        assert!(
+            mixed_integer_float_minimum
+                .validate_value(&Value::Integer(9_007_199_254_740_993))
+                .is_err()
+        );
         let mixed_i64_float_minimum = schema(
             OutputType::Number,
             Some(serde_json::Number::from_f64(9_223_372_036_854_775_808.0).unwrap()),
         );
-        assert!(mixed_i64_float_minimum
-            .validate_value(&Value::Integer(i64::MAX))
-            .is_err());
+        assert!(
+            mixed_i64_float_minimum
+                .validate_value(&Value::Integer(i64::MAX))
+                .is_err()
+        );
 
         let fractional = schema(
             OutputType::Integer,
@@ -3387,12 +3419,16 @@ mod numeric_minimum_tests {
             OutputType::Number,
             Some(serde_json::Number::from_f64(0.5).unwrap()),
         );
-        assert!(fractional_number
-            .validate_value(&Value::Number(serde_json::Number::from_f64(0.49).unwrap()))
-            .is_err());
-        assert!(fractional_number
-            .validate_value(&Value::Number(serde_json::Number::from_f64(0.5).unwrap()))
-            .is_ok());
+        assert!(
+            fractional_number
+                .validate_value(&Value::Number(serde_json::Number::from_f64(0.49).unwrap()))
+                .is_err()
+        );
+        assert!(
+            fractional_number
+                .validate_value(&Value::Number(serde_json::Number::from_f64(0.5).unwrap()))
+                .is_ok()
+        );
     }
 
     #[test]

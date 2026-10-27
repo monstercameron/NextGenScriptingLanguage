@@ -309,20 +309,32 @@ impl ParameterSchema {
             ParameterType::Json => serde_json::json!({}),
             ParameterType::String => {
                 let mut value = serde_json::json!({"type":"string"});
-                if let Some(choices) = &self.enum_values { value["enum"] = serde_json::json!(choices); }
+                if let Some(choices) = &self.enum_values {
+                    value["enum"] = serde_json::json!(choices);
+                }
                 value
             }
-            ParameterType::Path => serde_json::json!({"type":"string","format":"path","minLength":1}),
+            ParameterType::Path => {
+                serde_json::json!({"type":"string","format":"path","minLength":1})
+            }
             ParameterType::Integer => serde_json::json!({"type":"integer"}),
             ParameterType::Boolean => serde_json::json!({"type":"boolean"}),
             ParameterType::Record => {
-                let properties = self.fields.iter().map(|(name, schema)| (name.clone(), schema.json_schema())).collect::<serde_json::Map<_,_>>();
+                let properties = self
+                    .fields
+                    .iter()
+                    .map(|(name, schema)| (name.clone(), schema.json_schema()))
+                    .collect::<serde_json::Map<_, _>>();
                 serde_json::json!({"type":"object","properties":properties,"required":self.required,"additionalProperties":!self.one_of.is_empty()})
             }
-            ParameterType::List => serde_json::json!({"type":"array","items":self.items.as_deref().expect("list schema validated").json_schema()}),
+            ParameterType::List => {
+                serde_json::json!({"type":"array","items":self.items.as_deref().expect("list schema validated").json_schema()})
+            }
             ParameterType::Scalar => serde_json::json!({}),
         };
-        if self.one_of.is_empty() { base } else if self.kind == ParameterType::Json {
+        if self.one_of.is_empty() {
+            base
+        } else if self.kind == ParameterType::Json {
             serde_json::json!({"oneOf":self.one_of.iter().map(Self::json_schema).collect::<Vec<_>>()})
         } else {
             serde_json::json!({"allOf":[base,{"oneOf":self.one_of.iter().map(Self::json_schema).collect::<Vec<_>>()}]})
@@ -360,9 +372,19 @@ impl ParameterSchema {
                     bail!("{path}: string enums cannot contain duplicates");
                 }
             }
-            ParameterType::Path | ParameterType::Integer | ParameterType::Boolean | ParameterType::Json => {
-                if self.items.is_some() || !self.fields.is_empty() || !self.required.is_empty() || self.enum_values.is_some() {
-                    bail!("{path}: {} schemas cannot declare items, fields, or enums", self.kind);
+            ParameterType::Path
+            | ParameterType::Integer
+            | ParameterType::Boolean
+            | ParameterType::Json => {
+                if self.items.is_some()
+                    || !self.fields.is_empty()
+                    || !self.required.is_empty()
+                    || self.enum_values.is_some()
+                {
+                    bail!(
+                        "{path}: {} schemas cannot declare items, fields, or enums",
+                        self.kind
+                    );
                 }
             }
             ParameterType::Scalar => bail!("{path}: scalar is not valid in a JSON schema"),
@@ -385,7 +407,9 @@ impl ParameterSchema {
         if self.one_of.len() == 1 {
             bail!("{path}: one_of requires at least two variants");
         }
-        if !self.one_of.is_empty() && !matches!(self.kind, ParameterType::Json | ParameterType::Record) {
+        if !self.one_of.is_empty()
+            && !matches!(self.kind, ParameterType::Json | ParameterType::Record)
+        {
             bail!("{path}: one_of applies only to JSON or record schemas");
         }
         Ok(())
@@ -415,9 +439,10 @@ impl ParameterSchema {
                                     matches!(item.kind, ParameterType::String | ParameterType::Path)
                                 }))
                             || (kind == InputType::IntegerList
-                                && self.items.as_deref().is_some_and(|item| {
-                                    item.kind == ParameterType::Integer
-                                }))
+                                && self
+                                    .items
+                                    .as_deref()
+                                    .is_some_and(|item| item.kind == ParameterType::Integer))
                     }
                     ParameterType::Scalar => false,
                 };
@@ -428,14 +453,32 @@ impl ParameterSchema {
             }
         }
         match (self.kind, value) {
-            (ParameterType::Json, Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_) | Value::List(_) | Value::Record(_) | Value::Null) => {}
+            (
+                ParameterType::Json,
+                Value::String(_)
+                | Value::Integer(_)
+                | Value::Number(_)
+                | Value::Bool(_)
+                | Value::List(_)
+                | Value::Record(_)
+                | Value::Null,
+            ) => {}
             (ParameterType::String, Value::String(text)) => {
-                if self.enum_values.as_ref().is_some_and(|choices| !choices.contains(text)) {
-                    bail!("{path} must be one of {:?}", self.enum_values.as_ref().unwrap());
+                if self
+                    .enum_values
+                    .as_ref()
+                    .is_some_and(|choices| !choices.contains(text))
+                {
+                    bail!(
+                        "{path} must be one of {:?}",
+                        self.enum_values.as_ref().unwrap()
+                    );
                 }
             }
-            (ParameterType::Path, Value::String(text)) if !text.is_empty() && !text.contains('\0') => {}
-            (ParameterType::Integer, Value::Integer(_)) | (ParameterType::Boolean, Value::Bool(_)) => {}
+            (ParameterType::Path, Value::String(text))
+                if !text.is_empty() && !text.contains('\0') => {}
+            (ParameterType::Integer, Value::Integer(_))
+            | (ParameterType::Boolean, Value::Bool(_)) => {}
             (ParameterType::Record, Value::Record(fields)) => {
                 for name in &self.required {
                     if !fields.contains_key(name) {
@@ -458,7 +501,12 @@ impl ParameterSchema {
             (ParameterType::List, Value::List(items)) => {
                 let schema = self.items.as_deref().expect("list schema validated");
                 for (index, value) in items.iter().enumerate() {
-                    schema.validate_value(value, &format!("{path}[{index}]"), allow_references, bindings)?;
+                    schema.validate_value(
+                        value,
+                        &format!("{path}[{index}]"),
+                        allow_references,
+                        bindings,
+                    )?;
                 }
             }
             _ => bail!("{path} has the wrong value type for {:?}", self.kind),
@@ -466,7 +514,12 @@ impl ParameterSchema {
         if !self.one_of.is_empty() {
             let mut matches = 0;
             for schema in &self.one_of {
-                if schema.validate_value(value, path, allow_references, bindings).is_ok() { matches += 1; }
+                if schema
+                    .validate_value(value, path, allow_references, bindings)
+                    .is_ok()
+                {
+                    matches += 1;
+                }
             }
             let deferred = allow_references && contains_parameter_reference(value);
             if matches == 0 || (!deferred && matches != 1) {
@@ -4315,7 +4368,14 @@ mod tests {
             {"action":"write","path":"/tmp/item","expected_content_hash":"hash","content":"new"},
             {"action":"remove","path":"/tmp/other","expected_content_hash":"hash"}
         ]));
-        assert!(manifest.validate(&schema_invocation("fs.transaction", "operations", valid)).is_ok());
+        let validate = |value| {
+            let mut invocation = schema_invocation("fs.transaction", "operations", value);
+            invocation
+                .parameters
+                .insert("journal".into(), Value::String("/tmp/journal".into()));
+            manifest.validate(&invocation)
+        };
+        validate(valid).unwrap_or_else(|error| panic!("{error:#}"));
 
         for value in [
             serde_json::json!([1]),
@@ -4324,9 +4384,12 @@ mod tests {
             serde_json::json!([{"action":"copy","path":"/tmp/item","expected_content_hash":"hash"}]),
             serde_json::json!([{"action":"remove","path":"/tmp/item","expected_content_hash":"hash","extra":true}]),
         ] {
-            let error = manifest.validate(&schema_invocation("fs.transaction", "operations", operations(value)))
+            let error = validate(operations(value))
                 .expect_err("malformed transaction operation must fail static validation");
-            assert!(error.to_string().contains("schema") || format!("{error:#}").contains("schema"), "{error:#}");
+            assert!(
+                error.to_string().contains("schema") || format!("{error:#}").contains("schema"),
+                "{error:#}"
+            );
         }
     }
 
@@ -4341,13 +4404,17 @@ mod tests {
             {"not_equals":null},
             {"pointer":"/items","type":"array"}
         ]));
-        assert!(manifest.validate(&schema_invocation("json.filter", "where", valid)).is_ok());
+        assert!(manifest
+            .validate(&schema_invocation("json.filter", "where", valid))
+            .is_ok());
 
         let deferred = Value::List(vec![Value::Record(BTreeMap::from([
             ("pointer".into(), Value::Reference("dynamic_pointer".into())),
             ("exists".into(), Value::Bool(true)),
         ]))]);
-        assert!(manifest.validate(&schema_invocation("json.filter", "where", deferred)).is_ok());
+        assert!(manifest
+            .validate(&schema_invocation("json.filter", "where", deferred))
+            .is_ok());
 
         for value in [
             serde_json::json!([1]),
@@ -4356,9 +4423,17 @@ mod tests {
             serde_json::json!([{"exists":true,"equals":1}]),
             serde_json::json!([{"equals":1,"extra":true}]),
         ] {
-            let error = manifest.validate(&schema_invocation("json.filter", "where", predicates(value)))
+            let error = manifest
+                .validate(&schema_invocation(
+                    "json.filter",
+                    "where",
+                    predicates(value),
+                ))
                 .expect_err("malformed predicate must fail static validation");
-            assert!(error.to_string().contains("schema") || format!("{error:#}").contains("schema"), "{error:#}");
+            assert!(
+                error.to_string().contains("schema") || format!("{error:#}").contains("schema"),
+                "{error:#}"
+            );
         }
     }
 

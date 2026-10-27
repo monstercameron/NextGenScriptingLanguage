@@ -1,5 +1,14 @@
 //! Owned executable fixtures for native Windows/Unix process contract tests.
 use std::io::{BufRead, Read, Write};
+// This fixture intentionally lets the helper process outlive its short-lived parent
+// so the tests can exercise inherited-stderr draining after the parent exits.
+#[cfg(unix)]
+#[allow(clippy::zombie_processes)]
+fn spawn_detached_child(command: &mut std::process::Command) -> std::io::Result<()> {
+    let _child = command.spawn()?;
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str).unwrap_or("") {
@@ -139,7 +148,7 @@ fn main() {
                     Ok(())
                 });
             }
-            let _child = command.spawn().unwrap();
+            spawn_detached_child(&mut command).unwrap();
             let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while !std::path::Path::new(marker).exists() {
                 assert!(
@@ -156,7 +165,7 @@ fn main() {
             while !std::path::Path::new(&args[2]).exists() && std::time::Instant::now() < until {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            std::fs::write(format!("{}.done", &args[1]), b"done").unwrap();
+            std::fs::write(format!("{}.done", args[1]), b"done").unwrap();
         }
         "stderr-flood" => {
             let until = std::time::Instant::now() + std::time::Duration::from_secs(3);

@@ -6,7 +6,9 @@ use flow::runtime::{self, CheckpointOptions, RunOptions, ServiceLimits};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Read, Write};
+#[cfg(feature = "tooling")]
+use std::io::Read;
+use std::io::{self, Write};
 use std::net::ToSocketAddrs;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;

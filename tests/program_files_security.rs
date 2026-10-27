@@ -14,15 +14,35 @@ fn write(root: &Path, relative: &str, text: &str) {
     fs::write(path, text).unwrap();
 }
 
-/// A capability policy file. `read` names the directories the policy may read.
+/// A capability policy file. `read` names the host's allowed read and write directory.
 fn policy(root: &Path, read: Option<&str>) -> String {
     let body = match read {
-        Some(directory) => format!(
-            r#"{{"version":1,"applets":{{"text.concat":{{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{{"read":["{directory}"],"write":["{directory}"]}}}}}}}}"#
-        ),
+        Some(directory) => serde_json::json!({
+            "version": 1,
+            "host": {
+                "capabilities": ["filesystem.read", "filesystem.write"],
+                "filesystem": {"read": [directory], "write": [directory]}
+            },
+            "applets": {}
+        })
+        .to_string(),
         None => r#"{"version":1,"applets":{}}"#.to_owned(),
     };
-    write(root, "policy.json", &body);
+    let path = root.join("policy.json");
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        file.write_all(body.as_bytes()).unwrap();
+    }
+    #[cfg(not(unix))]
+    fs::write(&path, body).unwrap();
     "policy.json".to_owned()
 }
 

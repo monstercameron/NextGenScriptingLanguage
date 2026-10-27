@@ -319,9 +319,18 @@ impl ParameterSchema {
                 value
             }
             ParameterType::Path => {
-                serde_json::json!({"type":"string","format":"path","minLength":1})
+                serde_json::json!({
+                    "type":"string",
+                    "format":"path",
+                    "minLength":1,
+                    "pattern":"^[^\\u0000]+$"
+                })
             }
-            ParameterType::Integer => serde_json::json!({"type":"integer"}),
+            ParameterType::Integer => serde_json::json!({
+                "type":"integer",
+                "minimum":i64::MIN,
+                "maximum":i64::MAX
+            }),
             ParameterType::Boolean => serde_json::json!({"type":"boolean"}),
             ParameterType::Record => {
                 let properties = self
@@ -4394,6 +4403,19 @@ mod tests {
     }
 
     #[test]
+    fn recursive_path_and_integer_schemas_match_parameter_projections() {
+        for kind in [ParameterType::Path, ParameterType::Integer] {
+            let schema: ParameterSchema =
+                serde_json::from_value(serde_json::json!({"type": kind})).unwrap();
+            assert_eq!(
+                schema.json_schema(),
+                parameter_schema(kind, None),
+                "recursive {kind} projection must preserve its base constraints"
+            );
+        }
+    }
+
+    #[test]
     fn fs_transaction_static_schema_checks_variant_records() {
         let manifest = parse_manifest(include_str!("../manifests/core.fs_transaction.json"))
             .expect("transaction manifest schema parses");
@@ -4401,6 +4423,10 @@ mod tests {
             manifest.contract()["parameters_schema"]["properties"]["operations"].clone();
         assert_eq!(projected["minItems"], 1);
         assert_eq!(projected["maxItems"], 32);
+        assert_eq!(
+            projected["items"]["oneOf"][0]["properties"]["path"],
+            parameter_schema(ParameterType::Path, None)
+        );
         let operations = |values: serde_json::Value| structured_json(values);
         let valid = operations(serde_json::json!([
             {"action":"write","path":"/tmp/item","expected_content_hash":"hash","content":"new"},

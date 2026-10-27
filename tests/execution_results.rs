@@ -82,8 +82,9 @@ fn native_fail_fast_result_keeps_actual_status_and_pipeline_stage() {
         result.get("effect_certainty"),
         Some(&Value::String("uncertain".into()))
     );
-    // Fail-fast may observe the exit before collecting the terminal pipe.
-    assert_eq!(result.get("stdout_captured"), Some(&Value::Bool(false)));
+    // The terminal pipe is captured even when it contains no bytes.
+    assert_eq!(result.get("stdout_captured"), Some(&Value::Bool(true)));
+    assert_eq!(result.get("stdout"), Some(&Value::List(vec![])));
     let Some(Value::List(stages)) = result.get("stages") else {
         panic!("expected stage records");
     };

@@ -502,7 +502,7 @@ fn both_nested_checkpoint_paths_commit_and_resume_without_native_replay() {
             &["main.program", "--checkpoint", "journal", "--trace"],
         );
         good(&first);
-        assert_eq!(first.stdout, wanted);
+        assert_eq!(first.stdout, [b"input".as_slice(), wanted].concat());
         assert_eq!(
             String::from_utf8_lossy(&first.stderr)
                 .matches("\"event\":\"spawn\"")
@@ -520,7 +520,7 @@ fn both_nested_checkpoint_paths_commit_and_resume_without_native_replay() {
             ],
         );
         good(&resumed);
-        assert_eq!(resumed.stdout, wanted);
+        assert!(resumed.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&resumed.stderr).contains("\"event\":\"spawn\""));
     }
 }

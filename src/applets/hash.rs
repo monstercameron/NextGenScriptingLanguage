@@ -81,7 +81,9 @@ fn decode_hex(text: &str) -> Result<Vec<u8>, AppletError> {
         return Err(invalid("hex input must have an even number of digits"));
     }
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let hi = (pair[0] as char).to_digit(16);
             let lo = (pair[1] as char).to_digit(16);
@@ -120,7 +122,7 @@ fn decode_base64(text: &str) -> Result<Vec<u8>, AppletError> {
         return Err(invalid("base64 input length must be a multiple of four"));
     }
     let mut out = Vec::with_capacity(clean.len() / 4 * 3);
-    for (idx, ch) in clean.chunks_exact(4).enumerate() {
+    for (idx, ch) in clean.as_chunks::<4>().0.iter().enumerate() {
         let last = idx + 1 == clean.len() / 4;
         let val = |b: u8| -> Option<u8> {
             match b {

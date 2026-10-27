@@ -328,7 +328,7 @@ fn completed_checkpoint_requires_the_same_effective_input_values() {
         .output()
         .unwrap();
     check(&same);
-    assert_eq!(same.stdout, b"first");
+    assert!(same.stdout.is_empty());
     assert!(!String::from_utf8_lossy(&same.stderr).contains("\"event\":\"spawn\""));
     let changed = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("resume")

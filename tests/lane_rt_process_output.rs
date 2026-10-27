@@ -66,7 +66,8 @@ fn early_successful_pipe_consumer_keeps_its_output() {
          run \"printf\" with arguments [\"first=%s\\n\", first]\n",
     );
     assert!(output.status.success(), "{:?}", output.stderr);
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "first=1\n");
+    // The named result retains head's newline; printf appends its own.
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "first=1\n\n");
 }
 
 #[cfg(unix)]

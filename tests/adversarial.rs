@@ -183,7 +183,7 @@ fn command_and_parameter_names_can_overlap_modifier_keywords() {
     let result = run(
         temp.path(),
         &manifest,
-        "run as with path \"input.s\" and cache false as result\n",
+        "run as with path \"input.s\" and cache false as result\nuse value result\n",
     );
     assert!(
         result.status.success(),

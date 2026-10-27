@@ -2,13 +2,13 @@
 use anyhow::{anyhow, Result};
 use flow::ast::Value;
 use flow::contracts::{OutputType, ValueSchema};
-use flow::graph::{
-    self, GraphContext, GraphExecutor, GraphNode, GraphRunOptions, GraphSession, NodeIo, PortValue,
-    RuntimeGraphExecutor,
-};
+#[cfg(any(unix, feature = "remote"))]
+use flow::graph::{self, GraphRunOptions, GraphSession};
+use flow::graph::{GraphContext, GraphExecutor, GraphNode, NodeIo, PortValue, RuntimeGraphExecutor};
 #[cfg(feature = "remote")]
 use flow::graph::{EdgeSpec, GraphNodeKind, PortRef, PortSchema};
 use flow::manifest::Registry;
+#[cfg(any(unix, feature = "remote"))]
 use flow::runtime::RunOptions;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -18,7 +18,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(any(unix, feature = "remote"))]
+use std::time::Instant;
 
 #[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn text_schema() -> ValueSchema {
@@ -41,6 +43,7 @@ fn text_schema() -> ValueSchema {
     }
 }
 
+#[cfg(any(unix, feature = "remote"))]
 fn options() -> RunOptions {
     RunOptions {
         max_output_bytes: 1024 * 1024,

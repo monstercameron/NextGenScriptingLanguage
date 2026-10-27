@@ -2,7 +2,7 @@
 //! fixes. Each fix is applied to the source and the result is checked again, so a
 //! suggestion that does not actually repair the program fails the test.
 
-use flow::diagnostics::{analyze_source, Diagnostic, SuggestedFix};
+use flow::diagnostics::{Diagnostic, SuggestedFix, analyze_source};
 use flow::manifest::Registry;
 use std::path::Path;
 use std::process::Command;
@@ -174,14 +174,40 @@ fn semantic_parser_errors_have_specific_codes_and_token_spans() {
             "step",
         ),
         (
+            "accept input as text\naccept input as text\n",
+            "check.duplicate_name",
+            "input",
+        ),
+        (
+            "define worker\n  run \"true\"\ndefine worker\n  run \"true\"\n",
+            "check.duplicate_name",
+            "worker",
+        ),
+        (
             "run \"true\" as result\nrun \"true\" as result\n",
             "check.duplicate_name",
             "result",
         ),
+        ("exit with status 300\n", "check.range", "status"),
         (
-            "exit with status 300\n",
+            "parallel at most 0 as group\n  run fixture.count with count 1 as task\n",
             "check.range",
-            "status",
+            "0",
+        ),
+        (
+            "accept color as text one of [\"red\"] with default \"blue\"\n",
+            "check.value.constraint",
+            "\"blue\"",
+        ),
+        (
+            "run \"true\" with item \"a\" and item \"b\"\n",
+            "check.duplicate_name",
+            "item",
+        ),
+        (
+            "define worker\n  run program worker\n",
+            "check.program.cycle",
+            "worker",
         ),
         (
             "define worker\n  run \"true\"\n\nrun program workre\n",
@@ -194,7 +220,10 @@ fn semantic_parser_errors_have_specific_codes_and_token_spans() {
             .iter()
             .find(|diagnostic| diagnostic.code == code)
             .unwrap_or_else(|| panic!("expected {code}: {diagnostics:#?}"));
-        assert_eq!(diagnostic.span.precision, flow::diagnostics::SpanPrecision::Token);
+        assert_eq!(
+            diagnostic.span.precision,
+            flow::diagnostics::SpanPrecision::Token
+        );
         assert_eq!(
             &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
             token
@@ -239,7 +268,10 @@ fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
             .iter()
             .find(|diagnostic| diagnostic.code == code)
             .unwrap_or_else(|| panic!("expected {code}: {diagnostics:#?}"));
-        assert_eq!(diagnostic.span.precision, flow::diagnostics::SpanPrecision::Token);
+        assert_eq!(
+            diagnostic.span.precision,
+            flow::diagnostics::SpanPrecision::Token
+        );
         assert_eq!(
             &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
             token
@@ -247,16 +279,23 @@ fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
         if code == "check.program.input.unknown" {
             let repaired = apply(&source, diagnostic.fixes.first().expect("input rename fix"));
             assert!(repaired.contains("with input \"value\"\n"));
-            assert!(analyze_source(&repaired, &registry)
-                .iter()
-                .all(|item| item.code != code));
+            assert!(
+                analyze_source(&repaired, &registry)
+                    .iter()
+                    .all(|item| item.code != code)
+            );
         }
         if code == "check.program.input.required" {
-            let repaired = apply(&source, diagnostic.fixes.first().expect("input insertion fix"));
+            let repaired = apply(
+                &source,
+                diagnostic.fixes.first().expect("input insertion fix"),
+            );
             assert!(repaired.contains("run program worker with input \"\"\n"));
-            assert!(analyze_source(&repaired, &registry)
-                .iter()
-                .all(|item| item.code != code));
+            assert!(
+                analyze_source(&repaired, &registry)
+                    .iter()
+                    .all(|item| item.code != code)
+            );
         }
     }
 }
@@ -267,9 +306,14 @@ fn one_hundred_invalid_sources_never_fall_back_to_check_failed() {
     for index in 0..100 {
         let source = format!("use value missing_{index}\n");
         let diagnostics = analyze_source(&source, &registry);
-        assert!(!diagnostics.is_empty(), "source unexpectedly checked clean: {source}");
         assert!(
-            diagnostics.iter().all(|diagnostic| diagnostic.code != "check_failed"),
+            !diagnostics.is_empty(),
+            "source unexpectedly checked clean: {source}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "check_failed"),
             "generic failure code for {source}: {diagnostics:#?}"
         );
     }

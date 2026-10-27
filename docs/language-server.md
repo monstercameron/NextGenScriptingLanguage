@@ -50,11 +50,11 @@ means the parser only identified the containing line, so the full line is
 reported rather than an invented token range. LSP notifications translate
 these ranges to zero-based UTF-16 positions.
 
-Diagnostics include recoverable independent line syntax errors, unknown applet
-names, unknown or missing applet parameters, statically known literal parameter
-type mismatches, and pipeline connections whose declared output and stdin
-schemas disagree. A pipeline is checked only when both sides declare the
-relevant semantic schemas.
+Diagnostics include recoverable syntax errors, duplicate names, scope and range
+errors, reusable-program resolution and input errors, unknown applets and
+parameters, statically known type mismatches, and incompatible pipeline
+schemas. A pipeline is checked only when both sides declare the relevant
+semantic schemas.
 
 ### Diagnostic codes
 
@@ -63,6 +63,16 @@ meaning gets a new code. The family names the stage that finds the problem.
 
 | Code | Family | Meaning |
 | --- | --- | --- |
+| `check.duplicate_name` | validate | a declaration, parameter, binding, or object repeats a name |
+| `check.scope` | validate | a control-flow, job, declaration, or trigger is outside its valid scope or order |
+| `check.program.unknown` | resolve | a called reusable program is not defined |
+| `check.program.cycle` | validate | a reusable program call graph contains a recursive cycle |
+| `check.program.input.unknown` | validate | a reusable program call supplies an input it does not declare |
+| `check.program.input.required` | validate | a reusable program call omits a required input |
+| `check.range` | validate | a literal is outside the supported range for its setting |
+| `check.value.constraint` | validate | a literal violates a declared value or input constraint |
+| `check.parameter.direct` | validate | a direct executable call uses named applet parameters |
+| `check.bound_output_withheld` | validate | a final bound value is internal; explicitly reuse it to produce program stdout |
 | `parse.lexical` | parse | a line has an unterminated or invalid quoted or bracketed token |
 | `parse.syntax` | parse | a statement does not match the grammar |
 | `parse.indentation` | parse | a line is indented with tabs, or its indentation does not nest |
@@ -70,7 +80,6 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `source.invisible_format` | validate | source contains a Unicode format control that can change how it is displayed |
 | `check.undefined_name` | validate | a referenced result or input name is not defined at this point |
 | `check.type_mismatch` | type | statically known value types are incompatible at a use site |
-| `check.bound_output_withheld` | validate | a final bound value is internal; explicitly reuse it to produce program stdout |
 | `check.diagnostics.truncated` | validate | more diagnostics were found than the response limit permits |
 | `applet.unknown` | resolve | the operation names no declared applet and is not a quoted executable |
 | `applet.parameter.unknown` | resolve | the applet declares no parameter with this name |
@@ -79,6 +88,15 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `applet.pipeline.incompatible` | type | a pipeline stage's declared output does not satisfy the next stage's input |
 | `data_flow_policy_not_configured` | policy | a capability policy is set without a data-flow policy, so remote egress and persistence are unprotected |
 | `check_failed` | validate | validation failed without a static diagnostic; the `causes` list explains why |
+| `lint.shell_expansion_literal` | lint | shell-like expansion syntax in a literal argument is passed literally |
+| `lint.executable_name_whitespace` | lint | a quoted executable name contains shell metacharacters and is looked up as one filename |
+| `lint.empty_loop` | lint | a loop is guaranteed to execute zero times |
+| `lint.unused_binding` | lint | a result binding is not read in its lexical program body |
+| `lint.unused_input` | lint | a declared input is not read in its lexical program body |
+| `model.result_unchecked` | lint | a model result is consumed without checking its acceptance gate |
+| `model.threshold_missing` | lint | a classification or scoring call omits its minimum confidence threshold |
+| `model.text_to_command` | lint | model-generated text is passed to a shell command interpreter |
+| `lint.unreachable` | lint | a statement follows an unconditional exit in the same body |
 
 ## Installed command inventory
 

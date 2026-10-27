@@ -42,14 +42,14 @@ pub const CODES: &[CodeInfo] = &[
     CodeInfo {
         code: "check.duplicate_name",
         family: "validate",
-        meaning: "a result, input, label, or program name is declared more than once",
+        meaning: "a declaration, parameter, binding, or object repeats a name",
         example: "run \"true\" as result\nrun \"true\" as result",
         typical_fix: "Rename one binding so every result name is unique in its scope.",
     },
     CodeInfo {
         code: "check.scope",
         family: "validate",
-        meaning: "a control-flow or job statement is used outside its valid construct",
+        meaning: "a control-flow, job, declaration, or trigger is outside its valid scope or order",
         example: "break",
         typical_fix: "Move the statement into a valid loop, program, or job lifetime.",
     },
@@ -59,6 +59,13 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a called reusable program is not defined",
         example: "run program workre",
         typical_fix: "Correct the program name or define the called program.",
+    },
+    CodeInfo {
+        code: "check.program.cycle",
+        family: "validate",
+        meaning: "a reusable program call graph contains a recursive cycle",
+        example: "define worker\n  run program worker",
+        typical_fix: "Remove the recursive call or restructure it without a cycle.",
     },
     CodeInfo {
         code: "check.program.input.unknown",
@@ -80,6 +87,13 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a literal is outside the supported range for its setting",
         example: "exit with status 300",
         typical_fix: "Choose an integer within the documented range.",
+    },
+    CodeInfo {
+        code: "check.value.constraint",
+        family: "validate",
+        meaning: "a literal violates a declared value or input constraint",
+        example: "accept color as text one of [\"red\"] with default \"blue\"",
+        typical_fix: "Choose a value that satisfies the declaration's constraints.",
     },
     CodeInfo {
         code: "check.parameter.direct",
@@ -375,7 +389,8 @@ pub fn analyze_source_at(
         }
         if let Err(error) = parser::validate_statement(tokens) {
             let message = format!("{error:#}");
-            let mut diagnostic = classified_parse_error(source, &message, line_number, &line_starts);
+            let mut diagnostic =
+                classified_parse_error(source, &message, line_number, &line_starts);
             let line_start_offset = line_starts.start(line_number);
             let content_start = line_start_offset + statement.indent;
             if let Some(first) = content.split_whitespace().next() {
@@ -478,19 +493,55 @@ fn classified_parse_error(
     line_starts: &LineStarts,
 ) -> Diagnostic {
     let lower = message.to_ascii_lowercase();
-    let code = if lower.contains("duplicate")
+    let code = if lower.contains("recursive program call")
+        || lower.contains("program file calls form a cycle")
+    {
+        "check.program.cycle"
+    } else if (lower.contains("duplicate")
+        || lower.contains("more than once")
+        || lower.contains("both set and removed"))
         && (lower.contains("label")
             || lower.contains("input")
             || lower.contains("program")
             || lower.contains("binding")
             || lower.contains("name")
-            || lower.contains("identifier"))
+            || lower.contains("identifier")
+            || lower.contains("parameter")
+            || lower.contains("object key")
+            || lower.contains("choice")
+            || lower.contains("environment"))
+        || lower.contains("cannot match the group result binding")
     {
         "check.duplicate_name"
     } else if (lower.contains("only valid inside") || lower.contains("only valid in"))
         && (lower.contains("loop") || lower.contains("reusable program"))
         || lower.contains("must be awaited inside")
         || lower.contains("cannot be cancelled outside")
+        || lower.contains("must follow only initial folder setup")
+        || lower.contains("listener event header must follow")
+        || lower.contains("on exit and on interrupt apply to one-shot programs")
+        || lower.contains("input declarations must precede executable statements")
+        || lower.contains("program definitions must precede executable statements")
+        || lower.contains("program inputs must precede")
+        || lower.contains("reusable stdin must be read at the start")
+        || lower.contains("program definitions must be top-level")
+        || lower.contains("the `execute n` version marker must be the first statement")
+        || lower.contains("otherwise must follow a matching if body")
+        || lower.contains("catch and finally must belong to a try block")
+        || lower.contains("task groups require named applets")
+        || lower.contains("task group bodies accept only independent")
+        || lower.contains("task group entries")
+        || lower.contains("background pipeline")
+        || lower.contains("program calls cannot")
+        || lower.contains("listener source must be an applet")
+        || lower.contains("listener source cannot bind")
+        || lower.contains("command condition takes only")
+        || lower.contains("redirection and environment apply only")
+        || lower.contains("stdin from` applies only")
+        || lower.contains("applies only to")
+        || lower.contains("applies to one")
+        || lower.contains("applies to a single")
+        || lower.contains("cannot be combined")
     {
         "check.scope"
     } else if lower.contains("undefined program")
@@ -501,6 +552,7 @@ fn classified_parse_error(
         && (lower.contains("not declared")
             || lower.contains("unknown input")
             || lower.contains("has no input"))
+    {
         "check.program.input.unknown"
     } else if lower.contains("required input")
         || lower.contains("missing required input")
@@ -509,26 +561,92 @@ fn classified_parse_error(
         "check.program.input.required"
     } else if lower.contains("outside the supported")
         || lower.contains("must be between")
+        || lower.contains("must be a positive integer")
+        || lower.contains("must be greater than zero")
+        || lower.contains("interval is too large")
+        || lower.contains("cannot contain more than")
+        || lower.contains("backoff must be at most")
         || lower.contains("interval must be")
+        || lower.contains("task limit") && lower.contains("range")
         || lower.contains("must be a positive integer in range")
         || lower.contains("status must be")
         || lower.contains("retry count") && lower.contains("range")
     {
         "check.range"
+    } else if (lower.contains("default") && lower.contains("one of the allowed values"))
+        || lower.contains("must be one of")
+        || lower.contains("contains a nul byte")
+        || lower.contains("question must be nonempty")
+        || lower.contains("cron expression cannot be empty")
+        || lower.contains("output path must be nonempty")
+        || lower.contains("invalid environment name")
+        || lower.contains("unsupported interval unit")
+        || lower.contains("one of") && lower.contains("more than once")
+        || lower.contains("program location inputs take their value")
+    {
+        "check.value.constraint"
+    } else if lower.contains("one of applies only to text inputs")
+        || lower.contains("program location inputs must be text")
+        || lower.contains("secret prompt must be a text input")
+        || lower.contains("from arguments` requires list of text")
+        || lower.contains("always supplies a list; omit its default")
+        || lower.contains("backoff must be a whole number")
+        || lower.contains("expects")
+        || lower.contains("requires true or false")
+        || lower.contains("expects list of text")
+        || lower.contains("expects text list items")
+        || lower.contains("environment value") && lower.contains("must be")
+        || lower.contains("flag") && lower.contains("must be a boolean input")
+    {
+        "check.type_mismatch"
     } else if lower.contains("direct executable") && lower.contains("parameter") {
         "check.parameter.direct"
     } else {
         syntax_code(message)
     };
     let line_span = line_starts.span(source, line);
-    let token = line_words_from_start(source, line_span.start_byte)
-        .into_iter()
-        .find(|word| !word.3 && semantic_token_matches(word.0, &lower));
+    let words = line_words_from_start(source, line_span.start_byte);
+    let semantic_match =
+        |word: &&(String, usize, usize, bool)| semantic_token_matches(&word.0, &lower);
+    let token = if code == "check.duplicate_name" || code == "check.value.constraint" {
+        words.iter().rev().find(semantic_match)
+    } else {
+        words.iter().find(semantic_match)
+    }
+    .or_else(|| {
+        (code == "check.duplicate_name")
+            .then(|| {
+                words
+                    .windows(2)
+                    .rev()
+                    .find(|pair| pair[0].0 == "as" && !pair[1].3)
+                    .map(|pair| &pair[1])
+            })
+            .flatten()
+    })
+    .or_else(|| {
+        (code == "check.scope" || code == "check.value.constraint")
+            .then(|| words.iter().find(|word| !word.3))
+            .flatten()
+    })
+    .or_else(|| {
+        (code == "check.range")
+            .then(|| {
+                words
+                    .iter()
+                    .rev()
+                    .find(|word| !word.3 && word.0.parse::<i128>().is_ok())
+            })
+            .flatten()
+    });
     let span = token
         .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
         .unwrap_or(line_span);
     let mut diagnostic = Diagnostic::error(code, message, span.clone());
-    if code == "check.program.unknown" && span.precision == SpanPrecision::Token {
+    if code == "check.program.unknown"
+        && lower.contains("undefined program")
+        && span.precision == SpanPrecision::Token
+    {
         let names = parser::logical_lines(source)
             .unwrap_or_default()
             .into_iter()
@@ -558,11 +676,38 @@ fn classified_parse_error(
 }
 
 fn semantic_token_matches(token: &str, message: &str) -> bool {
-    let token = token.to_ascii_lowercase();
-    ["break", "continue", "return", "await", "cancel", "status", "retry", "repeat"]
-        .iter()
-        .any(|candidate| token == *candidate && message.contains(candidate))
+    let token = token.trim_matches(['"', '`']).to_ascii_lowercase();
+    [
+        "break",
+        "continue",
+        "return",
+        "await",
+        "cancel",
+        "status",
+        "retry",
+        "repeat",
+        "interval",
+        "limit",
+        "position",
+        "count",
+        "times",
+        "input",
+        "default",
+        "parameter",
+        "key",
+        "choice",
+        "task",
+        "direct",
+        "retry",
+        "interactively",
+        "environment",
+        "trigger",
+    ]
+    .iter()
+    .any(|candidate| token == *candidate && message.contains(candidate))
         || message.contains(&format!("{token:?}"))
+        || message.contains(&format!("`{token}`"))
+        || token.bytes().all(|byte| byte.is_ascii_digit()) && message.contains(&token)
 }
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {
@@ -1051,9 +1196,7 @@ fn collect_duplicate_call_bindings(
                 let words = line_words_from_start(source, line_starts.start(step.line));
                 let span = words
                     .windows(2)
-                    .find(|pair| {
-                        !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name.as_str()
-                    })
+                    .find(|pair| !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name.as_str())
                     .map(|pair| {
                         line_starts.span_at(source, pair[1].1, pair[1].2, SpanPrecision::Token)
                     })
@@ -1117,7 +1260,10 @@ fn collect_program_input_diagnostics(
                 .unwrap_or_else(|| line_starts.span(source, step.line));
             let mut diagnostic = Diagnostic::error(
                 "check.program.input.required",
-                format!("program {:?} requires input {:?}", call.operation, input.name),
+                format!(
+                    "program {:?} requires input {:?}",
+                    call.operation, input.name
+                ),
                 span,
             );
             if let Some(edit) = missing_program_input_edit(
@@ -1159,7 +1305,11 @@ fn missing_program_input_edit(
         crate::ast::InputType::Json => "null",
         crate::ast::InputType::Bytes => return None,
     };
-    let join = if already_has_inputs { " and " } else { " with " };
+    let join = if already_has_inputs {
+        " and "
+    } else {
+        " with "
+    };
     let replacement = format!("{join}{name} {placeholder}");
     let span = starts.span_at(source, offset, offset, SpanPrecision::Token);
     Some(TextEdit { span, replacement })
@@ -2263,9 +2413,11 @@ mod tests {
     #[test]
     fn stray_word_does_not_choose_a_published_parse_code() {
         let diagnostics = analyze_source("run \"printf\" tabs\n", &Registry::default());
-        assert!(diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "parse.syntax"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "parse.syntax")
+        );
     }
 
     #[test]

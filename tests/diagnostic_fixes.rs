@@ -85,13 +85,17 @@ fn check_json_reports_text_lines_item_type_mismatches_in_loops() {
     assert!(!output.status.success(), "type mismatch passed check");
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
-        result["diagnostics"].as_array().unwrap().iter().any(|diagnostic| {
-            diagnostic["code"] == "applet.parameter.type"
-                && diagnostic["span"]["line"] == 3
-                && diagnostic["message"].as_str().is_some_and(|message| {
-                    message.contains("expects integer") && message.contains("is text")
-                })
-        }),
+        result["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| {
+                diagnostic["code"] == "applet.parameter.type"
+                    && diagnostic["span"]["line"] == 3
+                    && diagnostic["message"].as_str().is_some_and(|message| {
+                        message.contains("expects integer") && message.contains("is text")
+                    })
+            }),
         "{result:#}"
     );
 }

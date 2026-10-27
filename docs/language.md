@@ -756,6 +756,11 @@ result back to binary64. A result outside the finite float range returns an
 0 when omitted. `number.format_size` accepts 0 through 6, defaulting to 1.
 A supplied precision outside the applicable range or of another type is invalid.
 
+`text.count_lines_by` groups input lines by a zero-based field separated by a
+nonempty delimiter. An omitted `field` defaults to zero; a supplied field must
+be an integer from 0 through 16,777,216, the maximum possible index within
+its 16 MiB input limit. A line without the selected field is an error.
+
 <a id="reusable-finite-programs-pending-source-candidate"></a>
 
 ### Reusable finite programs

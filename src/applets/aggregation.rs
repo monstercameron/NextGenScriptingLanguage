@@ -367,8 +367,19 @@ fn count_lines_by(
         return Err(invalid("args.delimiter cannot be empty"));
     }
     check_bytes(input.len())?;
-    let field = usize::try_from(args.get("field").and_then(Value::as_u64).unwrap_or(0))
-        .map_err(|_| invalid("args.field is too large"))?;
+    let field = match args.get("field") {
+        None => 0,
+        Some(value) => value
+            .as_u64()
+            .and_then(|field| usize::try_from(field).ok())
+            // A nonempty delimiter consumes at least one byte for each field.
+            .filter(|field| *field <= MAX_BYTES)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "args.field must be an integer from 0 through {MAX_BYTES}"
+                ))
+            })?,
+    };
     // Keys keep first-seen order; the index makes each line a constant-time lookup.
     let mut counts: Vec<(&str, usize)> = Vec::new();
     let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();

@@ -1209,6 +1209,9 @@ pub fn run_checkpointed(
         &|key| input_signature(program, &options.inputs, key),
     )?;
     prepare_with_modules(program, registry, &journal, module_session.fingerprints())?;
+    // Issue #536: a node-level `committed` resolution completes the in-flight
+    // node with operator-supplied output before execution resumes.
+    journal.apply_committed_node_resolution()?;
     let already_finished = journal.is_finished();
     let result = run_finite_inner(
         FiniteRun {

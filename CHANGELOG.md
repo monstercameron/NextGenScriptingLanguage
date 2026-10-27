@@ -7,6 +7,16 @@ original version labels.
 
 ## Unreleased
 
+- Uncertain nodes and `for each` elements can now be resolved per item.
+  `execute checkpoint resolve DIR --node STEP_ID [--element N] --as committed|retry`
+  records one operator decision with who, when and why; `committed` replays the
+  supplied output and bindings at resume instead of rerunning the effect, `retry`
+  authorizes one item to run again without the bulk `--retry-uncertain` flag.
+  `checkpoint status --json` reports decisions under `resolutions` and
+  still-undecided items under `unresolved_uncertain`, using the same step ids and
+  0-based element indices. Run records and `show-run` have no checkpoint pointer
+  and do not show resolutions.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

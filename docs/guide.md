@@ -356,9 +356,31 @@ without `--retry-uncertain` follows its declared effects: a pure or read-only in
 applet may, a native command may not. `execute checkpoint status DIR` shows what a
 resume would do without running anything.
 
+When an uncertain node or element did run and its external effect happened, you can
+record that decision instead of rerunning it:
+
+```sh
+execute checkpoint resolve CKPT --node STEP_ID --as committed \
+  --output verified.bin --accept-empty-bindings --reason "row written, verified in db"
+execute checkpoint resolve CKPT --node STEP_ID --element 1 --as retry \
+  --reason "element 0 confirmed, element 1 did not run"
+```
+
+`committed` replays the supplied output (and bindings later nodes read) at resume
+instead of rerunning the effect; `retry` authorizes one node or element to run again
+without the bulk `--retry-uncertain` flag. Element indices are 0-based, matching the
+`for each element N` diagnostics. `checkpoint status --json` lists recorded decisions
+under `resolutions` and still-undecided items under `unresolved_uncertain`. A committed
+element is stored as that element's commit on the next resume, so repeating the resume
+never reruns it. Run records (`show-run`) do not carry a checkpoint pointer, so they
+do not display resolutions; read the checkpoint status for the recorded decisions.
+
 Checkpoints do not make external effects transactional. An interrupted command
-with an uncertain outcome requires explicit `--retry-uncertain`; completed nodes
-cannot be rewritten in place. See [recovery contracts](runtime-reference.md#recover-after-a-failure),
+with an uncertain outcome requires an explicit decision per uncertain item: a
+resolution, or `--retry-uncertain` for the whole run; completed nodes
+cannot be rewritten in place. Resolutions never authorize two runs of one effect:
+recording the same node or element twice is refused, and a torn resolutions log
+refuses every resume until the operator removes the damaged line. See [recovery contracts](runtime-reference.md#recover-after-a-failure),
 [per-element checkpoints](runtime-reference.md#per-element-checkpoints) and
 [retry safety](language.md#retry-safety).
 

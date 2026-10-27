@@ -103,6 +103,9 @@ Compile a supported program form, including POSIX sh output.
 .B checkpoint status \fIDIR\fR
 Report checkpoint state; add \fB\-\-json\fR for structured output.
 .TP
+.B checkpoint resolve \fIDIR\fR \-\-node \fISTEP_ID\fR [\-\-element \fIN\fR] \-\-as committed|retry [\-\-output \fIFILE\fR] [\-\-binding \fINAME=VALUE\fR ...] [\-\-accept-empty-output] [\-\-accept-empty-bindings] [\-\-reason \fITEXT\fR]
+Record one operator decision for an uncertain node or element: \fBcommitted\fR replays the supplied output and bindings at resume instead of rerunning the effect, \fBretry\fR authorizes one item to run again without \fB\-\-retry\-uncertain\fR. Element indices are 0-based.
+.TP
 .B help
 Show command help.
 .TP

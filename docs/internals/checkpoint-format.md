@@ -24,6 +24,21 @@ Checkpoint directories contain private outputs and named values (0700 directorie
 state, not a sandbox or an encrypted secrets store. Keep them until recovery is
 complete; choose a separate directory for each execution.
 
+### Resolutions log
+
+`execute checkpoint resolve` appends one JSON object per line to the append-only
+`resolutions.jsonl` beside the journal (version 1 records; unknown versions are
+refused). A record carries the node step id, an optional 0-based element index, the
+`committed` or `retry` decision, the reason, the actor name, Unix time, and, for
+`committed` only, the hex-encoded output, the bindings, and the element fingerprint
+captured from the element log's begin record. Reads are line-bounded; a torn final
+line refuses every resume and status until the operator removes it, and a duplicate
+node/element key does the same, so concurrent resolves for one item fail closed.
+Files are created 0600 and the log is fsynced on append. Status reports only the
+who/when/why view; output, bindings and fingerprints stay in the checkpoint as
+resume evidence. Run records (`show-run`) carry no checkpoint pointer and never
+reference this log.
+
 The runtime rejects symlinks at the requested checkpoint
 and blob directory leaves, including a trailing `/` or `/.` on the requested
 checkpoint path. Lock, journal and blob files must be regular files; opens use

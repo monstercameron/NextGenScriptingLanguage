@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) mod elements;
+pub(crate) mod resolutions;
 #[cfg(feature = "graph")]
 pub(crate) mod graph;
 
@@ -972,11 +973,117 @@ impl Journal {
             .as_ref()
             .is_some_and(|node| !node.retry_safe);
         if uncertain && !self.retry_uncertain {
+            // A per-node `committed` or `retry` resolution explicitly allows
+            // this node without the bulk `--retry-uncertain` flag (#536).
+            if self.node_resolution_allows_retry()? {
+                return Ok(());
+            }
+            // Element (`for each`) nodes resolve per element. Any element
+            // resolution for this node lets resume reach the precise per-element
+            // gates, which still refuse every uncovered uncertain element by
+            // name before it runs; see `elements::check_pending` and
+            // `element_may_start`.
+            if self.element_resolutions_allow_retry()? {
+                return Ok(());
+            }
             bail!(
                 "checkpoint may contain an interrupted side effect; pass --retry-uncertain to retry"
             );
         }
         Ok(())
+    }
+
+    /// Whether a node-level resolution allows the in-flight uncertain node to
+    /// be retried or skipped. Element nodes are resolved per element; a
+    /// node-level record never covers them. A `committed` record also allows
+    /// the retry check because resume completes committed nodes before any
+    /// begin path runs; see `apply_committed_node_resolution`.
+    fn node_resolution_allows_retry(&self) -> Result<bool> {
+        let Some(node) = self.data.in_flight.as_ref() else {
+            return Ok(false);
+        };
+        let Some(step_id) = node.step_id.as_deref() else {
+            return Ok(false);
+        };
+        let resolutions =
+            resolutions::read_resolutions(&self.directory, self.max_output_bytes).unwrap_or_default();
+        Ok(resolutions::node_resolution(&resolutions, step_id).is_some())
+    }
+
+    /// Whether an element resolution lets resume reach the per-element gates.
+    /// Only element (`for each`) nodes resolve per element: the in-flight node
+    /// must carry element markers or already hold element-log progress, and at
+    /// least one resolution must name one of its elements. A node-level `retry`
+    /// record is already honored by `node_resolution_allows_retry`; this covers
+    /// only per-element records. Returning true never authorizes an effect by
+    /// itself: `elements::for_each_resume`, `check_pending` and
+    /// `element_may_start` still refuse every uncovered uncertain element.
+    fn element_resolutions_allow_retry(&self) -> Result<bool> {
+        let Some(node) = self.data.in_flight.as_ref() else {
+            return Ok(false);
+        };
+        let is_element_node =
+            node.element_fingerprint.is_some() || has_element_progress(&self.directory)?;
+        if !is_element_node {
+            return Ok(false);
+        }
+        let Some(step_id) = node.step_id.as_deref() else {
+            return Ok(false);
+        };
+        let resolutions =
+            resolutions::read_resolutions(&self.directory, self.max_output_bytes).unwrap_or_default();
+        Ok(resolutions
+            .iter()
+            .any(|record| record.node == step_id && record.element.is_some()))
+    }
+
+    /// Whether resume is running from an existing checkpoint.
+    pub fn is_resuming(&self) -> bool {
+        self.resuming
+    }
+
+    /// Apply a node-level `committed` resolution by completing the in-flight
+    /// node with the operator-supplied output and bindings. Returns true when
+    /// a resolution was applied. Element (`for each`) nodes are never completed
+    /// this way; they resolve per element.
+    pub fn apply_committed_node_resolution(&mut self) -> Result<bool> {
+        let step_id = match self.data.in_flight.as_ref() {
+            Some(node) => node.step_id.clone(),
+            None => return Ok(false),
+        };
+        let Some(step_id) = step_id else {
+            return Ok(false);
+        };
+        let resolutions =
+            resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        let Some(record) = resolutions
+            .iter()
+            .find(|record| {
+                record.node == step_id
+                    && record.element.is_none()
+                    && record.decision == resolutions::ResolutionDecision::Committed
+            })
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        // A node-level commit cannot stand in for per-element progress. The
+        // resolve command refuses this combination; double-check at resume so
+        // a hand-written record cannot silently skip a loop.
+        if has_element_progress(&self.directory)? {
+            bail!(
+                "node-level committed resolution is not valid for for-each nodes; resolve each element instead"
+            );
+        }
+        let output = record.output_bytes(self.max_output_bytes)?;
+        let bindings = record.bindings_map(self.max_output_bytes)?;
+        let cwd = self.restored_state()?.cwd;
+        self.complete_node_parts(
+            &cwd,
+            &output,
+            bindings.iter().map(|(name, value)| (name.as_str(), value)),
+        )?;
+        Ok(true)
     }
 
     #[cfg(all(test, unix))]
@@ -1696,6 +1803,22 @@ fn lock_directory(directory: &Path, #[cfg(unix)] pinned_directory: &File) -> Res
         return Err(error).context("locking checkpoint");
     }
     Ok(lock)
+}
+
+/// Whether the checkpoint holds any element-log progress for its in-flight
+/// node. A node-level committed resolution never covers element progress.
+fn has_element_progress(directory: &Path) -> Result<bool> {
+    let path = directory.join("elements.jsonl");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                bail!("checkpoint element log must be a regular file");
+            }
+            Ok(metadata.len() > 0)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).context("inspecting checkpoint element log"),
+    }
 }
 
 /// Probe the existing lock without creating files or changing permissions. All
@@ -4527,7 +4650,7 @@ fn restrict_directory(path: &Path) -> Result<()> {
         crate::platform::windows::restrict_directory(path)
     }
 }
-fn restrict_file(file: &File) -> Result<()> {
+pub(crate) fn restrict_file(file: &File) -> Result<()> {
     #[cfg(unix)]
     {
         file.set_permissions(fs::Permissions::from_mode(0o600))

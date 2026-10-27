@@ -332,6 +332,15 @@ edits over the same source. Some validation failures that do not have a source
 span use `check_failed` and include their cause chain. The
 [JSON schema](check-result.schema.json) defines the response envelope.
 
+Semantic validation failures use specific `check.*` codes with token spans when
+the source token can be located. They include duplicate names, invalid scope,
+unknown reusable programs and program files, unknown or required program inputs,
+range and value-constraint failures, and named parameters passed to direct
+executables. Program-name and program-input diagnostics can include suggested
+edits. Use `execute check --explain CODE` to print a registered code's meaning,
+example, and typical repair. The registry is documented in the
+[diagnostic code reference](language-server.md#diagnostic-codes).
+
 `--json` is accepted only by `check`. Malformed CLI arguments, duplicate options,
 help/version output and output-write failures retain normal CLI behavior;
 errors from a correctly parsed check use this protocol. Human-readable checks

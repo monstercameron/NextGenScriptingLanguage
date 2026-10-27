@@ -615,7 +615,10 @@ fn live_serve_refuses_a_socket_in_a_shared_parent() {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
-            assert!(!status.success(), "serve must refuse a shared socket parent");
+            assert!(
+                !status.success(),
+                "serve must refuse a shared socket parent"
+            );
             break;
         }
         assert!(
@@ -731,7 +734,10 @@ fn live_stop_is_served_while_wait_slots_are_full() {
     // the reserved lane with stop.
     std::thread::sleep(Duration::from_secs(2));
     let stop = request(json!({"op":"control","action":"stop"}));
-    assert_eq!(stop["ok"], true, "stop is served past full wait slots: {stop}");
+    assert_eq!(
+        stop["ok"], true,
+        "stop is served past full wait slots: {stop}"
+    );
     let deadline = Instant::now() + Duration::from_secs(20);
     while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));

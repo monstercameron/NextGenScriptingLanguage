@@ -1122,8 +1122,7 @@ fn handle(mut stream: UnixStream, shared: &Shared, constrained: bool) {
         if constrained && !is_priority_request(&op, action.as_deref()) {
             return Err(ApiError {
                 code: "busy",
-                message: "the server is saturated; retry, or stop and read remain available"
-                    .into(),
+                message: "the server is saturated; retry, or stop and read remain available".into(),
             }
             .into());
         }
@@ -1165,9 +1164,7 @@ fn handle_request(
             let (permission, risk) = match required {
                 auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
                 auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
-                auth::AgentPermission::Control => {
-                    ("control", crate::security::PolicyRisk::High)
-                }
+                auth::AgentPermission::Control => ("control", crate::security::PolicyRisk::High),
                 auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
                 auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
             };
@@ -1195,8 +1192,7 @@ fn handle_request(
                 reason,
             );
         }
-        authorization
-            .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+        authorization.map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
     } else if auth.is_some() {
         bail!("live agent credentials require serve --agent-policy");
     }

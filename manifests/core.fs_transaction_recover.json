@@ -10,7 +10,11 @@
     },
     "decision": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "complete",
+        "rollback"
+      ]
     },
     "lock_timeout_ms": {
       "type": "integer"

@@ -14,11 +14,21 @@
     },
     "symlink_policy": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "preserve",
+        "reject",
+        "replace"
+      ]
     },
     "permissions_policy": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "preserve",
+        "private",
+        "exact"
+      ]
     },
     "lock": {
       "type": "path"

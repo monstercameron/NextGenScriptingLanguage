@@ -15,7 +15,11 @@
       "required": true
     },
     "side": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "left",
+        "right"
+      ]
     },
     "fill": {
       "type": "string"
@@ -63,7 +67,11 @@
         "side": {
           "delivery": "single",
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "left",
+              "right"
+            ]
           }
         },
         "fill": {

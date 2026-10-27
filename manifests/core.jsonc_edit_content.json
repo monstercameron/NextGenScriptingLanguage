@@ -9,7 +9,11 @@
     },
     "action": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "set",
+        "remove"
+      ]
     },
     "key": {
       "type": "string",
@@ -54,7 +58,11 @@
         },
         "action": {
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "set",
+              "remove"
+            ]
           },
           "delivery": "single"
         },

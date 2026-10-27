@@ -11,7 +11,11 @@
       "type": "string"
     },
     "unit": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "chars",
+        "bytes"
+      ]
     }
   },
   "arguments": [
@@ -47,7 +51,11 @@
         "unit": {
           "delivery": "single",
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "chars",
+              "bytes"
+            ]
           }
         }
       },

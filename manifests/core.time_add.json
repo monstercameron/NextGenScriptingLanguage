@@ -10,7 +10,13 @@
     },
     "unit": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "seconds",
+        "minutes",
+        "hours",
+        "days"
+      ]
     },
     "epoch": {
       "type": "integer",
@@ -54,7 +60,13 @@
         },
         "unit": {
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "seconds",
+              "minutes",
+              "hours",
+              "days"
+            ]
           },
           "delivery": "single"
         },

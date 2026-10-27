@@ -14,7 +14,16 @@
     },
     "escape": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "plain",
+        "json",
+        "shell",
+        "url",
+        "csv",
+        "html",
+        "regex"
+      ]
     }
   },
   "arguments": [
@@ -58,7 +67,16 @@
         },
         "escape": {
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "plain",
+              "json",
+              "shell",
+              "url",
+              "csv",
+              "html",
+              "regex"
+            ]
           },
           "delivery": "single"
         }

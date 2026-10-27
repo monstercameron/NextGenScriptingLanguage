@@ -6,7 +6,12 @@
   "parameters": {
     "probe": {
       "type": "string",
-      "required": true
+      "required": true,
+      "enum": [
+        "file_exists",
+        "file_readable",
+        "tcp_port_open"
+      ]
     },
     "host": {
       "type": "string",
@@ -61,7 +66,12 @@
       "inputs": {
         "probe": {
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "file_exists",
+              "file_readable",
+              "tcp_port_open"
+            ]
           },
           "delivery": "single"
         },

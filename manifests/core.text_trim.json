@@ -13,7 +13,12 @@
       "type": "string"
     },
     "mode": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "both",
+        "start",
+        "end"
+      ]
     },
     "chars": {
       "type": "string"
@@ -52,7 +57,12 @@
         "mode": {
           "delivery": "single",
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "both",
+              "start",
+              "end"
+            ]
           }
         },
         "chars": {

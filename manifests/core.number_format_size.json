@@ -16,7 +16,11 @@
       "type": "integer"
     },
     "system": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "si",
+        "iec"
+      ]
     }
   },
   "arguments": [
@@ -58,7 +62,11 @@
         "system": {
           "delivery": "single",
           "schema": {
-            "type": "text"
+            "type": "text",
+            "enum": [
+              "si",
+              "iec"
+            ]
           }
         }
       },

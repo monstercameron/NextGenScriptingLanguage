@@ -199,6 +199,8 @@ fn is_false(value: &bool) -> bool {
 struct ParameterSpec {
     kind: ParameterType,
     item_type: Option<ParameterType>,
+    #[serde(default, rename = "enum", skip_serializing_if = "Option::is_none")]
+    enum_values: Option<Vec<String>>,
     #[serde(default)]
     required: bool,
     #[serde(default)]
@@ -225,6 +227,7 @@ impl From<RawParameter> for ParameterSpec {
         Self {
             kind: raw.kind,
             item_type: raw.items,
+            enum_values: raw.enum_values,
             required: raw.required,
             min_items: raw.min_items,
             allow_first_token: raw.allow_first_token,
@@ -582,6 +585,7 @@ impl Registry {
                 ParameterSpec {
                     kind: ParameterType::List,
                     item_type: Some(ParameterType::Scalar),
+                    enum_values: None,
                     required: false,
                     min_items: None,
                     allow_first_token: Vec::new(),
@@ -1386,6 +1390,9 @@ impl Manifest {
             .iter()
             .map(|(name, spec)| {
                 let mut schema = parameter_schema(spec.kind, spec.fields.as_ref());
+                if let Some(values) = &spec.enum_values {
+                    schema["enum"] = serde_json::json!(values);
+                }
                 if let Some(items) = spec.item_type {
                     schema["items"] = parameter_schema(items, None);
                 }
@@ -2042,6 +2049,11 @@ fn validate_value(
         if spec.kind == ParameterType::Path && string.is_empty() {
             bail!("path parameter {name:?} must be nonempty");
         }
+        if let Some(values) = &spec.enum_values {
+            if !values.iter().any(|allowed| allowed == string) {
+                bail!("parameter {name:?} must be one of {values:?}, got {string:?}");
+            }
+        }
     }
     if let (ParameterType::Record, Value::Record(values)) = (spec.kind, value) {
         validate_record_parameter(
@@ -2645,6 +2657,8 @@ struct RawParameter {
     required: bool,
     #[serde(default)]
     items: Option<ParameterType>,
+    #[serde(default, rename = "enum")]
+    enum_values: Option<Vec<String>>,
     #[serde(default)]
     min_items: Option<usize>,
     #[serde(default)]
@@ -2835,6 +2849,21 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
     for (name, spec) in &parameters {
         if name.trim().is_empty() {
             bail!("parameter names must be nonempty");
+        }
+        if let Some(values) = &spec.enum_values {
+            if spec.kind != ParameterType::String {
+                bail!("parameter {name:?}: enum constraints apply only to string parameters");
+            }
+            if values.is_empty() {
+                bail!("parameter {name:?}: enum constraints must contain at least one value");
+            }
+            let mut unique = BTreeSet::new();
+            if values
+                .iter()
+                .any(|value| value.contains('\0') || !unique.insert(value))
+            {
+                bail!("parameter {name:?}: enum values must be unique and contain no NUL bytes");
+            }
         }
         let is_list = spec.kind == ParameterType::List;
         if is_list != spec.item_type.is_some() {
@@ -3294,7 +3323,9 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
             enum_values: None,
         });
     }
-    parameter_field_value_schema(spec.kind, spec.fields.as_ref())
+    let mut schema = parameter_field_value_schema(spec.kind, spec.fields.as_ref())?;
+    schema.enum_values = spec.enum_values.clone();
+    Ok(schema)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3528,6 +3559,45 @@ impl std::fmt::Display for ParameterType {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn string_parameter_enums_are_validated_and_projected() {
+        let manifest = parse_manifest(
+            r#"{"name":"enum.test","binary":"echo","parameters":{"choice":{"type":"string","required":true,"enum":["left","right"]}},"arguments":[{"parameter":"choice"}]}"#,
+        )
+        .unwrap();
+        let schema = manifest.contract()["parameters_schema"]["properties"]["choice"].clone();
+        assert_eq!(schema["enum"], serde_json::json!(["left", "right"]));
+        assert_eq!(
+            manifest
+                .build_arguments(&BTreeMap::from([(
+                    "choice".to_owned(),
+                    Value::String("left".to_owned()),
+                )]))
+                .unwrap(),
+            ["left"]
+        );
+        let error = manifest
+            .build_arguments(&BTreeMap::from([(
+                "choice".to_owned(),
+                Value::String("middle".to_owned()),
+            )]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must be one of"), "{error}");
+    }
+
+    #[test]
+    fn string_parameter_enums_reject_invalid_manifest_constraints() {
+        for source in [
+            r#"{"name":"enum.test","binary":"echo","parameters":{"choice":{"type":"integer","enum":["1"]}},"arguments":[]}"#,
+            r#"{"name":"enum.test","binary":"echo","parameters":{"choice":{"type":"string","enum":[]}},"arguments":[]}"#,
+            r#"{"name":"enum.test","binary":"echo","parameters":{"choice":{"type":"string","enum":["same","same"]}},"arguments":[]}"#,
+            r#"{"name":"enum.test","binary":"echo","parameters":{"choice":{"type":"string","enum":["bad\u0000value"]}},"arguments":[]}"#,
+        ] {
+            assert!(parse_manifest(source).is_err(), "accepted {source}");
+        }
+    }
 
     #[test]
     fn the_borrowed_builder_expands_a_home_path_into_owned_argv() {
@@ -4602,6 +4672,7 @@ mod first_token_rule_tests {
         ParameterSpec {
             kind: ParameterType::List,
             item_type: Some(ParameterType::String),
+            enum_values: None,
             required: true,
             min_items: None,
             allow_first_token: Vec::new(),

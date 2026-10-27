@@ -241,8 +241,102 @@ fn main() {
                 }
             }
         }
+        "stream-probe" => {
+            // args: byte count written to stdout ('o') and to the inherited
+            // stderr ('e'). Exit 0 only when every byte lands; 42 when
+            // O_NONBLOCK is ever observed on the inherited stderr; 43 when a
+            // write fails (EAGAIN included). Both streams stay byte-pure so
+            // the parent can count what crossed the shared pipe.
+            let total: usize = args[1].parse().unwrap();
+            stream_probe(total);
+        }
         _ => std::process::exit(64),
     }
+}
+
+#[cfg(unix)]
+fn stream_probe(total: usize) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let nonblocking_seen = std::sync::Arc::new(AtomicBool::new(false));
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let monitor_seen = std::sync::Arc::clone(&nonblocking_seen);
+    let monitor_stop = std::sync::Arc::clone(&stop);
+    let monitor = std::thread::spawn(move || {
+        while !monitor_stop.load(Ordering::Acquire) {
+            // SAFETY: fd 2 is this process's inherited stderr, open for the
+            // whole probe. F_GETFL only reads its status flags.
+            let flags = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) };
+            if flags == -1 || flags & libc::O_NONBLOCK != 0 {
+                monitor_seen.store(true, Ordering::Release);
+            }
+            std::hint::spin_loop();
+        }
+    });
+    let writer_seen = std::sync::Arc::clone(&nonblocking_seen);
+    let stdout_writer =
+        std::thread::spawn(move || write_exact_raw(libc::STDOUT_FILENO, b'o', total, &writer_seen));
+    let stderr_ok = write_exact_raw(libc::STDERR_FILENO, b'e', total, &nonblocking_seen);
+    let stdout_ok = stdout_writer.join().unwrap();
+    stop.store(true, Ordering::Release);
+    monitor.join().unwrap();
+    if nonblocking_seen.load(Ordering::Acquire) {
+        std::process::exit(42);
+    }
+    if !stderr_ok || !stdout_ok {
+        std::process::exit(43);
+    }
+}
+
+/// Write exactly `total` copies of `byte` to `fd` without changing any
+/// descriptor flags. Only EINTR retries; a WouldBlock (EAGAIN) return means a
+/// blocking shared descriptor was corrupted and fails the probe.
+#[cfg(unix)]
+fn write_exact_raw(
+    fd: libc::c_int,
+    byte: u8,
+    total: usize,
+    nonblocking_seen: &std::sync::atomic::AtomicBool,
+) -> bool {
+    let chunk = [byte; 8192];
+    let mut remaining = total;
+    while remaining > 0 {
+        if fd == libc::STDERR_FILENO {
+            // SAFETY: stderr is open for the whole probe; F_GETFL only reads
+            // its status flags. The monitor thread can miss a brief window,
+            // so the writer re-checks before every chunk.
+            let flags = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) };
+            if flags == -1 || flags & libc::O_NONBLOCK != 0 {
+                nonblocking_seen.store(true, std::sync::atomic::Ordering::Release);
+                return false;
+            }
+        }
+        let next = remaining.min(chunk.len());
+        // SAFETY: `chunk` is live for `next` bytes and `fd` is an open writer
+        // owned by this process (stdout or the inherited stderr). The call
+        // changes no status flags.
+        let count = unsafe { libc::write(fd, chunk.as_ptr().cast(), next) };
+        if count > 0 {
+            remaining -= count as usize;
+            continue;
+        }
+        if count == 0 {
+            return false;
+        }
+        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+#[cfg(not(unix))]
+fn stream_probe(total: usize) {
+    // The regression test driving this probe is Unix-only; keep other
+    // platforms compiling with plain exact-count writes.
+    std::io::stdout().write_all(&vec![b'o'; total]).unwrap();
+    std::io::stderr().write_all(&vec![b'e'; total]).unwrap();
 }
 
 fn is_handshake_request(request: &serde_json::Value) -> bool {

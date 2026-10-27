@@ -5,8 +5,9 @@
 //! this module owns their lifetime and the explicit source-level handle operations.
 
 use super::*;
-use crate::ast::{JobStage, Value};
+use crate::ast::{Invocation, JobStage, Value};
 use crate::contracts::AppletBackend;
+use crate::manifest::Manifest;
 use crate::tasks::{CancellationWake, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
@@ -28,6 +29,11 @@ pub(super) struct JobEnv<'a> {
     pub(super) options: &'a RunOptions,
     pub(super) signals: &'a Signals,
     pub(super) environment: Option<crate::capabilities::CommandEnvOverlay>,
+}
+
+struct PreparedPipeline {
+    calls: Vec<(Invocation, Manifest, usize)>,
+    commands: Vec<(PathBuf, Vec<String>)>,
 }
 
 #[derive(Default)]
@@ -481,33 +487,21 @@ impl Supervisor {
         }
     }
 
-    /// Validate a setup-owned job without starting it. Services preflight every
-    /// setup job before launching the first persistent worker.
-    pub(super) fn preflight_spawn(
-        &self,
-        scope: usize,
+    fn prepare_pipeline(
         name: &str,
         stages: &[JobStage],
-        env: JobEnv<'_>,
-    ) -> Result<()> {
-        let JobEnv {
-            registry,
-            bindings,
-            cwd,
-            ..
-        } = env;
-        if stages.is_empty() || stages.len() > MAX_JOB_STAGES {
-            bail!("background pipeline must contain between 1 and {MAX_JOB_STAGES} stages");
-        }
-        if self.jobs.contains_key(&(scope, name.to_owned())) {
-            bail!("background job {name:?} is already defined in this scope");
-        }
-        let cwd = cwd.duplicate()?;
+        registry: &Registry,
+        bindings: &BTreeMap<String, Value>,
+        cwd: &crate::working_dir::WorkingDirectory,
+        retain_commands: bool,
+    ) -> Result<PreparedPipeline> {
         let mut calls = Vec::with_capacity(stages.len());
+        let mut commands = retain_commands.then(|| Vec::with_capacity(stages.len()));
         for (index, stage) in stages.iter().enumerate() {
             let mut call = stage.call.clone();
             let manifest = registry.resolve_call(&call)?.clone();
-            if manifest.builtin.is_some() || manifest.execution_backend() != AppletBackend::Command
+            if manifest.builtin.is_some()
+                || manifest.execution_backend() != AppletBackend::Command
             {
                 bail!(
                     "line {}: background jobs support native command applets only",
@@ -548,6 +542,7 @@ impl Supervisor {
                     );
                 }
             }
+
             let parameters = call
                 .parameters
                 .iter()
@@ -557,25 +552,54 @@ impl Supervisor {
                 format!("line {}: validating resolved job arguments", stage.line)
             })?;
             call.parameters = parameters;
+            // Workers collect every stage result so a later await can decide
+            // whether to retain a nonzero terminal status.
             call.status_binding = Some("__execute_job_stage_status".into());
-            let binary = binary_path(manifest.binary_for(&call), &cwd)
+            let binary = binary_path(manifest.binary_for(&call), cwd)
                 .with_context(|| format!("line {}: resolving job executable", stage.line))?;
             crate::capabilities::command_for(
                 &binary,
                 argv.iter().map(|argument| OsStr::new(argument.as_str())),
                 registry,
                 &manifest.name,
-                &cwd,
+                cwd,
             )
             .with_context(|| format!("line {}: preflighting job command", stage.line))?;
+            if let Some(commands) = &mut commands {
+                commands.push((binary, argv));
+            }
             calls.push((call, manifest, stage.line));
         }
         crate::capabilities::preflight_invocations(
             calls.iter().map(|(call, _, _)| call),
             registry,
-            &cwd,
+            cwd,
         )
         .with_context(|| format!("preflighting background job {name:?}"))?;
+        Ok(PreparedPipeline {
+            calls,
+            commands: commands.unwrap_or_default(),
+        })
+    }
+
+    /// Validate a setup-owned job without starting it. Services preflight every
+    /// setup job before launching the first persistent worker.
+    pub(super) fn preflight_spawn(
+        &self,
+        scope: usize,
+        name: &str,
+        stages: &[JobStage],
+        env: JobEnv<'_>,
+    ) -> Result<()> {
+        let JobEnv { registry, bindings, cwd, .. } = env;
+        if stages.is_empty() || stages.len() > MAX_JOB_STAGES {
+            bail!("background pipeline must contain between 1 and {MAX_JOB_STAGES} stages");
+        }
+        if self.jobs.contains_key(&(scope, name.to_owned())) {
+            bail!("background job {name:?} is already defined in this scope");
+        }
+        let cwd = cwd.duplicate()?;
+        Self::prepare_pipeline(name, stages, registry, bindings, &cwd, false)?;
         Ok(())
     }
 
@@ -610,84 +634,10 @@ impl Supervisor {
         let cwd = cwd
             .duplicate()
             .with_context(|| format!("snapshotting working directory for job {name:?}"))?;
-        let mut calls = Vec::with_capacity(stages.len());
-        let mut prepared = Vec::with_capacity(stages.len());
-        for (index, stage) in stages.iter().enumerate() {
-            let mut call = stage.call.clone();
-            let manifest = registry.resolve_call(&call)?.clone();
-            if manifest.builtin.is_some() || manifest.execution_backend() != AppletBackend::Command
-            {
-                bail!(
-                    "line {}: background jobs support native command applets only",
-                    stage.line
-                );
-            }
-            if call.cache || call.binding.is_some() || call.result_binding.is_some() {
-                bail!(
-                    "line {}: background stages cannot cache or bind values",
-                    stage.line
-                );
-            }
-            if call.status_binding.is_some() {
-                bail!(
-                    "line {}: background stages cannot bind native status",
-                    stage.line
-                );
-            }
-            if index > 0 && !manifest.accepts_stdin {
-                bail!(
-                    "line {}: background pipeline receiver {:?} does not accept stdin",
-                    stage.line,
-                    manifest.name_for(&call)
-                );
-            }
-            if let Some(stdio) = manifest.stdio() {
-                if stdio
-                    .stderr
-                    .is_some_and(|mode| mode != invocation_io::StdioDisposition::Capture)
-                    || (index + 1 == stages.len()
-                        && stdio
-                            .stdout
-                            .is_some_and(|mode| mode != invocation_io::StdioDisposition::Capture))
-                {
-                    bail!(
-                        "line {}: background pipelines require captured stdout and stderr",
-                        stage.line
-                    );
-                }
-            }
-
-            let parameters = call
-                .parameters
-                .iter()
-                .map(|(parameter, value)| Ok((parameter.clone(), resolve(value, bindings)?)))
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            let argv = manifest.build_arguments(&parameters).with_context(|| {
-                format!("line {}: validating resolved job arguments", stage.line)
-            })?;
-            call.parameters = parameters;
-            // The worker must collect all stage outcomes before the later
-            // `await` statement decides whether its terminal status is kept.
-            call.status_binding = Some("__execute_job_stage_status".into());
-            let binary = binary_path(manifest.binary_for(&call), &cwd)
-                .with_context(|| format!("line {}: resolving job executable", stage.line))?;
-            crate::capabilities::command_for(
-                &binary,
-                argv.iter().map(|argument| OsStr::new(argument.as_str())),
-                registry,
-                &manifest.name,
-                &cwd,
-            )
-            .with_context(|| format!("line {}: preflighting job command", stage.line))?;
-            prepared.push((binary, argv));
-            calls.push((call, manifest, stage.line));
-        }
-        crate::capabilities::preflight_invocations(
-            calls.iter().map(|(call, _, _)| call),
-            registry,
-            &cwd,
-        )
-        .with_context(|| format!("preflighting background job {name:?}"))?;
+        let prepared_pipeline =
+            Self::prepare_pipeline(name, stages, registry, bindings, &cwd, true)?;
+        let calls = prepared_pipeline.calls;
+        let prepared = prepared_pipeline.commands;
 
         // Reserve run-wide active and retained-handle capacity only after the
         // complete pipeline has passed preflight and before its first effect.

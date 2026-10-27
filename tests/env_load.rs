@@ -83,3 +83,110 @@ fn explain_shows_the_read_that_feeds_the_load() {
     assert_eq!(steps[0]["reads"], true);
     assert_eq!(steps[1]["applet"], "env.load");
 }
+
+#[test]
+fn selected_env_load_values_are_redacted_from_the_entire_run_record() {
+    let root = tempfile::tempdir().unwrap();
+    let canary = "ENV-LOAD-CANARY-6f24";
+    fs::write(
+        root.path().join("credentials.env"),
+        format!("TOKEN={canary}\nREGION=test-region\n"),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "read \"credentials.env\"\nthen env.load with secret [\"TOKEN\"] as loaded\n",
+    )
+    .unwrap();
+
+    let output = execute(root.path(), &["run", "job.program", "--record", "record"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (path, bytes) in files_under(&root.path().join("record")) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary),
+            "secret appeared in {}",
+            path.display()
+        );
+    }
+    let trace = fs::read_to_string(root.path().join("record/trace.jsonl")).unwrap();
+    assert!(trace.contains("\"withheld\":\"policy\""), "{trace}");
+}
+
+#[test]
+fn runtime_selected_env_load_values_are_redacted_from_the_entire_run_record() {
+    let root = tempfile::tempdir().unwrap();
+    let canary = "ENV-LOAD-REFERENCE-CANARY-2d80";
+    fs::write(
+        root.path().join("credentials.env"),
+        format!("TOKEN={canary}\nREGION=test-region\n"),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "use value [\"TOKEN\"] as selected\nread \"credentials.env\"\nthen env.load with secret selected as loaded\n",
+    )
+    .unwrap();
+    let output = execute(root.path(), &["run", "job.program", "--record", "record"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (path, bytes) in files_under(&root.path().join("record")) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary),
+            "secret appeared in {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn checkpointed_env_load_with_secret_values_is_refused_before_writing_state() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("credentials.env"),
+        "TOKEN=checkpoint-canary\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("job.program"),
+        "read \"credentials.env\"\nthen env.load with secret true as loaded\n",
+    )
+    .unwrap();
+
+    let output = execute(
+        root.path(),
+        &["run", "job.program", "--checkpoint", "checkpoint"],
+    );
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("secret"), "{error}");
+    assert!(!error.contains("checkpoint-canary"));
+    assert!(!root.path().join("checkpoint").exists());
+}
+
+fn files_under(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    fn visit(root: &Path, current: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
+        for entry in fs::read_dir(current).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.push((
+                    path.strip_prefix(root).unwrap().to_owned(),
+                    fs::read(path).unwrap(),
+                ));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    visit(root, root, &mut files);
+    files
+}

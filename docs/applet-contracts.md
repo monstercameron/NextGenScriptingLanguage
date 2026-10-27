@@ -826,6 +826,13 @@ single-quoted (literal), or double-quoted with the escapes `\\`, `\"`, `\$` and
 number: `$`, backquotes, and other shell metacharacters outside single quotes, an
 unquoted value with spaces, and a name set twice. Errors name a line, never a value.
 
+The optional `secret` parameter marks loaded values for redaction and Secret-label
+handling. Use `secret true` to mark every value, or `secret ["TOKEN", "PASSWORD"]`
+to mark selected names. A selected name must exist in the file and may appear only
+once. With no `secret` parameter, values remain ordinary text. A checkpointed run
+that marks loaded values secret is refused before effects because its journal could
+retain the values or data derived from them.
+
 The file is read by an ordinary `read` step, so the read is a host read that the
 capability policy authorizes as any other read is. `env.load` takes that text as its
 pipeline input:
@@ -836,8 +843,8 @@ then env.load
 ```
 
 Its result is a JSON value, so `take json at "/ID"` reads one name. The applet has no
-effects and runs under a strict policy. Values in a file that the policy marks as
-sensitive are not yet labelled; the file's values are ordinary text.
+effects and runs under a strict policy. Values are ordinary text unless selected by
+the `secret` parameter.
 
 YAML supports block mappings and sequences indented with spaces, plain, single-
 and double-quoted scalars, one-line flow collections, literal (`|`) and folded

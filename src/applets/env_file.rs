@@ -12,11 +12,67 @@ use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 /// Parse the bytes of an environment file into a JSON object of text values.
-pub(super) fn load(input: &[u8]) -> Result<Value, AppletError> {
+pub(super) fn load(input: &[u8], args: &Map<String, Value>) -> Result<Value, AppletError> {
     let input = crate::structured::strip_utf8_bom(input);
     let text =
         std::str::from_utf8(input).map_err(|_| invalid("environment file is not UTF-8 text"))?;
-    parse(text).map(Value::Object).map_err(invalid)
+    let values = parse(text).map_err(invalid)?;
+    // Validate the selection while the parsed object is available. Failing on
+    // misspelled names is safer than silently leaving an intended secret public.
+    secret_names(args, &Value::Object(values.clone()))?;
+    Ok(Value::Object(values))
+}
+
+/// Return the exact loaded values selected for secret treatment. `secret: true`
+/// selects every key; a string array selects those keys. Missing names and
+/// malformed options fail closed without including any values in diagnostics.
+pub(crate) fn secret_values(
+    args: &Map<String, Value>,
+    output: &Value,
+) -> Result<Vec<String>, AppletError> {
+    let values = output
+        .as_object()
+        .ok_or_else(|| invalid("env.load output is not an object"))?;
+    let names = secret_names(args, output)?;
+    names
+        .into_iter()
+        .map(|name| {
+            values
+                .get(&name)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| invalid("env.load secret selection is invalid"))
+        })
+        .collect()
+}
+
+fn secret_names(args: &Map<String, Value>, output: &Value) -> Result<Vec<String>, AppletError> {
+    let Some(selection) = args.get("secret") else {
+        return Ok(Vec::new());
+    };
+    let values = output
+        .as_object()
+        .ok_or_else(|| invalid("env.load output is not an object"))?;
+    match selection {
+        Value::Bool(true) => Ok(values.keys().cloned().collect()),
+        Value::Bool(false) => Ok(Vec::new()),
+        Value::Array(names) => {
+            let mut selected = BTreeSet::new();
+            for name in names {
+                let name = name
+                    .as_str()
+                    .ok_or_else(|| invalid("env.load secret names must be strings"))?;
+                if !selected.insert(name.to_owned()) {
+                    return Err(invalid("env.load secret names must be unique"));
+                }
+                if !values.contains_key(name) {
+                    return Err(invalid("env.load secret name is not present in the file"));
+                }
+            }
+            Ok(selected.into_iter().collect())
+        }
+        _ => Err(invalid("env.load secret must be a boolean or a list of names")),
+    }
 }
 
 /// Characters that a shell would expand, split, or interpret outside quotes.
@@ -173,6 +229,42 @@ mod tests {
 
     #[test]
     fn non_utf8_input_is_refused() {
-        assert!(load(&[0xff, 0xfe]).is_err());
+        assert!(load(&[0xff, 0xfe], &Map::new()).is_err());
+    }
+
+    #[test]
+    fn secret_selection_resolves_all_or_named_values_without_echoing_them() {
+        let output = serde_json::json!({
+            "TOKEN": "env-file-secret-value",
+            "REGION": "test-region"
+        });
+        let all = serde_json::json!({"secret": true});
+        assert_eq!(
+            secret_values(all.as_object().unwrap(), &output).unwrap(),
+            vec!["test-region", "env-file-secret-value"]
+        );
+
+        let named = serde_json::json!({"secret": ["TOKEN"]});
+        assert_eq!(
+            secret_values(named.as_object().unwrap(), &output).unwrap(),
+            vec!["env-file-secret-value"]
+        );
+    }
+
+    #[test]
+    fn invalid_secret_selection_fails_without_echoing_values_or_names() {
+        let output = serde_json::json!({"TOKEN": "env-file-secret-value"});
+        for selection in [
+            serde_json::json!({"secret": ["MISSING"]}),
+            serde_json::json!({"secret": ["TOKEN", "TOKEN"]}),
+            serde_json::json!({"secret": [17]}),
+            serde_json::json!({"secret": "TOKEN"}),
+        ] {
+            let error = secret_values(selection.as_object().unwrap(), &output).unwrap_err();
+            let message = error.to_string();
+            assert!(!message.contains("env-file-secret-value"));
+            assert!(!message.contains("TOKEN"));
+            assert!(!message.contains("MISSING"));
+        }
     }
 }

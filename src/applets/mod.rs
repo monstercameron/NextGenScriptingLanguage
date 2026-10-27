@@ -260,7 +260,7 @@ pub fn execute_with_context(
         "yaml.stringify" => yaml::stringify(args),
         "toml.parse" => toml::parse(args, input, context),
         "toml.stringify" => toml::stringify(args),
-        "env.load" => env_file::load(input),
+        "env.load" => env_file::load(input, args),
         "ini.parse" => ini::parse(args, input, context),
         "ini.stringify" => ini::stringify(args),
         "path.join" => path::join(args),
@@ -330,6 +330,19 @@ pub fn execute_with_context(
         context.checkpoint()?;
     }
     result
+}
+
+/// Return the env.load output strings selected for runtime-secret treatment.
+/// The runtime uses this before exposing the binding to observers or persistence.
+pub(crate) fn secret_values(
+    operation: &str,
+    args: &Map<String, Value>,
+    output: &Value,
+) -> Result<Vec<String>, AppletError> {
+    match operation {
+        "env.load" => env_file::secret_values(args, output),
+        _ => Ok(Vec::new()),
+    }
 }
 
 /// The parameter an in-process applet can read straight from an interpreter value,

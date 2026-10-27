@@ -620,6 +620,12 @@ execution records (`step_id`). A program checkpoint records the id of each compl
 node's first step and matches it again on resume; see
 [Recover after a failure](#recover-after-a-failure). Live control does not expose step ids yet.
 
+Checkpointed runs refuse secret prompt or environment inputs and runtime-secret
+bindings before effects, because the journal could retain their values or data
+derived from them. They do not store secret answers as HMACs. `env.load` can mark
+all loaded values with `secret true` or a selected name list; a checkpointed run
+using that option is refused as well.
+
 ### Exit and interrupt handlers
 
 A top-level `on exit` block runs on every exit path: normal completion, `exit`,

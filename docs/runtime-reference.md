@@ -204,9 +204,12 @@ same way. Only `run` asks; `check`, `inspect`, `explain`, and service deployment
 prompt.
 
 A secret answer is never printed or recorded. `inspect` reports `value_withheld`
-instead of the value, and a run's record keeps a `withheld` marker in place of it. A
-checkpoint records a keyed HMAC of the answer under the per-user key, not the answer,
-and `--checkpoint` is refused for a run with a secret prompt input.
+instead of the value, and a run's record keeps a `withheld` marker in place of it.
+`--checkpoint` is refused before any effects for a run with a secret prompt input;
+the answer is not stored as an HMAC in a checkpoint. Keyed HMACs are used for
+supported checkpoint input digests, not as a substitute for checkpointing secret
+answers. `env.load` can also mark all or selected loaded values secret, which applies
+the same redaction and checkpoint refusal to the resulting binding.
 A replay of a run with a withheld answer is refused, because the answer is needed
 again. A secret prompt must be `text` and cannot declare `one of`, since a choice
 error would quote the answer. The answer is still on the command line when given

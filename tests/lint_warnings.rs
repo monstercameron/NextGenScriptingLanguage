@@ -191,6 +191,38 @@ fn safe_first_path_expansion_gets_explicit_environment_fix() {
 }
 
 #[test]
+fn shell_expansion_fixes_require_the_format_applet_in_the_active_registry() {
+    let arguments_source = "run \"echo\" with arguments [\"$HOME/x\"]\n";
+    let empty_registry = Registry::from_sources(&[] as &[&str]).unwrap();
+    let arguments_diagnostics = analyze_source(arguments_source, &empty_registry);
+    let arguments_warning = arguments_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("literal argument warning remains available");
+    assert!(arguments_warning.fixes.is_empty());
+
+    let command_format = include_str!("../manifests/core.text_format.json")
+        .replace("\"backend\": \"in_process\"", "\"backend\": \"command\"");
+    let command_registry = Registry::from_sources(&[command_format]).unwrap();
+    let command_diagnostics = analyze_source(arguments_source, &command_registry);
+    let command_warning = command_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("literal argument warning remains with a command backend");
+    assert!(command_warning.fixes.is_empty());
+
+    let path_source = "run fs.read with path \"$HOME/input.txt\"\n";
+    let path_registry =
+        Registry::from_sources(&[include_str!("../manifests/core.fs_read.json")]).unwrap();
+    let path_diagnostics = analyze_source(path_source, &path_registry);
+    let path_warning = path_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("literal path warning remains available");
+    assert!(path_warning.fixes.is_empty());
+}
+
+#[test]
 fn path_expansion_fix_is_withheld_after_a_prior_pipeline_step() {
     let source = "read \"input.txt\"\nthen fs.read with path \"$HOME/input.txt\"\n";
     let diagnostics = analyze_source(source, &format_registry());

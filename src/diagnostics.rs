@@ -676,7 +676,13 @@ fn analyze_source_impl(
     };
     match parsed {
         Ok(program) => {
-            collect_lint_diagnostics(source, &program, &line_starts, &mut diagnostics);
+            collect_lint_diagnostics(
+                source,
+                &program,
+                supports_text_format_fix(registry),
+                &line_starts,
+                &mut diagnostics,
+            );
             if let Some(step) = program
                 .steps
                 .last()
@@ -1190,6 +1196,7 @@ fn warning_suppressed(source: &str, line: usize, code: &str) -> bool {
 fn collect_lint_diagnostics(
     source: &str,
     program: &Program,
+    text_format_available: bool,
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -1223,11 +1230,19 @@ fn collect_lint_diagnostics(
         source,
         &program.steps,
         Some(program),
+        text_format_available,
         line_starts,
         diagnostics,
     );
     for definition in program.definitions.values() {
-        collect_path_literal_diagnostics(source, &definition.steps, None, line_starts, diagnostics);
+        collect_path_literal_diagnostics(
+            source,
+            &definition.steps,
+            None,
+            text_format_available,
+            line_starts,
+            diagnostics,
+        );
     }
     let mut calls = Vec::new();
     collect_calls(&program.steps, &mut calls);
@@ -1294,17 +1309,21 @@ fn collect_lint_diagnostics(
                             parameter_value_span_at(source, line, "arguments", line_starts)
                                 .unwrap_or_else(|| line_starts.span(source, line))
                         });
-                let fixes = shell_expansion_argument_fix(
-                    source,
-                    program,
-                    line,
-                    call,
-                    index,
-                    value,
-                    line_starts,
-                )
-                .into_iter()
-                .collect();
+                let fixes = if text_format_available {
+                    shell_expansion_argument_fix(
+                        source,
+                        program,
+                        line,
+                        call,
+                        index,
+                        value,
+                        line_starts,
+                    )
+                    .into_iter()
+                    .collect()
+                } else {
+                    Vec::new()
+                };
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::Warning,
                     code: "lint.shell_expansion_literal".into(),
@@ -1316,6 +1335,52 @@ fn collect_lint_diagnostics(
             }
         }
     }
+}
+
+fn supports_text_format_fix(registry: &Registry) -> bool {
+    let Ok(manifest) = registry.resolve("text.format") else {
+        return false;
+    };
+    let Some(contract) = manifest.execution_contract() else {
+        return false;
+    };
+    if manifest.execution_backend() != AppletBackend::InProcess
+        || !contract.effects.is_empty()
+        || !contract
+            .output
+            .as_ref()
+            .is_some_and(|output| output.kind == OutputType::Text)
+    {
+        return false;
+    }
+
+    let schema = manifest.contract();
+    let Some(properties) = schema
+        .pointer("/parameters_schema/properties")
+        .and_then(JsonValue::as_object)
+    else {
+        return false;
+    };
+    let Some(required) = schema
+        .pointer("/parameters_schema/required")
+        .and_then(JsonValue::as_array)
+    else {
+        return false;
+    };
+    [
+        ("template", "string"),
+        ("values", "object"),
+        ("escape", "string"),
+    ]
+    .into_iter()
+    .all(|(name, expected_type)| {
+        required.iter().any(|value| value.as_str() == Some(name))
+            && properties
+                .get(name)
+                .and_then(|property| property.get("type"))
+                .and_then(JsonValue::as_str)
+                == Some(expected_type)
+    })
 }
 
 fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option<usize> {
@@ -1654,6 +1719,7 @@ fn collect_path_literal_diagnostics(
     source: &str,
     steps: &[Step],
     program: Option<&Program>,
+    text_format_available: bool,
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -1668,7 +1734,9 @@ fn collect_path_literal_diagnostics(
                 continue;
             }
             if matches!(value, Value::String(text) if has_shell_expansion(text)) {
-                let fixes = program
+                let fixes = text_format_available
+                    .then_some(program)
+                    .flatten()
                     .and_then(|program| match value {
                         Value::String(text) => shell_expansion_value_fix(
                             source,

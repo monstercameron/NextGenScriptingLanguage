@@ -5,7 +5,7 @@
 //! a line; token spans are emitted only when the token can be located reliably.
 
 use crate::ast::{Connection, Invocation, Program, Step, StepKind, Value};
-use crate::contracts::{AppletBackend, OutputType, ValueSchema};
+use crate::contracts::{AppletBackend, OutputType, StringPattern, ValueSchema};
 use crate::manifest::{Manifest, Registry};
 use crate::parser::{self, Token};
 use crate::suggest;
@@ -4938,6 +4938,13 @@ fn compare_schema(
             "{path} does not guarantee one of the input's allowed enum values"
         ));
     }
+    if output.kind == OutputType::Text
+        && !string_pattern_assignable(output.pattern, output.enum_values.as_deref(), input.pattern)
+    {
+        reasons.push(format!(
+            "{path} does not guarantee the input's required string pattern"
+        ));
+    }
     match output.kind {
         OutputType::List => match (&output.items, &input.items) {
             (Some(output_items), Some(input_items)) => {
@@ -4993,6 +5000,20 @@ fn enum_constraint_assignable(output: Option<&[String]>, input: Option<&[String]
         (_, None) => true,
         (Some(output), Some(input)) => output.iter().all(|value| input.contains(value)),
         (None, Some(_)) => false,
+    }
+}
+
+fn string_pattern_assignable(
+    output: Option<StringPattern>,
+    output_enum: Option<&[String]>,
+    input: Option<StringPattern>,
+) -> bool {
+    match input {
+        None => true,
+        Some(input) if output == Some(input) => true,
+        Some(input) => {
+            output_enum.is_some_and(|values| values.iter().all(|value| input.matches(value)))
+        }
     }
 }
 
@@ -5270,6 +5291,76 @@ mod tests {
         assert_eq!(
             schema_mismatch_reasons(&output, &input, "stdout", "stdin"),
             vec!["stdout → stdin.count is text, expected integer"]
+        );
+    }
+
+    #[test]
+    fn nested_string_patterns_are_directional_compatibility_refinements() {
+        let text = |pattern| ValueSchema {
+            kind: OutputType::Text,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            pattern,
+        };
+        let record = |mode| ValueSchema {
+            kind: OutputType::Record,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::from([("mode".into(), mode)]),
+            required: vec!["mode".into()],
+            enum_values: None,
+            pattern: None,
+        };
+        let list = |item| ValueSchema {
+            kind: OutputType::List,
+            nullable: false,
+            items: Some(Box::new(item)),
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            pattern: None,
+        };
+
+        let unconstrained = list(record(text(None)));
+        let octal = list(record(text(Some(StringPattern::OctalMode))));
+        let hex = list(record(text(Some(StringPattern::HexColorOptionalHash))));
+
+        assert!(!schemas_compatible(&unconstrained, &octal));
+        assert!(schemas_compatible(&octal, &unconstrained));
+        assert!(!schemas_compatible(&octal, &hex));
+        let octal_enum = list(record(ValueSchema {
+            kind: OutputType::Text,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: Some(vec!["0644".into(), "0755".into()]),
+            pattern: None,
+        }));
+        assert!(schemas_compatible(&octal_enum, &octal));
+        let invalid_octal_enum = list(record(ValueSchema {
+            kind: OutputType::Text,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: Some(vec!["8888".into()]),
+            pattern: None,
+        }));
+        assert!(!schemas_compatible(&invalid_octal_enum, &octal));
+        let broad_to_octal = schema_mismatch_reasons(&unconstrained, &octal, "source", "target");
+        assert_eq!(
+            broad_to_octal,
+            vec!["source → target[].mode does not guarantee the input's required string pattern"]
+        );
+        assert!(schema_mismatch_reasons(&octal, &unconstrained, "source", "target").is_empty());
+        let octal_to_hex = schema_mismatch_reasons(&octal, &hex, "source", "target");
+        assert_eq!(
+            octal_to_hex,
+            vec!["source → target[].mode does not guarantee the input's required string pattern"]
         );
     }
 

@@ -284,7 +284,14 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
                 return round_float(value, digits);
             }
             "number.abs" => value.abs(),
-            "number.sign" => value.signum(),
+            // Rust signum returns +/-1 for signed zero, but numeric zero has sign 0.
+            "number.sign" => {
+                if value == 0.0 {
+                    0.0
+                } else {
+                    value.signum()
+                }
+            }
             _ => value,
         };
         return from_float(out);

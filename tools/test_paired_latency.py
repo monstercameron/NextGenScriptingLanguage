@@ -72,9 +72,9 @@ class PairedLatencyTests(unittest.TestCase):
         self.assertNotIn("tools/check_latency.py", workflow)
         self.assertIn("diagnostic only", workflow)
         self.assertEqual(budgets["one_line_median_ms"], 5)
-        # Interim #518 re-budget: 11.7-11.9 ms measured at 8bccafa/ec30514
-        # versus the old 8 ms cap; the anchor workflow must not change it.
-        self.assertEqual(budgets["ten_step_median_ms"], 14)
+        # #518: the ten-step ceiling stays at the committed 8 ms cap until
+        # retained-sample regeneration lands; the anchor workflow must not change it.
+        self.assertEqual(budgets["ten_step_median_ms"], 8)
 
     def test_same_binary_can_be_paired_with_separate_argument_sets(self) -> None:
         commands = []

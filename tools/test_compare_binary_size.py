@@ -45,6 +45,10 @@ class SummarizeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive"):
             summarize(0, 8_000_000)
 
+    def test_zero_candidate_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            summarize(8_000_000, 0)
+
     def test_missing_binary_names_the_path(self):
         with self.assertRaisesRegex(ValueError, "not a built executable"):
             measure(Path("/does/not/exist-execute"))
@@ -144,6 +148,16 @@ class CompareMainTests(unittest.TestCase):
             )
             self.assertEqual(status, 1)
 
+    def test_negative_percent_threshold_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="execute-size-") as directory:
+            root = Path(directory)
+            first = write_bytes(root, "baseline", 1000)
+            status, _ = self.run_main(
+                ["--baseline", str(first), "--candidate", str(first),
+                 "--max-delta-pct", "-0.5"]
+            )
+            self.assertEqual(status, 1)
+
     def test_missing_candidate_reports_an_error(self):
         with tempfile.TemporaryDirectory(prefix="execute-size-") as directory:
             root = Path(directory)
@@ -171,6 +185,40 @@ class CompareMainTests(unittest.TestCase):
             self.assertIn("baseline", document["metadata"])
             self.assertIn("candidate", document["metadata"])
 
+    def test_json_out_records_each_side_revision(self):
+        with tempfile.TemporaryDirectory(prefix="execute-size-") as directory:
+            root = Path(directory)
+            first = write_bytes(root, "baseline", 1000)
+            second = write_bytes(root, "candidate", 1100)
+            document_path = root / "paired.json"
+            status, _ = self.run_main(
+                ["--baseline", str(first), "--candidate", str(second),
+                 "--baseline-revision", "a" * 40,
+                 "--candidate-revision", "b" * 40,
+                 "--json-out", str(document_path)]
+            )
+            self.assertEqual(status, 0)
+            document = json.loads(document_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["metadata"]["baseline"]["source_revision"], "a" * 40)
+            self.assertEqual(document["metadata"]["candidate"]["source_revision"], "b" * 40)
+            self.assertEqual(document["metadata"]["baseline"]["revision_source"], "explicit")
+            self.assertEqual(document["metadata"]["candidate"]["revision_source"], "explicit")
+
+    def test_implicit_revisions_fall_back_to_marked_git_head(self):
+        with tempfile.TemporaryDirectory(prefix="execute-size-") as directory:
+            root = Path(directory)
+            first = write_bytes(root, "baseline", 1000)
+            second = write_bytes(root, "candidate", 1100)
+            document_path = root / "paired.json"
+            status, _ = self.run_main(
+                ["--baseline", str(first), "--candidate", str(second),
+                 "--json-out", str(document_path)]
+            )
+            self.assertEqual(status, 0)
+            document = json.loads(document_path.read_text(encoding="utf-8"))
+            for side in ("baseline", "candidate"):
+                self.assertIn(document["metadata"][side]["revision_source"], ("git-head", "unknown"))
+
 
 class WorkflowWiringTests(unittest.TestCase):
     def test_size_gate_failure_triggers_same_runner_diagnosis(self) -> None:
@@ -187,6 +235,8 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertIn("tools/compare_binary_size.py", workflow)
         self.assertIn("--baseline \"$baseline_bin\"", workflow)
         self.assertIn("--candidate \"$candidate_bin\"", workflow)
+        self.assertIn("--baseline-revision \"$BASE_SHA\"", workflow)
+        self.assertIn("--candidate-revision \"$HEAD_SHA\"", workflow)
         self.assertIn("--json-out target/paired-binary-size.json", workflow)
         self.assertIn("continue-on-error: true", workflow)
         self.assertIn("id: paired_binary_size", workflow)

@@ -31,7 +31,7 @@ def measure(binary):
 
 def summarize(baseline_bytes, candidate_bytes):
     """Return the signed size delta between two measured binaries."""
-    if baseline_bytes <= 0 or candidate_bytes < 0:
+    if baseline_bytes <= 0 or candidate_bytes <= 0:
         raise ValueError("binary sizes must be positive")
     delta = candidate_bytes - baseline_bytes
     return {
@@ -42,8 +42,24 @@ def summarize(baseline_bytes, candidate_bytes):
     }
 
 
-def sample_metadata(binary):
-    """Return provenance metadata for a retained size sample."""
+def sample_metadata(binary, revision=None):
+    """Return provenance metadata for a retained size sample.
+
+    Each side records its own revision: pass the checked-out revision for
+    that side explicitly (CI passes the push parent SHA for the baseline and
+    the push SHA for the candidate). Only when no revision is given does the
+    tool fall back to the current checkout's HEAD, marked as such so a shared
+    checkout is never silently recorded as both sides.
+    """
+    if revision is not None:
+        return {
+            "source_revision": revision,
+            "revision_source": "explicit",
+            "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "binary": str(binary),
+        }
     source = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=Path.cwd(),
@@ -51,8 +67,10 @@ def sample_metadata(binary):
         text=True,
         check=False,
     )
+    head = source.stdout.strip() if source.returncode == 0 else None
     return {
-        "source_revision": source.stdout.strip() if source.returncode == 0 else None,
+        "source_revision": head,
+        "revision_source": "git-head" if head else "unknown",
         "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -66,6 +84,8 @@ def main(argv=None):
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--baseline-label", default="baseline")
     parser.add_argument("--candidate-label", default="candidate")
+    parser.add_argument("--baseline-revision", default=None)
+    parser.add_argument("--candidate-revision", default=None)
     parser.add_argument(
         "--max-delta-bytes",
         type=int,
@@ -91,6 +111,9 @@ def main(argv=None):
     if args.max_delta_bytes is not None and args.max_delta_bytes < 0:
         print("error: --max-delta-bytes cannot be negative", file=sys.stderr)
         return 1
+    if args.max_delta_pct is not None and args.max_delta_pct < 0:
+        print("error: --max-delta-pct cannot be negative", file=sys.stderr)
+        return 1
 
     print(
         f"{args.baseline_label}: {result['baseline_bytes']} bytes; "
@@ -105,8 +128,8 @@ def main(argv=None):
             json.dumps(
                 {
                     "metadata": {
-                        "baseline": sample_metadata(args.baseline),
-                        "candidate": sample_metadata(args.candidate),
+                        "baseline": sample_metadata(args.baseline, args.baseline_revision),
+                        "candidate": sample_metadata(args.candidate, args.candidate_revision),
                     },
                     "results": result,
                 },

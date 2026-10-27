@@ -263,6 +263,7 @@ fn policy_context_json(registry: &Registry) -> Json {
         registry
             .host_state::<Option<crate::capabilities::CapabilityPolicy>>()
             .as_ref()
+            .as_ref()
             .map(|policy| (u64::from(policy.version), policy.canonical_digest())),
     );
     let data_flow_policy = registry.host_state::<security::DataFlowPolicy>();
@@ -1379,7 +1380,7 @@ pub fn show_run_with_key(
     let audit_verified = matches!(audit, AuditVerification::Verified { .. });
     let audit_error: Json = audit
         .error()
-        .map(Json::String)
+        .map(|error| Json::String(error.to_owned()))
         .unwrap_or(Json::Null);
     if as_json {
         let document = json!({

@@ -13,7 +13,7 @@ use anyhow::{anyhow, Result};
 #[cfg(windows)]
 use anyhow::{bail, Context};
 use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;

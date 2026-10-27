@@ -1402,10 +1402,12 @@ mod tests {
             length += 1;
         }
         // SAFETY: the counted UTF-16 units precede the validated terminator.
-        let value =
-            std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(text, length) })
-                .to_string_lossy()
-                .into_owned();
+        // SAFETY: `text` came from ConvertSidToStringSidW and remains live until LocalFree below;
+        // `length` counts only the UTF-16 units before its validated NUL terminator.
+        let units = unsafe { std::slice::from_raw_parts(text, length) };
+        let value = std::ffi::OsString::from_wide(units)
+            .to_string_lossy()
+            .into_owned();
         // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
         unsafe { windows_sys::Win32::Foundation::LocalFree(text.cast()) };
         value

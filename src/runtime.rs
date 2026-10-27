@@ -1247,7 +1247,11 @@ fn spawn_drain_watchdog(
     Ok(())
 }
 pub(crate) fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
-    binary_path_with_path(binary, cwd, crate::capabilities::command_overlay_path().as_deref())
+    binary_path_with_path(
+        binary,
+        cwd,
+        crate::capabilities::command_overlay_path().as_deref(),
+    )
 }
 
 /// Resolve an executable using a caller-supplied PATH when present. This keeps
@@ -1359,14 +1363,14 @@ impl LaunchPathCache {
         if !self.key.as_ref().is_some_and(|(saved_path, saved_cwd)| {
             saved_path == path && saved_cwd.as_os_str() == cwd.as_os_str()
         }) {
-        self.entries = if path.is_empty() {
-            Vec::new().into()
-        } else {
-            std::env::split_paths(path)
-                .map(|entry| cwd.join(entry))
-                .collect::<Vec<_>>()
-                .into()
-        };
+            self.entries = if path.is_empty() {
+                Vec::new().into()
+            } else {
+                std::env::split_paths(path)
+                    .map(|entry| cwd.join(entry))
+                    .collect::<Vec<_>>()
+                    .into()
+            };
             self.key = Some((path.to_owned(), cwd.to_path_buf()));
         }
         Arc::clone(&self.entries)
@@ -2942,9 +2946,8 @@ fn run_command_condition(request: ConditionRequest<'_>, launched: &mut usize) ->
         registry,
         environment,
     } = request;
-    let _environment = environment.map(|overlay| {
-        crate::capabilities::CommandEnvScope::enter(Some(overlay))
-    });
+    let _environment =
+        environment.map(|overlay| crate::capabilities::CommandEnvScope::enter(Some(overlay)));
     let manifest = registry.resolve_call(call)?;
     // A nonzero exit is the answer here, not an applet failure. Retaining the
     // status is the process layer's switch for that; the placeholder name is
@@ -4663,9 +4666,9 @@ mod opt_manifest_binary_path_tests {
                 (Err(expected), Err(actual)) => {
                     assert_eq!(expected.to_string(), actual.to_string())
                 }
-                (expected, actual) => panic!(
-                    "cached lookup differs for PATH {path:?}: {expected:?}, {actual:?}"
-                ),
+                (expected, actual) => {
+                    panic!("cached lookup differs for PATH {path:?}: {expected:?}, {actual:?}")
+                }
             }
         }
         match (legacy, optimized) {

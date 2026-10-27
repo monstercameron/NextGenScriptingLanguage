@@ -1063,9 +1063,9 @@ pub(super) fn execute_group_with_sink(
                 events: libc::POLLIN,
                 revents: 0,
             }));
-            // SAFETY: `descriptors` is a live vector of pollfd and the count is its length.
-            // Entries are stdout, child observer and cancellation events; negative fds are ignored.
             let ready =
+                // SAFETY: `descriptors` is a live vector of pollfd and the count is its length.
+                // Entries are stdout, child observer and cancellation events; negative fds are ignored.
                 unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout_ms) };
             observer_notified = ready > 0 && descriptors[1].revents != 0;
             ready

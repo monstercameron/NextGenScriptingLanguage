@@ -195,6 +195,10 @@ name = "windows_native"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "parallel_each_windows"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "worker_backend_windows"
 required-features = ["test-fixtures"]
 

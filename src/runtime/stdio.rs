@@ -362,8 +362,8 @@ mod tests {
         // SAFETY: fd is writer's open descriptor and F_GETFL only reads its status flags.
         let original_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         assert_ne!(original_flags, -1);
-        // SAFETY: fd remains open and F_SETFL takes flags by value without reading pointers.
         assert_eq!(
+            // SAFETY: fd remains open and F_SETFL takes flags by value without reading pointers.
             unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags | libc::O_NONBLOCK) },
             0
         );
@@ -516,6 +516,7 @@ mod tests {
             }
             monitor_running.store(false, Ordering::Release);
             monitor.join().unwrap();
+            // SAFETY: STDERR_FILENO is valid in this child process and F_GETFL only reads its flags.
             let flags = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) };
             println!(
                 "CHILD_FLAGS={}",
@@ -547,8 +548,8 @@ mod tests {
         // SAFETY: fd is writer's open descriptor and F_GETFL only reads its status flags.
         let original_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         assert_ne!(original_flags, -1, "reading test pipe flags failed");
-        // SAFETY: fd remains open and F_SETFL takes flags by value without reading pointers.
         assert_eq!(
+            // SAFETY: fd remains open and F_SETFL takes flags by value without reading pointers.
             unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags | libc::O_NONBLOCK) },
             0,
             "making test pipe temporarily nonblocking failed"
@@ -570,8 +571,8 @@ mod tests {
             break;
         }
         assert!(filled > 0, "test pipe was not filled");
-        // SAFETY: fd remains open and F_SETFL takes flags by value without reading pointers.
         assert_eq!(
+            // SAFETY: fd remains open and F_SETFL takes flags by value without reading pointers.
             unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags) },
             0,
             "restoring blocking test pipe flags failed"

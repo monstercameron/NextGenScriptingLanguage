@@ -126,18 +126,14 @@ fn a_process_free_review_does_not_create_the_private_path_key() {
     )
     .unwrap();
     let report = what_if(directory.path());
-    assert!(
-        report["settings"]["executables"]
-            .as_object()
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        !directory
-            .path()
-            .join("what-if-state/execute/what-if.key")
-            .exists()
-    );
+    assert!(report["settings"]["executables"]
+        .as_object()
+        .unwrap()
+        .is_empty());
+    assert!(!directory
+        .path()
+        .join("what-if-state/execute/what-if.key")
+        .exists());
 }
 
 #[cfg(unix)]
@@ -163,12 +159,10 @@ fn confirmation_fingerprints_the_executable_resolved_from_the_environment_path()
         .iter()
         .find(|row| row["binary"] == "reviewed-tool")
         .expect("the direct executable appears in the plan");
-    assert!(
-        command["resolved_path"]
-            .as_str()
-            .unwrap()
-            .ends_with("fakebin/reviewed-tool")
-    );
+    assert!(command["resolved_path"]
+        .as_str()
+        .unwrap()
+        .ends_with("fakebin/reviewed-tool"));
     let reviewed_fingerprint = fingerprint(&reviewed);
 
     std::fs::write(&tool, "#!/bin/sh\nprintf 'second-version\\n'\n").unwrap();

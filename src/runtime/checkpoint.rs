@@ -3321,9 +3321,9 @@ fn open_or_create_directory_tree_with_hook(
             }
             std::path::Component::Normal(name) => {
                 let c_name = std::ffi::CString::new(name.as_bytes())?;
-                // SAFETY: directory is a live descriptor and c_name is a valid,
-                // nul-terminated single path component for this mkdirat call.
                 let created =
+                    // SAFETY: directory is a live descriptor and c_name is a valid,
+                    // nul-terminated single path component for this mkdirat call.
                     unsafe { libc::mkdirat(directory.as_raw_fd(), c_name.as_ptr(), mode) } == 0;
                 if !created {
                     let error = io::Error::last_os_error();

@@ -163,12 +163,10 @@ fn static_check_uses_the_command_path_overlay() {
         .unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["diagnostics"][0]["code"], "exec.not_found");
-    assert!(
-        report["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains(overlay.to_str().unwrap())
-    );
+    assert!(report["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains(overlay.to_str().unwrap()));
 }
 
 #[cfg(unix)]
@@ -201,12 +199,10 @@ fn static_check_reports_a_missing_executable_from_workflow_path_overlay() {
         .unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["diagnostics"][0]["code"], "exec.not_found");
-    assert!(
-        report["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains(overlay.to_str().unwrap())
-    );
+    assert!(report["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains(overlay.to_str().unwrap()));
 }
 
 #[cfg(unix)]
@@ -356,11 +352,9 @@ fn explain_does_not_publish_a_path_found_only_in_sensitive_path_tail() {
     assert!(invocation["resolved_path"].is_null(), "{plan}");
     assert!(invocation["resolved"].is_null(), "{plan}");
     assert!(invocation["resolved_path_inferred"].is_null(), "{plan}");
-    assert!(
-        !plan
-            .to_string()
-            .contains(&sensitive_bin.to_string_lossy().to_string())
-    );
+    assert!(!plan
+        .to_string()
+        .contains(&sensitive_bin.to_string_lossy().to_string()));
 }
 
 #[cfg(unix)]
@@ -397,11 +391,9 @@ fn explain_does_not_publish_path_derived_from_sensitive_printf_format() {
         .unwrap();
     assert!(invocation["resolved_path"].is_null(), "{plan}");
     assert!(invocation["resolved"].is_null(), "{plan}");
-    assert!(
-        !plan
-            .to_string()
-            .contains(&sensitive_bin.to_string_lossy().to_string())
-    );
+    assert!(!plan
+        .to_string()
+        .contains(&sensitive_bin.to_string_lossy().to_string()));
 }
 
 #[cfg(unix)]
@@ -764,11 +756,9 @@ fn checkpoint_resume_reconstructs_static_workflow_environment_without_persisting
                 assert_secret_not_persisted(&entry.path());
             } else if kind.is_file() {
                 let bytes = fs::read(entry.path()).unwrap();
-                assert!(
-                    !bytes
-                        .windows(b"checkpoint-secret-value".len())
-                        .any(|window| window == b"checkpoint-secret-value")
-                );
+                assert!(!bytes
+                    .windows(b"checkpoint-secret-value".len())
+                    .any(|window| window == b"checkpoint-secret-value"));
             }
         }
     }

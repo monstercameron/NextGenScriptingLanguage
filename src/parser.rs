@@ -1870,8 +1870,8 @@ fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
         let Some(Token::LeftBrace) = tokens.get(2) else {
             bail!("expected `use environment {{\"NAME\": \"value\"}}`");
         };
-        let close = matching_close(tokens, 2)
-            .context("environment record is missing its closing brace")?;
+        let close =
+            matching_close(tokens, 2).context("environment record is missing its closing brace")?;
         let mut cursor = 0;
         let slice = &tokens[2..=close];
         let Value::Record(fields) = parse_value(slice, &mut cursor)? else {
@@ -1886,7 +1886,9 @@ fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
             }
             match &value {
                 Value::String(text) if !text.contains('\0') => {}
-                Value::String(_) => bail!("environment value for {name:?} cannot contain a NUL byte"),
+                Value::String(_) => {
+                    bail!("environment value for {name:?} cannot contain a NUL byte")
+                }
                 Value::Reference(_) => {}
                 _ => bail!("environment value for {name:?} must be a text literal or text binding"),
             }

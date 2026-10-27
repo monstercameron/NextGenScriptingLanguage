@@ -2,7 +2,7 @@
   "name": "hash.sha256",
   "description": "Provides the hash.sha256 operation for controlled scripts.",
   "binary": "@execute-applet",
-  "accepts_stdin": false,
+  "accepts_stdin": true,
   "parameters": {
     "text": {
       "type": "string",
@@ -41,6 +41,13 @@
             "type": "text"
           },
           "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
         }
       },
       "outputs": {

@@ -2,7 +2,7 @@
   "name": "encode.base64",
   "description": "Encodes or decodes RFC 4648 base64 text, with optional URL-safe alphabet and padding control.",
   "binary": "@execute-applet",
-  "accepts_stdin": false,
+  "accepts_stdin": true,
   "parameters": {
     "text": {
       "type": "string",
@@ -59,6 +59,13 @@
             "type": "boolean"
           },
           "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
         }
       },
       "outputs": {

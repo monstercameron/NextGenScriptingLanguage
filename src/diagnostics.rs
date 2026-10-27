@@ -4538,6 +4538,15 @@ fn validate_call(
         }
     }
 
+    validate_json_pointer_literals(
+        source,
+        line,
+        call,
+        manifest,
+        line_starts,
+        diagnostics,
+    );
+
     let dispatches_wait_until = (manifest.execution_backend() == AppletBackend::InProcess
         && manifest.name_for(call) == "wait.until")
         || manifest.execute_applet_operation() == Some("wait.until");
@@ -4582,6 +4591,67 @@ fn validate_call(
                 find_phrase_span_at(source, line, &call.operation, line_starts)
                     .unwrap_or_else(|| line_starts.span(source, line)),
             ));
+        }
+    }
+}
+
+/// Validate statically known pointers for applets that use the shared JSON
+/// Pointer parser. References remain runtime-validated because their text is
+/// not available during static checking.
+fn validate_json_pointer_literals(
+    source: &str,
+    line: usize,
+    call: &Invocation,
+    manifest: &Manifest,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let operation = manifest
+        .execute_applet_operation()
+        .or_else(|| manifest.name.starts_with("json.").then_some(manifest.name.as_str()));
+    let Some(operation) = operation.filter(|operation| operation.starts_with("json.")) else {
+        return;
+    };
+
+    let mut invalid = Vec::new();
+    for name in ["pointer", "select", "path"] {
+        if let Some(value) = call.parameters.get(name) {
+            collect_invalid_pointers(name, value, &mut invalid);
+        }
+    }
+    if let Some(Value::List(pointers)) = call.parameters.get("pointers") {
+        for value in pointers {
+            collect_invalid_pointers("pointers", value, &mut invalid);
+        }
+    }
+    if let Some(Value::List(predicates)) = call.parameters.get("where") {
+        for predicate in predicates {
+            if let Value::Record(fields) = predicate {
+                if let Some(value) = fields.get("pointer") {
+                    collect_invalid_pointers("where", value, &mut invalid);
+                }
+            }
+        }
+    }
+
+    for (parameter, pointer) in invalid {
+        let message = format!(
+            "parameter {parameter:?} of applet {operation:?} contains malformed JSON Pointer \
+             {pointer:?}; a JSON Pointer must be empty or start with '/' and use only '~0' or '~1' escapes"
+        );
+        diagnostics.push(Diagnostic::error(
+            "applet.parameter.constraint",
+            message,
+            parameter_value_span_at(source, line, parameter, line_starts)
+                .unwrap_or_else(|| line_starts.span(source, line)),
+        ));
+    }
+}
+
+fn collect_invalid_pointers(parameter: &str, value: &Value, invalid: &mut Vec<(String, String)>) {
+    if let Value::String(pointer) = value {
+        if crate::structured::validate_pointer(pointer).is_err() {
+            invalid.push((parameter.to_owned(), pointer.clone()));
         }
     }
 }
@@ -5387,6 +5457,49 @@ mod tests {
         assert!(!analyze_source(&dynamic_source, &dynamic_helper)
             .iter()
             .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"));
+    }
+
+    #[test]
+    fn json_applet_pointer_literals_match_runtime_syntax_and_defer_references() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let registry =
+            Registry::load_default(&manifest_dir, crate::manifest::ManifestCheck::Full).unwrap();
+
+        for pointer in ["not-a-pointer", "/~2", "/trailing~"] {
+            let source = format!(
+                "run json.keys with document {{\"a\":1}} and pointer {pointer:?} as result\n"
+            );
+            let diagnostics = analyze_source(&source, &registry);
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+                "malformed pointer {pointer:?} was accepted: {diagnostics:#?}"
+            );
+        }
+
+        for pointer in ["", "/a", "/~0", "/~1", "/a~0b~1c"] {
+            let source = format!(
+                "run json.keys with document {{\"a\":1}} and pointer {pointer:?} as result\n"
+            );
+            let diagnostics = analyze_source(&source, &registry);
+            assert!(
+                !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+                "valid pointer {pointer:?} was rejected: {diagnostics:#?}"
+            );
+        }
+
+        let dynamic =
+            "accept pointer as text\nrun json.keys with document {\"a\":1} and pointer pointer as result\n";
+        let diagnostics = analyze_source(dynamic, &registry);
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+            "dynamic pointer was validated before its value was known: {diagnostics:#?}"
+        );
     }
 
     #[test]

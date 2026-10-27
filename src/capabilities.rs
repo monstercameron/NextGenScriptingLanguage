@@ -158,6 +158,15 @@ fn record_preflight_denial(registry: &Registry, subject: &str, action: &str) {
     );
 }
 
+/// Record an invalid-policy denial: the configured policy failed validation,
+/// so the run is denied before any grant is consulted. The reason stays
+/// `MissingGrant` because the decision enum carries no `InvalidPolicy`
+/// variant; the validation detail stays in the returned error and never
+/// reaches the persisted audit.
+fn record_invalid_policy(registry: &Registry, subject: &str, action: &str) {
+    record_preflight_denial(registry, subject, action);
+}
+
 fn validate_native_enforcement(grant: &AppletGrant, effects: &[String]) -> Result<()> {
     if !grant.network_origins.is_empty() {
         return Err(SandboxRefused(
@@ -1076,7 +1085,10 @@ fn preflight_program(
     let Some(policy) = configured.as_ref() else {
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "policy.validate");
+        return Err(error);
+    }
 
     if cwd_mode.is_dynamic()
         && calls.iter().any(|call| call.cache)
@@ -1184,7 +1196,10 @@ fn preflight_invocation_plan<'a>(
     let Some(policy) = configured.as_ref() else {
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "policy.validate");
+        return Err(error);
+    }
     validate_policy_names(policy, registry)?;
     preflight_invocations_with_policy(
         calls.iter().copied(),
@@ -1508,8 +1523,17 @@ where
     // secret variable, the child environment is exactly the inherited one. The command then
     // carries no environment changes, so std passes `environ` through instead of copying
     // and rebuilding the whole environment for every child.
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            // A malformed ambient allowlist denies the launch before any
+            // child exists. Record it so a recorded run names the denial.
+            record_preflight_denial(registry, applet_name, "environment.read");
+            return Err(error);
+        }
+    };
     let inherits_environment = configured.as_ref().is_none()
-        && child_environment_allowlist()?.is_none()
+        && allowlist.is_none()
         && !command_overlay_active()
         && registry
             .resolve(applet_name)
@@ -1545,7 +1569,10 @@ where
     ) {
         bail!("command launch requested for non-process applet {applet_name:?}");
     }
-    validate_environment_backend(manifest)?;
+    if let Err(error) = validate_environment_backend(manifest) {
+        record_preflight_denial(registry, &manifest.name, "environment.overlay");
+        return Err(error);
+    }
     let Some(policy) = configured.as_ref() else {
         let mut command = Command::new(binary);
         crate::platform::add_arguments(&mut command, arguments);
@@ -1553,17 +1580,23 @@ where
         cwd.apply(&mut command);
         return Ok(command);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "applet.invoke");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     authorize_backend_capability(registry, applet_name, grant, "process.exec")?;
     if manifest.name != applet_name {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
         bail!("capability policy applet names must use canonical manifest names");
     }
-    let contract = manifest.execution_contract().ok_or_else(|| {
-        anyhow!("capability policy requires a version-1 contract for applet {applet_name:?}")
-    })?;
+    let Some(contract) = manifest.execution_contract() else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy requires a version-1 contract for applet {applet_name:?}");
+    };
     policy.authorize_validated(
         applet_name,
         false,
@@ -1729,10 +1762,27 @@ pub fn effective_environment(
         }
     };
     if let Some(manifest) = manifest {
-        validate_environment_backend(manifest)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
 
-    let allowlist = child_environment_allowlist()?;
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.read",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
+            return Err(error);
+        }
+    };
     let mut environment = std::env::vars_os()
         .filter(|(name, _)| {
             environment_name_allowed(configured.as_ref().as_ref(), applet_name, name)
@@ -1743,8 +1793,20 @@ pub fn effective_environment(
         })
         .collect::<Vec<_>>();
     if let Some(policy) = configured.as_ref() {
-        policy.validate()?;
+        if let Err(error) = policy.validate() {
+            record_invalid_policy(registry, applet_name, "environment.read");
+            return Err(error);
+        }
         if !policy.applets.contains_key(applet_name) {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.read",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::MissingGrant,
+            );
             bail!("capability policy has no allowlist entry for applet {applet_name:?}");
         }
     }
@@ -1805,6 +1867,8 @@ pub fn parse_child_environment_allowlist(value: &str) -> Result<Vec<String>> {
 
 /// Apply the host's optional ambient allowlist to a directly launched helper.
 /// Unlike applet launches, these helpers have no per-applet policy or overlays.
+/// A malformed allowlist fails closed without an audit entry: this helper
+/// takes no registry, so there is no policy log to record into.
 pub fn apply_host_child_environment(command: &mut Command) -> Result<()> {
     if let Some(allowlist) = child_environment_allowlist()? {
         let environment = std::env::vars_os().filter(|(name, _)| {
@@ -1865,7 +1929,25 @@ fn authorize_environment_override(
     applet_name: &str,
     variable_name: &str,
 ) -> Result<()> {
-    if let Some(allowlist) = child_environment_allowlist()? {
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            // A malformed ambient allowlist denies the override before any
+            // policy is consulted. Record it so a recorded run names the
+            // denial instead of failing silent.
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
+            return Err(error);
+        }
+    };
+    if let Some(allowlist) = allowlist {
         if !allowlist
             .iter()
             .any(|name| same_environment_name(OsStr::new(name), variable_name))
@@ -1917,7 +1999,10 @@ fn authorize_environment_override(
         );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.set");
+        return Err(error);
+    }
     let allowed = policy
         .applets
         .get(applet_name)
@@ -1973,10 +2058,14 @@ pub fn policy_fingerprint(registry: &Registry, applet_name: &str) -> Result<Opti
     let Some(policy) = configured.as_ref() else {
         return Ok(None);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "applet.invoke");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     let encoded = serde_json::to_vec(grant).context("encoding capability grant identity")?;
     let digest = Sha256::digest(encoded);
     Ok(Some(digest.into()))
@@ -1996,10 +2085,14 @@ where
     let Some(policy) = configured.as_ref() else {
         return Ok(None);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.read");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "environment.read");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     let mut filtered = Vec::new();
     for (name, value) in environment {
         if name
@@ -2033,7 +2126,10 @@ pub fn authorize_environment_variable(
         );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.read");
+        return Err(error);
+    }
     let allowed = policy
         .applets
         .get(applet_name)
@@ -2083,7 +2179,10 @@ pub fn authorize_network_endpoint(
         );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "network.connect");
+        return Err(error);
+    }
     let Some(grant) = policy.applets.get(applet_name) else {
         record_policy_decision(
             registry,
@@ -2213,7 +2312,15 @@ pub fn authorize_host_path(
         );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        let action = if access == HostAccess::Write {
+            "filesystem.write"
+        } else {
+            "filesystem.read"
+        };
+        record_invalid_policy(registry, "host", action);
+        return Err(error);
+    }
     let host = policy.host.as_ref();
     let capability = if access == HostAccess::Write {
         "filesystem.write"
@@ -2291,7 +2398,15 @@ pub fn authorize_applet_host_path(
         );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        let action = if access == HostAccess::Write {
+            "filesystem.write"
+        } else {
+            "filesystem.read"
+        };
+        record_invalid_policy(registry, applet_name, action);
+        return Err(error);
+    }
     let Some(grant) = policy.applets.get(applet_name) else {
         record_policy_decision(
             registry,
@@ -2501,7 +2616,10 @@ pub fn authorize_environment_inputs(
         );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "environment.read");
+        return Err(error);
+    }
     for declaration in declarations {
         if let Some(crate::ast::InputSource::Environment(name)) = &declaration.source {
             let allowed = policy.host_environment.contains(name);

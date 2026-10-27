@@ -23,7 +23,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
     Arc, Condvar, Mutex,
 };
 use std::thread;
@@ -762,10 +762,18 @@ impl Drop for SocketGuard {
         }
     }
 }
-struct SignalGuard(Vec<signal_hook::SigId>);
+struct SignalGuard {
+    ids: Vec<signal_hook::SigId>,
+    // Retained so the registered handlers keep working for the guard's whole
+    // lifetime: the Windows backend only holds weak references. Each serve
+    // call owns a fresh slot, so one run can neither inherit nor erase
+    // another's recorded interrupt.
+    _cleanup: Arc<AtomicBool>,
+    _signal_code: Arc<AtomicI32>,
+}
 impl Drop for SignalGuard {
     fn drop(&mut self) {
-        for id in &self.0 {
+        for id in &self.ids {
             signal_hook::low_level::unregister(*id);
         }
     }
@@ -785,12 +793,19 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
         guard
     };
     listener.set_nonblocking(true)?;
-    let mut signals = SignalGuard(Vec::new());
-    signals.0 = crate::platform::signals(
+    let cleanup = Arc::new(AtomicBool::new(false));
+    let signal_code = Arc::new(AtomicI32::new(0));
+    let mut signals = SignalGuard {
+        ids: Vec::new(),
+        _cleanup: cleanup.clone(),
+        _signal_code: signal_code.clone(),
+    };
+    signals.ids = crate::platform::signals(
         shared.stop.clone(),
         None,
         None,
-        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        cleanup,
+        signal_code,
     )?;
     match mode {
         Mode::Serve => {

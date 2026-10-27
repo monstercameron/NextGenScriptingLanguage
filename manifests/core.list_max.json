@@ -9,7 +9,8 @@
   "accepts_stdin": true,
   "parameters": {
     "items": {
-      "type": "json"
+      "type": "list",
+      "items": "json"
     },
     "key": {
       "type": "string"
@@ -57,7 +58,10 @@
       "inputs": {
         "items": {
           "schema": {
-            "type": "json"
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
           },
           "delivery": "single"
         },

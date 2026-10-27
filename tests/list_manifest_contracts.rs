@@ -155,3 +155,36 @@ fn bundled_registry_checks_required_parameters_and_top_default() {
         }
     }
 }
+
+#[test]
+fn aggregation_items_require_lists_but_keep_arbitrary_json_elements() {
+    let root = tempfile::tempdir().unwrap();
+    for operation in [
+        "list.count",
+        "list.group",
+        "list.max",
+        "list.min",
+        "list.sort",
+        "list.sum",
+        "list.top",
+        "list.unique",
+    ] {
+        let source = format!("run {operation} with items {{}}\n");
+        let output = invoke(root.path(), &source, "check");
+        assert!(
+            !output.status.success(),
+            "static check accepted a non-list for {operation}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let source = "run list.unique with items [null, true, {\"nested\":[1]}] as result\nthen encode result as json\n";
+    let output = invoke(root.path(), source, "run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(actual, json!([null, true, {"nested":[1]}]));
+}

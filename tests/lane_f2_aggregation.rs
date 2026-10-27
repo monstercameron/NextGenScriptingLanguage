@@ -62,3 +62,16 @@ fn aggregate_input_and_numeric_errors_fail_closed() {
     assert!(run("list.sum", json!({"items":[1,"two"]}), &[]).is_err());
     assert!(run("list.count", json!({"items":{}}), &[]).is_err());
 }
+
+#[test]
+fn aggregation_items_preserve_arbitrary_json_and_omitted_items_use_stdin() {
+    let values = json!([null, true, {"nested":[1, "two"]}]);
+    assert_eq!(
+        run("list.unique", json!({"items":values.clone()}), &[]).unwrap(),
+        values
+    );
+    assert_eq!(
+        run("list.count", json!({}), b"one\ntwo\n").unwrap(),
+        json!(2)
+    );
+}

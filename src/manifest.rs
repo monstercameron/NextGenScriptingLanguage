@@ -2358,6 +2358,16 @@ fn is_scalar_type(value: &Value, expected: ParameterType) -> bool {
             | (ParameterType::Integer, Value::Integer(_))
             | (ParameterType::Boolean, Value::Bool(_))
             | (
+                ParameterType::Json,
+                Value::String(_)
+                    | Value::Integer(_)
+                    | Value::Number(_)
+                    | Value::Bool(_)
+                    | Value::List(_)
+                    | Value::Record(_)
+                    | Value::Null
+            )
+            | (
                 ParameterType::Scalar,
                 Value::String(_) | Value::Integer(_) | Value::Bool(_)
             )
@@ -2914,14 +2924,6 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         }
         if spec.item_type == Some(ParameterType::List) {
             bail!("parameter {name:?}: nested lists are not supported");
-        }
-        if spec
-            .item_type
-            .is_some_and(|item| matches!(item, ParameterType::Json | ParameterType::Record))
-        {
-            bail!(
-                "parameter {name:?}: json and record list items require json_arguments rather than spread"
-            );
         }
         if !is_list && spec.min_items.is_some() {
             bail!("parameter {name:?}: min_items only applies to lists");
@@ -3530,6 +3532,14 @@ fn convert_argument(
             })?;
             if spec.kind != ParameterType::List {
                 bail!("spread parameter {spread:?} must be a list");
+            }
+            if spec
+                .item_type
+                .is_some_and(|item| matches!(item, ParameterType::Json | ParameterType::Record))
+            {
+                bail!(
+                    "parameter {spread:?}: json and record list items require json_arguments rather than spread"
+                );
             }
             ArgumentNode::Spread { spread }
         }

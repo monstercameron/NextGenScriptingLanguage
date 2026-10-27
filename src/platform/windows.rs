@@ -40,18 +40,18 @@ where
             match unit {
                 x if x == b'\\' as u16 => slashes += 1,
                 x if x == b'"' as u16 => {
-                    quoted.extend(std::iter::repeat(b'\\' as u16).take(slashes * 2 + 1));
+                    quoted.extend(std::iter::repeat_n(b'\\' as u16, slashes * 2 + 1));
                     quoted.push(x);
                     slashes = 0;
                 }
                 x => {
-                    quoted.extend(std::iter::repeat(b'\\' as u16).take(slashes));
+                    quoted.extend(std::iter::repeat_n(b'\\' as u16, slashes));
                     quoted.push(x);
                     slashes = 0;
                 }
             }
         }
-        quoted.extend(std::iter::repeat(b'\\' as u16).take(slashes * 2));
+        quoted.extend(std::iter::repeat_n(b'\\' as u16, slashes * 2));
         quoted.push(b'"' as u16);
         command.raw_arg(std::ffi::OsString::from_wide(&quoted));
     }

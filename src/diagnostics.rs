@@ -363,6 +363,10 @@ pub struct SourceSpan {
     pub end_line: usize,
     pub end_column: usize,
     pub precision: SpanPrecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -375,6 +379,14 @@ pub struct Diagnostic {
     /// applying one should resolve the diagnostic it is attached to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fixes: Vec<SuggestedFix>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<RelatedInformation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelatedInformation {
+    pub message: String,
+    pub span: SourceSpan,
 }
 
 /// A repair described as text replacements over the checked source.
@@ -416,6 +428,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             fixes: Vec::new(),
+            related: Vec::new(),
         }
     }
 }
@@ -559,21 +572,105 @@ pub fn analyze_source_at(
                     message: "the final bound value is internal and will not be printed; use an unbound `use value NAME` for text or `then encode NAME as json` to emit it".into(),
                     span: line_starts.span(source, step.line),
                     fixes: Vec::new(),
+                    related: Vec::new(),
                 });
             }
-            collect_program_diagnostics(source, &program, registry, &line_starts, &mut diagnostics);
-            collect_pipeline_diagnostics(
+            let mut local_program = program.clone();
+            local_program
+                .definitions
+                .retain(|name, _| !name.starts_with("file:"));
+            collect_program_diagnostics(
                 source,
-                &program,
+                &local_program,
                 registry,
                 &line_starts,
                 &mut diagnostics,
             );
+            collect_pipeline_diagnostics(
+                source,
+                &local_program,
+                registry,
+                &line_starts,
+                &mut diagnostics,
+            );
+            if let Some(parent_path) = path {
+                let mut calls = Vec::new();
+                collect_file_calls(&program.steps, &mut calls);
+                for (name, definition) in &program.definitions {
+                    if name.starts_with("file:") {
+                        continue;
+                    }
+                    collect_file_calls(&definition.steps, &mut calls);
+                }
+                for (line, call) in calls
+                    .iter()
+                    .filter(|(_, call)| call.operation.starts_with("file:"))
+                {
+                    let key = &call.operation;
+                    let Some(child_path) = key
+                        .strip_prefix("file:")
+                        .map(std::path::PathBuf::from)
+                    else {
+                        continue;
+                    };
+                    let Ok(child_path) = std::fs::canonicalize(child_path) else {
+                        continue;
+                    };
+                    let Ok(child_source) = std::fs::read_to_string(&child_path) else {
+                        continue;
+                    };
+                    let mut child = analyze_source_at(&child_source, Some(&child_path), registry);
+                    let mut callsite = line_starts.span(source, *line);
+                    callsite.path = Some(parent_path.display().to_string());
+                    callsite.path_bytes = Some(parent_path.as_os_str().as_encoded_bytes().to_vec());
+                    for diagnostic in &mut child {
+                        diagnostic.related.push(RelatedInformation {
+                            message: "called from here".into(),
+                            span: callsite.clone(),
+                        });
+                    }
+                    diagnostics.append(&mut child);
+                }
+            }
         }
         Err(error) => {
             let message = format!("{error:#}");
+            if let Some(path_text) = message
+                .split_once("called program file ")
+                .and_then(|(_, tail)| {
+                    tail.split_once(" is not valid program text")
+                        .map(|(path, _)| path)
+                })
+            {
+                let child_path = std::path::PathBuf::from(path_text);
+                if let (Some(parent_path), Ok(child_source)) =
+                    (path, std::fs::read_to_string(&child_path))
+                {
+                    let mut child = analyze_source_at(&child_source, Some(&child_path), registry);
+                    let name = child_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("");
+                    let call_line = source
+                        .lines()
+                        .position(|line| line.contains(name))
+                        .map_or(1, |line| line + 1);
+                    let mut callsite = line_starts.span(source, call_line);
+                    callsite.path = Some(parent_path.display().to_string());
+                    callsite.path_bytes = Some(parent_path.as_os_str().as_encoded_bytes().to_vec());
+                    for diagnostic in &mut child {
+                        diagnostic.related.push(RelatedInformation {
+                            message: "called from here".into(),
+                            span: callsite.clone(),
+                        });
+                    }
+                    diagnostics.append(&mut child);
+                }
+            }
             let error_line = find_line_number(&message).unwrap_or(1);
-            if !local_error_lines.contains(&error_line) {
+            let callee_parse_error = message.contains("called program file ")
+                && message.contains(" is not valid program text");
+            if !callee_parse_error && !local_error_lines.contains(&error_line) {
                 diagnostics.push(classified_parse_error(
                     source,
                     &message,
@@ -589,15 +686,35 @@ pub fn analyze_source_at(
             || !warning_suppressed(source, diagnostic.span.line, &diagnostic.code)
     });
     diagnostics.sort_by(|left, right| {
-        (left.span.start_byte, &left.code, &left.message).cmp(&(
+        (&left.span.path, left.span.start_byte, &left.code, &left.message).cmp(&(
+            &right.span.path,
             right.span.start_byte,
             &right.code,
             &right.message,
         ))
     });
+    if let Some(path) = path {
+        let display = path.display().to_string();
+        let bytes = path.as_os_str().as_encoded_bytes().to_vec();
+        for diagnostic in &mut diagnostics {
+            if diagnostic.span.path.is_none() {
+                diagnostic.span.path = Some(display.clone());
+                diagnostic.span.path_bytes = Some(bytes.clone());
+            }
+            for fix in &mut diagnostic.fixes {
+                for edit in &mut fix.edits {
+                    if edit.span.path.is_none() {
+                        edit.span.path = Some(display.clone());
+                        edit.span.path_bytes = Some(bytes.clone());
+                    }
+                }
+            }
+        }
+    }
     diagnostics.dedup_by(|left, right| {
         left.code == right.code
             && left.message == right.message
+            && left.span.path == right.span.path
             && left.span.start_byte == right.span.start_byte
             && left.span.end_byte == right.span.end_byte
     });
@@ -2614,6 +2731,8 @@ impl LineStarts {
             end_line,
             end_column,
             precision,
+            path: None,
+            path_bytes: None,
         }
     }
 
@@ -4056,6 +4175,18 @@ fn collect_calls<'a>(steps: &'a [Step], calls: &mut Vec<(usize, &'a Invocation)>
                 kind: crate::ast::LoopKind::WhileCommand { call, .. },
                 ..
             } => calls.push((step.line, call)),
+            _ => {}
+        }
+    }
+}
+
+fn collect_file_calls<'a>(steps: &'a [Step], calls: &mut Vec<(usize, &'a Invocation)>) {
+    for step in steps {
+        match &step.kind {
+            StepKind::CallProgram { call, .. } => calls.push((step.line, call)),
+            StepKind::TaskGroup { tasks, .. } => {
+                calls.extend(tasks.iter().map(|call| (step.line, call)))
+            }
             _ => {}
         }
     }

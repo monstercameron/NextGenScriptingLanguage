@@ -592,3 +592,62 @@ fn human_errors_and_option_rejection_remain_unchanged() {
         assert!(!output.stderr.is_empty());
     }
 }
+
+#[test]
+fn called_file_diagnostics_keep_their_own_source_and_call_site() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("sub")).unwrap();
+    fs::write(root.path().join("main.program"),
+        "accept theme as text with default \"dark\"\nrun program file \"sub/child.program\" with theme theme as result\n").unwrap();
+    fs::write(root.path().join("sub/child.program"),
+        "accept theme as text\nrun \"printf\" with arguments [them]\n").unwrap();
+    let result = report(&invoke(root.path(), &["check", "main.program", "--json"]), false);
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "check.undefined_name");
+    assert_eq!(diagnostic["span"]["path"], root.path().join("sub/child.program").canonicalize().unwrap().display().to_string());
+    assert_eq!(diagnostic["span"]["line"], 2);
+    assert_eq!(diagnostic["span"]["precision"], "token");
+    assert!(diagnostic["message"].as_str().unwrap().contains("did you mean \"theme\""));
+    assert_eq!(diagnostic["fixes"][0]["edits"][0]["span"]["path"], diagnostic["span"]["path"]);
+    assert_eq!(diagnostic["related"][0]["span"]["path"], root.path().join("main.program").canonicalize().unwrap().display().to_string());
+    assert_eq!(diagnostic["related"][0]["span"]["line"], 2);
+}
+
+#[test]
+fn nested_called_file_diagnostics_report_the_innermost_file() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("sub")).unwrap();
+    fs::write(root.path().join("main.program"), "run program file \"sub/middle.program\"\n").unwrap();
+    fs::write(root.path().join("sub/middle.program"), "run program file \"leaf.program\"\n").unwrap();
+    fs::write(root.path().join("sub/leaf.program"), "read \"unterminated\n").unwrap();
+    let result = report(&invoke(root.path(), &["check", "main.program", "--json"]), false);
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "parse.lexical");
+    assert_eq!(diagnostic["span"]["path"], root.path().join("sub/leaf.program").canonicalize().unwrap().display().to_string());
+    assert_eq!(diagnostic["span"]["line"], 1);
+}
+
+#[test]
+fn called_file_parse_errors_report_the_callee_line_and_reason() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("main.program"),
+        "run program file \"callee.program\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("callee.program"),
+        "run \"printf\"\nrun \"printf\"\nrun \"printf\"\nrun\n",
+    )
+    .unwrap();
+    let result = report(&invoke(root.path(), &["check", "main.program", "--json"]), false);
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "parse.syntax");
+    assert_eq!(diagnostic["span"]["path"], root.path().join("callee.program").canonicalize().unwrap().display().to_string());
+    assert_eq!(diagnostic["span"]["line"], 4);
+    assert!(!diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("called program file"));
+    assert_eq!(diagnostic["related"][0]["span"]["line"], 1);
+}

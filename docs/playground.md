@@ -151,7 +151,7 @@ replacement for invalid sequences.
 
 Limits are 64 KiB source, 4,096 expanded steps, 1 MiB output/file, 128 files,
 128 directories, 4 MiB total file bytes, and a 256-entry / 4 MiB payload cache.
-Loops share a 100,000-iteration guard per invocation. Trace collection stops at
+Each loop execution has a 100,000-iteration guard. Trace collection stops at
 4,096 entries or 1 MiB with an explicit `trace truncated` marker; execution
 continues within its other bounds.
 The linker caps WASM linear memory at 64 MiB. Exceeding memory or stack capacity

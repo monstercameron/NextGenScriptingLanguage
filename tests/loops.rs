@@ -31,6 +31,8 @@ fn run(cwd: &Path, source: &str) -> runtime::RunResult {
 fn cli(cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .current_dir(cwd)
+        .env("XDG_STATE_HOME", cwd)
+        .env("LOCALAPPDATA", cwd)
         .args(args)
         .output()
         .unwrap()
@@ -117,7 +119,7 @@ fn invalid_body_counts_and_local_escapes_fail_before_any_effect() {
     let dir = tempfile::tempdir().unwrap();
     for bad in [
         "repeat -1 times\n  run \"true\"",
-        "repeat 100001 times\n  run \"true\"",
+        "repeat 1000001 times\n  run \"true\"",
         "repeat 0 times\n  run missing_manifest",
         "for each item in true\n  run \"true\"",
         "repeat 1 times\n  run \"printf\" with arguments [\"x\"] as local\nthen \"printf\" with arguments [local]",
@@ -140,7 +142,7 @@ fn known_loop_inputs_are_preflighted_before_earlier_effects_in_all_contexts() {
         format!("accept count as integer\n{body}"),
     )
     .unwrap();
-    for value in ["-1", "100001"] {
+    for value in ["-1", "1000001"] {
         let input = format!("count={value}");
         let output = cli(dir.path(), &["main.program", "--input", &input]);
         assert!(!output.status.success());
@@ -182,18 +184,17 @@ fn known_loop_inputs_are_preflighted_before_earlier_effects_in_all_contexts() {
 }
 
 #[test]
-fn nested_loops_and_calls_share_one_entered_iteration_budget() {
+fn nested_loops_and_calls_have_independent_iteration_limits() {
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("empty"), []).unwrap();
+    let mut opts = options(dir.path());
+    opts.max_loop_iterations = 3;
     for source in [
-        "repeat 100000 times\n  repeat 1 times\n    read \"empty\"\n",
-        "define a program named inner\n  repeat 1 times\n    read \"empty\"\nrepeat 100000 times\n  run program inner\n",
+        "repeat 3 times\n  repeat 3 times\n    use value \"x\"\n",
+        "define a program named inner\n  repeat 3 times\n    use value \"x\"\nrepeat 3 times\n  run program inner\n",
     ] {
         let program = parser::parse(source).unwrap();
-        let error = runtime::run(&program, &Registry::default(), &options(dir.path()))
-            .err()
-            .unwrap();
-        assert!(format!("{error:#}").contains("iteration"));
+        let result = runtime::run(&program, &Registry::default(), &opts).unwrap();
+        assert_eq!(result.output, b"x");
     }
 }
 
@@ -380,4 +381,95 @@ fn checkpoints_skip_completed_loops_pin_body_and_require_partial_retry() {
     // Explicit retry restarts the entire node, including its first iteration.
     assert_eq!(fs::read(dir.path().join("first.out")).unwrap(), b"partial");
     assert_eq!(fs::read(dir.path().join("second.out")).unwrap(), b"partial");
+}
+
+#[test]
+fn input_repeat_limit_is_checked_before_earlier_effects() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "accept count as integer\nuse value \"effect\"\nthen save to \"marker\"\nrepeat count times\n  use value \"body\"\n";
+    let mut opts = options(dir.path());
+    opts.inputs
+        .insert("count".into(), flow::ast::Value::Integer(4));
+    opts.max_loop_iterations = 3;
+    let error = runtime::run(&parser::parse(source).unwrap(), &Registry::default(), &opts)
+        .err()
+        .expect("the declared count exceeds its loop limit");
+    assert!(format!("{error:#}").contains("line 4"));
+    assert!(!dir.path().join("marker").exists());
+
+    let source =
+        "use value \"effect\"\nthen save to \"marker\"\nrepeat count times\n  use value \"body\"\n";
+    let mut context_options = options(dir.path());
+    context_options.max_loop_iterations = 3;
+    let error = runtime::run_with_context(
+        &parser::parse(source).unwrap(),
+        &Registry::default(),
+        &context_options,
+        BTreeMap::from([("count".into(), flow::ast::Value::Integer(4))]),
+        Vec::new(),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .err()
+    .expect("supplied context exceeds the loop limit");
+    assert!(format!("{error:#}").contains("line 3"));
+    assert!(!dir.path().join("marker").exists());
+}
+
+#[test]
+fn while_loop_enforces_its_own_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut opts = options(dir.path());
+    opts.max_loop_iterations = 3;
+    let program = parser::parse("while true is true\n  use value \"x\"\n").unwrap();
+    let error = runtime::run(&program, &Registry::default(), &opts)
+        .err()
+        .expect("the non-terminating loop must stop");
+    let text = format!("{error:#}");
+    assert!(
+        text.contains("line 1") && text.contains("budget of 3"),
+        "{text}"
+    );
+}
+
+#[cfg(feature = "agent-advisory")]
+#[test]
+fn changing_loop_limit_refuses_an_earlier_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("review.program"),
+        "use value \"effect\"\nthen save to \"marker\"\n",
+    )
+    .unwrap();
+    let review = cli(
+        dir.path(),
+        &[
+            "run",
+            "review.program",
+            "--what-if",
+            "--max-loop-iterations",
+            "3",
+        ],
+    );
+    assert!(
+        review.status.success(),
+        "{}",
+        String::from_utf8_lossy(&review.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&review.stdout).unwrap();
+    assert_eq!(report["settings"]["max_loop_iterations"], 3);
+    let fingerprint = report["fingerprint"].as_str().unwrap();
+    let confirmed = cli(
+        dir.path(),
+        &[
+            "run",
+            "review.program",
+            "--confirm",
+            fingerprint,
+            "--max-loop-iterations",
+            "4",
+        ],
+    );
+    assert!(!confirmed.status.success());
+    assert!(String::from_utf8_lossy(&confirmed.stderr).contains("plan changed since --what-if"));
+    assert!(!dir.path().join("marker").exists());
 }

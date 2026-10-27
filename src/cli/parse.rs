@@ -58,6 +58,8 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut headless = false;
     let mut max_output_bytes = 16 * 1024 * 1024;
     let mut max_output_seen = false;
+    let mut max_loop_iterations = flow::runtime::DEFAULT_MAX_LOOP_ITERATIONS;
+    let mut max_loop_seen = false;
     let mut max_runs = None;
     let mut missed_ticks = None;
     let mut max_catch_up = None;
@@ -330,6 +332,14 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     .map_err(|_| anyhow!("--max-output-bytes must be a non-negative integer"))?;
                 max_output_seen = true;
             }
+            "--max-loop-iterations" if matches!(command, "run" | "resume") => {
+                if max_loop_seen {
+                    bail!("--max-loop-iterations may be specified only once");
+                }
+                max_loop_iterations =
+                    parse_positive_usize(arguments, &mut index, "--max-loop-iterations")?;
+                max_loop_seen = true;
+            }
             "--command-timeout-ms" if matches!(command, "run" | "resume") => {
                 if command_timeout.is_some() {
                     bail!("--command-timeout-ms may be specified only once");
@@ -477,6 +487,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         trace,
         headless,
         max_output_bytes,
+        max_loop_iterations,
         max_runs,
         missed_ticks,
         max_catch_up,

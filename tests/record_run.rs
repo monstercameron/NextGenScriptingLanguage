@@ -432,3 +432,89 @@ fn long_recorded_runs_stop_growing_the_trace_at_its_limit() {
     assert_eq!(document["truncated"], true);
     assert_eq!(document["steps"], 100000);
 }
+
+#[test]
+fn record_and_replay_use_the_recorded_loop_limit() {
+    let work = tempfile::tempdir().unwrap();
+    fs::write(
+        work.path().join("loop.program"),
+        "repeat 4 times\n  use value \"ok\"\n",
+    )
+    .unwrap();
+    let record = work.path().join("loop-record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "loop.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--max-loop-iterations",
+            "4",
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let path = record.join("run.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(document["limits"]["loop_iterations_max"], 4);
+    assert_eq!(document["limits"]["loop_iterations_scope"], "per_loop");
+    document["limits"]["loop_iterations_max"] = 3.into();
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let replay = execute(work.path(), &["replay", record.to_str().unwrap()]);
+    assert!(
+        !replay.status.success(),
+        "replay should enforce the stored limit"
+    );
+    assert!(
+        String::from_utf8_lossy(&replay.stderr).contains("budget of 3"),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+}
+
+#[test]
+fn legacy_record_replay_preserves_shared_loop_budget_across_loops() {
+    let work = tempfile::tempdir().unwrap();
+    fs::write(
+        work.path().join("legacy.program"),
+        "repeat 60000 times\n  use value \"first\"\nrepeat 60000 times\n  use value \"second\"\n",
+    )
+    .unwrap();
+    let record = work.path().join("legacy-record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "legacy.program",
+            "--record",
+            record.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let path = record.join("run.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    document["limits"]
+        .as_object_mut()
+        .unwrap()
+        .remove("loop_iterations_max");
+    document["limits"]
+        .as_object_mut()
+        .unwrap()
+        .remove("loop_iterations_scope");
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let replay = execute(work.path(), &["replay", record.to_str().unwrap()]);
+    assert!(!replay.status.success());
+    let stderr = String::from_utf8_lossy(&replay.stderr);
+    assert!(
+        stderr.contains("line 3") && stderr.contains("budget of 100000"),
+        "{stderr}"
+    );
+}

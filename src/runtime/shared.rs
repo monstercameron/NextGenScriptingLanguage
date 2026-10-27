@@ -366,8 +366,27 @@ pub(crate) fn preflight_inputs(
     {
         return Ok(());
     }
-    calls::preflight(program, registry, bindings)?;
+    calls::preflight(program, registry, bindings, None)?;
     Ok(())
+}
+
+fn preflight_inputs_with_loop_limit(
+    program: &Program,
+    registry: &Registry,
+    bindings: &BTreeMap<String, Value>,
+    limit: usize,
+) -> Result<()> {
+    if program.inputs.is_empty()
+        && !program.steps.iter().any(|step| {
+            matches!(
+                step.kind,
+                StepKind::Loop { .. } | StepKind::CallProgram { .. }
+            )
+        })
+    {
+        return Ok(());
+    }
+    calls::preflight(program, registry, bindings, Some(limit))
 }
 
 fn binding(
@@ -818,7 +837,7 @@ fn validate_inputs(
             StepKind::CallProgram { .. } | StepKind::Loop { .. }
         )
     }) {
-        calls::preflight(program, registry, &BTreeMap::new())?;
+        calls::preflight(program, registry, &BTreeMap::new(), None)?;
     }
     Ok(())
 }
@@ -2068,13 +2087,13 @@ pub fn explain_with_inputs(
                     },
                 ..
             } => format!(
-                "while run {:?} {}; command output discarded, stdin closed; shared {} entered-iteration limit",
+                "while run {:?} {}; command output discarded, stdin closed; default per-loop {} entered-iteration limit",
                 call.operation,
                 if *expect_success { "succeeds" } else { "fails" },
                 loops::MAX_LOOP_ITERATIONS
             ),
             StepKind::Loop { kind, .. } => format!(
-                "loop {kind:?}; shared {} entered-iteration limit",
+                "loop {kind:?}; default per-loop {} entered-iteration limit",
                 loops::MAX_LOOP_ITERATIONS
             ),
             StepKind::EndLoop { .. } => "end iteration; remove body-local names".into(),

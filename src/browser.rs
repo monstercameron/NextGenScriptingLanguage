@@ -222,6 +222,13 @@ impl BrowserSession {
         }
         let supplied = crate::inputs::parse_cli(&program.inputs, &request.inputs)?;
         validate_with_arguments(&program, &self.registry, &supplied)?;
+        let known = crate::inputs::known_values(&program.inputs, &supplied)?;
+        preflight_inputs_with_loop_limit(
+            &program,
+            &self.registry,
+            &known,
+            loops::MAX_LOOP_ITERATIONS,
+        )?;
         for step in &program.steps {
             let unsupported = match &step.kind {
                 StepKind::BreakLoop | StepKind::ContinueLoop | StepKind::Return => {

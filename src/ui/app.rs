@@ -489,6 +489,8 @@ impl App {
                 cache_directory: options.cache_directory.clone(),
                 trace: options.trace,
                 max_output_bytes: options.max_output_bytes,
+                max_loop_iterations: options.max_loop_iterations,
+                loop_budget_scope: options.loop_budget_scope,
                 command_timeout: Some(options.command_timeout.unwrap_or(Duration::from_secs(30))),
                 total_timeout: options.total_timeout,
                 ..RunOptions::new(options.working_directory.clone())
@@ -654,6 +656,8 @@ impl App {
                     cache_directory: self.options.cache_directory.clone(),
                     trace: self.options.trace,
                     max_output_bytes: self.options.max_output_bytes,
+                    max_loop_iterations: self.options.max_loop_iterations,
+                    loop_budget_scope: self.options.loop_budget_scope,
                     command_timeout: self.options.command_timeout,
                     total_timeout: self.options.total_timeout,
                     ..RunOptions::new(self.options.working_directory.clone())

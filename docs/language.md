@@ -404,16 +404,22 @@ rebinding it in a loop requires establishing a known type before entry. Ordinary
 loop directory changes persist; checkpoint mode requires directory setup outside
 control blocks so executable identities remain unambiguous.
 
-Validation checks every body before effects, even for zero iterations. Known
-counts must be between 0 and 100,000; supplied input counts, lists and comparisons
-are checked before earlier native or file effects. Derived values are checked
-when execution reaches them. A shared guard allows at most **100,000 entered
-iterations per finite invocation**, across nested loops and reusable calls.
-Services and TUI handlers start a new guard per handler; managed live execution
-starts one per outer node. Resume counts newly entered iterations and does not
-persist a lifetime quota. Cancellation is checked between VM steps, including
-loops containing only builtins. Browser execution also retains its worker
-watchdog. `break` and `continue` target the innermost loop in the current
+Validation checks every body before effects, even for zero iterations. Repeat
+counts must be non-negative; known counts and supplied inputs are checked before
+earlier native or file effects, while derived values are checked when reached.
+Each execution of a loop allows at most **1,000,000 entered iterations** by
+default. `--max-loop-iterations N` changes the positive limit for `run` and
+`resume`; embedding callers can set `RunOptions::max_loop_iterations`. Each
+sequential or nested loop execution has its own counter. Nested
+loops can therefore execute many more iterations in total; use
+`--total-timeout-ms` to bound a whole run. `parallel for each` keeps its own
+10,000-element bound. A checkpointed `for each` counts restored elements toward
+that loop's limit.
+Recorded runs retain the configured limit for replay. Older records without a
+limit retain the original shared 100,000-iteration guard during replay.
+Cancellation is checked between VM steps, including loops containing only
+builtins. Browser execution uses a separate 100,000-iteration per-loop limit
+and retains its worker watchdog. `break` and `continue` target the innermost loop in the current
 reusable-program scope and cannot cross a reusable call boundary. `break`
 leaves the loop; `continue` finishes the current iteration and tests the loop
 again. Neither collects iteration output: the pipeline remains the last value

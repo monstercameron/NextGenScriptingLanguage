@@ -204,3 +204,67 @@ fn a_secret_element_is_refused_at_persistence_and_never_reaches_the_log() {
         "the secret reached the checkpoint directory"
     );
 }
+
+#[test]
+fn resumed_for_each_counts_committed_elements_against_new_limit() {
+    let directory = tempdir().unwrap();
+    write_step(directory.path());
+    fs::write(directory.path().join("a"), "A\n").unwrap();
+    fs::write(directory.path().join("c"), "C\n").unwrap();
+    fs::write(
+        directory.path().join("outer.program"),
+        outer_program("[\"a\", \"b\", \"c\"]"),
+    )
+    .unwrap();
+    let first = execute(
+        &[
+            "run",
+            "outer.program",
+            "--checkpoint",
+            "ck",
+            "--max-loop-iterations",
+            "3",
+        ],
+        directory.path(),
+    );
+    assert!(!first.status.success());
+    assert_eq!(log_lines(directory.path()), ["A"]);
+    fs::write(directory.path().join("b"), "B\n").unwrap();
+    let limited = execute(
+        &[
+            "resume",
+            "outer.program",
+            "--checkpoint",
+            "ck",
+            "--retry-uncertain",
+            "--max-loop-iterations",
+            "1",
+        ],
+        directory.path(),
+    );
+    assert!(!limited.status.success());
+    let message = String::from_utf8_lossy(&limited.stderr);
+    assert!(
+        message.contains("line 1") && message.contains("budget of 1"),
+        "{message}"
+    );
+    assert_eq!(log_lines(directory.path()), ["A"]);
+    let resumed = execute(
+        &[
+            "resume",
+            "outer.program",
+            "--checkpoint",
+            "ck",
+            "--retry-uncertain",
+            "--max-loop-iterations",
+            "3",
+        ],
+        directory.path(),
+    );
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert_eq!(log_lines(directory.path()), ["A", "B", "C"]);
+}

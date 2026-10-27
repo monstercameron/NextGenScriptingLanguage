@@ -30,7 +30,7 @@ _arguments -s \
   '--json-errors[structured error on stderr]' \
   '--version[show version]' '-V[show version]' \
   '--headless[run UI once]' '--once[run one activation]' '--init[supervise as PID 1]' \
-  '--trace[print execution details]' '--max-output-bytes[maximum captured output]:bytes:' \
+  '--trace[print execution details]' '--max-output-bytes[maximum captured output]:bytes:' '--max-loop-iterations[maximum iterations per loop]:count:' \
   '--max-runs[maximum trigger runs]:count:' '--missed-ticks[trigger backlog policy]:policy:(skip coalesce catch-up)' \
   '--max-catch-up[catch-up run bound]:count:' '--calendar-dedup[calendar fold policy]:mode:(instant local)' \
   '--command-timeout-ms[native pipeline lifetime]:milliseconds:' '--total-timeout-ms[workflow lifetime]:milliseconds:' \

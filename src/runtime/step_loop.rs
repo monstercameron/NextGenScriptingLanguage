@@ -247,7 +247,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     let mut index = 0;
     let mut call_frames: Vec<calls::Frame<'_>> = Vec::new();
     let mut bound_call_depths = Vec::new();
-    let mut loop_frames = loops::LoopStack::default();
+    let mut loop_frames = loops::LoopStack::with_policy(
+        options.max_loop_iterations,
+        options.loop_budget_scope == LoopBudgetScope::LegacySharedRun,
+    );
     let mut temp_scopes = temp::ScopeStack::default();
     let mut control_state = control_flow::RuntimeState::default();
     if let Some(journal) = journal.as_deref_mut() {
@@ -267,13 +270,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             if let Some(resumed) =
                 checkpoint::elements::for_each_resume(journal, program, index, &state, registry)?
             {
-                loop_frames.restore_for_each(
-                    index,
-                    &resumed.binding,
-                    resumed.outer,
-                    resumed.items,
-                    resumed.consumed,
-                )?;
+                loop_frames
+                    .restore_for_each(
+                        index,
+                        &resumed.binding,
+                        resumed.outer,
+                        resumed.items,
+                        resumed.consumed,
+                    )
+                    .with_context(|| {
+                        format!("line {}: restoring loop", program.steps[index].line)
+                    })?;
                 state = resumed.state;
                 state.bindings.remove(STDOUT_ELIGIBILITY);
             }
@@ -318,7 +325,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     }
     merge_declared_inputs(program, options, &mut bindings)?;
     if preflight_context {
-        preflight_inputs(program, registry, &bindings)?;
+        preflight_inputs_with_loop_limit(
+            program,
+            registry,
+            &bindings,
+            options.max_loop_iterations,
+        )?;
     }
     let mut journal_end = None;
     let mut journal_start = 0;

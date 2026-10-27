@@ -965,3 +965,25 @@ fn package_alias_invokes_pinned_transitive_export_without_catalog_duplicate() {
     let result = flow::runtime::run(&caller, &registry, &options).unwrap();
     assert_eq!(result.output, br#"{"count":5,"name":"pinned"}"#);
 }
+
+#[test]
+fn module_loop_uses_the_callers_iteration_limit() {
+    let temp = tempdir().unwrap();
+    let catalog = temp.path().join("applets");
+    write_direct_applet(
+        &catalog,
+        "test.module",
+        "define a program named entry\n  repeat 3 times\n    use value \"inside\"\n  then encode \"done\" as json\n",
+    );
+    let registry = flow::manifest::Registry::load(&catalog).unwrap();
+    let program = flow::parser::parse("run test.module as result\nuse value result\n").unwrap();
+    let mut options = flow::runtime::RunOptions::new(temp.path().to_path_buf());
+    options.max_loop_iterations = 2;
+    let error = flow::runtime::run(&program, &registry, &options)
+        .err()
+        .expect("module loop should respect the caller's lower limit");
+    assert!(format!("{error:#}").contains("budget of 2"));
+    options.max_loop_iterations = 3;
+    let result = flow::runtime::run(&program, &registry, &options).unwrap();
+    assert_eq!(result.output, b"done");
+}

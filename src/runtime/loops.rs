@@ -2,6 +2,9 @@
 use super::*;
 use crate::ast::{InputType, LoopKind};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const MAX_LOOP_ITERATIONS: usize = 1_000_000;
+#[cfg(target_arch = "wasm32")]
 pub(super) const MAX_LOOP_ITERATIONS: usize = 100_000;
 
 /// A resolved `for each` input is not an array or a text list.
@@ -27,12 +30,19 @@ impl std::error::Error for ForEachInputTypeError {}
 
 pub(super) fn repeat_count(value: &Value) -> Result<usize> {
     match value {
-        Value::Integer(count) if *count >= 0 && *count <= MAX_LOOP_ITERATIONS as i64 => {
-            Ok(*count as usize)
-        }
-        Value::Integer(_) => bail!("repeat count must be between 0 and {MAX_LOOP_ITERATIONS}"),
+        Value::Integer(count) if *count >= 0 => usize::try_from(*count)
+            .map_err(|_| anyhow!("repeat count is too large for this platform")),
+        Value::Integer(_) => bail!("repeat count must be non-negative"),
         _ => bail!("repeat count requires an integer"),
     }
+}
+
+fn repeat_count_with_limit(value: &Value, limit: usize) -> Result<usize> {
+    let count = repeat_count(value)?;
+    if count > limit {
+        bail!("loop iteration budget of {limit} exceeded");
+    }
+    Ok(count)
 }
 fn list_items(value: &Value) -> Result<&[Value]> {
     let Value::List(items) = value else {
@@ -101,13 +111,24 @@ pub(super) fn validate(kind: &LoopKind, flow: &control::FlowState) -> Result<()>
 
 /// Check known inputs before any native or filesystem effects. Unknown results
 /// retain references and are checked when the loop is entered.
-pub(super) fn preflight(kind: &LoopKind, values: &BTreeMap<String, Value>) -> Result<()> {
+pub(super) fn preflight(
+    kind: &LoopKind,
+    values: &BTreeMap<String, Value>,
+    limit: Option<usize>,
+) -> Result<()> {
     match kind {
         LoopKind::Repeat { count } => {
-            if !contains_reference(count) {
-                repeat_count(count)?;
-            } else if let Ok(value) = resolve(count, values) {
-                repeat_count(&value)?;
+            let known = if !contains_reference(count) {
+                Some(count.clone())
+            } else {
+                resolve(count, values).ok()
+            };
+            if let Some(value) = known {
+                if let Some(limit) = limit {
+                    repeat_count_with_limit(&value, limit)?;
+                } else {
+                    repeat_count(&value)?;
+                }
             }
         }
         LoopKind::ForEach { values: source, .. } => {
@@ -152,11 +173,17 @@ struct Frame {
     header: usize,
     outer: BTreeSet<String>,
     iterations: Iterations,
+    entered: usize,
 }
-#[derive(Default)]
 pub(super) struct LoopStack {
     frames: Vec<Frame>,
-    entered: usize,
+    limit: usize,
+    shared_entered: Option<usize>,
+}
+impl Default for LoopStack {
+    fn default() -> Self {
+        Self::with_limit(MAX_LOOP_ITERATIONS)
+    }
 }
 /// Runs a `while run <command>` header check: the invocation, the expected
 /// outcome and the current bindings. Returns whether the outcome matched.
@@ -164,6 +191,18 @@ pub(super) type CommandCheck<'a> =
     dyn FnMut(&crate::ast::Invocation, bool, &BTreeMap<String, Value>) -> Result<bool> + 'a;
 
 impl LoopStack {
+    pub fn with_limit(limit: usize) -> Self {
+        Self::with_policy(limit, false)
+    }
+
+    pub fn with_policy(limit: usize, legacy_shared: bool) -> Self {
+        Self {
+            frames: Vec::new(),
+            limit,
+            shared_entered: legacy_shared.then_some(0),
+        }
+    }
+
     /// Enter or re-check a loop whose header has no command condition.
     #[cfg(test)]
     pub fn header(
@@ -186,9 +225,10 @@ impl LoopStack {
     ) -> Result<bool> {
         if self.frames.last().is_none_or(|frame| frame.header != index) {
             let iterations = match kind {
-                LoopKind::Repeat { count } => {
-                    Iterations::Repeat(repeat_count(&resolve(count, bindings)?)?)
-                }
+                LoopKind::Repeat { count } => Iterations::Repeat(repeat_count_with_limit(
+                    &resolve(count, bindings)?,
+                    self.limit,
+                )?),
                 LoopKind::ForEach { binding, values } => {
                     if bindings.contains_key(binding) {
                         bail!("iteration binding {binding:?} is already defined");
@@ -210,6 +250,7 @@ impl LoopStack {
                 header: index,
                 outer: bindings.keys().cloned().collect(),
                 iterations,
+                entered: 0,
             });
         }
         let frame = self.frames.last_mut().expect("loop frame was pushed");
@@ -251,10 +292,11 @@ impl LoopStack {
             bindings.retain(|name, _| frame.outer.contains(name));
             return Ok(false);
         }
-        if self.entered >= MAX_LOOP_ITERATIONS {
-            bail!("loop iteration budget of {MAX_LOOP_ITERATIONS} exceeded");
+        let entered = self.shared_entered.as_mut().unwrap_or(&mut frame.entered);
+        if *entered >= self.limit {
+            bail!("loop iteration budget of {} exceeded", self.limit);
         }
-        self.entered += 1;
+        *entered += 1;
         Ok(true)
     }
     /// The element index and item of the `for each` at `header` that is running now.
@@ -292,14 +334,22 @@ impl LoopStack {
         if self.frames.last().is_some() {
             bail!("checkpoint restored a for each inside another loop");
         }
-        if self.entered + consumed > MAX_LOOP_ITERATIONS {
-            bail!("loop iteration budget of {MAX_LOOP_ITERATIONS} exceeded");
+        let restored_total = self
+            .shared_entered
+            .unwrap_or(0)
+            .checked_add(consumed)
+            .ok_or_else(|| anyhow!("loop iteration budget of {} exceeded", self.limit))?;
+        if restored_total > self.limit {
+            bail!("loop iteration budget of {} exceeded", self.limit);
         }
-        self.entered += consumed;
+        if let Some(total) = &mut self.shared_entered {
+            *total = restored_total;
+        }
         let remaining = items.split_off(consumed);
         self.frames.push(Frame {
             header,
             outer,
+            entered: consumed,
             iterations: Iterations::ForEach {
                 binding: binding.to_owned(),
                 items: remaining.into_iter(),
@@ -383,20 +433,23 @@ mod tests {
         };
         assert!(preflight(
             &kind,
-            &BTreeMap::from([("flag".into(), Value::String("true".into()))])
+            &BTreeMap::from([("flag".into(), Value::String("true".into()))]),
+            None,
         )
         .is_err());
         assert!(preflight(
             &kind,
-            &BTreeMap::from([("flag".into(), Value::List(vec![]))])
+            &BTreeMap::from([("flag".into(), Value::List(vec![]))]),
+            None,
         )
         .is_err());
         assert!(preflight(
             &kind,
-            &BTreeMap::from([("flag".into(), Value::Bool(false))])
+            &BTreeMap::from([("flag".into(), Value::Bool(false))]),
+            None,
         )
         .is_ok());
-        assert!(preflight(&kind, &BTreeMap::new()).is_ok());
+        assert!(preflight(&kind, &BTreeMap::new(), None).is_ok());
     }
 
     #[test]
@@ -431,32 +484,44 @@ mod tests {
     }
 
     #[test]
-    fn nested_loops_share_entered_budget_without_charging_exhausted_headers() -> Result<()> {
+    fn nested_loops_have_independent_limits() -> Result<()> {
         let one = LoopKind::Repeat {
             count: Value::Integer(1),
         };
-        let zero = LoopKind::Repeat {
-            count: Value::Integer(0),
-        };
-        let mut stack = LoopStack {
-            entered: MAX_LOOP_ITERATIONS - 1,
-            ..LoopStack::default()
-        };
+        let mut stack = LoopStack::with_limit(1);
         let mut bindings = BTreeMap::new();
         assert!(stack.header(0, &one, &mut bindings)?);
-        assert!(!stack.header(2, &zero, &mut bindings)?);
+        assert!(stack.header(2, &one, &mut bindings)?);
+        stack.end_iteration(2, &mut bindings)?;
+        assert!(!stack.header(2, &one, &mut bindings)?);
+        stack.end_iteration(0, &mut bindings)?;
+        assert!(!stack.header(0, &one, &mut bindings)?);
+        assert!(stack.header(4, &one, &mut bindings)?);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_policy_shares_one_counter_across_nested_and_sequential_loops() -> Result<()> {
+        let one = LoopKind::Repeat {
+            count: Value::Integer(1),
+        };
+        let mut stack = LoopStack::with_policy(1, true);
+        let mut bindings = BTreeMap::new();
+        assert!(stack.header(0, &one, &mut bindings)?);
         assert!(stack
+            .header(2, &one, &mut bindings)
+            .unwrap_err()
+            .to_string()
+            .contains("budget of 1"));
+        let mut sequential = LoopStack::with_policy(1, true);
+        assert!(sequential.header(0, &one, &mut bindings)?);
+        sequential.end_iteration(0, &mut bindings)?;
+        assert!(!sequential.header(0, &one, &mut bindings)?);
+        assert!(sequential
             .header(4, &one, &mut bindings)
             .unwrap_err()
             .to_string()
-            .contains("iteration budget"));
-        let mut stack = LoopStack {
-            entered: MAX_LOOP_ITERATIONS - 1,
-            ..LoopStack::default()
-        };
-        assert!(stack.header(0, &one, &mut bindings)?);
-        stack.end_iteration(0, &mut bindings)?;
-        assert!(!stack.header(0, &one, &mut bindings)?);
+            .contains("budget of 1"));
         Ok(())
     }
 

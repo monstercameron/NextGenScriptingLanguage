@@ -164,6 +164,7 @@ pub(super) fn preflight(
     program: &Program,
     registry: &Registry,
     supplied: &BTreeMap<String, Value>,
+    loop_limit: Option<usize>,
 ) -> Result<()> {
     fn known(value: &Value, values: &BTreeMap<String, Value>) -> Value {
         match value {
@@ -258,7 +259,7 @@ pub(super) fn preflight(
                 native(call, step.line, registry, &values, &types)?;
             }
             StepKind::Loop { kind, .. } => {
-                loops::preflight(kind, &values)
+                loops::preflight(kind, &values, loop_limit)
                     .map_err(|error| loops::at_line(error, step.line))
                     .with_context(|| format!("line {}: loop inputs", step.line))?;
                 if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
@@ -570,7 +571,7 @@ mod tests {
                 BTreeMap::from([("record".into(), Value::String("x".repeat(size)))])
             };
             let before = supplied.clone();
-            preflight(&program, &registry, &supplied)?;
+            preflight(&program, &registry, &supplied, None)?;
             assert_eq!(before, supplied);
             let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&supplied)?));
             let iterations = if size >= 64 * 1024 { 10 } else { 100 };
@@ -582,6 +583,7 @@ mod tests {
                         std::hint::black_box(&program),
                         &registry,
                         std::hint::black_box(&supplied),
+                        None,
                     )?;
                 }
                 if batch >= 10 {
@@ -681,7 +683,7 @@ mod tests {
                     native(call, step.line, registry, &values, &types)?;
                 }
                 StepKind::Loop { kind, .. } => {
-                    loops::preflight(kind, &values)
+                    loops::preflight(kind, &values, None)
                         .with_context(|| format!("line {}: loop inputs", step.line))?;
                     if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
                         native(call, step.line, registry, &values, &types)?;
@@ -839,7 +841,7 @@ mod tests {
                     let before = supplied.clone();
                     let legacy = legacy_preflight(&program, &registry, &supplied)
                         .map_err(|error| format!("{error:#}"));
-                    let candidate = preflight(&program, &registry, &supplied)
+                    let candidate = preflight(&program, &registry, &supplied, None)
                         .map_err(|error| format!("{error:#}"));
                     assert_eq!(
                         candidate, legacy,

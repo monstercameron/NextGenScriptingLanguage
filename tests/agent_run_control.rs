@@ -423,3 +423,45 @@ mod round_trip {
         assert!(!endpoint.exists(), "the endpoint should be removed on exit");
     }
 }
+
+#[test]
+fn run_control_honours_the_per_loop_iteration_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("loop.program"),
+        "repeat 4 times\n  use value \"done\"\n",
+    )
+    .unwrap();
+    let limited = execute(
+        &[
+            "run",
+            "loop.program",
+            "--control",
+            "--max-loop-iterations",
+            "3",
+        ],
+        directory.path(),
+    );
+    assert!(!limited.status.success());
+    assert!(
+        String::from_utf8_lossy(&limited.stderr).contains("budget of 3"),
+        "{}",
+        String::from_utf8_lossy(&limited.stderr)
+    );
+    let allowed = execute(
+        &[
+            "run",
+            "loop.program",
+            "--control",
+            "--max-loop-iterations",
+            "4",
+        ],
+        directory.path(),
+    );
+    assert!(
+        allowed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    assert_eq!(allowed.stdout, b"done");
+}

@@ -33,6 +33,8 @@ pub struct RunSettings<'a> {
     pub data_flow_policy: Option<&'a Path>,
     pub manifest_dir: Option<&'a Path>,
     pub manifest_catalog: Option<&'a Path>,
+    pub max_loop_iterations: usize,
+    pub loop_budget_scope: crate::runtime::LoopBudgetScope,
 }
 
 /// SHA-256 as lowercase hex.
@@ -282,6 +284,11 @@ fn settings_covered(plan: &Value, context: &RunSettings<'_>) -> Result<Value> {
         "capability_policy": file_digest(context.capability_policy)?,
         "data_flow_policy": file_digest(context.data_flow_policy)?,
         "manifests": manifest_digests(context)?,
+        "max_loop_iterations": context.max_loop_iterations,
+        "loop_budget_scope": match context.loop_budget_scope {
+            crate::runtime::LoopBudgetScope::PerLoop => "per_loop",
+            crate::runtime::LoopBudgetScope::LegacySharedRun => "legacy_shared_run",
+        },
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
@@ -330,6 +337,8 @@ mod tests {
             data_flow_policy: None,
             manifest_dir: Some(&manifests),
             manifest_catalog: None,
+            max_loop_iterations: crate::runtime::DEFAULT_MAX_LOOP_ITERATIONS,
+            loop_budget_scope: crate::runtime::LoopBudgetScope::PerLoop,
         };
         let plan = json!({"steps": []});
         let before = fingerprint(&plan, &context).unwrap().0;
@@ -370,6 +379,8 @@ mod tests {
             data_flow_policy: None,
             manifest_dir: Some(&manifests),
             manifest_catalog: None,
+            max_loop_iterations: crate::runtime::DEFAULT_MAX_LOOP_ITERATIONS,
+            loop_budget_scope: crate::runtime::LoopBudgetScope::PerLoop,
         };
         let plan = json!({"steps": []});
         let first = fingerprint(&plan, &context).unwrap().0;

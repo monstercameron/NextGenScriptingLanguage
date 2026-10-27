@@ -98,6 +98,17 @@ pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
 pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
 type PreparedJobCommands = Vec<(PathBuf, Vec<String>)>;
 
+/// Default maximum number of iterations entered by one loop execution.
+pub const DEFAULT_MAX_LOOP_ITERATIONS: usize = loops::MAX_LOOP_ITERATIONS;
+
+/// How entered iterations are charged. Legacy shared accounting is retained
+/// for replaying records written before per-loop limits were introduced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopBudgetScope {
+    PerLoop,
+    LegacySharedRun,
+}
+
 #[derive(Clone)]
 pub struct RunOptions {
     pub inputs: BTreeMap<String, Value>,
@@ -105,6 +116,10 @@ pub struct RunOptions {
     pub cache_directory: Option<PathBuf>,
     pub trace: bool,
     pub max_output_bytes: usize,
+    /// Maximum entered iterations for the selected scope (per loop by default).
+    pub max_loop_iterations: usize,
+    /// Selects legacy run-wide accounting when replaying an older record.
+    pub loop_budget_scope: LoopBudgetScope,
     /// Budget for each native pipeline group, finite stdin capture and
     /// cooperative checkpoints in an in-process applet. It cannot interrupt a
     /// synchronous OS or library call.
@@ -115,7 +130,7 @@ pub struct RunOptions {
 
 impl RunOptions {
     /// Options for a run in `working_directory` with no inputs, cache, trace or
-    /// timeouts, and a 1 MiB output limit.
+    /// timeouts, a 1 MiB output limit, and one million iterations per loop.
     pub fn new(working_directory: PathBuf) -> Self {
         Self {
             inputs: BTreeMap::new(),
@@ -123,6 +138,8 @@ impl RunOptions {
             cache_directory: None,
             trace: false,
             max_output_bytes: 1024 * 1024,
+            max_loop_iterations: loops::MAX_LOOP_ITERATIONS,
+            loop_budget_scope: LoopBudgetScope::PerLoop,
             command_timeout: None,
             total_timeout: None,
         }
@@ -335,6 +352,12 @@ fn configured_inputs<'a>(
     options: &'a RunOptions,
 ) -> Result<Cow<'a, RunOptions>> {
     if program.inputs.is_empty() && options.inputs.is_empty() {
+        preflight_inputs_with_loop_limit(
+            program,
+            registry,
+            &options.inputs,
+            options.max_loop_iterations,
+        )?;
         return Ok(Cow::Borrowed(options));
     }
     // Resolve supplied values once; cloning options first copied the complete
@@ -344,11 +367,18 @@ fn configured_inputs<'a>(
         cache_directory: options.cache_directory.clone(),
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
+        max_loop_iterations: options.max_loop_iterations,
+        loop_budget_scope: options.loop_budget_scope,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
         ..RunOptions::new(options.working_directory.clone())
     };
-    preflight_inputs(program, registry, &configured.inputs)?;
+    preflight_inputs_with_loop_limit(
+        program,
+        registry,
+        &configured.inputs,
+        configured.max_loop_iterations,
+    )?;
     Ok(Cow::Owned(configured))
 }
 
@@ -3845,7 +3875,7 @@ pub fn run_with_context(
         let mut supplied = options.inputs.clone();
         supplied.extend(bindings.clone());
         let values = crate::inputs::resolve(&program.inputs, &supplied, true)?;
-        preflight_inputs(program, registry, &values)?;
+        preflight_inputs_with_loop_limit(program, registry, &values, options.max_loop_iterations)?;
     }
     let mut signals = Signals::with_cancellation_and_deadline(
         cancelled,

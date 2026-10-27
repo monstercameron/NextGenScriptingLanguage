@@ -40,6 +40,7 @@ pub(crate) struct Args {
     pub(crate) trace: bool,
     pub(crate) headless: bool,
     pub(crate) max_output_bytes: usize,
+    pub(crate) max_loop_iterations: usize,
     pub(crate) max_runs: Option<usize>,
     pub(crate) missed_ticks: Option<String>,
     pub(crate) max_catch_up: Option<usize>,

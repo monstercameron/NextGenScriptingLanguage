@@ -92,6 +92,8 @@ pub struct Recorder {
 }
 
 struct RecorderState {
+    loop_limit: Option<usize>,
+    loop_scope: Option<crate::runtime::LoopBudgetScope>,
     steps: usize,
     blob_bytes: usize,
     truncated: bool,
@@ -166,6 +168,8 @@ impl Recorder {
             declared_secret_names: security::declared_secret_environment_names(start.registry),
             redactor,
             state: Mutex::new(RecorderState {
+                loop_limit: None,
+                loop_scope: None,
                 steps: 0,
                 blob_bytes: 0,
                 truncated: false,
@@ -180,6 +184,18 @@ impl Recorder {
         };
         recorder.write_run_document(false, None)?;
         Ok(recorder)
+    }
+
+    /// Record the execution limit before running so replay can use the same cap.
+    pub fn set_loop_budget(
+        &self,
+        limit: usize,
+        scope: crate::runtime::LoopBudgetScope,
+    ) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.loop_limit = Some(limit);
+        state.loop_scope = Some(scope);
+        self.write_run_document_locked(&mut state, false, None)
     }
 
     /// Write `run.json` for a finished run. Call after the run, whatever its result.
@@ -248,6 +264,11 @@ impl Recorder {
             "terminal": terminal,
             "truncated": state.truncated,
             "limits": {
+                "loop_iterations_max": state.loop_limit,
+                "loop_iterations_scope": state.loop_scope.map(|scope| match scope {
+                    crate::runtime::LoopBudgetScope::PerLoop => "per_loop",
+                    crate::runtime::LoopBudgetScope::LegacySharedRun => "legacy_shared_run",
+                }),
                 "blob_bytes_max": MAX_BLOB_BYTES,
                 "blob_bytes_used": state.blob_bytes,
                 "stderr_tail_bytes": STDERR_TAIL_BYTES,

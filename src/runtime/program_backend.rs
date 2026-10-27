@@ -74,6 +74,8 @@ pub(super) fn execute(
         cache_directory: options.cache_directory.clone(),
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
+        max_loop_iterations: options.max_loop_iterations,
+        loop_budget_scope: options.loop_budget_scope,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
         ..RunOptions::new(cwd.to_path_buf())

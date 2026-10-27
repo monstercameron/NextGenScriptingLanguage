@@ -61,6 +61,7 @@ pub struct HostRun {
     pub cache_dir: Option<PathBuf>,
     pub command_timeout_ms: Option<u64>,
     pub max_output_bytes: usize,
+    pub max_loop_iterations: usize,
     /// Source lines to pause before from the start (`--break-at`).
     pub breakpoints: Vec<usize>,
 }
@@ -91,6 +92,8 @@ pub fn host_run(
         socket.to_string_lossy().into_owned(),
         "--max-output-bytes".to_owned(),
         run.max_output_bytes.min(MAX_MESSAGE).to_string(),
+        "--max-loop-iterations".to_owned(),
+        run.max_loop_iterations.to_string(),
     ];
     if let Some(dir) = &run.cache_dir {
         args.push("--cache-dir".to_owned());
@@ -204,6 +207,7 @@ fn options(args: &[String]) -> Result<Options> {
                 "--cache-dir",
                 "--command-timeout-ms",
                 "--max-output-bytes",
+                "--max-loop-iterations",
                 "--breakpoints",
                 "--json",
                 "--json-file",
@@ -379,6 +383,7 @@ fn dispatch(
                 "--cache-dir",
                 "--command-timeout-ms",
                 "--max-output-bytes",
+                "--max-loop-iterations",
                 "--breakpoints",
             ],
             true,
@@ -439,6 +444,13 @@ fn dispatch(
         let max_bytes = usize::try_from(numeric(&opts, "--max-output-bytes")?.unwrap_or(262144))?;
         if max_bytes == 0 || max_bytes > MAX_MESSAGE {
             bail!("live max-output-bytes must be 1..1048576");
+        }
+        let max_loop_iterations = usize::try_from(
+            numeric(&opts, "--max-loop-iterations")?
+                .unwrap_or(crate::runtime::DEFAULT_MAX_LOOP_ITERATIONS as u64),
+        )?;
+        if max_loop_iterations == 0 {
+            bail!("live max-loop-iterations must be positive");
         }
         let timeout = numeric(&opts, "--command-timeout-ms")?.map(Duration::from_millis);
         if timeout
@@ -565,6 +577,7 @@ fn dispatch(
                 .get("--cache-dir")
                 .map(|p| shared.initial_cwd.join(p)),
             max_output_bytes: max_bytes,
+            max_loop_iterations,
             command_timeout: timeout,
             ..RunOptions::new(shared.initial_cwd.clone())
         };

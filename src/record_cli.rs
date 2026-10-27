@@ -39,6 +39,7 @@ pub fn run_recorded(
         inputs: record::inputs_json_for(&options.inputs, &program.inputs),
         registry,
     })?);
+    recorder.set_loop_budget(options.max_loop_iterations, options.loop_budget_scope)?;
     let guard = runtime::observe::install(recorder.clone())?;
     let result = runtime::with_streamed_stdout(|| runtime::run(program, registry, options));
     drop(guard);
@@ -156,11 +157,35 @@ pub fn replay(arguments: &[String]) -> Result<()> {
         None,
         None,
     )?;
+    // Records written before per-loop limits used 100,000 as their default.
+    let recorded_limit = record.run["limits"].get("loop_iterations_max");
+    let max_loop_iterations = match recorded_limit {
+        None | Some(serde_json::Value::Null) => 100_000,
+        Some(value) => usize::try_from(value.as_u64().context("invalid recorded loop limit")?)
+            .context("recorded loop limit exceeds this platform")?,
+    };
+    let loop_budget_scope = match record.run["limits"].get("loop_iterations_scope") {
+        None | Some(serde_json::Value::Null)
+            if recorded_limit.is_none_or(serde_json::Value::is_null) =>
+        {
+            runtime::LoopBudgetScope::LegacySharedRun
+        }
+        None | Some(serde_json::Value::Null) => runtime::LoopBudgetScope::PerLoop,
+        Some(serde_json::Value::String(scope)) if scope == "per_loop" => {
+            runtime::LoopBudgetScope::PerLoop
+        }
+        Some(serde_json::Value::String(scope)) if scope == "legacy_shared_run" => {
+            runtime::LoopBudgetScope::LegacySharedRun
+        }
+        _ => bail!("invalid recorded loop budget scope"),
+    };
     let replayer = Arc::new(Replayer::new(record, &registry, until)?);
     let guard = runtime::observe::install(replayer.clone())?;
     let options = RunOptions {
         inputs,
         max_output_bytes: 16 * 1024 * 1024,
+        max_loop_iterations,
+        loop_budget_scope,
         ..RunOptions::new(env::current_dir().context("could not determine current directory")?)
     };
     let result = runtime::with_streamed_stdout(|| runtime::run(&program, &registry, &options));

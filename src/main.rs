@@ -954,6 +954,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     cache_directory: args.cache_dir,
                     trace: args.trace,
                     max_output_bytes: args.max_output_bytes,
+                    max_loop_iterations: args.max_loop_iterations,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
                     ..RunOptions::new(
@@ -1070,6 +1071,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             cache_directory: args.cache_dir,
             trace: args.trace,
             max_output_bytes: args.max_output_bytes,
+            max_loop_iterations: args.max_loop_iterations,
             command_timeout: args.command_timeout,
             total_timeout: args.total_timeout,
             ..RunOptions::new(cwd.clone())
@@ -1253,6 +1255,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     cache_directory: args.cache_dir,
                     trace: args.trace,
                     max_output_bytes: args.max_output_bytes,
+                    max_loop_iterations: args.max_loop_iterations,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
                     ..RunOptions::new(cwd.clone())
@@ -1453,6 +1456,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             data_flow_policy: args.data_flow_policy.as_deref(),
             manifest_dir: args.manifest_dir.as_deref(),
             manifest_catalog: args.manifest_catalog.as_deref(),
+            max_loop_iterations: args.max_loop_iterations,
+            loop_budget_scope: runtime::LoopBudgetScope::PerLoop,
         };
         let (fingerprint, settings) = flow::agent::what_if::fingerprint(&plan, &context)?;
         if args.what_if {
@@ -1600,6 +1605,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 cache_directory: args.cache_dir,
                 trace: args.trace,
                 max_output_bytes: args.max_output_bytes,
+                max_loop_iterations: args.max_loop_iterations,
                 command_timeout: args.command_timeout,
                 total_timeout: args.total_timeout,
                 ..RunOptions::new(cwd.clone())
@@ -1832,6 +1838,7 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
             .command_timeout
             .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
         max_output_bytes: args.max_output_bytes,
+        max_loop_iterations: args.max_loop_iterations,
         breakpoints: args.break_at.clone(),
     };
     // The host has already written the program's output and diagnostics. Exit with
@@ -2689,7 +2696,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --json                  Structured result for check or explain\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --json                  Structured result for check or explain\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

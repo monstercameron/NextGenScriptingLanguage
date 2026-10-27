@@ -4606,9 +4606,14 @@ fn validate_json_pointer_literals(
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let operation = manifest
-        .execute_applet_operation()
-        .or_else(|| manifest.name.starts_with("json.").then_some(manifest.name.as_str()));
+    let operation = if call.direct {
+        None
+    } else {
+        manifest.execute_applet_operation().or_else(|| {
+            (manifest.execution_backend() == AppletBackend::InProcess)
+                .then_some(manifest.name_for(call))
+        })
+    };
     let Some(operation) = operation.filter(|operation| operation.starts_with("json.")) else {
         return;
     };
@@ -5499,6 +5504,60 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
             "dynamic pointer was validated before its value was known: {diagnostics:#?}"
+        );
+
+        let custom_command = json!({
+            "name": "json.keys",
+            "binary": "custom-json-keys",
+            "parameters": {
+                "document": { "type": "json", "required": true },
+                "pointer": { "type": "string" }
+            },
+            "arguments": [{ "parameter": "pointer" }]
+        })
+        .to_string();
+        let custom = Registry::from_sources(&[custom_command.clone()]).unwrap();
+        let malformed =
+            "run json.keys with document {\"a\":1} and pointer \"not-a-pointer\" as result\n";
+        assert!(
+            !analyze_source(malformed, &custom)
+                .iter()
+                .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+            "a same-name custom command was treated as the in-process json.keys applet"
+        );
+
+        let scope_origin = tempfile::tempdir().unwrap();
+        let scoped = registry
+            .with_scoped_manifest_sources(&[custom_command], scope_origin.path())
+            .unwrap();
+        assert!(
+            !analyze_source(malformed, &scoped)
+                .iter()
+                .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+            "a same-name scoped custom command was treated as the in-process json.keys applet"
+        );
+
+        let helper = json!({
+            "name": "fixture.json_keys",
+            "binary": "@execute-applet",
+            "parameters": {
+                "document": { "type": "json", "required": true },
+                "pointer": { "type": "string" }
+            },
+            "arguments": [
+                { "literal": "json.keys" },
+                { "literal": "--args" },
+                { "json_arguments": true }
+            ]
+        })
+        .to_string();
+        let helper = Registry::from_sources(&[helper]).unwrap();
+        let helper_source = malformed.replace("json.keys", "fixture.json_keys");
+        assert!(
+            analyze_source(&helper_source, &helper)
+                .iter()
+                .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"),
+            "a fixed helper dispatch to json.keys was not pointer-checked"
         );
     }
 

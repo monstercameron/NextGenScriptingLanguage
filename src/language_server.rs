@@ -2579,6 +2579,95 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_report_text_lines_items_as_text_inside_for_each() {
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("typed-loop.program");
+        let source = "run text.lines with text \"a\\nb\" as lines\nfor each line in lines\n  run text.repeat with text \"x\" and count line\n";
+        fs::write(&program, source).unwrap();
+        let uri = url::Url::from_file_path(&program).unwrap().to_string();
+        let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let registry = Registry::load(&manifests).unwrap();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+                canonical_path: None,
+            },
+        );
+        let workspace = Workspace {
+            roots: vec![fs::canonicalize(directory.path()).unwrap()],
+            explicitly_configured: true,
+        };
+        let diagnostics = diagnostics_for_document(&uri, &documents, &workspace, &registry);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "applet.parameter.type"
+                    && diagnostic.span.line == 3
+                    && diagnostic.message.contains("parameter \"count\"")
+                    && diagnostic.message.contains("expects integer")
+                    && diagnostic.message.contains("result \"line\" is text")
+            }),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_treat_path_list_items_as_text_inside_for_each() {
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("path-loop.program");
+        let source = "run fixture.paths as paths\nfor each path in paths\n  run fixture.text with text path\n";
+        fs::write(&program, source).unwrap();
+        let uri = url::Url::from_file_path(&program).unwrap().to_string();
+        let registry = Registry::from_sources(&[
+            json!({
+                "name": "fixture.paths",
+                "binary": "fixture-paths",
+                "parameters": {},
+                "arguments": [],
+                "contract": {
+                    "version": 1,
+                    "output": {
+                        "type": "list",
+                        "encoding": "json",
+                        "items": {"type": "path"}
+                    }
+                }
+            })
+            .to_string(),
+            json!({
+                "name": "fixture.text",
+                "binary": "fixture-text",
+                "parameters": {"text": {"type": "string", "required": true}},
+                "arguments": [{"parameter": "text"}]
+            })
+            .to_string(),
+        ])
+        .unwrap();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            uri.clone(),
+            Document {
+                text: source.to_owned(),
+                version: Some(1),
+                canonical_path: None,
+            },
+        );
+        let workspace = Workspace {
+            roots: vec![fs::canonicalize(directory.path()).unwrap()],
+            explicitly_configured: true,
+        };
+        let diagnostics = diagnostics_for_document(&uri, &documents, &workspace, &registry);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "applet.parameter.type"),
+            "path items are text-valued in runtime loops: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
     fn caller_rechecks_callee_after_disk_changes_and_bounds_open_text() {
         let dir = tempfile::tempdir().unwrap();
         let caller = dir.path().join("caller.program");

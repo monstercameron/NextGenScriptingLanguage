@@ -4141,6 +4141,7 @@ fn known_list_item_type(
 /// Other homogeneous JSON arrays remain conservatively JSON.
 fn runtime_list_item_type(kind: OutputType) -> OutputType {
     match kind {
+        OutputType::Path => OutputType::Text,
         OutputType::Text
         | OutputType::Integer
         | OutputType::UnsignedInteger
@@ -4420,6 +4421,17 @@ fn infer_call_output_type(call: &Invocation, registry: &Registry, scope: &mut In
         .execution_contract()
         .and_then(|contract| contract.output.as_ref());
     if let Some(output) = output {
+        if output.kind == OutputType::List {
+            if let Some(items) = output.items.as_deref() {
+                scope
+                    .list_item_types
+                    .insert(binding.clone(), runtime_list_item_type(items.kind));
+            } else {
+                scope.list_item_types.remove(binding);
+            }
+        } else {
+            scope.list_item_types.remove(binding);
+        }
         if let Some(parameter) = output.same_as_parameter.as_deref() {
             if let Some(value) = call.parameters.get(parameter) {
                 if let Some(item_kind) =

@@ -64,6 +64,39 @@ fn a_misspelled_parameter_is_renamed_and_the_fix_checks_clean() {
 }
 
 #[test]
+fn check_json_reports_text_lines_item_type_mismatches_in_loops() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("typed-loop.program");
+    std::fs::write(
+        &program,
+        "run text.lines with text \"a\\nb\" as lines\nfor each line in lines\n  run text.repeat with text \"x\" and count line\n",
+    )
+    .unwrap();
+    let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("check")
+        .arg(&program)
+        .arg("--json")
+        .arg("--manifest-dir")
+        .arg(manifests)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "type mismatch passed check");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        result["diagnostics"].as_array().unwrap().iter().any(|diagnostic| {
+            diagnostic["code"] == "applet.parameter.type"
+                && diagnostic["span"]["line"] == 3
+                && diagnostic["message"].as_str().is_some_and(|message| {
+                    message.contains("expects integer") && message.contains("is text")
+                })
+        }),
+        "{result:#}"
+    );
+}
+
+#[test]
 fn a_misspelled_applet_name_is_corrected() {
     let registry = fixture_registry();
     let source = "run fixture.readr with arguments \"x\"\n";

@@ -10,7 +10,34 @@
     },
     "operations": {
       "type": "json",
-      "required": true
+      "required": true,
+      "schema": {
+        "type": "list",
+        "items": {
+          "type": "json",
+          "one_of": [
+            {
+              "type": "record",
+              "fields": {
+                "action": { "type": "string", "enum": ["write"] },
+                "path": { "type": "path" },
+                "expected_content_hash": { "type": "string" },
+                "content": { "type": "string" }
+              },
+              "required": ["action", "path", "expected_content_hash", "content"]
+            },
+            {
+              "type": "record",
+              "fields": {
+                "action": { "type": "string", "enum": ["remove"] },
+                "path": { "type": "path" },
+                "expected_content_hash": { "type": "string" }
+              },
+              "required": ["action", "path", "expected_content_hash"]
+            }
+          ]
+        }
+      }
     },
     "lock_timeout_ms": {
       "type": "integer"

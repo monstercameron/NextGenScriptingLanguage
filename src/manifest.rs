@@ -222,6 +222,11 @@ const RUST_TRIM_WHITESPACE_PATTERN: &str =
 struct ParameterSpec {
     kind: ParameterType,
     item_type: Option<ParameterType>,
+    /// Optional recursive value constraint for JSON parameters. Unlike the
+    /// legacy parameter type, this can describe nested closed records and
+    /// structural unions without narrowing the parameter's transport type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schema: Option<ParameterSchema>,
     #[serde(default, rename = "enum", skip_serializing_if = "Option::is_none")]
     enum_values: Option<Vec<String>>,
     #[serde(default)]
@@ -262,6 +267,7 @@ impl From<RawParameter> for ParameterSpec {
         Self {
             kind: raw.kind,
             item_type: raw.items,
+            schema: raw.schema,
             enum_values: raw.enum_values,
             required: raw.required,
             min_items: raw.min_items,
@@ -275,6 +281,199 @@ impl From<RawParameter> for ParameterSpec {
             min_properties: raw.min_properties,
             max_properties: raw.max_properties,
         }
+    }
+}
+
+/// Recursive validation schema for structured JSON parameters. `one_of`
+/// models alternatives such as tagged actions and mutually exclusive tests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParameterSchema {
+    #[serde(rename = "type")]
+    kind: ParameterType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    items: Option<Box<ParameterSchema>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    fields: BTreeMap<String, ParameterSchema>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required: Vec<String>,
+    #[serde(default, rename = "enum", skip_serializing_if = "Option::is_none")]
+    enum_values: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    one_of: Vec<ParameterSchema>,
+}
+
+impl ParameterSchema {
+    fn json_schema(&self) -> serde_json::Value {
+        let base = match self.kind {
+            ParameterType::Json => serde_json::json!({}),
+            ParameterType::String => {
+                let mut value = serde_json::json!({"type":"string"});
+                if let Some(choices) = &self.enum_values { value["enum"] = serde_json::json!(choices); }
+                value
+            }
+            ParameterType::Path => serde_json::json!({"type":"string","format":"path","minLength":1}),
+            ParameterType::Integer => serde_json::json!({"type":"integer"}),
+            ParameterType::Boolean => serde_json::json!({"type":"boolean"}),
+            ParameterType::Record => {
+                let properties = self.fields.iter().map(|(name, schema)| (name.clone(), schema.json_schema())).collect::<serde_json::Map<_,_>>();
+                serde_json::json!({"type":"object","properties":properties,"required":self.required,"additionalProperties":!self.one_of.is_empty()})
+            }
+            ParameterType::List => serde_json::json!({"type":"array","items":self.items.as_deref().expect("list schema validated").json_schema()}),
+            ParameterType::Scalar => serde_json::json!({}),
+        };
+        if self.one_of.is_empty() { base } else if self.kind == ParameterType::Json {
+            serde_json::json!({"oneOf":self.one_of.iter().map(Self::json_schema).collect::<Vec<_>>()})
+        } else {
+            serde_json::json!({"allOf":[base,{"oneOf":self.one_of.iter().map(Self::json_schema).collect::<Vec<_>>()}]})
+        }
+    }
+
+    fn validate_schema(&self, path: &str) -> Result<()> {
+        match self.kind {
+            ParameterType::List => {
+                if self.items.is_none() || !self.fields.is_empty() || !self.required.is_empty() {
+                    bail!("{path}: list schemas require items and cannot declare fields");
+                }
+            }
+            ParameterType::Record => {
+                if self.items.is_some() {
+                    bail!("{path}: record schemas cannot declare items");
+                }
+                let mut seen = BTreeSet::new();
+                for name in &self.required {
+                    if !self.fields.contains_key(name) || !seen.insert(name) {
+                        bail!("{path}: required fields must be declared once in fields");
+                    }
+                }
+            }
+            ParameterType::String => {
+                if self.items.is_some() || !self.fields.is_empty() || !self.required.is_empty() {
+                    bail!("{path}: string schemas cannot declare items or fields");
+                }
+                if self.enum_values.as_ref().is_some_and(Vec::is_empty) {
+                    bail!("{path}: string enums must not be empty");
+                }
+                if self.enum_values.as_ref().is_some_and(|values| {
+                    values.iter().collect::<BTreeSet<_>>().len() != values.len()
+                }) {
+                    bail!("{path}: string enums cannot contain duplicates");
+                }
+            }
+            ParameterType::Path | ParameterType::Integer | ParameterType::Boolean | ParameterType::Json => {
+                if self.items.is_some() || !self.fields.is_empty() || !self.required.is_empty() || self.enum_values.is_some() {
+                    bail!("{path}: {} schemas cannot declare items, fields, or enums", self.kind);
+                }
+            }
+            ParameterType::Scalar => bail!("{path}: scalar is not valid in a JSON schema"),
+        }
+        if self.kind != ParameterType::String && self.enum_values.is_some() {
+            bail!("{path}: enum constraints apply only to string schemas");
+        }
+        if let Some(item) = &self.items {
+            item.validate_schema(&format!("{path}[]"))?;
+        }
+        for (name, schema) in &self.fields {
+            if name.is_empty() {
+                bail!("{path}: field names must be nonempty");
+            }
+            schema.validate_schema(&format!("{path}.{name}"))?;
+        }
+        for (index, schema) in self.one_of.iter().enumerate() {
+            schema.validate_schema(&format!("{path}.one_of[{index}]"))?;
+        }
+        if self.one_of.len() == 1 {
+            bail!("{path}: one_of requires at least two variants");
+        }
+        if !self.one_of.is_empty() && !matches!(self.kind, ParameterType::Json | ParameterType::Record) {
+            bail!("{path}: one_of applies only to JSON or record schemas");
+        }
+        Ok(())
+    }
+
+    fn validate_value(
+        &self,
+        value: &Value,
+        path: &str,
+        allow_references: bool,
+        bindings: &BTreeMap<String, InputType>,
+    ) -> Result<()> {
+        if allow_references {
+            if let Value::Reference(reference) = value {
+                let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
+                let accepts = match self.kind {
+                    ParameterType::Json => true,
+                    ParameterType::String | ParameterType::Path => kind == InputType::Text,
+                    ParameterType::Integer => kind == InputType::Integer,
+                    ParameterType::Boolean => kind == InputType::Boolean,
+                    ParameterType::Record => kind == InputType::Json,
+                    ParameterType::List => {
+                        kind == InputType::Json
+                            || kind == InputType::JsonList
+                            || (kind == InputType::TextList
+                                && self.items.as_deref().is_some_and(|item| {
+                                    matches!(item.kind, ParameterType::String | ParameterType::Path)
+                                }))
+                            || (kind == InputType::IntegerList
+                                && self.items.as_deref().is_some_and(|item| {
+                                    item.kind == ParameterType::Integer
+                                }))
+                    }
+                    ParameterType::Scalar => false,
+                };
+                if accepts {
+                    return Ok(());
+                }
+                bail!("{path} reference {reference:?} has incompatible type {kind}");
+            }
+        }
+        match (self.kind, value) {
+            (ParameterType::Json, Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_) | Value::List(_) | Value::Record(_) | Value::Null) => {}
+            (ParameterType::String, Value::String(text)) => {
+                if self.enum_values.as_ref().is_some_and(|choices| !choices.contains(text)) {
+                    bail!("{path} must be one of {:?}", self.enum_values.as_ref().unwrap());
+                }
+            }
+            (ParameterType::Path, Value::String(text)) if !text.is_empty() && !text.contains('\0') => {}
+            (ParameterType::Integer, Value::Integer(_)) | (ParameterType::Boolean, Value::Bool(_)) => {}
+            (ParameterType::Record, Value::Record(fields)) => {
+                for name in &self.required {
+                    if !fields.contains_key(name) {
+                        bail!("{path} is missing required field {name:?}");
+                    }
+                }
+                for (name, value) in fields {
+                    if let Some(schema) = self.fields.get(name) {
+                        schema.validate_value(
+                            value,
+                            &format!("{path}.{name}"),
+                            allow_references,
+                            bindings,
+                        )?;
+                    } else if self.one_of.is_empty() {
+                        bail!("{path} contains undeclared field {name:?}");
+                    }
+                }
+            }
+            (ParameterType::List, Value::List(items)) => {
+                let schema = self.items.as_deref().expect("list schema validated");
+                for (index, value) in items.iter().enumerate() {
+                    schema.validate_value(value, &format!("{path}[{index}]"), allow_references, bindings)?;
+                }
+            }
+            _ => bail!("{path} has the wrong value type for {:?}", self.kind),
+        }
+        if !self.one_of.is_empty() {
+            let mut matches = 0;
+            for schema in &self.one_of {
+                if schema.validate_value(value, path, allow_references, bindings).is_ok() { matches += 1; }
+            }
+            let deferred = allow_references && contains_parameter_reference(value);
+            if matches == 0 || (!deferred && matches != 1) {
+                bail!("{path} must match exactly one schema variant");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -636,6 +835,7 @@ impl Registry {
                 ParameterSpec {
                     kind: ParameterType::List,
                     item_type: Some(ParameterType::Scalar),
+                    schema: None,
                     enum_values: None,
                     required: false,
                     min_items: None,
@@ -1446,6 +1646,9 @@ impl Manifest {
             .iter()
             .map(|(name, spec)| {
                 let mut schema = parameter_schema(spec.kind, spec.fields.as_ref());
+                if let Some(constraint) = &spec.schema {
+                    schema = constraint.json_schema();
+                }
                 if let Some(values) = &spec.enum_values {
                     schema["enum"] = serde_json::json!(values);
                 }
@@ -2226,6 +2429,16 @@ fn validate_value(
             bindings,
         )?;
     }
+    if let Some(schema) = &spec.schema {
+        schema
+            .validate_value(
+                value,
+                &format!("parameter {name:?}"),
+                allow_reference_items,
+                bindings,
+            )
+            .with_context(|| format!("validating parameter {name:?} schema"))?;
+    }
     if let (ParameterType::List, Value::List(items)) = (spec.kind, value) {
         let item_type = spec.item_type.expect("list schema validated");
         if allow_reference_items && item_type == ParameterType::Json {
@@ -2896,6 +3109,8 @@ struct RawParameter {
     min_properties: Option<usize>,
     #[serde(default)]
     max_properties: Option<usize>,
+    #[serde(default, deserialize_with = "crate::contracts::deserialize_present")]
+    schema: Option<ParameterSchema>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3155,6 +3370,27 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
             spec.nonempty,
             name,
         )?;
+        if let Some(schema) = &spec.schema {
+            if spec.kind != ParameterType::Json {
+                bail!("parameter {name:?}: schema is only supported on json parameters");
+            }
+            if spec.item_type.is_some()
+                || spec.min_items.is_some()
+                || !spec.allow_first_token.is_empty()
+                || !spec.deny_first_token.is_empty()
+                || spec.forbid_option_items
+                || spec.fields.is_some()
+                || spec.enum_values.is_some()
+                || spec.additional_properties.is_some()
+                || spec.min_properties.is_some()
+                || spec.max_properties.is_some()
+                || spec.min_length.is_some()
+                || spec.nonempty
+            {
+                bail!("parameter {name:?}: schema cannot be combined with legacy list, record, object, or enum constraints");
+            }
+            schema.validate_schema(&format!("parameter {name:?}"))?;
+        }
     }
     validate_parameter_alternatives(&raw.parameter_alternatives, &parameters)?;
     if let Some(contract) = &raw.contract {
@@ -4051,6 +4287,80 @@ impl std::fmt::Display for ParameterType {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn structured_json(value: serde_json::Value) -> Value {
+        crate::structured::from_json(value)
+    }
+
+    fn schema_invocation(operation: &str, parameter: &str, value: Value) -> Invocation {
+        Invocation {
+            operation: operation.into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([(parameter.into(), value)]),
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        }
+    }
+
+    #[test]
+    fn fs_transaction_static_schema_checks_variant_records() {
+        let manifest = parse_manifest(include_str!("../manifests/core.fs_transaction.json"))
+            .expect("transaction manifest schema parses");
+        let operations = |values: serde_json::Value| structured_json(values);
+        let valid = operations(serde_json::json!([
+            {"action":"write","path":"/tmp/item","expected_content_hash":"hash","content":"new"},
+            {"action":"remove","path":"/tmp/other","expected_content_hash":"hash"}
+        ]));
+        assert!(manifest.validate(&schema_invocation("fs.transaction", "operations", valid)).is_ok());
+
+        for value in [
+            serde_json::json!([1]),
+            serde_json::json!([{"action":"write","path":"/tmp/item","expected_content_hash":"hash"}]),
+            serde_json::json!([{"action":"remove","path":"/tmp/item","expected_content_hash":"hash","content":"x"}]),
+            serde_json::json!([{"action":"copy","path":"/tmp/item","expected_content_hash":"hash"}]),
+            serde_json::json!([{"action":"remove","path":"/tmp/item","expected_content_hash":"hash","extra":true}]),
+        ] {
+            let error = manifest.validate(&schema_invocation("fs.transaction", "operations", operations(value)))
+                .expect_err("malformed transaction operation must fail static validation");
+            assert!(error.to_string().contains("schema") || format!("{error:#}").contains("schema"), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn json_filter_static_schema_checks_predicate_variants_and_defers_references() {
+        let manifest = parse_manifest(include_str!("../manifests/core.json_filter.json"))
+            .expect("filter manifest schema parses");
+        let predicates = |values: serde_json::Value| structured_json(values);
+        let valid = predicates(serde_json::json!([
+            {"exists":true},
+            {"pointer":"/name","equals":"Ada"},
+            {"not_equals":null},
+            {"pointer":"/items","type":"array"}
+        ]));
+        assert!(manifest.validate(&schema_invocation("json.filter", "where", valid)).is_ok());
+
+        let deferred = Value::List(vec![Value::Record(BTreeMap::from([
+            ("pointer".into(), Value::Reference("dynamic_pointer".into())),
+            ("exists".into(), Value::Bool(true)),
+        ]))]);
+        assert!(manifest.validate(&schema_invocation("json.filter", "where", deferred)).is_ok());
+
+        for value in [
+            serde_json::json!([1]),
+            serde_json::json!([{"type":"task"}]),
+            serde_json::json!([{"exists":"yes"}]),
+            serde_json::json!([{"exists":true,"equals":1}]),
+            serde_json::json!([{"equals":1,"extra":true}]),
+        ] {
+            let error = manifest.validate(&schema_invocation("json.filter", "where", predicates(value)))
+                .expect_err("malformed predicate must fail static validation");
+            assert!(error.to_string().contains("schema") || format!("{error:#}").contains("schema"), "{error:#}");
+        }
+    }
 
     #[test]
     fn json_list_item_references_accept_json_values_but_reject_bytes() {
@@ -5419,6 +5729,7 @@ mod first_token_rule_tests {
         ParameterSpec {
             kind: ParameterType::List,
             item_type: Some(ParameterType::String),
+            schema: None,
             enum_values: None,
             required: true,
             min_items: None,

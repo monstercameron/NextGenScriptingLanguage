@@ -12,7 +12,50 @@
     },
     "where": {
       "type": "json",
-      "required": true
+      "required": true,
+      "schema": {
+        "type": "list",
+        "items": {
+          "type": "json",
+          "one_of": [
+            {
+              "type": "record",
+              "fields": {
+                "pointer": { "type": "string" },
+                "exists": { "type": "boolean" }
+              },
+              "required": ["exists"]
+            },
+            {
+              "type": "record",
+              "fields": {
+                "pointer": { "type": "string" },
+                "equals": { "type": "json" }
+              },
+              "required": ["equals"]
+            },
+            {
+              "type": "record",
+              "fields": {
+                "pointer": { "type": "string" },
+                "not_equals": { "type": "json" }
+              },
+              "required": ["not_equals"]
+            },
+            {
+              "type": "record",
+              "fields": {
+                "pointer": { "type": "string" },
+                "type": {
+                  "type": "string",
+                  "enum": ["null", "boolean", "number", "string", "array", "object"]
+                }
+              },
+              "required": ["type"]
+            }
+          ]
+        }
+      }
     }
   },
   "arguments": [

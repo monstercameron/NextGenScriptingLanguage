@@ -515,6 +515,18 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         None => return Ok(()),
     };
 
+    if let Some(code) = args.diagnostic_explain.as_deref() {
+        let info = flow::diagnostics::code_info(code)
+            .ok_or_else(|| anyhow!("unknown diagnostic code {code:?}"))?;
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "Diagnostic code: {}", info.code)?;
+        writeln!(stdout, "Family: {}", info.family)?;
+        writeln!(stdout, "Meaning: {}", info.meaning)?;
+        writeln!(stdout, "Example:\n{}", info.example)?;
+        writeln!(stdout, "Typical fix: {}", info.typical_fix)?;
+        return Ok(());
+    }
+
     if args.command == "check" {
         let json = args.json;
         let path = args.file.to_string_lossy().into_owned();

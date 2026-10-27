@@ -179,7 +179,7 @@ fn semantic_parser_errors_have_specific_codes_and_token_spans() {
             "input",
         ),
         (
-            "define worker\n  run \"true\"\ndefine worker\n  run \"true\"\n",
+            "define a program named worker\n  run \"true\"\ndefine a program named worker\n  run \"true\"\n",
             "check.duplicate_name",
             "worker",
         ),
@@ -205,7 +205,7 @@ fn semantic_parser_errors_have_specific_codes_and_token_spans() {
             "item",
         ),
         (
-            "define worker\n  run program worker\n",
+            "define a program named worker\n  run program worker\n",
             "check.program.cycle",
             "worker",
         ),
@@ -215,7 +215,7 @@ fn semantic_parser_errors_have_specific_codes_and_token_spans() {
             "one",
         ),
         (
-            "define worker\n  run \"true\"\n\nrun program workre\n",
+            "define a program named worker\n  run \"true\"\n\nrun program workre\n",
             "check.program.unknown",
             "workre",
         ),
@@ -254,12 +254,12 @@ fn direct_executable_args_typo_has_a_machine_applicable_fix() {
 #[test]
 fn reusable_program_input_errors_have_specific_codes_and_token_spans() {
     let registry = Registry::default();
-    let definition = "define worker\n  accept input as text\n  accept extra as text\n  use value input\n  use value extra\n\n";
+    let definition = "define a program named worker\n  accept input as text\n  accept extra as text\n  use value input\n  use value extra\n\n";
     for (call, code, token) in [
         (
-            "run program worker with typo \"value\"\n",
+            "run program worker with inpt \"value\"\n",
             "check.program.input.unknown",
-            "typo",
+            "inpt",
         ),
         (
             "run program worker with extra \"value\" as result\n",

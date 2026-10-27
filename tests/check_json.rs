@@ -61,7 +61,7 @@ fn failures_in_all_execution_forms_are_structured_without_side_effects() {
         ),
         (
             "every 0 seconds\n  run \"printf\"\n",
-            "parse.syntax",
+            "check.range",
             Some(1),
         ),
         (
@@ -87,7 +87,12 @@ fn failures_in_all_execution_forms_are_structured_without_side_effects() {
         match expected_line {
             Some(line) => {
                 assert_eq!(diagnostic["span"]["line"], line);
-                assert_eq!(diagnostic["span"]["precision"], "line");
+                let precision = if expected_code == "check.range" {
+                    "token"
+                } else {
+                    "line"
+                };
+                assert_eq!(diagnostic["span"]["precision"], precision);
                 assert!(diagnostic.get("causes").is_none());
             }
             None => assert!(!diagnostic["causes"].as_array().unwrap().is_empty()),

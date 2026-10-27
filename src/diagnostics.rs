@@ -71,7 +71,7 @@ pub const CODES: &[CodeInfo] = &[
         code: "check.program.cycle",
         family: "validate",
         meaning: "a reusable program call graph contains a recursive cycle",
-        example: "define worker\n  run program worker",
+        example: "define a program named worker\n  run program worker",
         typical_fix: "Remove the recursive call or restructure it without a cycle.",
     },
     CodeInfo {
@@ -85,7 +85,7 @@ pub const CODES: &[CodeInfo] = &[
         code: "check.program.input.required",
         family: "validate",
         meaning: "a reusable program call omits a required input",
-        example: "define worker\n  accept input as text\n  use value input\nrun program worker",
+        example: "define a program named worker\n  accept input as text\n  use value input\nrun program worker",
         typical_fix: "Supply the required input, or declare a default value.",
     },
     CodeInfo {
@@ -546,7 +546,7 @@ fn classified_parse_error(
         || lower.contains("redirection and environment apply only")
         || lower.contains("stdin from` applies only")
         || lower.contains("applies only to")
-            && !lower.contains("one of applies only to text inputs")
+            && !lower.contains("applies only to text inputs")
         || lower.contains("applies to one")
         || lower.contains("applies to a single")
         || lower.contains("cannot be combined")
@@ -595,7 +595,7 @@ fn classified_parse_error(
         || lower.contains("program location inputs take their value")
     {
         "check.value.constraint"
-    } else if lower.contains("one of applies only to text inputs")
+    } else if lower.contains("applies only to text inputs")
         || lower.contains("program location inputs must be text")
         || lower.contains("secret prompt must be a text input")
         || lower.contains("from arguments` requires list of text")
@@ -658,16 +658,21 @@ fn classified_parse_error(
         .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
         .unwrap_or(line_span);
     let mut diagnostic = Diagnostic::error(code, message, span.clone());
-    if code == "check.program.unknown"
-        && lower.contains("undefined program")
-        && span.precision == SpanPrecision::Token
-    {
+    if code == "check.program.unknown" && span.precision == SpanPrecision::Token {
         let names = parser::logical_lines(source)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|statement| {
                 let tokens = parser::tokenize(&statement.text).ok()?;
                 match tokens.as_slice() {
+                    [
+                        Token::Word("define"),
+                        Token::Word("a"),
+                        Token::Word("program"),
+                        Token::Word("named"),
+                        Token::Word(name),
+                        ..
+                    ] => Some((*name).to_owned()),
                     [Token::Word("define"), Token::Word(name), ..] => Some((*name).to_owned()),
                     _ => None,
                 }

@@ -1085,10 +1085,10 @@ fn completion_words(prefix: &str) -> Vec<CompletionWord> {
     let mut quoted: Option<char> = None;
     let mut escaped = false;
     let mut in_word = false;
-    let mut flush = |current: &mut String,
-                     words: &mut Vec<CompletionWord>,
-                     in_word: &mut bool,
-                     quoted_word: bool| {
+    let flush = |current: &mut String,
+                 words: &mut Vec<CompletionWord>,
+                 in_word: &mut bool,
+                 quoted_word: bool| {
         if *in_word || quoted_word {
             words.push(CompletionWord {
                 text: std::mem::take(current),
@@ -3060,7 +3060,7 @@ fn guess_binding_kind(words: &[&str]) -> &'static str {
         if words.get(1) == Some(&"list") {
             return "list of text";
         }
-        return match words.get(1) {
+        return match words.get(1).copied() {
             Some(kind @ ("text" | "integer" | "boolean" | "json")) => kind,
             _ => "binding",
         };

@@ -1783,8 +1783,8 @@ fn known_list_item_type(
     }
 }
 
-/// Runtime list outputs currently retain precise item types only for text and
-/// integer lists. Other homogeneous JSON arrays remain conservatively JSON.
+/// Runtime list outputs retain precise item types for text and integer lists.
+/// Other homogeneous JSON arrays remain conservatively JSON.
 fn runtime_list_item_type(kind: OutputType) -> OutputType {
     match kind {
         OutputType::Text | OutputType::Integer => kind,
@@ -1800,8 +1800,8 @@ fn runtime_json_item_type(kind: OutputType) -> OutputType {
     }
 }
 
-/// Match `runtime::loops::element_type`: only text and integer arrays retain
-/// scalar precision; empty, mixed, boolean, floating-point, and nested arrays
+/// Match `runtime::loops::element_type`: text, integer, and boolean arrays
+/// retain scalar precision; empty, mixed, floating-point, and nested arrays
 /// are JSON values.
 fn known_for_each_item_type(
     value: &Value,
@@ -1811,9 +1811,11 @@ fn known_for_each_item_type(
     let item_kind = |item: &Value| match item {
         Value::String(_) => OutputType::Text,
         Value::Integer(_) => OutputType::Integer,
+        Value::Bool(_) => OutputType::Boolean,
         Value::Reference(name) => match known_types.get(name).copied() {
             Some(OutputType::Text) => OutputType::Text,
             Some(OutputType::Integer) => OutputType::Integer,
+            Some(OutputType::Boolean) => OutputType::Boolean,
             None => OutputType::Text,
             _ => OutputType::Json,
         },

@@ -82,6 +82,15 @@ pub(super) fn element_type(
         {
             Ok(InputType::Integer)
         }
+        Value::List(items)
+            if items.iter().all(|item| match item {
+                Value::Bool(_) => true,
+                Value::Reference(name) => types.get(name) == Some(&InputType::Boolean),
+                _ => false,
+            }) =>
+        {
+            Ok(InputType::Boolean)
+        }
         Value::List(_) => Ok(InputType::Json),
         _ => Err(ForEachInputTypeError::default().into()),
     }

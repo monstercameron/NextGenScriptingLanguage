@@ -192,12 +192,25 @@ fn list_sort_preserves_integer_items_through_loop_bindings_and_argv() {
 }
 
 #[test]
-fn unsupported_json_array_items_keep_conservative_loop_types() {
-    let cases = ["[true, false]", "[1.5, 2.5]", "[]", "[[1], [2]]"];
+fn json_loop_item_types_match_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    let booleans =
+        "for each x in [true, false]\n  run \"printf\" with arguments [\"%s\", x]\n";
+    for command in ["check", "run"] {
+        let result = execute(root.path(), booleans, &[command]);
+        assert!(
+            result.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let run = execute(root.path(), booleans, &["run"]);
+    assert_eq!(run.stdout, b"truefalse");
+
+    let cases = ["[1.5, 2.5]", "[]", "[[1], [2]]", "[true, 1]"];
     for items in cases {
         let root = tempfile::tempdir().unwrap();
-        let source =
-            format!("for each x in {items}\n  run \"printf\" with arguments [\"%s\", x]\n");
+        let source = format!("for each x in {items}\n  then encode x as json\n");
         let check = execute(root.path(), &source, &["check"]);
         assert!(
             check.status.success(),
@@ -209,6 +222,15 @@ fn unsupported_json_array_items_keep_conservative_loop_types() {
             run.status.success(),
             "run failed for {items}: {}",
             String::from_utf8_lossy(&run.stderr)
+        );
+
+        let argv_source = format!(
+            "for each x in {items}\n  run \"printf\" with arguments [\"%s\", x]\n"
+        );
+        let argv_check = execute(root.path(), &argv_source, &["check"]);
+        assert!(
+            !argv_check.status.success(),
+            "check accepted JSON loop items from {items} at the native argv boundary"
         );
     }
 }

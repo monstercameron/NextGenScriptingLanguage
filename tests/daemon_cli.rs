@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 
 const PRINT_OUT: &str = r#"run printf with message "out""#;
 
+fn bubblewrap_namespaces_unavailable(output: &Output) -> bool {
+    String::from_utf8_lossy(&output.stderr)
+        .contains("bubblewrap could not establish the required namespaces")
+}
+
 fn manifests() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
 }
@@ -346,6 +351,18 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
     };
     let cold = run(false);
     let forwarded = run(true);
+    if bubblewrap_namespaces_unavailable(&cold) || bubblewrap_namespaces_unavailable(&forwarded) {
+        assert!(
+            bubblewrap_namespaces_unavailable(&cold)
+                && bubblewrap_namespaces_unavailable(&forwarded),
+            "daemon forwarding must preserve the local fail-closed sandbox result: local={:?}, forwarded={:?}",
+            cold,
+            forwarded
+        );
+        assert_eq!(cold.status.code(), forwarded.status.code());
+        eprintln!("sandbox namespace probe unavailable; verified local and daemon fail closed");
+        return;
+    }
     assert!(
         cold.status.success(),
         "local: {}",
@@ -948,6 +965,20 @@ fn forwarded_runs_do_not_share_capability_policies() {
             local.status.code(),
             "step {index}: local/daemon mismatch"
         );
+        if allowed
+            && (bubblewrap_namespaces_unavailable(&output)
+                || bubblewrap_namespaces_unavailable(&local))
+        {
+            assert!(
+                bubblewrap_namespaces_unavailable(&output)
+                    && bubblewrap_namespaces_unavailable(&local),
+                "step {index}: daemon and local runs must both fail closed when namespaces are unavailable"
+            );
+            eprintln!(
+                "step {index}: sandbox namespace probe unavailable; verified local and daemon fail closed"
+            );
+            continue;
+        }
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             output.status.success(),
@@ -1050,21 +1081,28 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
             .args(extra)
             .output()
             .unwrap();
-        assert!(output.status.success(), "{:?}", output);
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "out
-"
-        );
+        output
     };
     let mut forwarded = Vec::new();
     let mut cold = Vec::new();
     for _ in 0..10 {
         let started = Instant::now();
-        run(&["--daemon"]);
+        let forwarded_run = run(&["--daemon"]);
+        if bubblewrap_namespaces_unavailable(&forwarded_run) {
+            eprintln!("setup-heavy latency skipped: sandbox namespace probe unavailable");
+            return;
+        }
+        assert!(forwarded_run.status.success(), "{:?}", forwarded_run);
+        assert_eq!(String::from_utf8_lossy(&forwarded_run.stdout), "out\n");
         forwarded.push(started.elapsed());
         let started = Instant::now();
-        run(&[]);
+        let cold_run = run(&[]);
+        if bubblewrap_namespaces_unavailable(&cold_run) {
+            eprintln!("setup-heavy latency skipped: sandbox namespace probe unavailable");
+            return;
+        }
+        assert!(cold_run.status.success(), "{:?}", cold_run);
+        assert_eq!(String::from_utf8_lossy(&cold_run.stdout), "out\n");
         cold.push(started.elapsed());
     }
     forwarded.sort();

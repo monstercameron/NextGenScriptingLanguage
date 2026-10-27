@@ -233,6 +233,9 @@ fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> 
 }
 pub struct RunResult {
     pub output: Vec<u8>,
+    /// Runtime types of bindings retained by a successful finite run. Values are
+    /// intentionally omitted so observers can inspect types without copying data.
+    pub binding_types: BTreeMap<String, &'static str>,
     pub cache_hits: usize,
     /// Child/helper process spawns that succeeded during this run. This does
     /// not include descendants started internally by those processes.

@@ -230,6 +230,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     let mut detached_launches = 0usize;
     let mut result = RunResult {
         output: Vec::new(),
+        binding_types: BTreeMap::new(),
         cache_hits: 0,
         launched_processes: 0,
         executions: Vec::new(),
@@ -2136,6 +2137,19 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         signals,
         options.command_timeout,
     )?;
+    result.binding_types = bindings.iter().map(|(name, value)| {
+        let kind = match value {
+            Value::String(_) => "string",
+            Value::Integer(_) => "integer",
+            Value::Bool(_) => "boolean",
+            Value::List(_) => "list",
+            Value::Record(_) => "record",
+            Value::Null => "null",
+            Value::Number(_) => "number",
+            Value::Reference(_) => "reference",
+        };
+        (name.clone(), kind)
+    }).collect();
     #[cfg(feature = "live")]
     if let Some(state) = state_out {
         *state = live::NodeState {

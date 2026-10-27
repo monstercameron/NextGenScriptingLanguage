@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/repl.v1.schema.json",
+  "title": "Execute REPL line protocol, execute.repl/1",
+  "description": "One response for each JSON request line sent to execute repl --json. A planned response has status planned and a structured execute.explain/2 object in plan. Diagnostics include session-program spans and submitted-block spans. Binding types describe the runtime Value variant observed after execution, not a static type guarantee.",
+  "type": "object",
+  "required": ["status"],
+  "properties": {
+    "status": {"enum": ["ran", "planned", "rejected", "failed", "ok", "saved", "undone", "error"]},
+    "stdout": {"type": "string"},
+    "stderr_tail": {"type": "string", "maxLength": 4096},
+    "exit": {"type": "integer"},
+    "error": {"type": "string"},
+    "source": {"type": "string"},
+    "explain": {"type": "string"},
+    "path": {"type": "string"},
+    "protocol": {"const": "execute.check/1"},
+    "plan": {"$ref": "explain.v2.schema.json"},
+    "bindings": {"type": "object", "additionalProperties": {"type": "object", "required": ["type", "preview"], "properties": {"type": {"enum": ["string", "integer", "boolean", "list", "record", "null", "number", "reference", "unknown"]}, "preview": {"type": "string"}}}},
+    "diagnostics": {"type": "array", "items": {"type": "object", "required": ["message"], "properties": {"severity": {"type": "string"}, "code": {"type": "string"}, "message": {"type": "string"}, "span": {"type": "object"}}}}
+  },
+  "additionalProperties": true
+}

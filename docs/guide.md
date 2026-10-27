@@ -532,6 +532,22 @@ repeated. Commands:
   replaced.
 - `:quit` ends the session.
 
+For agents, `execute repl --json` accepts one JSON object per line and returns one
+JSON object per line. Requests use `{"submit":"..."}`, `{"explain":true}`,
+`{"bindings":true}`, `{"source":true}`, `{"save":"FILE"}`, or `{"undo":1}`.
+Submission responses have `status` `ran`, `rejected`, or `failed`; rejected
+diagnostics carry `protocol: "execute.check/1"`, the full session span, and a span
+relative to the submitted block.
+`execute repl --json --what-if` validates each submitted block and returns
+`{"status":"planned","plan":{...}}` where `plan` is an `execute.explain/2`
+object; rejected submissions use the same diagnostic object shape as normal JSON
+mode. Accepted planned blocks accumulate in session source without running. The
+protocol schema is `docs/schemas/repl.v1.schema.json`. Binding previews remain
+bounded to 60 characters. Their `type` is the runtime value kind observed
+after execution (`string`, `integer`, `boolean`, `list`, `record`, `null`, `number`,
+or `reference`), not a static type guarantee. JSON session output redacts declared
+secrets in output, previews, and failure text.
+
 ```sh
 printf 'run printf with message "a" as first\nrun printf with message first\n:save session.program\n:quit\n' | execute repl
 ```

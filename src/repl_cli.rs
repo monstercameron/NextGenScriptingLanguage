@@ -10,9 +10,13 @@ use std::path::PathBuf;
 pub fn repl(arguments: &[String]) -> Result<()> {
     let mut policy = crate::execution_policy_options::ExecutionPolicyOptions::default();
     let mut manifest_dir: Option<PathBuf> = None;
+    let mut json = false;
+    let mut what_if = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--json" => json = true,
+            "--what-if" => what_if = true,
             "--manifest-dir" => {
                 index += 1;
                 manifest_dir = Some(PathBuf::from(
@@ -39,12 +43,15 @@ pub fn repl(arguments: &[String]) -> Result<()> {
     }
     let working_directory = env::current_dir().context("could not determine current directory")?;
     let mut session = Session::new(&registry, working_directory);
+    if json && io::stdin().is_terminal() {
+        bail!("repl --json requires line-oriented input from stdin");
+    }
     let interactive = io::stdin().is_terminal();
-    repl::run(
-        &mut session,
-        io::stdin().lock(),
-        io::stdout().lock(),
-        interactive,
-    )?;
+    if json {
+        repl::run_json(&mut session, io::stdin().lock(), io::stdout().lock(), what_if)?;
+    } else {
+        if what_if { bail!("--what-if requires --json"); }
+        repl::run(&mut session, io::stdin().lock(), io::stdout().lock(), interactive)?;
+    }
     Ok(())
 }

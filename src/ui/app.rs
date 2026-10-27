@@ -1844,6 +1844,7 @@ mod tests {
     fn run_result(exit: Option<runtime::ProgramExit>) -> runtime::RunResult {
         runtime::RunResult {
             output: b"partial".to_vec(),
+            binding_types: Default::default(),
             cache_hits: 0,
             launched_processes: 0,
             executions: Vec::new(),

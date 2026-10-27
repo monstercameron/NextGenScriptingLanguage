@@ -27,6 +27,8 @@ const MAX_RENAME_EDITS: usize = 10_000;
 struct Document {
     text: String,
     version: Option<i64>,
+    /// File identity captured at didOpen, used only if the live path disappears.
+    canonical_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +186,8 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                             Document {
                                 text: text.to_owned(),
                                 version: Some(version),
+                                canonical_path: local_file_path(uri)
+                                    .and_then(|path| fs::canonicalize(path).ok()),
                             },
                         );
                         publish_affected_diagnostics(
@@ -555,15 +559,27 @@ impl Workspace {
     }
 }
 
-fn open_document_overlays(documents: &BTreeMap<String, Document>) -> BTreeMap<PathBuf, &str> {
-    documents
-        .iter()
-        .filter_map(|(uri, document)| {
-            local_file_path(uri)
-                .and_then(|path| fs::canonicalize(path).ok())
-                .map(|path| (path, document.text.as_str()))
-        })
-        .collect()
+fn open_document_overlays(
+    documents: &BTreeMap<String, Document>,
+) -> (BTreeMap<PathBuf, &str>, BTreeMap<PathBuf, PathBuf>) {
+    let mut sources = BTreeMap::new();
+    let mut aliases = BTreeMap::new();
+    for (uri, document) in documents {
+        let Some(requested_path) = local_file_path(uri) else {
+            continue;
+        };
+        let canonical = fs::canonicalize(&requested_path)
+            .ok()
+            .or_else(|| document.canonical_path.clone());
+        let Some(canonical) = canonical else {
+            continue;
+        };
+        sources.insert(canonical.clone(), document.text.as_str());
+        if requested_path != canonical {
+            aliases.insert(requested_path, canonical);
+        }
+    }
+    (sources, aliases)
 }
 
 #[cfg(test)]
@@ -573,8 +589,15 @@ fn diagnostics_for_document(
     workspace: &Workspace,
     registry: &Registry,
 ) -> Vec<Diagnostic> {
-    let open_documents = open_document_overlays(documents);
-    diagnostics_with_overlays(uri, documents, workspace, registry, &open_documents)
+    let (open_documents, aliases) = open_document_overlays(documents);
+    diagnostics_with_overlays(
+        uri,
+        documents,
+        workspace,
+        registry,
+        &open_documents,
+        &aliases,
+    )
 }
 
 fn diagnostics_with_overlays<'a>(
@@ -583,15 +606,18 @@ fn diagnostics_with_overlays<'a>(
     workspace: &Workspace,
     registry: &'a Registry,
     open_documents: &'a BTreeMap<PathBuf, &'a str>,
+    aliases: &'a BTreeMap<PathBuf, PathBuf>,
 ) -> Vec<Diagnostic> {
     let document = &documents[uri];
-    let path = local_file_path(uri).and_then(|path| fs::canonicalize(path).ok());
+    let path = local_file_path(uri)
+        .and_then(|path| fs::canonicalize(path).ok())
+        .or_else(|| document.canonical_path.clone());
     let root = path.as_deref().and_then(|path| workspace.root_for(path));
-    let scope = root
-        .as_ref()
-        .map(|root| {
-            crate::program_files::SourceScope::new(root, open_documents).with_source_snapshots()
-        });
+    let scope = root.as_ref().map(|root| {
+        crate::program_files::SourceScope::new(root, open_documents)
+            .with_open_document_aliases(aliases)
+            .with_source_snapshots()
+    });
     let usable_path = if scope.is_some() {
         path.as_deref()
     } else {
@@ -626,7 +652,7 @@ fn publish_affected_diagnostics<W: Write>(
     diagnostic_targets: &mut BTreeMap<String, BTreeSet<String>>,
     changed_uri: Option<&str>,
 ) -> Result<()> {
-    let open_documents = open_document_overlays(documents);
+    let (open_documents, aliases) = open_document_overlays(documents);
     let mut outgoing = BTreeMap::<String, Vec<Diagnostic>>::new();
     let mut sources = BTreeSet::<String>::new();
     for (uri, document) in documents {
@@ -667,14 +693,15 @@ fn publish_affected_diagnostics<W: Write>(
         };
         outgoing.entry(uri.clone()).or_default();
         let mut current_targets = BTreeSet::new();
-        for diagnostic in
-            diagnostics_with_overlays(&uri, documents, workspace, registry, &open_documents)
-        {
-            let diagnostic_path = diagnostic
-                .span
-                .path
-                .as_deref()
-                .map(PathBuf::from);
+        for diagnostic in diagnostics_with_overlays(
+            &uri,
+            documents,
+            workspace,
+            registry,
+            &open_documents,
+            &aliases,
+        ) {
+            let diagnostic_path = diagnostic.span.path.as_deref().map(PathBuf::from);
             let destination = diagnostic_path
                 .as_deref()
                 .and_then(|path| uri_for_source_path(path, documents))
@@ -759,7 +786,14 @@ fn uri_for_source_path<'a>(
         let Some(document_path) = local_file_path(uri) else {
             return false;
         };
-        let candidate = fs::canonicalize(&document_path).unwrap_or(document_path);
+        let candidate = fs::canonicalize(&document_path)
+            .ok()
+            .or_else(|| {
+                documents
+                    .get(uri)
+                    .and_then(|document| document.canonical_path.clone())
+            })
+            .unwrap_or(document_path);
         candidate.as_path() == path
     })
 }
@@ -1729,6 +1763,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let diagnostics = diagnostics_for_document(
@@ -1772,6 +1807,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let diagnostics = diagnostics_for_document(
@@ -1814,6 +1850,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let diagnostics = diagnostics_for_document(
@@ -1867,6 +1904,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         documents.insert(
@@ -1874,6 +1912,7 @@ mod tests {
             Document {
                 text: "run\n".to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let failed = diagnostics_for_document(
@@ -1917,6 +1956,7 @@ mod tests {
             Document {
                 text: caller_text.into(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         documents.insert(
@@ -1924,6 +1964,7 @@ mod tests {
             Document {
                 text: overlay_text.into(),
                 version: Some(2),
+                canonical_path: None,
             },
         );
         let diagnostics = diagnostics_for_document(
@@ -2083,6 +2124,72 @@ mod tests {
         assert_eq!(scope.loaded_source(&callee).as_deref(), Some(overlay_text));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn open_callee_overlay_survives_target_removal_through_symlink_alias() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let caller = root.join("caller.program");
+        let callee = root.join("callee.program");
+        let alias = root.join("alias.program");
+        let caller_text = "run program file \"alias.program\"\n";
+        let overlay_text = "accept theme as text\nrun \"printf\" with arguments [them]\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, "run \"printf\" with arguments [\"disk\"]\n").unwrap();
+        symlink(&callee, &alias).unwrap();
+        let canonical_callee = fs::canonicalize(&callee).unwrap();
+        let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
+        let alias_uri = url::Url::from_file_path(&alias).unwrap().to_string();
+        let mut documents = BTreeMap::new();
+        documents.insert(
+            caller_uri.clone(),
+            Document {
+                text: caller_text.to_owned(),
+                version: Some(1),
+                canonical_path: Some(fs::canonicalize(&caller).unwrap()),
+            },
+        );
+        documents.insert(
+            alias_uri.clone(),
+            Document {
+                text: overlay_text.to_owned(),
+                version: Some(1),
+                canonical_path: Some(canonical_callee.clone()),
+            },
+        );
+        fs::remove_file(&callee).unwrap();
+
+        let workspace = Workspace {
+            roots: vec![root],
+            explicitly_configured: true,
+        };
+        let mut output = Vec::new();
+        publish_affected_diagnostics(
+            &mut output,
+            &documents,
+            &workspace,
+            &Registry::default(),
+            &mut BTreeMap::new(),
+            Some(&caller_uri),
+        )
+        .unwrap();
+        let messages = decode_frames(&output);
+        let routed = messages
+            .iter()
+            .find(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == alias_uri
+            })
+            .expect("callee diagnostics should route to the open alias URI");
+        assert!(routed["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "check.undefined_name"));
+    }
+
     #[test]
     fn routed_callee_diagnostics_refresh_when_the_caller_closes_or_error_is_fixed() {
         let dir = tempfile::tempdir().unwrap();
@@ -2168,6 +2275,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let workspace = Workspace {
@@ -2212,6 +2320,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let diagnostics =
@@ -2242,6 +2351,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let diagnostics = || {
@@ -2265,6 +2375,7 @@ mod tests {
             Document {
                 text: "x".repeat(1024 * 1024 + 1),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let bounded = diagnostics_for_document(
@@ -2307,6 +2418,7 @@ mod tests {
             Document {
                 text: source.to_owned(),
                 version: Some(1),
+                canonical_path: None,
             },
         );
         let workspace = Workspace {
@@ -2635,6 +2747,7 @@ mod tests {
         let mut document = Document {
             text: "alpha beta\n".to_owned(),
             version: Some(4),
+            canonical_path: None,
         };
         let params = json!({
             "textDocument": { "version": 5 },
@@ -2673,6 +2786,7 @@ mod tests {
         let mut document = Document {
             text: "run printf\n".to_owned(),
             version: Some(4),
+            canonical_path: None,
         };
         let params = json!({
             "textDocument": { "version": 4 },
@@ -2730,6 +2844,7 @@ mod tests {
         let document = Document {
             text: "run \nrun fixture.echo with ".to_owned(),
             version: Some(1),
+            canonical_path: None,
         };
         let documents = BTreeMap::from([(uri.to_owned(), document)]);
 

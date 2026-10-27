@@ -58,8 +58,8 @@ fn canonicalize_called_path(
         Ok(canonical) => Ok(canonical),
         Err(error) => {
             // A dirty editor buffer remains a valid source after its backing file is
-            // removed. Recover only an exact open-document path whose parent still
-            // resolves; workspace containment is checked by the loader afterwards.
+            // removed. Recover only a captured open-document path or symlink alias
+            // whose parent still resolves; workspace containment is checked afterwards.
             let Some(scope) = scope else {
                 return Err(error);
             };
@@ -75,6 +75,12 @@ fn canonicalize_called_path(
             let candidate = parent.join(name);
             if scope.open_documents.contains_key(&candidate) {
                 Ok(candidate)
+            } else if let Some(canonical) = scope
+                .open_document_aliases
+                .and_then(|aliases| aliases.get(&candidate))
+                .filter(|canonical| scope.open_documents.contains_key(*canonical))
+            {
+                Ok(canonical.clone())
             } else {
                 Err(error)
             }
@@ -126,6 +132,7 @@ pub fn parse_source_resolved(
 pub(crate) struct SourceScope<'a> {
     pub root: &'a Path,
     pub open_documents: &'a BTreeMap<PathBuf, &'a str>,
+    open_document_aliases: Option<&'a BTreeMap<PathBuf, PathBuf>>,
     snapshot: std::rc::Rc<std::cell::RefCell<SourceLoadSnapshot>>,
     capture_sources: bool,
     replay_only: bool,
@@ -137,10 +144,19 @@ impl<'a> SourceScope<'a> {
         Self {
             root,
             open_documents,
+            open_document_aliases: None,
             snapshot: std::rc::Rc::new(std::cell::RefCell::new(SourceLoadSnapshot::default())),
             capture_sources: false,
             replay_only: false,
         }
+    }
+
+    pub(crate) fn with_open_document_aliases(
+        mut self,
+        aliases: &'a BTreeMap<PathBuf, PathBuf>,
+    ) -> Self {
+        self.open_document_aliases = Some(aliases);
+        self
     }
 
     /// Enable source capture for diagnostics that need callee provenance. Kept opt-in
@@ -166,6 +182,7 @@ impl<'a> SourceScope<'a> {
         Self {
             root: self.root,
             open_documents: self.open_documents,
+            open_document_aliases: self.open_document_aliases,
             snapshot: self.snapshot.clone(),
             capture_sources: false,
             replay_only: true,

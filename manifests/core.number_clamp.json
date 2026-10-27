@@ -9,13 +9,16 @@
   "accepts_stdin": false,
   "parameters": {
     "value": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "min": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "max": {
-      "type": "json"
+      "type": "json",
+      "required": true
     }
   },
   "arguments": [

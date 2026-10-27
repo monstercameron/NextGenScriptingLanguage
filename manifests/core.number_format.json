@@ -9,7 +9,8 @@
   "accepts_stdin": false,
   "parameters": {
     "value": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "precision": {
       "type": "integer"

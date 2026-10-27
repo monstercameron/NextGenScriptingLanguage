@@ -16,6 +16,39 @@
       "type": "integer"
     }
   },
+  "parameter_alternatives": [
+    {
+      "message": "digits must be between -38 and 38 for integer values or -308 and 308 for floating-point values",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "digits"
+          }
+        ],
+        [
+          {
+            "test": "number_range_by_representation",
+            "parameter": "digits",
+            "based_on": "value",
+            "representation": "integer",
+            "minimum": -38,
+            "maximum": 38
+          }
+        ],
+        [
+          {
+            "test": "number_range_by_representation",
+            "parameter": "digits",
+            "based_on": "value",
+            "representation": "float",
+            "minimum": -308,
+            "maximum": 308
+          }
+        ]
+      ]
+    }
+  ],
   "arguments": [
     {
       "literal": "number.round"

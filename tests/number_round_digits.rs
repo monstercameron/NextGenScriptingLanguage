@@ -1,5 +1,5 @@
 use flow::applets::{self, AppletErrorKind};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{fs, process::Command};
 
 fn round(value: Value, digits: Option<Value>) -> Result<Value, flow::applets::AppletError> {
@@ -86,4 +86,88 @@ fn helper_reports_bad_digits_and_workflow_preserves_valid_rounding() {
             );
         }
     }
+}
+
+#[test]
+fn static_rounding_digit_bounds_follow_json_number_representation() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("round-bounds.program");
+    let invoke = |source: &str, action: &str, extra: &[&str]| {
+        fs::write(&file, source).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg(action)
+            .arg(&file)
+            .arg("--manifest-dir")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/manifests"))
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+
+    for source in [
+        "run number.round with value 1 and digits -38\n",
+        "run number.round with value 1 and digits 38\n",
+        "run number.round with value 1.5 and digits -308\n",
+        "run number.round with value 1.5 and digits 308\n",
+        // Float values retain the wider domain; integer-only limits must not
+        // accidentally narrow valid floating-point calls.
+        "run number.round with value 1.5 and digits 39\n",
+        "run number.round with value 1.5 and digits -39\n",
+    ] {
+        let checked = invoke(source, "check", &[]);
+        assert!(
+            checked.status.success(),
+            "static checker rejected {source:?}: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+    }
+
+    for source in [
+        "run number.round with value 1 and digits 39\n",
+        "run number.round with value 1 and digits -39\n",
+        "run number.round with value 1.5 and digits 309\n",
+        "run number.round with value 1.5 and digits -309\n",
+    ] {
+        let checked = invoke(source, "check", &[]);
+        assert!(
+            !checked.status.success()
+                && String::from_utf8_lossy(&checked.stderr)
+                    .contains("integer values or -308 and 308"),
+            "static checker accepted {source:?}: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+    }
+
+    // A reference may resolve to either representation, so checking defers
+    // the conditional constraint and execution validates the resolved pair.
+    let dynamic_value = concat!(
+        "run json.parse with text \"1\" as amount\n",
+        "run number.round with value amount and digits 39\n"
+    );
+    assert!(invoke(dynamic_value, "check", &[]).status.success());
+    let dynamic_run = invoke(dynamic_value, "run", &[]);
+    assert!(!dynamic_run.status.success());
+    assert!(
+        String::from_utf8_lossy(&dynamic_run.stderr).contains("digits must be between -38 and 38")
+    );
+
+    let dynamic_float = concat!(
+        "run json.parse with text \"1.5\" as amount\n",
+        "run number.round with value amount and digits 39\n"
+    );
+    assert!(invoke(dynamic_float, "check", &[]).status.success());
+    assert!(invoke(dynamic_float, "run", &[]).status.success());
+
+    // Likewise, a dynamic digits input remains statically possible but is
+    // checked against the known floating-point representation at execution.
+    let dynamic_digits = concat!(
+        "accept digits as integer\n",
+        "run number.round with value 1.5 and digits digits\n"
+    );
+    assert!(invoke(dynamic_digits, "check", &[]).status.success());
+    let dynamic_run = invoke(dynamic_digits, "run", &["--input", "digits=309"]);
+    assert!(!dynamic_run.status.success());
+    assert!(
+        String::from_utf8_lossy(&dynamic_run.stderr).contains("digits must be between -38 and 38")
+    );
 }

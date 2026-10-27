@@ -96,6 +96,22 @@ enum ParameterPredicate {
         minimum: i64,
         maximum: i64,
     },
+    NumberRangeByRepresentation {
+        parameter: String,
+        based_on: String,
+        representation: NumberRepresentation,
+        minimum: i64,
+        maximum: i64,
+    },
+}
+
+/// Numeric JSON representation as consumed by applets: integer JSON numbers
+/// use the integer path, while fractional numbers use the floating-point path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NumberRepresentation {
+    Integer,
+    Float,
 }
 
 impl ParameterPredicate {
@@ -107,7 +123,8 @@ impl ParameterPredicate {
             | Self::NegativeInteger { parameter }
             | Self::Boolean { parameter, .. }
             | Self::StringNotEquals { parameter, .. }
-            | Self::NumberRange { parameter, .. } => parameter,
+            | Self::NumberRange { parameter, .. }
+            | Self::NumberRangeByRepresentation { parameter, .. } => parameter,
         }
     }
 
@@ -132,6 +149,27 @@ impl ParameterPredicate {
                 minimum, maximum, ..
             } => {
                 serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "number", "minimum": minimum, "maximum": maximum}}})
+            }
+            Self::NumberRangeByRepresentation {
+                based_on,
+                representation,
+                minimum,
+                maximum,
+                ..
+            } => {
+                // JSON Schema's `integer` type is mathematical, not a JSON
+                // number's parsed representation. Keep this as an explicit
+                // extension rather than projecting an inaccurate constraint.
+                serde_json::json!({
+                    "required": [parameter, based_on],
+                    "x-number-range-by-representation": {
+                        "parameter": parameter,
+                        "based_on": based_on,
+                        "representation": representation,
+                        "minimum": minimum,
+                        "maximum": maximum
+                    }
+                })
             }
         }
     }
@@ -177,6 +215,45 @@ impl ParameterPredicate {
                 }),
                 _ => false,
             }),
+            Self::NumberRangeByRepresentation {
+                based_on,
+                representation,
+                minimum,
+                maximum,
+                ..
+            } => {
+                let Some(source) = values.get(based_on).map(Borrow::borrow) else {
+                    return Some(false);
+                };
+                let source_representation = match source {
+                    Value::Reference(_) => return None,
+                    Value::Integer(_) => NumberRepresentation::Integer,
+                    Value::Number(number) if number.is_i64() || number.is_u64() => {
+                        NumberRepresentation::Integer
+                    }
+                    Value::Number(_) => NumberRepresentation::Float,
+                    _ => return Some(false),
+                };
+                if source_representation != *representation {
+                    return Some(false);
+                }
+                Some(match value {
+                    Some(Value::Integer(value)) => value >= minimum && value <= maximum,
+                    Some(Value::Number(value)) if value.is_i64() => value
+                        .as_i64()
+                        .is_some_and(|value| value >= *minimum && value <= *maximum),
+                    Some(Value::Number(value)) if value.is_u64() => {
+                        value.as_u64().is_some_and(|value| {
+                            i128::from(value) >= i128::from(*minimum)
+                                && i128::from(value) <= i128::from(*maximum)
+                        })
+                    }
+                    Some(Value::Number(value)) => value.as_f64().is_some_and(|value| {
+                        value.is_finite() && value >= *minimum as f64 && value <= *maximum as f64
+                    }),
+                    _ => false,
+                })
+            }
         }
     }
 }
@@ -3734,6 +3811,29 @@ fn validate_parameter_alternatives(
                         bail!(
                             "number_range predicate requires a numeric parameter and ordered integer bounds within binary64 exact range"
                         );
+                    }
+                    ParameterPredicate::NumberRangeByRepresentation {
+                        based_on,
+                        minimum,
+                        maximum,
+                        ..
+                    } => {
+                        let source = parameters.get(based_on).ok_or_else(|| {
+                            anyhow!(
+                                "number_range_by_representation references unknown parameter {based_on:?}"
+                            )
+                        })?;
+                        if based_on == name
+                            || !matches!(spec.kind, ParameterType::Integer | ParameterType::Json)
+                            || source.kind != ParameterType::Json
+                            || minimum > maximum
+                            || *minimum < -9_007_199_254_740_992
+                            || *maximum > 9_007_199_254_740_992
+                        {
+                            bail!(
+                                "number_range_by_representation requires distinct numeric parameters, a JSON source parameter, and ordered integer bounds within binary64 exact range"
+                            );
+                        }
                     }
                     _ => {}
                 }

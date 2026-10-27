@@ -6,8 +6,10 @@
 //!
 //! A hand-over replaces the script with one program. On Unix this is `execve`
 //! after flushing our output; the process keeps its pid and exit status. Windows
-//! has no in-place replacement, so the child is spawned with inherited stdio,
-//! waited for, and its exit code becomes the script's exit code.
+//! has no in-place replacement, so the child runs in a job object with
+//! `KILL_ON_JOB_CLOSE` and inherited stdio, is waited on together with the
+//! run's cancellation flag and workflow deadline, and its exit code becomes
+//! the script's exit code.
 //!
 //! A detached launch starts a program that the script does not own. The child
 //! gets its own session on Unix and `DETACHED_PROCESS` on Windows, and is never
@@ -163,13 +165,64 @@ pub(crate) fn hand_over(mut command: Command) -> Result<i32> {
     Err(error).context("handing over to the native program")
 }
 
+/// The cancellation and deadline check for a Windows hand-over wait. The
+/// deadline error carries the timeout marker so the run records it as a
+/// timeout, and the cancellation error carries the cancelled kind so the run
+/// reports it as a cancellation rather than a plain failure.
 #[cfg(windows)]
-pub(crate) fn hand_over(mut command: Command) -> Result<i32> {
+fn check_handoff_budget(signals: &super::Signals) -> Result<()> {
+    if signals
+        .deadline
+        .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+    {
+        return Err(anyhow::anyhow!(
+            "execution deadline exceeded; external effects may be incomplete"
+        )
+        .context(super::CommandTimedOut));
+    }
+    if signals.is_cancelled() {
+        return Err(super::execution_result::ExecutionFailure::new(
+            super::execution_result::ExecutionResult::runtime_failure(
+                super::execution_result::ExecutionKind::Cancelled,
+                "workflow cancelled by signal",
+                super::execution_result::EffectCertainty::Uncertain,
+            ),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(crate) fn hand_over(mut command: Command, signals: &super::Signals) -> Result<i32> {
     flush_output()?;
-    let mut child = command.spawn().context("starting the native program")?;
-    let status = child.wait().context("waiting for the native program")?;
-    // Windows has no signal-terminated status; a missing code is reported as failure.
-    Ok(status.code().unwrap_or(1))
+    // Refuse before spawning when the run is already over budget, instead of
+    // starting a child that the wait loop would immediately have to kill.
+    check_handoff_budget(signals)?;
+    // The child joins a job that dies with this process: if the interpreter
+    // is killed, the job handle closes and `KILL_ON_JOB_CLOSE` ends the child
+    // instead of leaving it behind as an orphan. `Job::spawn` starts the
+    // child suspended so no instruction runs before it belongs to the job.
+    let (mut child, job) = crate::platform::windows::Job::spawn(&mut command)
+        .context("starting the native program")?;
+    let result = (|| -> Result<i32> {
+        loop {
+            check_handoff_budget(signals)?;
+            if let Some(status) = child.try_wait().context("waiting for the native program")? {
+                // Windows has no signal-terminated status; a missing code is reported as failure.
+                return Ok(status.code().unwrap_or(1));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    })();
+    // Ending the job kills a still-running child on cancellation or deadline;
+    // when the child already exited this is skipped. Waiting reaps the child
+    // so a cancelled hand-over never leaves a zombie behind.
+    if result.is_err() {
+        job.terminate();
+        let _ = child.wait();
+    }
+    result
 }
 
 /// Start `command` without waiting for it. Returns the child's process id.
@@ -292,10 +345,103 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn hand_over_returns_the_child_exit_code() {
+        use std::sync::{atomic::AtomicBool, Arc};
         let temp = tempfile::tempdir().unwrap();
+        let signals = crate::runtime::Signals::with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            false,
+            None,
+        )
+        .unwrap();
         let mut command = shell("exit 7", "exit /b 7", temp.path());
         command.env_clear();
-        assert_eq!(hand_over(command).unwrap(), 7);
+        assert_eq!(hand_over(command, &signals).unwrap(), 7);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hand_over_refuses_to_start_when_already_cancelled() {
+        use std::sync::{atomic::AtomicBool, Arc};
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let signals = crate::runtime::Signals::with_cancellation_and_deadline(
+            cancelled,
+            false,
+            None,
+        )
+        .unwrap();
+        // The command is never spawned: the pre-spawn budget check refuses it.
+        let command = std::process::Command::new("execute-no-such-program-for-handoff");
+        let error = hand_over(command, &signals).unwrap_err();
+        let failure = error
+            .downcast_ref::<crate::runtime::execution_result::ExecutionFailure>()
+            .expect("cancellation must report the cancelled kind");
+        assert_eq!(
+            failure.result.kind,
+            crate::runtime::execution_result::ExecutionKind::Cancelled
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hand_over_cancels_mid_wait_and_reaps_the_child() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&cancelled);
+        // Cancel 200 ms into a ~30 second wait: the wait loop must observe the
+        // flag, terminate the job, and reap the child instead of blocking.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            stop.store(true, Ordering::Release);
+        });
+        let signals = crate::runtime::Signals::with_cancellation_and_deadline(
+            cancelled,
+            false,
+            None,
+        )
+        .unwrap();
+        let mut command = shell(
+            "sleep 30",
+            "ping -n 30 127.0.0.1 >nul",
+            temp.path(),
+        );
+        command.env_clear();
+        let started = Instant::now();
+        let error = hand_over(command, &signals).unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "a cancelled hand-over must return promptly"
+        );
+        let failure = error
+            .downcast_ref::<crate::runtime::execution_result::ExecutionFailure>()
+            .expect("cancellation must report the cancelled kind");
+        assert_eq!(
+            failure.result.kind,
+            crate::runtime::execution_result::ExecutionKind::Cancelled
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hand_over_reports_an_expired_deadline_without_starting_the_child() {
+        use std::sync::{atomic::AtomicBool, Arc};
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let signals = crate::runtime::Signals::with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            false,
+            Some(past),
+        )
+        .unwrap();
+        // The command is never spawned: the pre-spawn budget check refuses it.
+        let command = std::process::Command::new("execute-no-such-program-for-handoff");
+        let error = hand_over(command, &signals).unwrap_err();
+        assert!(
+            error.is::<super::super::CommandTimedOut>(),
+            "expired deadline must report the timeout marker: {error:#}"
+        );
     }
 
     #[cfg(feature = "live")]
@@ -311,7 +457,22 @@ mod tests {
 
     #[test]
     fn hand_over_reports_a_missing_program_without_running_anything() {
-        let command = Command::new(OsString::from("execute-no-such-program-for-handoff"));
-        assert!(hand_over(command).is_err());
+        #[cfg(unix)]
+        {
+            let command = Command::new(OsString::from("execute-no-such-program-for-handoff"));
+            assert!(hand_over(command).is_err());
+        }
+        #[cfg(windows)]
+        {
+            use std::sync::{atomic::AtomicBool, Arc};
+            let signals = crate::runtime::Signals::with_cancellation_and_deadline(
+                Arc::new(AtomicBool::new(false)),
+                false,
+                None,
+            )
+            .unwrap();
+            let command = Command::new(OsString::from("execute-no-such-program-for-handoff"));
+            assert!(hand_over(command, &signals).is_err());
+        }
     }
 }

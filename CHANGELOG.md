@@ -7,6 +7,11 @@ original version labels.
 
 ## Unreleased
 
+- On Windows, `hand over to` now runs the replacement program in a job object
+  that ends it if the interpreter process is killed, and the wait observes
+  cancellation and the workflow deadline instead of blocking unconditionally.
+  The exit code is still propagated unchanged.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

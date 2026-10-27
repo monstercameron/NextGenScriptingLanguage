@@ -192,6 +192,142 @@ fn hand_over_replaces_the_script_and_passes_its_exit_status() {
 }
 
 #[test]
+fn hand_over_enforces_the_workflow_deadline() {
+    // Unix replaces the interpreter with `execve`, so no waiter remains to
+    // enforce a deadline after the hand-over. This exercises the Windows wait:
+    // `ping -n 6` sleeps about five seconds, the 500 ms workflow deadline fires
+    // first, and the job object ends the child.
+    if !cfg!(windows) {
+        return;
+    }
+    let directory = tempdir().unwrap();
+    let program = write_program(
+        directory.path(),
+        "hand over to \"C:/Windows/System32/cmd.exe\" with arguments [\"/c\", \"ping -n 6 127.0.0.1 >nul\"]\n",
+    );
+    let output = execute(
+        &[
+            "run",
+            program.to_str().unwrap(),
+            "--total-timeout-ms",
+            "500",
+        ],
+        directory.path(),
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a hand-over past its deadline must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("deadline"),
+        "a deadline failure must say so, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn hand_over_kill_ends_the_handed_over_child() {
+    // Windows-only acceptance for the job object behind `hand over`: killing
+    // the interpreter must end the handed-over child instead of orphaning it.
+    // Unix replaces the interpreter with `execve`, so there is no waiter to
+    // kill and nothing to orphan.
+    if !cfg!(windows) {
+        return;
+    }
+    use std::process::Stdio;
+
+    let directory = tempdir().unwrap();
+    let pid_file = directory.path().join("handed-over.pid");
+    let pid_forward = pid_file.to_str().unwrap().replace('\\', "/");
+    // The handed-over program records its own PID and then sleeps for a
+    // minute, so the test can kill the interpreter and probe for the orphan
+    // directly. PowerShell is an inbox native fixture; `tasklist`/`taskkill`
+    // below are inbox probes and bounded cleanup.
+    let script = format!(
+        "$PID | Out-File -FilePath '{pid_forward}' -Encoding ascii; Start-Sleep -Seconds 60"
+    );
+    let program = write_program(
+        directory.path(),
+        &format!(
+            "hand over to \"C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe\" with arguments [\"-NoProfile\", \"-NonInteractive\", \"-Command\", {}]\n",
+            serde_json::to_string(&script).unwrap()
+        ),
+    );
+    let mut interpreter = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run", program.to_str().unwrap()])
+        .current_dir(directory.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Wait for the handed-over child to publish its PID. The 20 second bound
+    // keeps a slow hosted runner from hanging the suite.
+    let pid_by = Instant::now() + Duration::from_secs(20);
+    let child_pid: u32 = loop {
+        if let Ok(text) = fs::read_to_string(&pid_file) {
+            if let Ok(pid) = text.trim().parse::<u32>() {
+                if pid != 0 {
+                    break pid;
+                }
+            }
+        }
+        if interpreter.try_wait().unwrap().is_some() {
+            let _ = interpreter.wait();
+            panic!("the interpreter exited before the handed-over child wrote its pid");
+        }
+        if Instant::now() >= pid_by {
+            let _ = interpreter.kill();
+            let _ = interpreter.wait();
+            panic!("the handed-over child never wrote its pid");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        interpreter.try_wait().unwrap().is_none(),
+        "the interpreter must still be waiting on the handed-over child"
+    );
+
+    // Killing the interpreter closes the job handle, and KILL_ON_JOB_CLOSE
+    // must end the handed-over child with it.
+    let _ = interpreter.kill();
+    let _ = interpreter.wait();
+
+    let gone_by = Instant::now() + Duration::from_secs(10);
+    loop {
+        let probe = Command::new("tasklist")
+            .args([
+                "/FI",
+                &format!("PID eq {child_pid}"),
+                "/FO",
+                "CSV",
+                "/NH",
+            ])
+            .output()
+            .unwrap();
+        let listing = String::from_utf8_lossy(&probe.stdout);
+        if !listing.contains(&format!("\"{child_pid}\"")) {
+            break;
+        }
+        if Instant::now() >= gone_by {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &child_pid.to_string(), "/F"])
+                .output();
+            panic!(
+                "handed-over child {child_pid} survived killing the interpreter: {listing}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Belt and braces: leave no minute-long sleeper behind even on success.
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child_pid.to_string(), "/F"])
+        .output();
+}
+
+#[test]
 fn detached_output_follows_the_write_policy_before_the_child_starts() {
     // A policy with no grants forbids the write, so the launch is refused before
     // any child starts and the output file is never created.

@@ -737,7 +737,10 @@ pub(crate) struct Signals {
     /// Each run owns its slot, so overlapping signal-owning runs keep their
     /// own exit codes and runs that never install handlers cannot inherit a
     /// previous run's code. Only entry points without a run (the CLI error
-    /// reporter) read the process-wide fallback in `platform`.
+    /// reporter) read the process-wide fallback in `platform`. OS delivery is
+    /// broadcast: one process-wide signal runs every installed owner's
+    /// handler set, so overlapping owners each record that same signal while
+    /// runs without handlers stay clean.
     cancel_signal: Arc<AtomicI32>,
     /// Stops this run's drain watchdog when the run's signals are dropped.
     drain_stop: Option<Arc<AtomicBool>>,
@@ -6173,7 +6176,9 @@ mod drain_tests {
         // Two live signal-owning runs record different signals: with the old
         // process-wide slot the second record overwrote the first run's code.
         // The serial lock keeps the installed handlers' fallback writes away
-        // from concurrent tests while both runs overlap.
+        // from concurrent tests while both runs overlap. This injects per-slot
+        // signals to prove slot independence; the real-delivery broadcast proof
+        // is `both_overlapping_owners_observe_a_real_broadcast_signal` below.
         let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -6240,6 +6245,56 @@ mod drain_tests {
         assert_eq!(crate::platform::cancel_exit_code(), Some(130));
         assert_eq!(other.cancel_exit_code(), None);
         drop(signals);
+        crate::platform::clear_cancel_signal();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn both_overlapping_owners_observe_a_real_broadcast_signal() {
+        // Real OS delivery is process-wide broadcast: one SIGINT addressed to
+        // this process runs every installed owner's handler set, so two
+        // overlapping signal-owning runs each record the same signal in their
+        // own slot (and the CLI fallback), while an overlapping run without
+        // handlers stays clean. The serial lock keeps this process-wide
+        // delivery away from concurrent tests while both owners overlap, and
+        // clearing the fallback before and after keeps the run isolated.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::platform::clear_cancel_signal();
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let other =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        // SAFETY: both owners installed signal-safe handlers (atomic stores
+        // plus a nonblocking wake write), so delivering a real SIGINT is safe.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+        // `signal_hook` relays through a background thread, so poll briefly.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (first.cancel_exit_code().is_none() || second.cancel_exit_code().is_none())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(second.cancel_exit_code(), Some(130));
+        assert_eq!(first.drain_exit_status(), 130);
+        assert_eq!(second.drain_exit_status(), 130);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        assert_eq!(other.cancel_exit_code(), None);
+        drop(first);
+        drop(second);
         crate::platform::clear_cancel_signal();
     }
 

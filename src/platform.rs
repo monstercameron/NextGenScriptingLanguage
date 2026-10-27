@@ -165,6 +165,11 @@ pub(crate) fn request_drain(state: &std::sync::atomic::AtomicU8) -> bool {
         .is_ok()
 }
 
+/// Install one signal-handler set for a single run: each handler records into
+/// that run's own `signal_code` slot (plus the process-wide CLI fallback).
+/// OS delivery is process-wide broadcast -- a signal addressed to this process
+/// runs every installed owner's handler set, so overlapping owners each record
+/// that same signal while runs without handlers stay clean.
 pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,

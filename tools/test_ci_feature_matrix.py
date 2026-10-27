@@ -69,6 +69,21 @@ class FeatureMatrixTests(unittest.TestCase):
         self.assertIn("--features full,test-fixtures", command)
         self.assertIn("private Windows DACL", source)
 
+    def test_handoff_kill_acceptance_runs_on_both_windows_targets(self) -> None:
+        source = (ROOT / "tests/lane_o_handoff.rs").read_text(encoding="utf-8")
+        self.assertIn("hand_over_kill_ends_the_handed_over_child", source)
+        self.assertIn("descendant", source)
+        windows = self.workflow.split("  windows:\n", maxsplit=1)[1]
+        self.assertIn("target: x86_64-pc-windows-msvc", windows)
+        self.assertIn("target: aarch64-pc-windows-msvc", windows)
+        command = next(
+            line for line in windows.splitlines()
+            if "cargo test --locked --target ${{ matrix.target }}" in line
+            and "--test windows_native" in line
+        )
+        self.assertIn("--features full,test-fixtures", command)
+        self.assertIn("--test lane_o_handoff", command)
+
     def test_fixture_is_test_only_and_built_for_ci(self) -> None:
         manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
         full = re.search(r'(?m)^full\s*=\s*\[(.*?)\]', manifest)

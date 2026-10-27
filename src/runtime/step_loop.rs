@@ -2700,8 +2700,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             } else if cleanup_cancelled {
                 (error, true)
             } else {
-                let cancellation =
-                    !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
+                let cancellation = !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
                 (error, cancellation)
             };
             let action = if let Some(call_depth) = status_capture_depth {

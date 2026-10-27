@@ -106,7 +106,11 @@ impl WatchedChild {
     }
 
     /// Nonblocking exit poll that records the exit under the same lock the
-    /// watchdog kills under, so the two can never race on the pid.
+    /// watchdog kills under, so the two can never race on the pid. Only an
+    /// observed exit marks the child exited: a `try_wait` error (for example,
+    /// the platform reporting no unwaited-for child after an automatic reap)
+    /// must keep polling and must never stand down later kills, or one bad
+    /// poll turns into a permanent blind `None` with no signal ever sent.
     fn poll_exit(&self) -> Option<ExitStatus> {
         let Ok(mut guard) = self.child.lock() else {
             return None;
@@ -117,10 +121,7 @@ impl WatchedChild {
                 Some(status)
             }
             Ok(None) => None,
-            Err(_) => {
-                self.exited.store(true, Ordering::SeqCst);
-                None
-            }
+            Err(_) => None,
         }
     }
 
@@ -145,12 +146,14 @@ impl WatchedChild {
         let _ = guard.kill();
     }
 
-    /// Bounded reap for failure paths: SIGKILL, then poll. Never blocks
-    /// forever; reports the status when the run exits in time.
+    /// Bounded reap for failure paths: SIGKILL, then poll, re-signalling on
+    /// every round. Never blocks forever; reports the status when the run
+    /// exits in time. The kill is retried (not fired once) so one swallowed
+    /// kill failure cannot masquerade as an unkillable run.
     fn reap_bounded(&self, limit: Duration) -> Option<ExitStatus> {
-        self.kill();
         let deadline = Instant::now() + limit;
         loop {
+            self.kill();
             if let Some(status) = self.poll_exit() {
                 return Some(status);
             }

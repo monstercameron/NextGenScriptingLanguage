@@ -236,7 +236,9 @@ fn is_cancellation_error(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<execution_result::ExecutionFailure>()
-            .is_some_and(|failure| failure.result.kind == execution_result::ExecutionKind::Cancelled)
+            .is_some_and(|failure| {
+                failure.result.kind == execution_result::ExecutionKind::Cancelled
+            })
     }) || error.chain().any(|cause| {
         let message = cause.to_string();
         message.contains("workflow cancelled")
@@ -408,11 +410,17 @@ mod cleanup_interrupt_tests {
             .context("outer step")
             .unwrap_err();
         assert!(is_cancellation_error(&chained));
-        assert!(is_cancellation_error(&anyhow::anyhow!("cancelled by handle")));
-        assert!(is_cancellation_error(&anyhow::anyhow!("cancelled while draining")));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "cancelled by handle"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "cancelled while draining"
+        )));
         // Task-group, parallel fan-out, in-process applet and model
         // cancellations unwound mid-statement must rewrite the same way.
-        assert!(is_cancellation_error(&anyhow::anyhow!("task group cancelled")));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "task group cancelled"
+        )));
         assert!(is_cancellation_error(&anyhow::anyhow!(
             "task group was cancelled before preflight"
         )));

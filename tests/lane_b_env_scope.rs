@@ -317,10 +317,8 @@ fn explain_does_not_publish_a_path_found_only_in_sensitive_path_tail() {
     fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
     let inherited_path = format!("/usr/bin:/bin:{}", sensitive_bin.display());
-    let source = format!(
-        "accept oldpath as text from environment \"PATH\"\nuse environment {{\"PATH\": oldpath}}\nrun \"lane-b-secret-path-tool\" with arguments []\n"
-    );
-    fs::write(directory.path().join("workflow.program"), &source).unwrap();
+    let source = "accept oldpath as text from environment \"PATH\"\nuse environment {\"PATH\": oldpath}\nrun \"lane-b-secret-path-tool\" with arguments []\n";
+    fs::write(directory.path().join("workflow.program"), source).unwrap();
     let explain = execute_command()
         .arg("explain")
         .arg(directory.path().join("workflow.program"))

@@ -1387,16 +1387,15 @@ mod tests {
         let process = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
         let sid = crate::platform::windows::user_sid(process).unwrap();
         let mut text = std::ptr::null_mut();
-        // SAFETY: sid is a valid current-user SID and text is a writable out-slot.
-        assert_ne!(
-            unsafe {
-                windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW(
-                    sid.as_ptr().cast_mut().cast(),
-                    &mut text,
-                )
-            },
-            0
-        );
+        // SAFETY: sid owns a live current-user SID buffer; text is a writable out-slot,
+        // and the API allocates the returned string for LocalFree on success.
+        let status = unsafe {
+            windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW(
+                sid.as_ptr().cast_mut().cast(),
+                &mut text,
+            )
+        };
+        assert_ne!(status, 0);
         let mut length = 0;
         // SAFETY: ConvertSidToStringSidW returned a NUL-terminated LocalAlloc string.
         while unsafe { *text.add(length) } != 0 {
@@ -1434,28 +1433,26 @@ mod tests {
             .chain(Some(0))
             .collect::<Vec<_>>();
         let mut descriptor = std::ptr::null_mut();
-        // SAFETY: wide is NUL-terminated and descriptor is a writable out-slot.
-        assert_ne!(
-            unsafe {
-                windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                    wide.as_ptr(),
-                    windows_sys::Win32::Security::Authorization::SDDL_REVISION_1,
-                    &mut descriptor,
-                    std::ptr::null_mut(),
-                )
-            },
-            0
-        );
+        // SAFETY: wide is a live NUL-terminated SDDL string, descriptor is a writable
+        // out-slot, and the optional size pointer may be null for this API.
+        let status = unsafe {
+            windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide.as_ptr(),
+                windows_sys::Win32::Security::Authorization::SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(status, 0);
         let mut present = 0;
         let mut defaulted = 0;
         let mut dacl = std::ptr::null_mut();
-        // SAFETY: descriptor is the live descriptor returned by the SDDL conversion.
-        assert_ne!(
-            unsafe {
-                GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted)
-            },
-            0
-        );
+        // SAFETY: descriptor is live from the preceding conversion; present, dacl, and
+        // defaulted are writable out-slots, and returned DACL memory is borrowed from it.
+        let status = unsafe {
+            GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted)
+        };
+        assert_ne!(status, 0);
         assert_ne!(present, 0);
         // SAFETY: file is live, dacl belongs to descriptor, and all outputs passed to the API
         // are valid. SetSecurityInfo reads the DACL before the descriptor is freed below.

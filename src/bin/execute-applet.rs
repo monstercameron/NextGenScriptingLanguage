@@ -1,4 +1,4 @@
-use flow::applets::{execute, AppletError, AppletErrorKind};
+use flow::applets::{AppletError, AppletErrorKind, execute};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::io::{self, BufRead, Read, Write};
@@ -270,6 +270,192 @@ fn run_worker<R: BufRead, W: Write>(reader: &mut R, writer: &mut W) -> io::Resul
     }
 }
 
+fn worker_response(request: WorkerRequest) -> WorkerResponse {
+    match parse_invocation(&request.arguments)
+        .and_then(|(operation, args)| execute(&operation, &args, &request.input))
+        .and_then(encode_output)
+    {
+        Ok(output) => WorkerResponse {
+            id: request.id,
+            status: 0,
+            output,
+            stderr: None,
+        },
+        Err(error) => WorkerResponse {
+            id: request.id,
+            status: error.exit_status(),
+            output: Vec::new(),
+            stderr: Some(format!(
+                "execute-applet: {}: {}\n",
+                error.code, error.message
+            )),
+        },
+    }
+}
+
+fn worker_response_v2(request: WorkerRequestV2) -> Value {
+    if request.version != 2 {
+        return worker_response_v2_error(
+            request.id,
+            request.json_output,
+            "unsupported frame version",
+        );
+    }
+    let input = match base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &request.input_base64,
+    ) {
+        Ok(input) => input,
+        Err(error) => {
+            return worker_response_v2_error(
+                request.id,
+                request.json_output,
+                &format!("invalid input_base64: {error}"),
+            );
+        }
+    };
+    let invocation = parse_invocation_v2(&request.arguments, request.value);
+    match invocation.and_then(|(operation, args)| execute(&operation, &args, &input)) {
+        Ok(value) if request.json_output => serde_json::json!({
+            "version":2,
+            "id":request.id,
+            "status":0,
+            "value":value
+        }),
+        Ok(value) => match encode_output(value) {
+            Ok(output) => serde_json::json!({
+                "version":2,
+                "id":request.id,
+                "status":0,
+                "output_base64":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, output)
+            }),
+            Err(error) => worker_response_v2_error(
+                request.id,
+                request.json_output,
+                &format!("{}: {}", error.code, error.message),
+            ),
+        },
+        Err(error) => worker_response_v2_error(
+            request.id,
+            request.json_output,
+            &format!("{}: {}", error.code, error.message),
+        ),
+    }
+}
+
+fn parse_invocation_v2(
+    arguments: &[String],
+    value: Option<Value>,
+) -> Result<(String, Map<String, Value>), AppletError> {
+    let Some(value) = value else {
+        return parse_invocation(arguments);
+    };
+    let Some(operation) = arguments.first() else {
+        return Err(request_error(
+            "invalid_arguments",
+            "v2 typed JSON value requires an operation argument",
+        ));
+    };
+    let trailing = &arguments[1..];
+    if !trailing.is_empty() && !(trailing.len() == 1 && trailing[0] == "--args") {
+        return Err(request_error(
+            "invalid_arguments",
+            "v2 typed JSON value cannot be combined with additional positional arguments",
+        ));
+    }
+    let object = value.as_object().ok_or_else(|| {
+        request_error("invalid_arguments", "v2 typed JSON value must be an object")
+    })?;
+    Ok((operation.clone(), object.clone()))
+}
+
+fn worker_response_v2_error(id: u64, json_output: bool, message: &str) -> Value {
+    let mut response = serde_json::json!({
+        "version":2,
+        "id":id,
+        "status":2,
+        "stderr":format!("execute-applet: {message}\n")
+    });
+    if json_output {
+        response["value"] = Value::Null;
+    } else {
+        response["output_base64"] = Value::String(String::new());
+    }
+    response
+}
+
+fn read_bounded_line<R: BufRead>(reader: &mut R, limit: usize) -> io::Result<Option<Vec<u8>>> {
+    let mut result = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return if result.is_empty() {
+                Ok(None)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "worker frame is missing its final newline",
+                ))
+            };
+        }
+        let end = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if result.len().saturating_add(end) > limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("worker line exceeds {limit} bytes"),
+            ));
+        }
+        result.extend_from_slice(&available[..end]);
+        reader.consume(end);
+        if result.last() == Some(&b'\n') {
+            return Ok(Some(result));
+        }
+    }
+}
+
+fn request_error(code: &'static str, message: impl Into<String>) -> AppletError {
+    AppletError {
+        code,
+        kind: AppletErrorKind::Permanent,
+        message: message.into(),
+    }
+}
+
+fn help() -> &'static str {
+    "execute-applet OPERATION --args JSON_OBJECT\n\
+     Reads optional raw bytes from stdin and writes one JSON value plus LF.\n\
+     Operations: path.dirname, path.basename, path.remove_suffix, text.trim_final_lf,\n\
+     text.normalize, text.trim, text.length, text.substring, text.pad, text.repeat,\n\
+     text.starts_with, text.ends_with, text.contains_any, text.truncate, text.concat,\n\
+     text.matches, number.abs, number.ceil, number.clamp, number.divmod, number.floor,\n\
+     number.format, number.format_size, number.int_divide, number.max, number.min,\n\
+     number.modulo, number.round, number.sign, number.trunc, number.add, number.subtract,\n\
+     number.multiply, number.divide, number.compare, number.parse_integer,\n\
+     number.parse_integer.result, number.to_text, color.rgb_to_hex, color.parse_rgb,\n\
+     color.parse_rgb.result, json.parse, json.stringify, json.get, json.set,\n\
+     json.map, json.filter, json.concat, json.delete, json.entries, json.first,\n\
+     json.group_by, json.has, json.keys, json.last, json.length, json.merge,\n\
+     json.omit, json.pick, json.rename_keys, json.sort_by, json.sum, json.unique_by,\n\
+     json.values, csv.parse, csv.stringify, jsonc.edit_content,\n\
+     text.lines, text.split, text.default_if_empty, text.replace,\n\
+     text.strip_prefix, text.strip_suffix, text.lower, text.upper, text.join,\n\
+     path.join, text.render, list.chunk, list.concat, list.enumerate, list.first,\n\
+     list.flatten, list.last, list.range, list.rest, list.reverse, list.slice, list.zip,\n\
+     hash.sha256, hash.sha512, encode.base64, encode.form, encode.hex, encode.url,\n\
+     decode.base64, decode.hex, decode.url, time.add, time.diff, time.format, time.now,\n\
+     time.parse, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
+     ini.parse, ini.stringify, env.load, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
+     fs.ensure_symlink, fs.ensure_dir,\n\
+     fs.read, fs.snapshot,\n\
+     fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\
+     jsonc.set,\n\
+     jsonc.remove.\n\
+     Persistent workers use --worker and newline-delimited JSON frames."
+}
+
 #[cfg(test)]
 mod worker_protocol_tests {
     use super::*;
@@ -505,190 +691,4 @@ mod worker_protocol_tests {
             .expect("line present");
         assert_eq!(line.len(), 16 * 1024 * 1024 + 2);
     }
-}
-
-fn worker_response(request: WorkerRequest) -> WorkerResponse {
-    match parse_invocation(&request.arguments)
-        .and_then(|(operation, args)| execute(&operation, &args, &request.input))
-        .and_then(encode_output)
-    {
-        Ok(output) => WorkerResponse {
-            id: request.id,
-            status: 0,
-            output,
-            stderr: None,
-        },
-        Err(error) => WorkerResponse {
-            id: request.id,
-            status: error.exit_status(),
-            output: Vec::new(),
-            stderr: Some(format!(
-                "execute-applet: {}: {}\n",
-                error.code, error.message
-            )),
-        },
-    }
-}
-
-fn worker_response_v2(request: WorkerRequestV2) -> Value {
-    if request.version != 2 {
-        return worker_response_v2_error(
-            request.id,
-            request.json_output,
-            "unsupported frame version",
-        );
-    }
-    let input = match base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &request.input_base64,
-    ) {
-        Ok(input) => input,
-        Err(error) => {
-            return worker_response_v2_error(
-                request.id,
-                request.json_output,
-                &format!("invalid input_base64: {error}"),
-            );
-        }
-    };
-    let invocation = parse_invocation_v2(&request.arguments, request.value);
-    match invocation.and_then(|(operation, args)| execute(&operation, &args, &input)) {
-        Ok(value) if request.json_output => serde_json::json!({
-            "version":2,
-            "id":request.id,
-            "status":0,
-            "value":value
-        }),
-        Ok(value) => match encode_output(value) {
-            Ok(output) => serde_json::json!({
-                "version":2,
-                "id":request.id,
-                "status":0,
-                "output_base64":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, output)
-            }),
-            Err(error) => worker_response_v2_error(
-                request.id,
-                request.json_output,
-                &format!("{}: {}", error.code, error.message),
-            ),
-        },
-        Err(error) => worker_response_v2_error(
-            request.id,
-            request.json_output,
-            &format!("{}: {}", error.code, error.message),
-        ),
-    }
-}
-
-fn parse_invocation_v2(
-    arguments: &[String],
-    value: Option<Value>,
-) -> Result<(String, Map<String, Value>), AppletError> {
-    let Some(value) = value else {
-        return parse_invocation(arguments);
-    };
-    let Some(operation) = arguments.first() else {
-        return Err(request_error(
-            "invalid_arguments",
-            "v2 typed JSON value requires an operation argument",
-        ));
-    };
-    let trailing = &arguments[1..];
-    if !trailing.is_empty() && !(trailing.len() == 1 && trailing[0] == "--args") {
-        return Err(request_error(
-            "invalid_arguments",
-            "v2 typed JSON value cannot be combined with additional positional arguments",
-        ));
-    }
-    let object = value.as_object().ok_or_else(|| {
-        request_error("invalid_arguments", "v2 typed JSON value must be an object")
-    })?;
-    Ok((operation.clone(), object.clone()))
-}
-
-fn worker_response_v2_error(id: u64, json_output: bool, message: &str) -> Value {
-    let mut response = serde_json::json!({
-        "version":2,
-        "id":id,
-        "status":2,
-        "stderr":format!("execute-applet: {message}\n")
-    });
-    if json_output {
-        response["value"] = Value::Null;
-    } else {
-        response["output_base64"] = Value::String(String::new());
-    }
-    response
-}
-
-fn read_bounded_line<R: BufRead>(reader: &mut R, limit: usize) -> io::Result<Option<Vec<u8>>> {
-    let mut result = Vec::new();
-    loop {
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            return if result.is_empty() {
-                Ok(None)
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "worker frame is missing its final newline",
-                ))
-            };
-        }
-        let end = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |index| index + 1);
-        if result.len().saturating_add(end) > limit {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("worker line exceeds {limit} bytes"),
-            ));
-        }
-        result.extend_from_slice(&available[..end]);
-        reader.consume(end);
-        if result.last() == Some(&b'\n') {
-            return Ok(Some(result));
-        }
-    }
-}
-
-fn request_error(code: &'static str, message: impl Into<String>) -> AppletError {
-    AppletError {
-        code,
-        kind: AppletErrorKind::Permanent,
-        message: message.into(),
-    }
-}
-
-fn help() -> &'static str {
-    "execute-applet OPERATION --args JSON_OBJECT\n\
-     Reads optional raw bytes from stdin and writes one JSON value plus LF.\n\
-     Operations: path.dirname, path.basename, path.remove_suffix, text.trim_final_lf,\n\
-     text.normalize, text.trim, text.length, text.substring, text.pad, text.repeat,\n\
-     text.starts_with, text.ends_with, text.contains_any, text.truncate, text.concat,\n\
-     text.matches, number.abs, number.ceil, number.clamp, number.divmod, number.floor,\n\
-     number.format, number.format_size, number.int_divide, number.max, number.min,\n\
-     number.modulo, number.round, number.sign, number.trunc, number.add, number.subtract,\n\
-     number.multiply, number.divide, number.compare, number.parse_integer,\n\
-     number.parse_integer.result, number.to_text, color.rgb_to_hex, color.parse_rgb,\n\
-     color.parse_rgb.result, json.parse, json.stringify, json.get, json.set,\n\
-     json.map, json.filter, json.concat, json.delete, json.entries, json.first,\n\
-     json.group_by, json.has, json.keys, json.last, json.length, json.merge,\n\
-     json.omit, json.pick, json.rename_keys, json.sort_by, json.sum, json.unique_by,\n\
-     json.values, csv.parse, csv.stringify, jsonc.edit_content,\n\
-     text.lines, text.split, text.default_if_empty, text.replace,\n\
-     text.strip_prefix, text.strip_suffix, text.lower, text.upper, text.join,\n\
-     path.join, text.render, list.chunk, list.concat, list.enumerate, list.first,\n\
-     list.flatten, list.last, list.range, list.rest, list.reverse, list.slice, list.zip,\n\
-     hash.sha256, hash.sha512, encode.base64, encode.form, encode.hex, encode.url,\n\
-     decode.base64, decode.hex, decode.url, time.add, time.diff, time.format, time.now,\n\
-     time.parse, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
-     ini.parse, ini.stringify, env.load, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
-     fs.ensure_symlink, fs.ensure_dir,\n\
-     fs.read, fs.snapshot,\n\
-     fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\
-     jsonc.set,\n\
-     jsonc.remove.\n\
-     Persistent workers use --worker and newline-delimited JSON frames."
 }

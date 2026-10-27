@@ -68,6 +68,41 @@ fn opt_manifest_list_type_errors_keep_precedence_over_nul_errors() {
 }
 
 #[test]
+fn opt_manifest_json_lists_require_json_arguments_not_spread() {
+    let manifest = opt_manifest_from_json(
+        r#"{"name":"check","binary":"tool","parameters":{"items":{"type":"list","items":"json","required":true},"flags":{"type":"list","items":"string","required":true}},"arguments":[{"literal":"--flags"},{"spread":"flags"},{"literal":"--args"},{"json_arguments":true}]}"#,
+    );
+    let values = BTreeMap::from([
+        (
+            "items".into(),
+            Value::List(vec![Value::Record(BTreeMap::from([(
+                "name".into(),
+                Value::String("Ada".into()),
+            )]))]),
+        ),
+        (
+            "flags".into(),
+            Value::List(vec![Value::String("--quiet".into())]),
+        ),
+    ]);
+    assert_eq!(
+        manifest.build_arguments(&values).unwrap(),
+        [
+            "--flags",
+            "--quiet",
+            "--args",
+            r#"{"flags":["--quiet"],"items":[{"name":"Ada"}]}"#
+        ]
+    );
+
+    let spread_only = opt_manifest_load_error(
+        r#"{"name":"check","binary":"tool","parameters":{"items":{"type":"list","items":"json","required":true}},"arguments":[{"spread":"items"}]}"#,
+    );
+    assert!(spread_only
+        .contains("json and record list items require json_arguments rather than spread"));
+}
+
+#[test]
 fn opt_manifest_unknown_and_required_errors_keep_their_order() {
     let manifest = opt_manifest_from_json(
         r#"{"name":"check","binary":"tool","parameters":{"a":{"type":"string","required":true},"z":{"type":"string"}},"arguments":[]}"#,

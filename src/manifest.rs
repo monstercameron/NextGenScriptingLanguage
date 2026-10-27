@@ -2543,7 +2543,12 @@ fn validate_value(
         }
         let mut contains_nul = false;
         for item in items {
-            if !(is_scalar_type(item, item_type)
+            let valid_item = if item_type == ParameterType::Json {
+                crate::structured::literal(item)
+            } else {
+                is_scalar_type(item, item_type)
+            };
+            if !(valid_item
                 || allow_reference_items
                     && matches!(
                         item_type,
@@ -3253,6 +3258,33 @@ enum RawArgument {
     },
 }
 
+fn raw_argument_has_json_arguments(argument: &RawArgument) -> bool {
+    match argument {
+        RawArgument::JsonArguments => true,
+        RawArgument::WhenPresent { append, .. } => {
+            append.iter().any(raw_argument_has_json_arguments)
+        }
+        _ => false,
+    }
+}
+
+fn raw_argument_maps_parameter(argument: &RawArgument, parameter: &str) -> bool {
+    match argument {
+        RawArgument::Parameter { parameter: mapped }
+        | RawArgument::Spread { spread: mapped }
+        | RawArgument::JsonParameter {
+            json_parameter: mapped,
+        }
+        | RawArgument::PrefixedParameter {
+            parameter: mapped, ..
+        } => mapped == parameter,
+        RawArgument::WhenPresent { append, .. } => append
+            .iter()
+            .any(|argument| raw_argument_maps_parameter(argument, parameter)),
+        _ => false,
+    }
+}
+
 impl<'de> Deserialize<'de> for RawArgument {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         // Missing fields and explicit null have different meanings: all present
@@ -3425,6 +3457,21 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         }
         if spec.item_type == Some(ParameterType::List) {
             bail!("parameter {name:?}: nested lists are not supported");
+        }
+        if spec
+            .item_type
+            .is_some_and(|item| matches!(item, ParameterType::Json | ParameterType::Record))
+        {
+            let has_json_arguments = raw.arguments.iter().any(raw_argument_has_json_arguments);
+            let has_direct_mapping = raw
+                .arguments
+                .iter()
+                .any(|argument| raw_argument_maps_parameter(argument, name));
+            if !has_json_arguments || has_direct_mapping {
+                bail!(
+                    "parameter {name:?}: json and record list items require json_arguments rather than spread"
+                );
+            }
         }
         if !is_list && spec.min_items.is_some() {
             bail!("parameter {name:?}: min_items only applies to lists");

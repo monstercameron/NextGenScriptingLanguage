@@ -5,7 +5,8 @@
   "accepts_stdin": false,
   "parameters": {
     "document": {
-      "type": "json",
+      "type": "list",
+      "items": "json",
       "required": true
     },
     "pointer": {
@@ -44,7 +45,10 @@
       "inputs": {
         "document": {
           "schema": {
-            "type": "json"
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
           },
           "delivery": "single"
         },

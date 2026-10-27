@@ -507,6 +507,24 @@ execute replay .runs/deploy --as-test tests/deploy-recorded   # then: execute te
 inputs, exit status, and terminal stdout. The fixture runs the real program, so it
 needs the tools the program calls.
 
+A failed recorded run can be repaired without a checkpoint: the failure names
+the loop. `repair --from-record` edits only the failed suffix — the first
+failed step's top-level statement and everything after it — and refuses lines in
+the completed prefix. `resume --from-record` then replays the completed prefix
+from the captured blobs, launching no process and writing no file for those
+steps, and runs the repaired suffix natively:
+
+```sh
+execute run deploy.program --record .runs/deploy   # fails at line 42
+execute repair --from-record .runs/deploy --program deploy.program --op 'replace-command 42 ...'
+execute resume deploy.program --from-record .runs/deploy
+```
+
+A prefix that no longer matches the record, bytes the record never kept, and a
+record that completed successfully are refused with the step and reason instead
+of re-running anything. The repair is logged in `repairs.jsonl` beside the
+record; `run.json` and `trace.jsonl` are never modified.
+
 ## Try statements in a session
 
 `test`, `run-parts`, and `repl` accept `--capability-policy FILE`,

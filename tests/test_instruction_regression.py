@@ -641,6 +641,42 @@ class SameRunnerPairTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "instructions_backend"):
             gate.evaluate(before, after, fail_closed=True)
 
+    def test_cross_commit_pair_allows_distinct_builds(self):
+        provenance = {"instructions_backend": "cachegrind",
+                      "instruction_repeats": 2}
+        baseline = report("a" * 40,
+                          {key: self.COUNTS[key] for key in self.GATED_KEYS},
+                          keys=self.GATED_KEYS,
+                          extra=dict(provenance, execute_sha256="exe-base",
+                                     runner_sha256="runner"))
+        candidate = report("b" * 40,
+                           {key: self.COUNTS[key] for key in self.GATED_KEYS},
+                           keys=self.GATED_KEYS,
+                           extra=dict(provenance, execute_sha256="exe-head",
+                                      runner_sha256="runner"))
+        _, failures, skipped = gate.evaluate(
+            baseline, candidate, fail_closed=True, require_provenance=True)
+        self.assertEqual(failures, [])
+        self.assertEqual(skipped, [])
+
+    def test_cross_commit_pair_regressions_fail(self):
+        provenance = {"instructions_backend": "cachegrind",
+                      "instruction_repeats": 2}
+        baseline = report("a" * 40,
+                          {key: self.COUNTS[key] for key in self.GATED_KEYS},
+                          keys=self.GATED_KEYS,
+                          extra=dict(provenance, execute_sha256="exe-base",
+                                     runner_sha256="runner"))
+        candidate = report("b" * 40,
+                           {key: int(self.COUNTS[key] * 1.03)
+                            for key in self.GATED_KEYS},
+                           keys=self.GATED_KEYS,
+                           extra=dict(provenance, execute_sha256="exe-head",
+                                      runner_sha256="runner"))
+        _, failures, _ = gate.evaluate(
+            baseline, candidate, fail_closed=True, require_provenance=True)
+        self.assertEqual(sorted(failures), sorted(self.GATED_KEYS))
+
 
 if __name__ == "__main__":
     unittest.main()

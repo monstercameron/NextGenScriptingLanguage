@@ -219,24 +219,35 @@ directory and fresh output/checkpoint fixtures. The wall-time comparison runs
 counter-free (`--instructions-backend none`) so counting never perturbs its
 medians or spends its budget; its instruction columns report `-` by design.
 Instruction counts come from a dedicated gate pair: the eight gated CPU-bound
-scenarios measured twice back-to-back on the same runner (3 runs, no warmup,
-2 instruction samples), pinned to cachegrind (`I refs` via valgrind, which needs
-no PMU). Each focused report records which backend produced the counts plus
-one-line counter diagnostics (kernel `perf_event_paranoid` level,
+scenarios measured once per build, back-to-back on the same runner (3 runs, no
+warmup, 2 instruction samples), pinned to cachegrind (`I refs` via valgrind,
+which needs no PMU). Each focused report records which backend produced the
+counts plus one-line counter diagnostics (kernel `perf_event_paranoid` level,
 perf/valgrind probe outcomes), and the log and step
 summary state how many execute arms report counts. Every child has a
 30-second timeout and the harness stops at a 285-second end-to-end budget (hard maximum
 300 seconds).
 [bash-compare.yml](../.github/workflows/bash-compare.yml) runs the workload-contract
-test, the synthetic instruction-gate contract test, and the comparison for each
+test, the synthetic instruction-gate contract test, the revision-policy contract
+test, and the comparison for each
 release/profile variant on ubuntu-24.04 and
-ubuntu-24.04-arm, retaining a grouped JSON report. The workflow then measures the
-same-runner gate pair and runs the real gate on it:
+ubuntu-24.04-arm, retaining a grouped JSON report. The workflow then builds two
+distinct binaries on the same runner -- the baseline at the base revision and
+the candidate at the head revision -- measures the focused pair, and runs the
+real gate on it:
 [tools/check_instruction_regression.py](../tools/check_instruction_regression.py)
-with `--fail-closed --require-provenance` compares the two focused reports
-(revisions suffixed run-a/run-b), which must agree within +2%, and a canary
+with `--fail-closed --require-provenance` compares the baseline report against
+the candidate report, which must agree within +2%. Revisions come from
+[tools/resolve_gate_revisions.py](../tools/resolve_gate_revisions.py): pull
+requests compare base SHA versus head SHA; pushes compare `before` versus the
+pushed SHA (a zero `before` on a new branch falls back to the parent of the
+head commit); manual dispatches accept explicit base/head inputs and otherwise
+compare the parent of HEAD versus HEAD. Any unresolved revision is incomplete,
+never acceptance. A canary
 derives a synthetic baseline with gated counts deflated by 3% and requires the
-wired gate to fail on the measured report. An inconclusive canary (no gated
+wired gate to fail on the measured candidate; the canary proves the wiring is
+live but is not itself a regression gate -- only the base-versus-head pair can
+report a real regression. An inconclusive canary (no gated
 instruction data) or an incomplete pair fails the job; there is no
 incomplete-green. Missing counter
 data fails the fail-closed gate as incomplete rather than passing silently. The local
@@ -247,13 +258,13 @@ the source for per-profile CI results.
 The counter fallback is cachegrind via valgrind (instruction counts from its
 virtual CPU, the same approach the Rust ecosystem uses for CI benchmarking on
 virtualized runners), installed on every gate runner; perf stays best-effort for
-diagnostics only. Still awaiting Linux CI validation: cachegrind overhead for the
-focused pair against its 10-minute step timeout, and behavior on static musl
-binaries. No cross-commit stored baseline exists yet, so the gate proves
-same-runner stability plus a live +3% tripwire rather than catching regressions
-across commits; a checked-in baseline, when one lands, is backend-specific, and
-the gate rejects any backend mismatch (including a missing backend against a
-recorded one) as incomparable units.
+diagnostics only. Still awaiting Linux CI validation, so unverified: cachegrind
+overhead for the two focused runs against their shared 10-minute step timeout
+(same sample counts as the former same-binary pair, so the measurement budget
+is unchanged), behavior on static musl binaries, and the doubled build cost of
+compiling both revisions per matrix variant. The gate rejects any backend
+mismatch (including a missing backend against a recorded one) as incomparable
+units, and likewise rejects differing runner scripts or sample counts.
 What it does not show. The pairs use each runtime's natural operation, so they compare
 jobs rather than isolating interpreter overhead. The runners are shared machines, files
 are warm in the page cache, and wall-time point estimates stay noisy; use the retained

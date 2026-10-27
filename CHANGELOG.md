@@ -43,19 +43,24 @@ original version labels.
 - Operational instruction gate on shared runners. `tools/bash_compare.py` reports a deterministic
   bootstrap 95% confidence interval for every median wall time; the wall-time
   comparison runs counter-free so counting never perturbs its medians or budget.
-  The `Execute vs bash` workflow installs valgrind and measures the eight gated
-  CPU-bound scenarios twice back-to-back on the same runner, pinned to cachegrind
+  The `Execute vs bash` workflow installs valgrind, builds two distinct binaries
+  on the same runner (the baseline at the base revision and the candidate at the
+  head revision), and measures the eight gated
+  CPU-bound scenarios once per build, back-to-back, pinned to cachegrind
   `I refs` (no PMU required); each focused report records the backend plus counter
   diagnostics (`perf_event_paranoid`, probe outcomes), and CI prints real
   per-scenario counts with coverage. `tools/check_instruction_regression.py`
   defines the +2% gate for CPU-bound rows: CI runs it fail-closed with
-  `--fail-closed --require-provenance` on the same-runner pair, then runs a canary
-  proving the wired gate fails a synthetic +3% regression on the measured report.
+  `--fail-closed --require-provenance` on the baseline-versus-candidate pair, then runs a canary
+  proving the wired gate fails a synthetic +3% regression on the measured candidate.
+  The canary proves the wiring is live but is not itself a regression gate.
+  Revisions come from `tools/resolve_gate_revisions.py` (pull-request base/head;
+  push before/sha with a HEAD~1 fallback; dispatch inputs or HEAD~1 versus HEAD).
   An inconclusive canary or incomplete pair fails the job; a missing backend
-  against a recorded one is rejected as incomparable units. No cross-commit stored
-  baseline exists yet, so the gate proves same-runner stability plus a live +3%
-  tripwire rather than catching regressions across commits. Cachegrind overhead
-  and static musl behavior still need Linux CI validation.
+  against a recorded one is rejected as incomparable units. Measurement budgets
+  match the former same-binary pair; cachegrind overhead against the shared
+  10-minute step timeout, static musl behavior, and the doubled per-variant
+  build cost are still unverified on Linux CI.
 - Twenty more Omarchy v4.0.4 scripts are ported under `examples/omarchy-ports/<script>/`
   with the Bash original, the port and a `case.json`. `tools/port_compare.py` runs both in
   sandboxes with logging fake binaries and compares status, stdout, stderr, the

@@ -5,11 +5,13 @@ Both inputs are JSON reports produced by tools/bash_compare.py. The baseline
 report must come from the same OS family, machine architecture, manifest
 selection, and instruction backend as the candidate. A baseline is
 intentionally required: this tool never invents one from a current run. In CI
-the pair is two back-to-back focused runs of the same binary on the same
-runner (revisions suffixed run-a/run-b), so the comparison is defensible
-without trusting cross-runner numbers; run with --fail-closed (and
---require-provenance) so missing gated data fails instead of passing
-silently.
+the pair is two focused runs on the same runner from two distinct builds --
+the baseline built at the base revision and the candidate at the head
+revision (pull_request base/head SHAs; push before/sha with a HEAD~1
+fallback for a zero before; dispatch inputs or HEAD~1 versus HEAD) -- so a
+regression verdict never depends on cross-runner numbers; run with
+--fail-closed (and --require-provenance) so missing gated data fails instead
+of passing silently.
 
 Only CPU-bound scenarios are gated: rows where the Execute arm is dominated by
 interpreter work rather than child processes or filesystem traffic, so the
@@ -25,9 +27,10 @@ children while cachegrind `I refs` counts the leader process only, so reports
 whose backends differ — including a missing backend against a recorded one,
 since unknown units are never assumed comparable — are rejected as
 incomparable. Use --canary to
-prove the gate is live: it derives a synthetic baseline from a real candidate
-report with gated counts deflated by --canary-percent and checks that the gate
-fails on it.
+prove the gate wiring is live: it derives a synthetic baseline from a real
+candidate report with gated counts deflated by --canary-percent and checks
+that the gate fails on it. The canary never stands in for the base-versus-head
+comparison; only the two-build pair can report a real regression.
 """
 import argparse
 import copy

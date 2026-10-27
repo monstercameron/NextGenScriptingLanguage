@@ -2,7 +2,17 @@ name: Execute vs bash
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
+    inputs:
+      base_sha:
+        description: 'Baseline commit SHA for the instruction gate (full 40-hex; defaults to HEAD~1)'
+        required: false
+        default: ''
+      head_sha:
+        description: 'Candidate commit SHA for the instruction gate (full 40-hex; defaults to HEAD)'
+        required: false
+        default: ''
 permissions:
   contents: read
 concurrency:
@@ -25,10 +35,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+          # The instruction gate compares the PR base against the PR head (or
+          # before against sha on push), so both commits must be present.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@686976e191b89faba5713205c55f1f0f3308cb29 # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59f2b # v2.9.2
         with:
           key: ${{ matrix.variant }}
       - run: sudo apt-get install -y --no-install-recommends time strace musl-tools valgrind
@@ -40,10 +53,49 @@ jobs:
         run: python3 -m unittest tests/test_bash_ratio_regression.py -v
       - name: Check CPU-bound instruction regression gate
         run: python3 -m unittest tests/test_instruction_regression.py -v
-      - name: Build
+      - name: Check instruction gate revision policy
+        run: python3 -m unittest tests/test_resolve_gate_revisions.py -v
+      - name: Resolve gate revisions
+        id: gate-revs
+        env:
+          BASE_INPUT: ${{ inputs.base_sha }}
+          HEAD_INPUT: ${{ inputs.head_sha }}
+        run: |
+          set -e
+          args=(--event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" --sha "$GITHUB_SHA")
+          if [ -n "$BASE_INPUT" ]; then args+=(--base-input "$BASE_INPUT"); fi
+          if [ -n "$HEAD_INPUT" ]; then args+=(--head-input "$HEAD_INPUT"); fi
+          python3 tools/resolve_gate_revisions.py "${args[@]}" | tee "$RUNNER_TEMP/gate-revs.txt"
+          base="$(sed -n 's/^BASE_SHA=//p' "$RUNNER_TEMP/gate-revs.txt")"
+          head="$(sed -n 's/^HEAD_SHA=//p' "$RUNNER_TEMP/gate-revs.txt")"
+          if [ -z "$base" ] || [ -z "$head" ] || [ "$base" = "$head" ]; then
+            echo "error: gate revisions are unresolved or indistinct" >&2
+            exit 2
+          fi
+          echo "base_sha=$base" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head" >> "$GITHUB_OUTPUT"
+      - name: Fetch gate revisions
+        env:
+          BASE_SHA: ${{ steps.gate-revs.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.gate-revs.outputs.head_sha }}
+        run: |
+          set -e
+          # Best effort: a full checkout already carries both commits on most
+          # events; the pull head ref covers forks.
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "${{ github.event.pull_request.number }}" ]; then
+            git fetch --no-tags origin "pull/${{ github.event.pull_request.number }}/head:refs/remotes/pull/${{ github.event.pull_request.number }}/head" || true
+          fi
+          git cat-file -e "$BASE_SHA^{commit}"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          [ "$BASE_SHA" != "$HEAD_SHA" ]
+      - name: Build baseline and measure its instructions
         env:
           VARIANT: ${{ matrix.variant }}
+          BASE_SHA: ${{ steps.gate-revs.outputs.base_sha }}
         run: |
+          set -e
+          git checkout --quiet "$BASE_SHA"
           musl="$(uname -m)-unknown-linux-musl"
           case "$VARIANT" in
             release) cargo build --locked --release --bin execute; bin=target/release/execute ;;
@@ -53,7 +105,31 @@ jobs:
             core) cargo build --locked --release --bin execute --no-default-features; bin=target/release/execute ;;
             core-musl-min) rustup target add "$musl"; cargo build --locked --profile min --bin execute --no-default-features --target "$musl"; bin="target/$musl/min/execute" ;;
           esac
-          echo "EXECUTE_BIN=$bin" >> "$GITHUB_ENV"
+          cp "$bin" "$RUNNER_TEMP/execute-base"
+          echo "EXECUTE_BASE=$RUNNER_TEMP/execute-base" >> "$GITHUB_ENV"
+          opts="--manifest-dir manifests --max-runtime-seconds 285 --runs 3 --warmup 0 --instruction-repeats 2 --instructions-backend cachegrind"
+          only="--only builtin_loop --only text_upper --only json_get --only csv_parse --only read_10k_lines --only suffix_strip --only here_string --only text_substitution"
+          # shellcheck disable=SC2086
+          python3 tools/bash_compare.py "$RUNNER_TEMP/execute-base" $opts $only --json-out target/instructions-baseline.json
+      - name: Build candidate
+        env:
+          VARIANT: ${{ matrix.variant }}
+          HEAD_SHA: ${{ steps.gate-revs.outputs.head_sha }}
+        run: |
+          set -e
+          git checkout --quiet "$HEAD_SHA"
+          musl="$(uname -m)-unknown-linux-musl"
+          case "$VARIANT" in
+            release) cargo build --locked --release --bin execute; bin=target/release/execute ;;
+            opt-s) CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo build --locked --release --bin execute; bin=target/release/execute ;;
+            musl) rustup target add "$musl"; cargo build --locked --release --bin execute --target "$musl"; bin="target/$musl/release/execute" ;;
+            musl-min) rustup target add "$musl"; cargo build --locked --profile min --bin execute --target "$musl"; bin="target/$musl/min/execute" ;;
+            core) cargo build --locked --release --bin execute --no-default-features; bin=target/release/execute ;;
+            core-musl-min) rustup target add "$musl"; cargo build --locked --profile min --bin execute --no-default-features --target "$musl"; bin="target/$musl/min/execute" ;;
+          esac
+          cp "$bin" "$RUNNER_TEMP/execute-head"
+          echo "EXECUTE_BIN=$RUNNER_TEMP/execute-head" >> "$GITHUB_ENV"
+          echo "EXECUTE_HEAD=$RUNNER_TEMP/execute-head" >> "$GITHUB_ENV"
       - run: bash --version | head -1 && jq --version && ls -l /usr/bin/dash "$EXECUTE_BIN"
       - name: Compare
         timeout-minutes: 5
@@ -78,44 +154,45 @@ jobs:
           LD_DEBUG=statistics "${program[@]}" 2>&1 | head -n 20
           strace -f -c -o "$RUNNER_TEMP/bash-count.txt" bash --norc --noprofile -c :
           tail -n 4 "$RUNNER_TEMP/bash-count.txt"
-      - name: Measure CPU-bound instructions twice (same-runner gate pair)
+      - name: Measure candidate instructions (same-runner gate pair)
         timeout-minutes: 10
+        env:
+          HEAD_SHA: ${{ steps.gate-revs.outputs.head_sha }}
         run: |
-          # Focused instruction runs over the eight gated CPU-bound scenarios
+          set -e
+          git checkout --quiet "$HEAD_SHA"
+          # Focused instruction run over the eight gated CPU-bound scenarios
           # only, pinned to cachegrind: deterministic counts from its virtual
-          # CPU with no PMU or privileges required on hosted runners. Two
-          # back-to-back reports on this same runner form the gate pair, so a
-          # regression verdict never depends on cross-runner numbers. The
-          # run-a/run-b revision suffixes distinguish the two measurements of
-          # the same binary (the gate requires distinct revisions; provenance
-          # hashes stay identical, which the gate checks).
+          # CPU with no PMU or privileges required on hosted runners. The
+          # baseline report above and this candidate report form the gate pair:
+          # two distinct builds (base versus head) measured back-to-back on
+          # this same runner, so a regression verdict never depends on
+          # cross-runner numbers. Same 285-second budget and sample counts as
+          # the former same-binary pair.
           opts="--manifest-dir manifests --max-runtime-seconds 285 --runs 3 --warmup 0 --instruction-repeats 2 --instructions-backend cachegrind"
           only="--only builtin_loop --only text_upper --only json_get --only csv_parse --only read_10k_lines --only suffix_strip --only here_string --only text_substitution"
           # shellcheck disable=SC2086
-          python3 tools/bash_compare.py "$EXECUTE_BIN" $opts $only --json-out target/instructions-run-a.json
-          # shellcheck disable=SC2086
-          python3 tools/bash_compare.py "$EXECUTE_BIN" $opts $only --json-out target/instructions-run-b.json
-          # jq is verified above; the gate requires distinct revisions while
-          # provenance hashes stay identical, which the gate checks.
-          for tag in run-a run-b; do
-            tmp="$(mktemp)"
-            jq --arg tag "$tag" '.metadata.source_revision += "-\($tag)"' "target/instructions-$tag.json" > "$tmp"
-            mv "$tmp" "target/instructions-$tag.json"
-          done
-      - name: Gate CPU-bound instructions (same-runner pair, fail-closed)
+          python3 tools/bash_compare.py "$EXECUTE_HEAD" $opts $only --json-out target/instructions-candidate.json
+      - name: Gate CPU-bound instructions (base versus head, fail-closed)
+        env:
+          BASE_SHA: ${{ steps.gate-revs.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.gate-revs.outputs.head_sha }}
         run: |
-          # Fail-closed: every nonzero exit below fails this job. The real
-          # gate compares the two same-runner reports (exit 0 means the pair
-          # is stable within +2%); the canary then requires the wired gate to
-          # fail a synthetic +3% regression on the real report (exit 0 means
-          # caught). Exit 2 (inconclusive: no gated counts, incomparable
-          # backends) is a job failure, never acceptance green.
+          # Fail-closed: every nonzero exit below fails this job. The real gate
+          # compares the same-runner baseline (base revision) against the
+          # candidate (head revision): exit 0 means the change holds within
+          # +2%. The canary then only proves the wired gate is live by failing
+          # a synthetic +3% regression on the real candidate report (exit 0
+          # means caught); the canary alone is not a regression gate. Exit 2
+          # (unresolved revisions, no gated counts, incomparable backends) is
+          # a job failure, never acceptance green.
           set -e
-          python3 tools/check_instruction_regression.py target/instructions-run-a.json target/instructions-run-b.json --fail-closed --require-provenance
-          python3 tools/check_instruction_regression.py --canary target/instructions-run-b.json --canary-percent 3
+          echo "Gate pair: baseline $BASE_SHA versus candidate $HEAD_SHA"
+          python3 tools/check_instruction_regression.py target/instructions-baseline.json target/instructions-candidate.json --fail-closed --require-provenance
+          python3 tools/check_instruction_regression.py --canary target/instructions-candidate.json --canary-percent 3
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             echo "## Instruction gate" >> "$GITHUB_STEP_SUMMARY"
-            echo "Same-runner cachegrind pair stable within +2%, and the gate caught a synthetic +3% regression on the measured report." >> "$GITHUB_STEP_SUMMARY"
+            echo "Base-versus-head cachegrind pair stable within +2% (baseline $BASE_SHA, candidate $HEAD_SHA), and the gate caught a synthetic +3% regression on the measured candidate." >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -123,7 +200,7 @@ jobs:
           name: bash-compare-${{ matrix.os }}-${{ matrix.variant }}
           path: |
             target/bash-compare.json
-            target/instructions-run-a.json
-            target/instructions-run-b.json
+            target/instructions-baseline.json
+            target/instructions-candidate.json
           if-no-files-found: warn
           retention-days: 30

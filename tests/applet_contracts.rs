@@ -230,7 +230,6 @@ fn invalid_requests_and_invalid_catalogs_fail_without_partial_json() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("without executing applets"));
 }
 
-
 #[test]
 fn compact_signatures_and_ranked_search_keep_catalog_discovery_small_and_usable() {
     let cwd = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -358,7 +357,6 @@ fn compact_signatures_and_ranked_search_keep_catalog_discovery_small_and_usable(
     assert!(String::from_utf8_lossy(&typo.stderr).contains("did you mean"));
 }
 
-
 #[test]
 fn text_discovery_escapes_terminal_controls_but_json_preserves_descriptions() {
     let directory = tempfile::tempdir().unwrap();
@@ -417,7 +415,6 @@ fn text_discovery_escapes_terminal_controls_but_json_preserves_descriptions() {
         .unwrap()
         .contains('\u{202e}'));
 }
-
 
 #[test]
 fn single_line_discovery_escapes_newlines_and_tabs_in_manifest_names_and_keys() {
@@ -485,12 +482,10 @@ fn single_line_discovery_escapes_newlines_and_tabs_in_manifest_names_and_keys() 
     ));
     let contract = &listed["applets"][0];
     assert_eq!(contract["name"], name);
-    assert!(
-        contract["parameters_schema"]["properties"]
-            .as_object()
-            .unwrap()
-            .contains_key(parameter)
-    );
+    assert!(contract["parameters_schema"]["properties"]
+        .as_object()
+        .unwrap()
+        .contains_key(parameter));
 }
 
 #[test]

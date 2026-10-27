@@ -274,6 +274,7 @@ fn parallel_for_each_of_an_empty_list_returns_empty_records() -> Result<()> {
     let source = "parallel for each word in [] at most 4 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\nthen encode results as json\n";
     let program = flow::parser::parse(source)?;
     let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
     let options = flow::runtime::RunOptions {
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(8)),
@@ -284,6 +285,25 @@ fn parallel_for_each_of_an_empty_list_returns_empty_records() -> Result<()> {
     assert_eq!(value["items"], serde_json::json!([]));
     assert_eq!(value["succeeded"], 0);
     assert_eq!(result.launched_processes, 0);
+
+    // Empty loop items are uninhabited, so every valid consumer type remains
+    // accepted while the loop body is still structurally validated.
+    let json_consumer = flow::parser::parse(
+        "parallel for each item in [] at most 4 as results\n  run json.get with document item and pointer \"\"\n",
+    )?;
+    flow::runtime::validate(&json_consumer, &registry)?;
+    let integer_consumer = flow::parser::parse(
+        "parallel for each item in [] at most 4 as results\n  run color.rgb_to_hex with red item and green 0 and blue 0\n",
+    )?;
+    flow::runtime::validate(&integer_consumer, &registry)?;
+    let list_consumer = flow::parser::parse(
+        "parallel for each item in [] at most 4 as results\n  run list.chunk with items [item] and size 1\n",
+    )?;
+    flow::runtime::validate(&list_consumer, &registry)?;
+    let nested_empty_consumer = flow::parser::parse(
+        "for each item in []\n  for each nested in item\n    run color.rgb_to_hex with red nested and green 0 and blue 0\n",
+    )?;
+    flow::runtime::validate(&nested_empty_consumer, &registry)?;
     Ok(())
 }
 

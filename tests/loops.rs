@@ -81,7 +81,14 @@ fn foreach_uses_literal_filenames_and_keeps_only_last_result() {
     assert_eq!(result.output, b"last");
     assert_eq!(fs::read(dir.path().join("last.out")).unwrap(), b"last");
     assert_eq!(result.launched_processes, 2);
-    assert_eq!(run(dir.path(), "run \"printf\" with arguments [\"keep\"]\nfor each file in []\n  run \"cat\" with arguments [file]\n").output, b"keep");
+    let empty_loop = parser::parse(
+        "run \"printf\" with arguments [\"keep\"]\nfor each file in []\n  run \"cat\" with arguments [file]\n",
+    )
+    .unwrap();
+    runtime::validate(&empty_loop, &Registry::default()).unwrap();
+    let empty_result =
+        runtime::run(&empty_loop, &Registry::default(), &options(dir.path())).unwrap();
+    assert_eq!(empty_result.output, b"keep");
 }
 
 #[test]

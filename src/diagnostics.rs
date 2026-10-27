@@ -3061,6 +3061,7 @@ fn collect_program_diagnostics(
     let mut applet_suggestions = BTreeMap::<String, Option<String>>::new();
     for input in &program.inputs {
         let kind = match input.kind {
+            crate::ast::InputType::Never => None,
             crate::ast::InputType::Text => Some(OutputType::Text),
             crate::ast::InputType::Integer => Some(OutputType::Integer),
             crate::ast::InputType::Boolean => Some(OutputType::Boolean),
@@ -3078,6 +3079,7 @@ fn collect_program_diagnostics(
     let mut list_item_types = BTreeMap::<String, OutputType>::new();
     for input in &program.inputs {
         let item_kind = match input.kind {
+            crate::ast::InputType::Never => Some(OutputType::Json),
             crate::ast::InputType::TextList => Some(OutputType::Text),
             crate::ast::InputType::IntegerList => Some(OutputType::Integer),
             crate::ast::InputType::JsonList | crate::ast::InputType::Json => Some(OutputType::Json),
@@ -3538,6 +3540,7 @@ fn missing_program_input_edit(
     let layout = parser::repair_invocation_layout(&statement.text).ok()?;
     let offset = line_start + bom + statement.indent + layout.parameter_insert;
     let placeholder = match kind {
+        crate::ast::InputType::Never => return None,
         crate::ast::InputType::Text => match choices {
             Some([first, ..]) => serde_json::to_string(first).ok()?,
             Some([]) => return None,
@@ -3954,8 +3957,8 @@ fn runtime_json_item_type(kind: OutputType) -> OutputType {
 }
 
 /// Match `runtime::loops::element_type`: text, integer, and boolean arrays
-/// retain scalar precision; empty, mixed, floating-point, and nested arrays
-/// are JSON values.
+/// retain scalar precision; mixed, floating-point, and nested arrays are JSON
+/// values. Empty literals have no statically usable item type.
 fn known_for_each_item_type(
     value: &Value,
     known_types: &BTreeMap<String, OutputType>,
@@ -3983,7 +3986,7 @@ fn known_for_each_item_type(
             .or_else(|| {
                 (known_types.get(name) == Some(&OutputType::Json)).then_some(OutputType::Json)
             }),
-        Value::List(items) if items.is_empty() => Some(OutputType::Json),
+        Value::List(items) if items.is_empty() => None,
         Value::List(items) => {
             let first = item_kind(&items[0]);
             Some(if items.iter().all(|item| item_kind(item) == first) {
@@ -4185,6 +4188,7 @@ fn set_scoped_binding_type(scope: &mut InferredTypeScope, binding: &str, kind: O
 
 fn output_type_for_input(kind: crate::ast::InputType) -> OutputType {
     match kind {
+        crate::ast::InputType::Never => OutputType::Json,
         crate::ast::InputType::Text => OutputType::Text,
         crate::ast::InputType::Integer => OutputType::Integer,
         crate::ast::InputType::Boolean => OutputType::Boolean,
@@ -6386,6 +6390,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_parallel_loop_does_not_assume_an_item_type() {
+        let fixture = json!({
+            "name": "fixture.boolean",
+            "binary": "fixture-boolean",
+            "parameters": {"flag": {"type": "boolean", "required": true}},
+            "arguments": [{"parameter": "flag"}]
+        });
+        let registry = Registry::from_sources(&[fixture.to_string()]).unwrap();
+        let source = "parallel for each item in [] at most 2 as results\n  run fixture.boolean with flag item\n";
+        let diagnostics = analyze_source(source, &registry);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "applet.parameter.type"),
+            "empty loop item should not be narrowed to a type: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
     fn loop_item_inference_treats_nul_text_as_json_like_runtime() {
         let item = Value::String("text\0with-nul".into());
         let items = Value::List(vec![item]);
@@ -6393,6 +6416,26 @@ mod tests {
         assert_eq!(
             known_for_each_item_type(&items, &types, &types),
             Some(OutputType::Json)
+        );
+    }
+
+    #[test]
+    fn empty_list_item_inference_is_unknown_like_runtime() {
+        let empty = Value::List(Vec::new());
+        let types = BTreeMap::new();
+        assert_eq!(
+            known_list_item_type(&empty, &types, &types),
+            Some(OutputType::Json)
+        );
+        assert_eq!(known_for_each_item_type(&empty, &types, &types), None);
+        assert_eq!(
+            known_for_each_item_type(
+                &Value::Reference("items".into()),
+                &types,
+                &BTreeMap::from([("items".into(), OutputType::Json)]),
+            ),
+            Some(OutputType::Json),
+            "declared JSON-list items remain dynamically typed"
         );
     }
 

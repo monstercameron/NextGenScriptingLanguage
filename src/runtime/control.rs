@@ -283,6 +283,10 @@ pub(super) fn validate_shape(steps: &[Step], return_allowed: bool) -> Result<()>
 }
 
 fn scalar_kind(value: &Value, types: &BTreeMap<String, InputType>) -> Result<Option<InputType>> {
+    if matches!(value, Value::List(items) if items.iter().any(|item| matches!(item, Value::Reference(name) if types.get(name) == Some(&InputType::Never))))
+    {
+        return Ok(Some(InputType::Never));
+    }
     let kind = match value {
         Value::String(_) => Some(InputType::Text),
         Value::Integer(_) => Some(InputType::Integer),
@@ -316,7 +320,12 @@ fn scalar_kind(value: &Value, types: &BTreeMap<String, InputType>) -> Result<Opt
 
 fn validate_equality_types(left: Option<InputType>, right: Option<InputType>) -> Result<()> {
     if let (Some(left), Some(right)) = (left, right) {
-        if left != right && left != InputType::Json && right != InputType::Json {
+        if left != right
+            && left != InputType::Json
+            && right != InputType::Json
+            && left != InputType::Never
+            && right != InputType::Never
+        {
             bail!(
                 "condition compares {left} with {right}; values must have the same type, and implicit conversion is unsupported"
             );
@@ -343,7 +352,8 @@ pub(super) fn validate_condition(
                     | InputType::TextList
                     | InputType::IntegerList
                     | InputType::JsonList
-                    | InputType::Json,
+                    | InputType::Json
+                    | InputType::Never,
                 )
                 | None => {}
                 Some(kind) => {
@@ -351,7 +361,7 @@ pub(super) fn validate_condition(
                 }
             }
             if matches!(left, Some(InputType::Text | InputType::TextList))
-                && right.is_some_and(|kind| kind != InputType::Text)
+                && right.is_some_and(|kind| kind != InputType::Text && kind != InputType::Never)
             {
                 bail!("string and text-list containment requires a text value");
             }

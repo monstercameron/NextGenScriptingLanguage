@@ -1938,10 +1938,14 @@ fn validate_service_ports(
 }
 
 fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
+    if input == InputType::Never {
+        return true;
+    }
     if schema.nullable {
         return input == InputType::Json && schema.kind != OutputType::Bytes;
     }
     match input {
+        InputType::Never => true,
         InputType::Text => matches!(schema.kind, OutputType::Text | OutputType::Path),
         InputType::Integer => schema.kind == OutputType::Integer,
         InputType::Boolean => schema.kind == OutputType::Boolean,
@@ -2973,6 +2977,7 @@ mod tests {
             pattern: None,
         };
         assert!(port_schema_accepts_input(&path_schema, InputType::Text));
+        assert!(port_schema_accepts_input(&path_schema, InputType::Never));
 
         let path_list_schema = ValueSchema {
             scalar_only: false,

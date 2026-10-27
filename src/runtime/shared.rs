@@ -80,7 +80,7 @@ fn validate_exit_operand(
             bail!("{what} must be between {minimum} and 255, received {status}")
         }
         Value::Reference(name) => match flow.types.get(name) {
-            Some(crate::ast::InputType::Integer) => Ok(()),
+            Some(crate::ast::InputType::Integer | crate::ast::InputType::Never) => Ok(()),
             Some(kind) => bail!("{what} {name:?} must be integer, received {kind}"),
             None => bail!("{what} {name:?} has no known integer type"),
         },
@@ -507,7 +507,7 @@ fn validate_text_operand(value: &Value, flow: &control::FlowState, what: &str) -
     match value {
         Value::String(_) => Ok(()),
         Value::Reference(name) => match flow.types.get(name) {
-            Some(crate::ast::InputType::Text) => Ok(()),
+            Some(crate::ast::InputType::Text | crate::ast::InputType::Never) => Ok(()),
             Some(kind) => bail!("{what} {name:?} must be text, received {kind}"),
             None => bail!("{what} {name:?} has no known text type"),
         },
@@ -1433,11 +1433,9 @@ fn validate_range(
                 _ => None,
             };
             if let Some(Value::Reference(name)) = path {
-                if flow
-                    .types
-                    .get(name)
-                    .is_some_and(|kind| *kind != crate::ast::InputType::Text)
-                {
+                if flow.types.get(name).is_some_and(|kind| {
+                    *kind != crate::ast::InputType::Text && *kind != crate::ast::InputType::Never
+                }) {
                     bail!("path {name:?} requires text, received {}", flow.types[name]);
                 }
             }
@@ -1615,11 +1613,10 @@ fn validate_range(
                 } => {
                     check_value(pointer, &flow.names)?;
                     if let Value::Reference(reference) = pointer {
-                        if flow
-                            .types
-                            .get(reference)
-                            .is_some_and(|kind| *kind != crate::ast::InputType::Text)
-                        {
+                        if flow.types.get(reference).is_some_and(|kind| {
+                            *kind != crate::ast::InputType::Text
+                                && *kind != crate::ast::InputType::Never
+                        }) {
                             bail!("dynamic JSON pointer {reference:?} requires text");
                         }
                     }
@@ -2744,6 +2741,10 @@ mod binding_type_tests {
             .unwrap(),
             InputType::TextList
         );
+        assert_eq!(
+            binding_value_type(&Value::List(Vec::new()), &types).unwrap(),
+            InputType::TextList
+        );
     }
 
     #[test]
@@ -2767,6 +2768,7 @@ mod binding_type_tests {
         for (values, expected) in [
             ("[\"\\u0000\"]", InputType::JsonList),
             ("[\"plain\"]", InputType::TextList),
+            ("[]", InputType::JsonList),
         ] {
             let program =
                 crate::parser::parse(&format!("run fixture.list with items {values} as bound\n"))

@@ -13,6 +13,7 @@ impl std::fmt::Display for InputType {
             Self::IntegerList => "list of integer",
             Self::JsonList => "list of json",
             Self::Json => "json",
+            Self::Never => "uninhabited empty-list item",
             Self::Bytes => "bytes",
         })
     }
@@ -129,6 +130,10 @@ impl InputDeclaration {
                 "input {:?} cannot be a byte capture; byte captures come from `then capture bytes`",
                 self.name
             ),
+            InputType::Never => bail!(
+                "input {:?} cannot use the internal empty-loop item type",
+                self.name
+            ),
             InputType::TextList => {
                 let items: Vec<String> = serde_json::from_str(text).with_context(|| {
                     format!("input {:?} requires a JSON list of text", self.name)
@@ -241,6 +246,12 @@ fn validate_schema<'a>(
 ) -> Result<()> {
     let mut spellings: BTreeSet<&str> = BTreeSet::new();
     for input in declarations {
+        if input.kind == InputType::Never {
+            bail!(
+                "line {}: the internal empty-loop item type cannot be declared as a program input",
+                input.line
+            );
+        }
         if !crate::parser::is_identifier(&input.name)
             || matches!(input.name.as_str(), "true" | "false" | "null")
         {

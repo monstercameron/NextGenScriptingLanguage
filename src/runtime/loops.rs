@@ -62,6 +62,9 @@ pub(super) fn element_type(
     };
     match value {
         Value::Reference(name) => match types.get(name).copied() {
+            // A Never binding has no runtime value to iterate. Treat a nested
+            // loop over it as empty too, preserving validation of its body.
+            Some(InputType::Never) => Ok(InputType::Never),
             Some(InputType::TextList) => Ok(InputType::Text),
             Some(InputType::IntegerList) => Ok(InputType::Integer),
             Some(InputType::JsonList) => Ok(InputType::Json),
@@ -71,7 +74,14 @@ pub(super) fn element_type(
             // interpretation. Declared JSON inputs opt into general values.
             None => Ok(InputType::Text),
         },
-        Value::List(items) if items.is_empty() => Ok(InputType::Json),
+        Value::List(items)
+            if items.iter().any(|item| {
+                matches!(item, Value::Reference(name) if types.get(name) == Some(&InputType::Never))
+            }) =>
+        {
+            Ok(InputType::Never)
+        }
+        Value::List(items) if items.is_empty() => Ok(InputType::Never),
         Value::List(items) if items.iter().all(is_text_item) => Ok(InputType::Text),
         Value::List(items)
             if items.iter().all(|item| match item {
@@ -103,10 +113,9 @@ pub(super) fn validate(kind: &LoopKind, flow: &control::FlowState) -> Result<()>
             check_value(count, &flow.names)?;
             match count {
                 Value::Reference(name)
-                    if flow
-                        .types
-                        .get(name)
-                        .is_none_or(|kind| *kind == InputType::Integer) => {}
+                    if flow.types.get(name).is_none_or(|kind| {
+                        *kind == InputType::Integer || *kind == InputType::Never
+                    }) => {}
                 Value::Reference(_) => bail!("repeat count requires an integer"),
                 value => {
                     repeat_count(value)?;
@@ -416,6 +425,32 @@ impl LoopStack {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_literal_list_uses_uninhabited_item_type() {
+        assert_eq!(
+            element_type(&Value::List(Vec::new()), &BTreeMap::new()).unwrap(),
+            InputType::Never
+        );
+        assert_eq!(
+            element_type(
+                &Value::Reference("items".into()),
+                &BTreeMap::from([("items".into(), InputType::JsonList)]),
+            )
+            .unwrap(),
+            InputType::Json,
+            "a declared JSON list keeps its dynamic element type"
+        );
+        assert_eq!(
+            element_type(
+                &Value::Reference("item".into()),
+                &BTreeMap::from([("item".into(), InputType::Never)]),
+            )
+            .unwrap(),
+            InputType::Never,
+            "nested loops over an uninhabited item are also uninhabited"
+        );
+    }
 
     #[test]
     fn validation_rejects_temporary_outer_type_drift_and_unknown_outer_writes() -> Result<()> {

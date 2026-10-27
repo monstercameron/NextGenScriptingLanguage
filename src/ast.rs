@@ -645,6 +645,8 @@ pub enum InputType {
     IntegerList,
     JsonList,
     Json,
+    /// Uninhabited item type for a statically empty list literal in a loop.
+    Never,
     /// A raw byte capture (`then capture bytes as NAME`). Never valid as text.
     Bytes,
 }

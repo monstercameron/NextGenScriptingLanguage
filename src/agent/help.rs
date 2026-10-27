@@ -138,6 +138,7 @@ fn type_label(kind: InputType) -> &'static str {
         InputType::IntegerList => "list of integer",
         InputType::JsonList => "list of json",
         InputType::Json => "json",
+        InputType::Never => "uninhabited empty-loop item",
         InputType::Bytes => "bytes",
     }
 }

@@ -539,6 +539,9 @@ impl ParameterSchema {
         if allow_references {
             if let Value::Reference(reference) = value {
                 let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
+                if kind == InputType::Never {
+                    return Ok(());
+                }
                 let accepts = match self.kind {
                     ParameterType::Json => true,
                     ParameterType::String | ParameterType::Path => kind == InputType::Text,
@@ -2544,6 +2547,9 @@ fn parameter_accepts_reference(
     item_type: Option<ParameterType>,
     actual: InputType,
 ) -> bool {
+    if actual == InputType::Never {
+        return true;
+    }
     if actual == InputType::Json {
         return true;
     }
@@ -2588,6 +2594,9 @@ fn parameter_accepts_reference(
 /// `parameter_accepts_reference`; list-valued references inside a list are
 /// intentionally unsupported.
 fn list_item_accepts_reference(item_type: Option<ParameterType>, actual: InputType) -> bool {
+    if actual == InputType::Never {
+        return true;
+    }
     if item_type == Some(ParameterType::Json) {
         // Every declared input except raw bytes has a JSON representation. A
         // JSON list item may be any of those values, including nested arrays.
@@ -4189,6 +4198,9 @@ fn validate_manifest_ports(manifest: &Manifest) -> Result<()> {
 }
 
 fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
+    if kind == InputType::Never {
+        return true;
+    }
     match schema.kind {
         OutputType::Bytes => false,
         OutputType::Text | OutputType::Path => kind == InputType::Text,
@@ -4839,6 +4851,7 @@ mod tests {
             InputType::IntegerList,
             InputType::JsonList,
             InputType::Json,
+            InputType::Never,
         ] {
             assert!(
                 list_item_accepts_reference(Some(ParameterType::Json), kind),

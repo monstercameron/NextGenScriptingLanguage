@@ -96,7 +96,8 @@ pub(super) fn validate_arguments(
         check_value(value, &flow.names)?;
         if let Value::Reference(name) = value {
             if let Some(kind) = flow.types.get(name) {
-                if input.kind != InputType::Json && input.kind != *kind {
+                if input.kind != InputType::Json && input.kind != *kind && *kind != InputType::Never
+                {
                     bail!(
                         "program input {:?} expects {}, but {name:?} contains {kind}",
                         input.name,
@@ -128,12 +129,14 @@ pub(super) fn validate_arguments(
                         if input.kind == InputType::JsonList => {}
                     Value::Reference(name)
                         if match input.kind {
-                            InputType::TextList => flow
-                                .types
-                                .get(name)
-                                .is_none_or(|kind| *kind == InputType::Text),
+                            InputType::TextList => flow.types.get(name).is_none_or(|kind| {
+                                *kind == InputType::Text || *kind == InputType::Never
+                            }),
                             InputType::IntegerList => {
-                                flow.types.get(name) == Some(&InputType::Integer)
+                                matches!(
+                                    flow.types.get(name),
+                                    Some(InputType::Integer | InputType::Never)
+                                )
                             }
                             InputType::JsonList => flow
                                 .types

@@ -35,6 +35,128 @@ fn decoded(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+#[cfg(windows)]
+fn set_private_windows_test_acl(path: &Path) {
+    use std::os::windows::{
+        ffi::OsStrExt,
+        fs::OpenOptionsExt,
+        io::{AsRawHandle, FromRawHandle},
+    };
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{
+            Authorization::{
+                ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+                SetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
+            },
+            GetSecurityDescriptorDacl, GetTokenInformation, TokenUser, DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY,
+            TOKEN_USER,
+        },
+        Storage::FileSystem::{READ_CONTROL, WRITE_DAC, WRITE_OWNER},
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | WRITE_DAC | WRITE_OWNER)
+        .open(path)
+        .unwrap();
+    // SAFETY: GetCurrentProcess returns a valid pseudo-handle and token is a writable out-slot.
+    let process = unsafe { GetCurrentProcess() };
+    let mut raw_token = std::ptr::null_mut();
+    // SAFETY: process is the valid pseudo-handle above; raw_token is a writable out-slot.
+    let status = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut raw_token) };
+    assert_ne!(status, 0);
+    // SAFETY: OpenProcessToken succeeded and returned a new handle owned only by this scope.
+    let token = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw_token) };
+    let mut token_bytes = 0;
+    // SAFETY: a null buffer and zero length are the documented TokenUser size query.
+    unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &mut token_bytes,
+        );
+    }
+    assert_ne!(token_bytes, 0);
+    let mut token_data =
+        vec![0usize; (token_bytes as usize).div_ceil(std::mem::size_of::<usize>())];
+    // SAFETY: token_data is aligned and has at least token_bytes writable bytes; token stays live.
+    let status = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            token_data.as_mut_ptr().cast(),
+            token_bytes,
+            &mut token_bytes,
+        )
+    };
+    assert_ne!(status, 0);
+    // SAFETY: GetTokenInformation wrote a TOKEN_USER into the aligned buffer above.
+    let user = unsafe { &*(token_data.as_ptr().cast::<TOKEN_USER>()) };
+    let mut sid_text = std::ptr::null_mut();
+    // SAFETY: user SID points inside token_data and sid_text is a writable out-slot.
+    let status = unsafe { ConvertSidToStringSidW(user.User.Sid, &mut sid_text) };
+    assert_ne!(status, 0);
+    let mut sid_length = 0;
+    // SAFETY: ConvertSidToStringSidW returned a NUL-terminated LocalAlloc string.
+    while unsafe { *sid_text.add(sid_length) } != 0 {
+        sid_length += 1;
+    }
+    // SAFETY: the counted UTF-16 units are within the allocated string before its terminator.
+    let sid =
+        String::from_utf16(unsafe { std::slice::from_raw_parts(sid_text, sid_length) }).unwrap();
+    // SAFETY: sid_text was allocated by ConvertSidToStringSidW with LocalAlloc.
+    unsafe { LocalFree(sid_text.cast()) };
+
+    let sddl_text = format!("O:{sid}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{sid})");
+    let sddl = std::ffi::OsStr::new(&sddl_text)
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: sddl is live and NUL-terminated, descriptor is writable, and the optional
+    // descriptor-size output may be null for this API.
+    let status = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(status, 0);
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut dacl = std::ptr::null_mut();
+    // SAFETY: descriptor is live; present, dacl, and defaulted are writable out-slots.
+    let status =
+        unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) };
+    assert_ne!(status, 0);
+    assert_ne!(present, 0);
+    assert!(!dacl.is_null());
+    // SAFETY: file is live, SID is inside token_data, dacl belongs to descriptor, and all
+    // out/in parameters are valid. SetSecurityInfo copies these values before returning.
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.User.Sid,
+            std::ptr::null_mut(),
+            dacl,
+            std::ptr::null_mut(),
+        )
+    };
+    // SAFETY: descriptor came from ConvertStringSecurityDescriptorToSecurityDescriptorW.
+    unsafe { LocalFree(descriptor.cast()) };
+    assert_eq!(status, 0);
+}
+
 #[cfg(all(unix, feature = "live"))]
 fn live_request(socket: &Path, request: Value) -> Value {
     use std::os::unix::net::UnixStream;
@@ -379,6 +501,13 @@ fn policy_input_is_bounded_and_check_json_reports_parse_failures() {
     fs::write(&program, "run \"true\"\n").unwrap();
     let policy = root.path().join("policy.json");
     fs::write(&policy, "{\"version\":1,\"unexpected\":true}").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    set_private_windows_test_acl(&policy);
 
     let invalid = cli(
         root.path(),
@@ -405,7 +534,17 @@ fn policy_input_is_bounded_and_check_json_reports_parse_failures() {
                     .is_some_and(|message| message.contains("capability policy"))
         }));
 
-    fs::write(&policy, vec![b' '; 1024 * 1024 + 1]).unwrap();
+    // Keep this aligned with CapabilityPolicy's 64 KiB file bound. The constant is
+    // intentionally private, so exercise acceptance at the boundary and rejection
+    // immediately beyond it through the public loader and CLI.
+    const POLICY_LIMIT_BYTES: usize = 64 * 1024;
+    let mut at_limit = br#"{"version":1,"applets":{}}"#.to_vec();
+    at_limit.resize(POLICY_LIMIT_BYTES, b' ');
+    fs::write(&policy, at_limit).unwrap();
+    flow::capabilities::CapabilityPolicy::load(&policy)
+        .expect("a valid policy exactly at the byte limit must be accepted");
+
+    fs::write(&policy, vec![b' '; POLICY_LIMIT_BYTES + 1]).unwrap();
     let oversized = cli(
         root.path(),
         &[
@@ -416,7 +555,11 @@ fn policy_input_is_bounded_and_check_json_reports_parse_failures() {
         ],
     );
     assert!(!oversized.status.success());
-    assert!(String::from_utf8_lossy(&oversized.stderr).contains("exceeds 1048576 bytes"));
+    let oversized_stderr = String::from_utf8_lossy(&oversized.stderr);
+    assert!(
+        oversized_stderr.contains("capability policy exceeds the size limit"),
+        "expected the bounded-size diagnostic, got: {oversized_stderr}"
+    );
 
     fs::write(&policy, r#"{"version":1,"applets":{}}"#).unwrap();
     let warning = cli(

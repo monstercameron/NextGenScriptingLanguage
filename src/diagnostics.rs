@@ -4558,6 +4558,22 @@ fn validate_call(
         }
     }
 
+    let dispatches_time_format = (manifest.execution_backend() == AppletBackend::InProcess
+        && manifest.name_for(call) == "time.format")
+        || manifest.execute_applet_operation() == Some("time.format");
+    if dispatches_time_format {
+        if let Some(Value::String(zone)) = call.parameters.get("zone") {
+            if !crate::applets::valid_time_zone(zone) {
+                diagnostics.push(Diagnostic::error(
+                    "applet.parameter.constraint",
+                    "parameter \"zone\" of applet \"time.format\" must be \"utc\", \"local\", or a valid signed offset in seconds",
+                    parameter_value_span_at(source, line, "zone", line_starts)
+                        .unwrap_or_else(|| line_starts.span(source, line)),
+                ));
+            }
+        }
+    }
+
     for name in required {
         if !call.parameters.contains_key(name) {
             diagnostics.push(Diagnostic::error(

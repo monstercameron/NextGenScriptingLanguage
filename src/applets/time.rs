@@ -155,6 +155,15 @@ fn at_epoch(epoch: i64, zone: &str) -> Result<DateTime<FixedOffset>, AppletError
         }
     }
 }
+
+pub(super) fn valid_zone(zone: &str) -> bool {
+    matches!(zone, "utc" | "local")
+        || zone
+            .parse::<i32>()
+            .ok()
+            .and_then(FixedOffset::east_opt)
+            .is_some()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

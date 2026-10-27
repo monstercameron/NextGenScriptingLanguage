@@ -28,6 +28,10 @@ mod transaction;
 mod wait;
 mod yaml;
 
+pub(crate) fn valid_time_zone(zone: &str) -> bool {
+    time::valid_zone(zone)
+}
+
 use serde_json::{Map, Value};
 use std::fmt;
 use std::path::Path;

@@ -1,3 +1,4 @@
+#![cfg(feature = "records")]
 //! `execute replay RECORD`: a recorded run replays with its recorded outputs, no
 //! process launched and no file written. An edited program reports the first
 //! divergence, `--until` stops early, and `--as-test` writes a test fixture.
@@ -166,6 +167,7 @@ fn a_recorded_failure_replays_as_the_same_failure() {
     assert_eq!(text(&replayed.stdout), text(&original.stdout));
 }
 
+#[cfg(feature = "tooling")]
 #[test]
 fn as_test_writes_a_fixture_that_execute_test_accepts() {
     let work = tempfile::tempdir().unwrap();

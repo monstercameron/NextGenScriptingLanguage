@@ -1,3 +1,4 @@
+#![cfg(feature = "records")]
 //! `execute repl`: a scripted session keeps bindings across lines, survives a
 //! validation error, and `:save` writes a program that runs the same way.
 

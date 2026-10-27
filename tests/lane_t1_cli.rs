@@ -1,11 +1,15 @@
 use std::fs;
+#[cfg(feature = "tooling")]
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(feature = "tooling")]
+use std::process::Stdio;
 
 fn execute() -> Command {
     Command::new(env!("CARGO_BIN_EXE_execute"))
 }
 
+#[cfg(feature = "tooling")]
 #[test]
 fn compile_rejects_repeated_options_source_overwrite_and_writes_atomically() {
     let directory = tempfile::tempdir().unwrap();
@@ -84,8 +88,9 @@ fn compile_rejects_repeated_options_source_overwrite_and_writes_atomically() {
         .starts_with("run \"echo\""));
 }
 
+#[cfg(feature = "agent-advisory")]
 #[test]
-fn what_if_does_not_create_single_instance_lock_and_help_has_one_usage_text() {
+fn what_if_does_not_create_single_instance_lock() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("program.program");
     let lock = directory.path().join("run.lock");
@@ -104,7 +109,10 @@ fn what_if_does_not_create_single_instance_lock_and_help_has_one_usage_text() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(!lock.exists());
+}
 
+#[test]
+fn help_has_one_usage_text() {
     let help = execute().arg("--help").output().unwrap();
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("--total-timeout-ms"));
@@ -175,6 +183,7 @@ fn json_errors_after_separator_remains_a_literal_program_argument() {
     assert_eq!(result.stdout, expected);
 }
 
+#[cfg(feature = "tooling")]
 #[test]
 fn run_parts_exits_quietly_with_sigpipe_status_when_stdout_is_closed() {
     let directory = tempfile::tempdir().unwrap();

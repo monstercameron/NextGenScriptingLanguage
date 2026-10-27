@@ -80,7 +80,7 @@
       "mutate": {
         "effect.txt": "leave completed effect alone\n"
       },
-      "after_expected": "already done\n",
+      "after_expected": "",
       "after_spawns": [],
       "restored": 2,
       "after_files": {

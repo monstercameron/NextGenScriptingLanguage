@@ -1,3 +1,4 @@
+#![cfg(feature = "tooling")]
 //! `execute compile --to sh`: the emitted script must pass `dash -n`, and on Unix its
 //! behaviour must match `execute run` for the same program. Unsupported statements
 //! are refused by name and line, never approximated.

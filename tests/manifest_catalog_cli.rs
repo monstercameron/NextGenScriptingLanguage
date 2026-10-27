@@ -183,6 +183,7 @@ fn selectors_conflict_for_ordinary_applets_service_and_live_serve() {
     )
     .unwrap();
 
+    #[cfg(feature = "live")]
     let socket = fixture.temp.path().join("live.sock");
     let cases: &[&[&str]] = &[
         &[
@@ -201,6 +202,7 @@ fn selectors_conflict_for_ordinary_applets_service_and_live_serve() {
             "--manifest-catalog",
             Fixture::path(&fixture.manifest_catalog),
         ],
+        #[cfg(feature = "tooling")]
         &[
             "service",
             "generate",
@@ -211,6 +213,7 @@ fn selectors_conflict_for_ordinary_applets_service_and_live_serve() {
             "--manifest-catalog",
             Fixture::path(&fixture.manifest_catalog),
         ],
+        #[cfg(feature = "live")]
         &[
             "live",
             "serve",
@@ -238,6 +241,7 @@ fn selectors_conflict_for_ordinary_applets_service_and_live_serve() {
     }
 }
 
+#[cfg(feature = "live")]
 #[test]
 fn live_serve_loads_the_explicit_packed_catalog_before_planning() {
     let fixture = Fixture::new();
@@ -268,6 +272,7 @@ fn live_serve_loads_the_explicit_packed_catalog_before_planning() {
     );
 }
 
+#[cfg(feature = "tooling")]
 #[test]
 fn generated_service_uses_canonical_explicit_catalog_path() {
     let fixture = Fixture::new();

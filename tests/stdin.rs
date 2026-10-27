@@ -313,7 +313,7 @@ fn completed_checkpoint_reuses_captured_input_without_reading_replacement_stdin(
             .output()
             .unwrap(),
     );
-    assert_eq!(first, again);
+    assert!(again.is_empty());
     assert_eq!(fs::read(root.path().join("saved")).unwrap(), first);
 }
 
@@ -362,6 +362,7 @@ fn services_and_screen_handlers_reject_process_stdin_before_prior_effects() {
     let root = tempfile::tempdir().unwrap();
     for source in [
         "every 1 second\n  run \"sh\" with arguments [\"-c\", \"touch forbidden\"]\n  read from stdin\n",
+        #[cfg(feature = "screens")]
         "open a screen titled \"Test\"\nplace app on the left\ndefine a program named app\n  show a text panel named output with text \"ready\"\n  whenever the program opens\n    run \"sh\" with arguments [\"-c\", \"touch forbidden\"]\n    read from stdin\n",
     ] {
         let result = run(root.path(), source, b"data", &[]);

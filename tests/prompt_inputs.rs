@@ -146,31 +146,34 @@ fn a_secret_answer_never_reaches_inspect_explain_trace_or_record() {
     assert!(!String::from_utf8_lossy(&explained.stdout).contains(SECRET));
     assert!(!stderr(&explained).contains(SECRET));
 
-    // Records and checkpoints cannot be combined, so each gets its own run.
-    let record = root.path().join("record");
-    let recorded = execute(
-        root.path(),
-        &[
-            "run",
-            "job.program",
-            "--input",
-            &format!("token={SECRET}"),
-            "--trace",
-            "--record",
-            record.to_str().unwrap(),
-        ],
-    );
-    assert!(recorded.status.success(), "{}", stderr(&recorded));
-    assert_eq!(
-        fs::read_to_string(root.path().join("out.txt")).unwrap(),
-        SECRET
-    );
-    assert!(
-        !stderr(&recorded).contains(SECRET),
-        "trace leaked the secret"
-    );
-    assert!(!String::from_utf8_lossy(&recorded.stdout).contains(SECRET));
-    assert_no_file_contains(&record, SECRET);
+    #[cfg(feature = "records")]
+    {
+        // Records and checkpoints cannot be combined, so each gets its own run.
+        let record = root.path().join("record");
+        let recorded = execute(
+            root.path(),
+            &[
+                "run",
+                "job.program",
+                "--input",
+                &format!("token={SECRET}"),
+                "--trace",
+                "--record",
+                record.to_str().unwrap(),
+            ],
+        );
+        assert!(recorded.status.success(), "{}", stderr(&recorded));
+        assert_eq!(
+            fs::read_to_string(root.path().join("out.txt")).unwrap(),
+            SECRET
+        );
+        assert!(
+            !stderr(&recorded).contains(SECRET),
+            "trace leaked the secret"
+        );
+        assert!(!String::from_utf8_lossy(&recorded.stdout).contains(SECRET));
+        assert_no_file_contains(&record, SECRET);
+    }
 }
 
 #[test]
@@ -214,6 +217,7 @@ fn a_secret_prompt_cannot_be_a_choice_input() {
 }
 
 /// Assert that no file under `directory`, in any nested folder, holds `needle`.
+#[cfg(feature = "records")]
 fn assert_no_file_contains(directory: &Path, needle: &str) {
     if !directory.exists() {
         return;

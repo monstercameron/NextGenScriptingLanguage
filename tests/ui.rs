@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(all(unix, feature = "screens"))]
 //! UI tests never contact GitHub; the gh fixture records argv and returns controlled JSON.
 use std::{
     fs,
@@ -50,6 +50,7 @@ fn headless_tracker_maps_argv_and_renders_real_chart_widgets() {
     assert_eq!(widgets["history"]["series"]["morluto/rea"][0][1], 101);
     assert_eq!(data["completed_jobs"], 1);
     let frame = data["frame"].as_str().unwrap();
+    #[cfg(feature = "tui")]
     for label in [
         "history",
         "stars",
@@ -60,6 +61,8 @@ fn headless_tracker_maps_argv_and_renders_real_chart_widgets() {
     ] {
         assert!(frame.contains(label), "{label}: {frame}");
     }
+    #[cfg(not(feature = "tui"))]
+    assert!(frame.is_empty());
     let argv: serde_json::Value = serde_json::from_str(
         fs::read_to_string(dir.path().join("calls.jsonl"))
             .unwrap()
@@ -114,7 +117,25 @@ fn errors_are_bounded_and_never_turn_missing_stars_into_zero() {
         if mode == "fail" {
             assert!(String::from_utf8_lossy(&output.stderr).contains("fixture permission denied"));
         }
-        assert!(output.stderr.len() < 20000, "diagnostics were not bounded");
+        // Native diagnostics retain at most 64 KiB per stage; allow room for
+        // the CLI's surrounding error context while checking the noisy payload.
+        assert!(
+            output.stderr.len() <= 64 * 1024 + 4096,
+            "{mode}: {} bytes",
+            output.stderr.len()
+        );
+        if mode == "noisy" {
+            let longest_run = output
+                .stderr
+                .split(|byte| *byte != b'x')
+                .map(<[u8]>::len)
+                .max()
+                .unwrap_or(0);
+            assert!(
+                longest_run <= 64 * 1024,
+                "diagnostic payload exceeded its cap"
+            );
+        }
     }
 }
 #[test]
@@ -188,6 +209,7 @@ fn invalid_shortcuts_and_button_cycles_fail_before_launching_gh() {
     }
     assert!(!dir.path().join("calls.jsonl").exists());
 }
+#[cfg(feature = "tui")]
 #[test]
 fn terminal_interaction_restoration_and_worker_cancellation() {
     let output = Command::new("python3")

@@ -1593,16 +1593,22 @@ fn closed_stdout_is_a_normal_error_for_cli_and_live_responses() {
     let (directory, manifests) = fixture();
     let script = directory.path().join("workflow.program");
     fs::write(&script, "run pwd\n").unwrap();
+    #[cfg(feature = "screens")]
     let screen = directory.path().join("screen.program");
+    #[cfg(feature = "screens")]
     fs::write(&screen, "open a screen titled \"closed output\"\nplace app on the left\ndefine a program named app\n  show a text panel named status with text \"ready\"\n").unwrap();
     let script = script.to_str().unwrap();
+    #[cfg(feature = "screens")]
     let screen = screen.to_str().unwrap();
     for arguments in [
         vec!["--version"],
         vec!["--help"],
         vec!["explain", script],
+        #[cfg(feature = "screens")]
         vec![screen, "--headless"],
+        #[cfg(feature = "live")]
         vec!["live", "schema"],
+        #[cfg(feature = "live")]
         vec!["live", "read", "--socket", "does-not-exist.sock"],
     ] {
         let (reader, writer) = std::io::pipe().unwrap();

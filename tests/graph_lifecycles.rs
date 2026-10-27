@@ -3,9 +3,11 @@ use anyhow::{anyhow, Result};
 use flow::ast::Value;
 use flow::contracts::{OutputType, ValueSchema};
 use flow::graph::{
-    self, EdgeSpec, GraphContext, GraphExecutor, GraphNode, GraphNodeKind, GraphRunOptions,
-    GraphSession, NodeIo, PortRef, PortSchema, PortValue, RuntimeGraphExecutor,
+    self, GraphContext, GraphExecutor, GraphNode, GraphRunOptions, GraphSession, NodeIo, PortValue,
+    RuntimeGraphExecutor,
 };
+#[cfg(feature = "remote")]
+use flow::graph::{EdgeSpec, GraphNodeKind, PortRef, PortSchema};
 use flow::manifest::Registry;
 use flow::runtime::RunOptions;
 use serde_json::json;
@@ -18,6 +20,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn text_schema() -> ValueSchema {
     ValueSchema {
         kind: OutputType::Text,
@@ -37,10 +40,12 @@ fn options() -> RunOptions {
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn fixture_server() -> (Registry, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     fixture_server_at_host("127.0.0.1")
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn fixture_server_at_host(
     endpoint_host: &str,
 ) -> (Registry, mpsc::Receiver<String>, thread::JoinHandle<()>) {
@@ -125,12 +130,14 @@ fn fixture_server_at_host(
     (registry, receiver, worker)
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 struct RemoteTransformSink {
     remote: RuntimeGraphExecutor,
     metadata: Arc<Mutex<Vec<flow::graph::RemoteEventMetadata>>>,
     values: Arc<Mutex<Vec<Value>>>,
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 impl GraphExecutor for RemoteTransformSink {
     fn execute(&self, node: &GraphNode, io: &mut NodeIo, context: &GraphContext) -> Result<()> {
         match node.id.as_str() {
@@ -158,6 +165,7 @@ impl GraphExecutor for RemoteTransformSink {
     }
 }
 
+#[cfg(feature = "remote")]
 #[test]
 fn local_sse_listener_routes_typed_events_through_transform_and_sink() {
     let (registry, requests, server) = fixture_server();
@@ -245,6 +253,7 @@ fn local_sse_listener_routes_typed_events_through_transform_and_sink() {
 }
 
 #[cfg(unix)]
+#[cfg(feature = "remote")]
 #[test]
 fn remote_listener_accounts_dns_helper_spawns_in_graph_result() {
     let (registry, requests, server) = fixture_server_at_host("localhost");
@@ -363,6 +372,7 @@ fn options_for_directory(directory: &std::path::Path) -> RunOptions {
     run_options
 }
 
+#[cfg(feature = "remote")]
 #[test]
 fn idle_remote_sse_listener_is_cancelled_before_reconfigure_starts_next_generation() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -553,6 +563,7 @@ fn idle_native_listener_child_is_reaped_during_reconfigure() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[test]
 fn expired_remote_listener_deadline_prevents_discovery_request() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -598,6 +609,7 @@ fn expired_remote_listener_deadline_prevents_discovery_request() {
     ));
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn read_request_line(stream: &std::net::TcpStream) -> String {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut first_line = String::new();
@@ -612,6 +624,7 @@ fn read_request_line(stream: &std::net::TcpStream) -> String {
     first_line
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn write_response(stream: &mut std::net::TcpStream, content_type: &str, body: &[u8]) {
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -622,6 +635,7 @@ fn write_response(stream: &mut std::net::TcpStream, content_type: &str, body: &[
     stream.flush().unwrap();
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn write_chunk(stream: &mut std::net::TcpStream, body: &[u8]) -> std::io::Result<()> {
     write!(stream, "{:x}\r\n", body.len())?;
     stream.write_all(body)?;

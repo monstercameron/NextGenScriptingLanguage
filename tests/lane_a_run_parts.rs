@@ -1,3 +1,4 @@
+#![cfg(feature = "tooling")]
 //! `execute run-parts`: lexical order, stop-on-failure, `--continue`, `--once` state with
 //! content hashes, changed files reported and not rerun, and parseable `--json`.
 

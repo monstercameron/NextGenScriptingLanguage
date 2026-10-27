@@ -180,7 +180,7 @@ fn recursion_nesting_bad_definitions_and_expansion_amplification_are_bounded() {
 fn native_cache_inside_a_program_is_shared_across_calls() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("lines"), b"first\nsecond\n").unwrap();
-    let source = "define a program named first\n  accept count as integer with default 1\n  read from stdin\n  then head with lines count and cache\nread \"lines\"\nthen program first as a\nread \"lines\"\nthen program first as b\n";
+    let source = "define a program named first\n  accept count as integer with default 1\n  read from stdin\n  then head with lines count and cache\nread \"lines\"\nthen program first as a\nread \"lines\"\nthen program first as b\nuse value b\n";
     let registry =
         Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
     let result = runtime::run(

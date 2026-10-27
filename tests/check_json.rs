@@ -69,6 +69,7 @@ fn failures_in_all_execution_forms_are_structured_without_side_effects() {
             "check_failed",
             None,
         ),
+        #[cfg(feature = "screens")]
         (
             "open a screen titled \"broken\"\nplace pane on the left\ndefine a program named pane\n  unknown widget\n",
             "check_failed",

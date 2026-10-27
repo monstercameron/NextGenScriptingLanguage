@@ -197,7 +197,7 @@ fn completed_status_binding_is_restored_and_command_is_not_repeated() {
     )
     .unwrap();
     // The failed `run "false"` is not retry-safe, so going past it needs --retry-uncertain.
-    for _ in 0..2 {
+    for attempt in 0..2 {
         let result = Command::new(env!("CARGO_BIN_EXE_execute"))
             .current_dir(dir.path())
             .args([
@@ -214,7 +214,10 @@ fn completed_status_binding_is_restored_and_command_is_not_repeated() {
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
-        assert_eq!(result.stdout, b"7");
+        assert_eq!(
+            result.stdout,
+            if attempt == 0 { &b"7"[..] } else { &b""[..] }
+        );
     }
     assert_eq!(fs::read(dir.path().join("calls")).unwrap(), b"x");
     fs::write(dir.path().join("main.program"),"run \"sh\" with arguments [\"-c\", \"printf x >> calls; exit 7\"] and keep status as different\nthen \"printf\" with arguments [\"%s\", different]\n").unwrap();

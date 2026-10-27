@@ -20,9 +20,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 const COMPOSITION_DIR: &str = "examples/composition/graph-runtime";
 
 #[derive(Clone, Debug)]
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 struct ObservedUpdate {
     source_node: String,
     generation: u64,
@@ -32,11 +34,13 @@ struct ObservedUpdate {
 
 /// This fixture replaces only the renderer node. Applet, program-service,
 /// remote-listener, and native-stream nodes still use RuntimeGraphExecutor.
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 struct HeadlessTuiFixture {
     runtime: RuntimeGraphExecutor,
     updates: mpsc::Sender<ObservedUpdate>,
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 impl GraphExecutor for HeadlessTuiFixture {
     fn execute(&self, node: &GraphNode, io: &mut NodeIo, context: &GraphContext) -> Result<()> {
         if matches!(&node.kind, GraphNodeKind::Renderer { backend } if backend == "tui:text") {
@@ -72,6 +76,7 @@ impl GraphExecutor for HeadlessTuiFixture {
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 struct LoopbackSseServer {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
@@ -81,6 +86,7 @@ struct LoopbackSseServer {
     thread: Option<thread::JoinHandle<Result<()>>>,
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 impl LoopbackSseServer {
     fn start(listener: TcpListener, descriptor: Vec<u8>, generations: u64) -> Result<Self> {
         listener.set_nonblocking(true)?;
@@ -265,12 +271,14 @@ impl LoopbackSseServer {
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn note_server_activity(activity: &Mutex<Vec<String>>, note: String) {
     if let Ok(mut activity) = activity.lock() {
         activity.push(note);
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 impl Drop for LoopbackSseServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -281,6 +289,7 @@ impl Drop for LoopbackSseServer {
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn accept_until_stopped(listener: &TcpListener, stop: &AtomicBool) -> Option<TcpStream> {
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
@@ -294,6 +303,7 @@ fn accept_until_stopped(listener: &TcpListener, stop: &AtomicBool) -> Option<Tcp
     None
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
     read_request_with_ready(stream, || {})
 }
@@ -361,6 +371,7 @@ fn read_request_waits_for_a_delayed_request_on_a_nonblocking_socket() -> Result<
     Ok(())
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn write_response(stream: &mut TcpStream, content_type: &str, body: &[u8]) -> std::io::Result<()> {
     write!(
         stream,
@@ -371,6 +382,7 @@ fn write_response(stream: &mut TcpStream, content_type: &str, body: &[u8]) -> st
     stream.flush()
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn write_chunk(stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
     write!(stream, "{:X}\r\n", bytes.len())?;
     stream.write_all(bytes)?;
@@ -386,6 +398,7 @@ fn record_schema() -> JsonValue {
     })
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn remote_contract(endpoint: &str) -> JsonValue {
     json!({
         "version": 1,
@@ -505,6 +518,7 @@ fn write_projection_module(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn python3() -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|directory| directory.join("python3"))
@@ -512,6 +526,7 @@ fn python3() -> PathBuf {
         .expect("Python 3 is available for the persistent-worker fixture")
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn make_generation(
     root: &Path,
     endpoint: &str,
@@ -634,6 +649,7 @@ fn graph_options() -> GraphRunOptions {
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn collect_until(
     receiver: &mpsc::Receiver<ObservedUpdate>,
     events: &mut Vec<ObservedUpdate>,
@@ -656,6 +672,7 @@ fn collect_until(
     Ok(())
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn has_generation_evidence(events: &[ObservedUpdate], generation: u64) -> bool {
     let generation_events = events
         .iter()
@@ -678,12 +695,14 @@ fn has_generation_evidence(events: &[ObservedUpdate], generation: u64) -> bool {
             .any(|event| event.source_node == "native" && event.text == "native-stream")
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn drain_updates(receiver: &mpsc::Receiver<ObservedUpdate>, events: &mut Vec<ObservedUpdate>) {
     while let Ok(event) = receiver.try_recv() {
         events.push(event);
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn assert_generation_events(events: &[ObservedUpdate], generation: u64, revision: u64) {
     let generation_events = events
         .iter()
@@ -746,6 +765,7 @@ fn assert_generation_events(events: &[ObservedUpdate], generation: u64, revision
     );
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn read_pids(path: &Path) -> Vec<i32> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -754,6 +774,7 @@ fn read_pids(path: &Path) -> Vec<i32> {
         .collect()
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn wait_for_pid_count(path: &Path, count: usize, timeout: Duration) -> Result<Vec<i32>> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -771,6 +792,7 @@ fn wait_for_pid_count(path: &Path, count: usize, timeout: Duration) -> Result<Ve
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn wait_for_metric(metric: impl Fn() -> usize, count: usize, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     while metric() < count {
@@ -785,6 +807,7 @@ fn wait_for_metric(metric: impl Fn() -> usize, count: usize, timeout: Duration) 
     Ok(())
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn assert_process_reaped(pid: i32) {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -799,6 +822,7 @@ fn assert_process_reaped(pid: i32) {
     }
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn read_effects(path: &Path) -> Vec<String> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -807,6 +831,7 @@ fn read_effects(path: &Path) -> Vec<String> {
         .collect()
 }
 
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn graph_failure_diagnostic(
     error: anyhow::Error,
     session: &mut GraphSession,
@@ -828,6 +853,7 @@ fn graph_failure_diagnostic(
     )
 }
 
+#[cfg(feature = "remote")]
 #[test]
 fn parsed_runtime_graph_composes_services_workers_streams_and_reconfiguration() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -1044,6 +1070,7 @@ fn native_listener_projects_imported_finite_program_result_to_typed_event() -> R
     Ok(())
 }
 
+#[cfg(feature = "remote")]
 #[test]
 fn remote_typed_events_flow_through_imported_module_result_projection_and_cancel() -> Result<()> {
     let root = tempfile::tempdir()?;

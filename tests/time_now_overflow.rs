@@ -68,16 +68,18 @@ fn helper_runtime_and_record_agree_on_success_and_overflow() {
             .unwrap();
         let program = root.path().join(format!("{i}.program"));
         fs::write(&program, format!("run time.now with epoch_s {seconds}\n")).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+        command.arg("run").arg(&program);
+        #[cfg(feature = "records")]
         let record = root.path().join(format!("record-{i}"));
-        let run = Command::new(env!("CARGO_BIN_EXE_execute"))
-            .arg("run")
-            .arg(&program)
-            .arg("--record")
-            .arg(&record)
+        #[cfg(feature = "records")]
+        command.arg("--record").arg(&record);
+        let run = command
             .arg("--manifest-dir")
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/manifests"))
             .output()
             .unwrap();
+        #[cfg(feature = "records")]
         let summary: Value =
             serde_json::from_slice(&fs::read(record.join("run.json")).unwrap()).unwrap();
         if helper.status.success() {
@@ -89,18 +91,22 @@ fn helper_runtime_and_record_agree_on_success_and_overflow() {
             let expected: Value = serde_json::from_slice(&helper.stdout).unwrap();
             let actual: Value = serde_json::from_slice(&run.stdout).unwrap();
             assert_eq!(actual, expected);
-            assert_eq!(summary["result"]["ok"], true);
-            let trace = fs::read_to_string(record.join("trace.jsonl")).unwrap();
-            let step: Value = serde_json::from_str(trace.lines().next().unwrap()).unwrap();
-            let blob = step["stdout"]["blob"].as_str().unwrap();
-            let recorded: Value =
-                serde_json::from_slice(&fs::read(record.join(blob)).unwrap()).unwrap();
-            assert_eq!(recorded, expected);
+            #[cfg(feature = "records")]
+            {
+                assert_eq!(summary["result"]["ok"], true);
+                let trace = fs::read_to_string(record.join("trace.jsonl")).unwrap();
+                let step: Value = serde_json::from_str(trace.lines().next().unwrap()).unwrap();
+                let blob = step["stdout"]["blob"].as_str().unwrap();
+                let recorded: Value =
+                    serde_json::from_slice(&fs::read(record.join(blob)).unwrap()).unwrap();
+                assert_eq!(recorded, expected);
+            }
         } else {
             assert_eq!(helper.status.code(), Some(2));
             assert!(String::from_utf8_lossy(&helper.stderr).contains("invalid_request"));
             assert!(!run.status.success());
             assert!(String::from_utf8_lossy(&run.stderr).contains("invalid_request"));
+            #[cfg(feature = "records")]
             assert_eq!(summary["result"]["ok"], false);
         }
     }

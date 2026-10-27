@@ -17,6 +17,7 @@ fn run(directory: &Path, program: &str) -> std::process::Output {
         .expect("execute starts")
 }
 
+#[cfg(feature = "agent-advisory")]
 #[test]
 fn allow_none_header_refuses_a_file_write_before_it_happens() {
     let directory = tempfile::tempdir().unwrap();
@@ -48,6 +49,7 @@ fn a_program_without_a_header_is_unaffected() {
     assert!(directory.path().join("written.txt").exists());
 }
 
+#[cfg(feature = "agent-advisory")]
 #[test]
 fn a_header_after_a_bom_is_still_enforced() {
     let directory = tempfile::tempdir().unwrap();
@@ -59,6 +61,7 @@ fn a_header_after_a_bom_is_still_enforced() {
     assert!(!directory.path().join("written.txt").exists());
 }
 
+#[cfg(feature = "agent-advisory")]
 #[test]
 fn a_malformed_header_refuses_the_run() {
     let directory = tempfile::tempdir().unwrap();

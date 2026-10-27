@@ -1,6 +1,6 @@
 //! CI check for examples/demo: check, explain, a failing checkpointed run, and a resume
 //! after the fake compositor is fixed. Unix only, because the fake tool is a shell script.
-#![cfg(unix)]
+#![cfg(all(unix, feature = "agent-advisory"))]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

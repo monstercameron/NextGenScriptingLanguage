@@ -1,9 +1,9 @@
 use serde_json::{json, Value};
 use std::fs;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "live"))]
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "live"))]
 use std::process::Stdio;
 use std::process::{Command, Output};
 
@@ -35,7 +35,7 @@ fn decoded(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "live"))]
 fn live_request(socket: &Path, request: Value) -> Value {
     use std::os::unix::net::UnixStream;
 
@@ -46,10 +46,10 @@ fn live_request(socket: &Path, request: Value) -> Value {
     serde_json::from_str(&response).unwrap()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "live"))]
 struct ChildCleanup(std::process::Child);
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "live"))]
 impl Drop for ChildCleanup {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
@@ -186,7 +186,7 @@ fn strict_policy_preflights_every_invocation_before_the_first_command_runs() {
     assert!(!later.exists());
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "live"))]
 #[test]
 fn live_policy_rejects_a_source_patch_before_committing_it() {
     let root = tempfile::tempdir().unwrap();
@@ -253,7 +253,7 @@ fn live_policy_rejects_a_source_patch_before_committing_it() {
     assert!(child.0.wait().unwrap().success());
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "live"))]
 #[test]
 fn live_agent_policy_requires_credentials_and_never_returns_them() {
     use std::os::unix::fs::PermissionsExt;
@@ -482,6 +482,7 @@ fn total_timeout_is_enforced_for_finite_run() {
     );
 }
 
+#[cfg(feature = "tooling")]
 #[test]
 fn applet_discovery_and_typed_matching_are_machine_readable_without_execution() {
     let root = tempfile::tempdir().unwrap();
@@ -576,63 +577,70 @@ fn hidden_remote_resolver_emits_only_numeric_socket_addresses() {
     }
 }
 
+#[cfg(any(feature = "module-tools", feature = "tooling"))]
 #[test]
 fn modules_verify_and_service_generate_are_explicit_read_or_render_operations() {
     let root = tempfile::tempdir().unwrap();
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/modules");
-    let package = examples.join("package");
-    let manifest = package.join("program.modules.json");
-    let lock = package.join("program.modules.lock.json");
-    let verify = cli(
-        root.path(),
-        &[
-            "modules",
-            "verify",
-            manifest.to_str().unwrap(),
-            "--root",
-            examples.to_str().unwrap(),
-            "--lock",
-            lock.to_str().unwrap(),
-        ],
-    );
-    assert!(
-        verify.status.success(),
-        "{}",
-        String::from_utf8_lossy(&verify.stderr)
-    );
-    assert_eq!(decoded(&verify)["validation"], "package_and_lock");
-
-    let workflow = root.path().join("scheduled.program");
-    fs::write(
-        &workflow,
-        "every 1 hour\n  run \"printf\" with arguments [\"tick\"]\n",
-    )
-    .unwrap();
-    let executable = env!("CARGO_BIN_EXE_execute");
-    let rendered = cli(
-        root.path(),
-        &[
-            "service",
-            "generate",
-            "systemd",
-            workflow.to_str().unwrap(),
-            "--working-dir",
-            root.path().to_str().unwrap(),
-        ],
-    );
-    assert!(
-        rendered.status.success(),
-        "{}",
-        String::from_utf8_lossy(&rendered.stderr)
-    );
-    let rendered = String::from_utf8(rendered.stdout).unwrap();
-    assert!(rendered.contains("[Service]"));
-    if cfg!(unix) {
-        // The generated unit escapes the Windows path, so the literal path check is Unix-only.
-        assert!(rendered.contains(executable));
+    #[cfg(feature = "module-tools")]
+    {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/modules");
+        let package = examples.join("package");
+        let manifest = package.join("program.modules.json");
+        let lock = package.join("program.modules.lock.json");
+        let verify = cli(
+            root.path(),
+            &[
+                "modules",
+                "verify",
+                manifest.to_str().unwrap(),
+                "--root",
+                examples.to_str().unwrap(),
+                "--lock",
+                lock.to_str().unwrap(),
+            ],
+        );
+        assert!(
+            verify.status.success(),
+            "{}",
+            String::from_utf8_lossy(&verify.stderr)
+        );
+        assert_eq!(decoded(&verify)["validation"], "package_and_lock");
     }
-    assert!(rendered.contains("scheduled.program"));
-    assert!(!root.path().join("scheduled.service").exists());
+
+    #[cfg(feature = "tooling")]
+    {
+        let workflow = root.path().join("scheduled.program");
+        fs::write(
+            &workflow,
+            "every 1 hour\n  run \"printf\" with arguments [\"tick\"]\n",
+        )
+        .unwrap();
+        let executable = env!("CARGO_BIN_EXE_execute");
+        let rendered = cli(
+            root.path(),
+            &[
+                "service",
+                "generate",
+                "systemd",
+                workflow.to_str().unwrap(),
+                "--working-dir",
+                root.path().to_str().unwrap(),
+            ],
+        );
+        assert!(
+            rendered.status.success(),
+            "{}",
+            String::from_utf8_lossy(&rendered.stderr)
+        );
+        let rendered = String::from_utf8(rendered.stdout).unwrap();
+        assert!(rendered.contains("[Service]"));
+        if cfg!(unix) {
+            // The generated unit escapes the Windows path, so the literal path check is Unix-only.
+            assert!(rendered.contains(executable));
+        }
+        assert!(rendered.contains("scheduled.program"));
+        assert!(!root.path().join("scheduled.service").exists());
+    }
 }
 
 #[test]

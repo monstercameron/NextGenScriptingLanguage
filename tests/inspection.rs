@@ -105,6 +105,7 @@ fn discovers_all_noninteractive_lifetimes_without_waiting_or_launching_producers
     }
 }
 
+#[cfg(feature = "screens")]
 #[test]
 fn screen_ports_are_distinct_from_root_cli_inputs_and_open_handlers_never_run() {
     let root = tempfile::tempdir().unwrap();
@@ -173,18 +174,21 @@ fn inspect_accepts_file_uris_and_live_schema_exposes_declared_type_restrictions(
             .unwrap(),
     );
     assert_eq!(report["kind"], "finite");
-    let schema = decoded(
-        Command::new(env!("CARGO_BIN_EXE_execute"))
-            .args(["live", "schema"])
-            .output()
-            .unwrap(),
-    );
-    assert!(schema["inspection"]
-        .as_str()
-        .unwrap()
-        .contains("execute inspect"));
-    assert!(schema["declared_inputs"]
-        .as_str()
-        .unwrap()
-        .contains("cannot be deleted"));
+    #[cfg(feature = "live")]
+    {
+        let schema = decoded(
+            Command::new(env!("CARGO_BIN_EXE_execute"))
+                .args(["live", "schema"])
+                .output()
+                .unwrap(),
+        );
+        assert!(schema["inspection"]
+            .as_str()
+            .unwrap()
+            .contains("execute inspect"));
+        assert!(schema["declared_inputs"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be deleted"));
+    }
 }

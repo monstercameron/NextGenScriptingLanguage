@@ -1,3 +1,4 @@
+#[cfg(feature = "module-tools")]
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -11,10 +12,12 @@ fn output(work: &Path, args: &[&str]) -> Output {
     execute().current_dir(work).args(args).output().unwrap()
 }
 
+#[cfg(any(feature = "tooling", feature = "module-tools"))]
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+#[cfg(feature = "module-tools")]
 fn write_module_fixture(root: &Path) {
     let package = root.join("package");
     fs::create_dir_all(package.join("src")).unwrap();
@@ -50,6 +53,7 @@ fn check_json_marks_static_errors_not_ok_and_fails() {
 }
 
 #[cfg(unix)]
+#[cfg(feature = "tooling")]
 #[test]
 fn service_generate_forwards_private_answers_file_by_path() {
     use std::os::unix::fs::PermissionsExt;
@@ -114,6 +118,7 @@ fn service_generate_accepts_answers_option_and_rejects_nonprivate_acl() {
     assert!(!error.contains("unsupported service option --answers"));
 }
 
+#[cfg(feature = "module-tools")]
 #[test]
 fn modules_inspect_accepts_bare_manifest_filename() {
     let work = tempfile::tempdir().unwrap();
@@ -123,6 +128,7 @@ fn modules_inspect_accepts_bare_manifest_filename() {
     assert!(result.status.success(), "{}", text(&result.stderr));
 }
 
+#[cfg(feature = "module-tools")]
 #[test]
 fn module_lock_manifest_paths_use_forward_slashes_and_read_backslashes() {
     let work = tempfile::tempdir().unwrap();

@@ -1,3 +1,4 @@
+#![cfg(feature = "records")]
 //! `execute run --record DIR` and `execute show-run`: a failed run can be diagnosed
 //! from its record, the record is private and bounded, and declared secrets never
 //! appear in it.

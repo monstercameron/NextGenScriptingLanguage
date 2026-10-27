@@ -719,7 +719,9 @@ fn changed_body_applet_invalidates_module_cache_and_checkpoint_resume() {
 
     let registry = flow::manifest::Registry::load(&catalog).unwrap();
     let cwd = fs::canonicalize(&temp).unwrap();
-    let cached_caller = flow::parser::parse("run test.body as output and cache\n").unwrap();
+    let cached_caller =
+        flow::parser::parse("run test.body as output and cache\nthen encode output as json\n")
+            .unwrap();
     let options = flow::runtime::RunOptions {
         cache_directory: Some(cwd.join("cache")),
         max_output_bytes: 1024 * 1024,

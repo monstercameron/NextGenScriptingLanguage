@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(all(unix, feature = "screens"))]
 //! Ranking and scheduling belong to the .program; only ps is replaced in fixtures.
 use std::{
     fs,
@@ -65,9 +65,14 @@ fn real_jq_selects_ten_numeric_cpu_values_and_routes_identical_records() {
     assert_eq!(records[5]["name"], "editor");
     assert_eq!(records[3]["name"], "quote\"name");
     let frame = data["frame"].as_str().unwrap();
-    assert!(frame.contains("125.5%"));
-    assert!(frame.contains('█'));
-    assert!(frame.contains("55 multicore"));
+    #[cfg(feature = "tui")]
+    {
+        assert!(frame.contains("125.5%"));
+        assert!(frame.contains('█'));
+        assert!(frame.contains("55 multicore"));
+    }
+    #[cfg(not(feature = "tui"))]
+    assert!(frame.is_empty());
     assert_eq!(
         fs::read_to_string(dir.path().join("ps-calls.jsonl"))
             .unwrap()
@@ -153,6 +158,7 @@ fn invalid_bar_declarations_fail_before_any_process_query() {
     }
     assert!(!dir.path().join("ps-calls.jsonl").exists());
 }
+#[cfg(feature = "tui")]
 #[test]
 fn cpu_terminal_refresh_timer_and_quit() {
     let output = Command::new("python3")

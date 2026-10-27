@@ -1,3 +1,4 @@
+#![cfg(feature = "records")]
 use std::process::Command;
 
 #[test]

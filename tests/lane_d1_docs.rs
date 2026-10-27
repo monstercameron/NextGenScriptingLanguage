@@ -65,10 +65,13 @@ fn security_and_applet_docs_record_current_parser_and_file_contracts() {
     assert!(applets.contains("Duplicate JSON object keys are\nrefused everywhere"));
     assert!(applets.contains("nonnumeric index is"));
     assert!(applets.contains("fs.ensure_line"));
-    assert!(applets.contains("follow POSIX path rules"));
+    assert!(applets.contains("`path.dirname` returns `.`"));
+    assert!(applets.contains("`path.basename` returns an empty string"));
 
     let csv = doc("docs/csv.md");
-    assert!(csv.contains("One trailing blank record is ignored"));
+    assert!(csv.contains("One unquoted, physically blank trailing record"));
+    assert!(csv.contains("after another record is ignored, for LF and CRLF alike"));
+    assert!(csv.contains("A quoted empty record"));
     assert!(csv.contains("TAB is ordinary cell content"));
     assert!(csv.contains("written as `\"\"`"));
 }

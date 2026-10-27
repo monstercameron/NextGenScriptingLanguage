@@ -201,7 +201,8 @@ def run_case(binary, case):
                 assert actual==retained, 'completed service left old event blobs'
             if mode=='recover' and not case.get('no_restarted_producer'):
                 repeated=invoke(binary,cwd,after_args)
-                verify(repeated,cwd,case,'after')
+                # A completed resume never replays already committed output.
+                verify(repeated,cwd,{**case, 'after_expected': ''},'after')
                 assert not any(e['event']=='spawn' for e in events(repeated)), 'completed effects replayed'
                 phases['completed_resume']=summary(repeated)
         return phases

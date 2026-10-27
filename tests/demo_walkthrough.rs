@@ -1,7 +1,7 @@
 //! CI check for the flagship demo: `examples/demo/walkthrough.sh` walks write, validate,
 //! what-if, confirm, a failing run, repair and resume, with the fake compositor. Unix
 //! only, because the compositor is a shell script that the runtime launches directly.
-#![cfg(unix)]
+#![cfg(all(unix, feature = "agent-advisory", feature = "records"))]
 
 use std::path::Path;
 use std::process::Command;

@@ -1,3 +1,4 @@
+#![cfg(feature = "tooling")]
 //! `execute test`: discovery, sidecar expectations, TAP and JSON output, fixtures on
 //! PATH. Portable tests use `printf` for output; the fixture test is Unix-only because
 //! it uses an executable shell script as the fake tool.

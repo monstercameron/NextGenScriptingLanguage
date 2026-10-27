@@ -200,7 +200,7 @@ fn nested_loops_and_calls_share_one_entered_iteration_budget() {
 #[test]
 fn scheduled_handlers_get_fresh_loop_frames_for_each_tick() {
     let dir = tempfile::tempdir().unwrap();
-    let source = "every 1 millisecond\n  run \"printf\" with arguments [\"a\"]\n  repeat 2 times\n    then \"tr\" with arguments [\"a-z\", \"b-za\"] as local\n";
+    let source = "every 1 millisecond\n  run \"printf\" with arguments [\"a\"]\n  repeat 2 times\n    then \"tr\" with arguments [\"a-z\", \"b-za\"] as local\n    use value local\n";
     let program = parser::parse(source).unwrap();
     let mut outputs = Vec::new();
     runtime::run_service(

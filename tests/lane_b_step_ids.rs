@@ -143,6 +143,7 @@ fn trace_events_keep_the_labelled_id_when_a_statement_is_inserted_above_it() {
     assert_eq!(labelled_events(BASE), labelled_events(&inserted_above()));
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn run_records_name_the_labelled_step() {
     let directory = tempfile::tempdir().unwrap();

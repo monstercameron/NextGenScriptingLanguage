@@ -2,7 +2,9 @@
 //! in its unexecuted suffix, the journal is untouched, and resume completes the run.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "records")]
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn execute(directory: &Path, arguments: &[&str]) -> Output {
@@ -13,6 +15,7 @@ fn execute(directory: &Path, arguments: &[&str]) -> Output {
         .unwrap()
 }
 
+#[cfg(feature = "records")]
 fn manifests() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
 }
@@ -22,6 +25,7 @@ fn text(bytes: &[u8]) -> String {
 }
 
 /// Line 1 completes, line 2 fails, line 3 is never reached.
+#[cfg(feature = "records")]
 fn failing_program() -> String {
     let executable = env!("CARGO_BIN_EXE_execute").replace('\\', "/");
     format!(
@@ -32,6 +36,7 @@ fn failing_program() -> String {
 }
 
 /// Run the program until its checkpoint fails, returning the program and checkpoint.
+#[cfg(feature = "records")]
 fn failed_checkpoint(work: &Path) -> (PathBuf, PathBuf) {
     let program = work.join("prog.program");
     fs::write(&program, failing_program()).unwrap();
@@ -51,6 +56,7 @@ fn failed_checkpoint(work: &Path) -> (PathBuf, PathBuf) {
     (program, checkpoint)
 }
 
+#[cfg(feature = "records")]
 fn repair(work: &Path, checkpoint: &Path, op: &str, extra: &[&str]) -> Output {
     let mut arguments = vec![
         "repair",
@@ -135,6 +141,7 @@ fn documented_repair_example_requires_explicit_retry_and_recovers() {
     );
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn set_parameter_targets_the_named_parameter_even_when_a_binding_shares_its_name() {
     let work = tempfile::tempdir().unwrap();
@@ -166,6 +173,7 @@ fn set_parameter_targets_the_named_parameter_even_when_a_binding_shares_its_name
         .contains("with text old and old \"q\" and new \"z\""));
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn added_retry_runs_with_the_global_command_timeout() {
     let work = tempfile::tempdir().unwrap();
@@ -207,6 +215,7 @@ fn added_retry_runs_with_the_global_command_timeout() {
     assert!(resumed.status.success(), "{}", text(&resumed.stderr));
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn a_repaired_suffix_resumes_and_the_journal_is_never_modified() {
     let work = tempfile::tempdir().unwrap();
@@ -276,6 +285,7 @@ fn a_repaired_suffix_resumes_and_the_journal_is_never_modified() {
     );
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn a_completed_prefix_line_cannot_be_repaired() {
     let work = tempfile::tempdir().unwrap();
@@ -292,6 +302,7 @@ fn a_completed_prefix_line_cannot_be_repaired() {
     assert!(!checkpoint.join("repairs.jsonl").exists());
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn a_repair_that_does_not_check_leaves_the_program_untouched() {
     let work = tempfile::tempdir().unwrap();
@@ -313,6 +324,7 @@ fn a_repair_that_does_not_check_leaves_the_program_untouched() {
     assert!(!checkpoint.join("repairs.jsonl").exists());
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn a_dry_run_shows_the_diff_and_writes_nothing() {
     let work = tempfile::tempdir().unwrap();
@@ -334,6 +346,7 @@ fn a_dry_run_shows_the_diff_and_writes_nothing() {
     assert!(!checkpoint.join("repairs.jsonl").exists());
 }
 
+#[cfg(feature = "records")]
 #[test]
 fn a_completed_checkpoint_has_nothing_to_repair() {
     let work = tempfile::tempdir().unwrap();

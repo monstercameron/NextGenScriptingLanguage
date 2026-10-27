@@ -255,6 +255,7 @@ fn hand_over_writes_earlier_output_before_the_program_starts() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "beforeinner");
 }
 
+#[cfg(feature = "live")]
 #[test]
 fn run_control_refuses_hand_over_and_detached_launch() {
     let directory = tempdir().unwrap();

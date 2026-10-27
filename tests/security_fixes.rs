@@ -318,6 +318,10 @@ mod swap_after_use_folder {
                 "main.program",
                 "--capability-policy",
                 "policy.json",
+                // Exercise host policy checks without requiring the OS sandbox, which
+                // cannot preflight a dynamic working directory in untrusted mode.
+                "--execution-mode",
+                "trusted",
                 "--manifest-dir",
             ])
             .arg(&manifests)

@@ -1,6 +1,6 @@
 //! Declared program inputs: one schema for CLI values, runtime calls and live edits.
 use crate::ast::{InputDeclaration, InputSource, InputType, Value};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl std::fmt::Display for InputType {
@@ -10,6 +10,8 @@ impl std::fmt::Display for InputType {
             Self::Integer => "integer",
             Self::Boolean => "boolean",
             Self::TextList => "list of text",
+            Self::IntegerList => "list of integer",
+            Self::JsonList => "list of json",
             Self::Json => "json",
             Self::Bytes => "bytes",
         })
@@ -36,6 +38,12 @@ impl InputDeclaration {
             (InputType::TextList, Value::List(items)) => items
                 .iter()
                 .all(|v| matches!(v, Value::String(s) if !s.contains('\0'))),
+            (InputType::IntegerList, Value::List(items)) => {
+                items.iter().all(|v| matches!(v, Value::Integer(_)))
+            }
+            (InputType::JsonList, Value::List(items)) => {
+                items.iter().all(crate::structured::literal)
+            }
             (InputType::Json, value) => crate::structured::literal(value),
             _ => false,
         };
@@ -57,6 +65,11 @@ impl InputDeclaration {
                         self.name
                     )
                 }
+                (InputType::IntegerList | InputType::JsonList, Value::List(_)) => bail!(
+                    "line {}: input {:?} contains an item of the wrong type",
+                    self.line,
+                    self.name
+                ),
                 (InputType::Json, _) => bail!(
                     "line {}: input {:?} expects a literal JSON value",
                     self.line,
@@ -122,6 +135,14 @@ impl InputDeclaration {
                 })?;
                 Value::List(items.into_iter().map(Value::String).collect())
             }
+            InputType::IntegerList | InputType::JsonList => {
+                let value = crate::structured::parse(text.as_bytes())
+                    .with_context(|| format!("input {:?} requires a JSON list", self.name))?;
+                let Value::List(_) = value else {
+                    bail!("input {:?} requires a JSON list", self.name);
+                };
+                value
+            }
             InputType::Json => crate::structured::parse(text.as_bytes())
                 .with_context(|| format!("input {:?} requires JSON", self.name))?,
         };
@@ -148,6 +169,23 @@ impl InputDeclaration {
                         .collect(),
                 )
             }
+            (InputType::IntegerList, serde_json::Value::Array(items))
+                if items.iter().all(|item| item.as_i64().is_some()) =>
+            {
+                Value::List(
+                    items
+                        .iter()
+                        .map(|item| Value::Integer(item.as_i64().unwrap()))
+                        .collect(),
+                )
+            }
+            (InputType::JsonList, serde_json::Value::Array(items)) => Value::List(
+                items
+                    .iter()
+                    .cloned()
+                    .map(crate::structured::from_json)
+                    .collect(),
+            ),
             _ => bail!(
                 "line {}: input {:?} expects {}",
                 self.line,

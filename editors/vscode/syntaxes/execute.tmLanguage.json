@@ -1140,7 +1140,7 @@
     },
     "program-input": {
       "name": "meta.program-input.execute",
-      "begin": "^(accept)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+(list[ \\t]+of[ \\t]+text|text|integer|boolean|json)\\b",
+      "begin": "^(accept)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+(list[ \\t]+of[ \\t]+(?:text|integer|json)|text|integer|boolean|json)\\b",
       "end": "$",
       "beginCaptures": {
         "1": {
@@ -1406,7 +1406,7 @@
     },
     "nested-program-input": {
       "name": "meta.program-input.execute",
-      "begin": "^[ \\t]+(accept)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+(list[ \\t]+of[ \\t]+text|integer|boolean|json)\\b",
+      "begin": "^[ \\t]+(accept)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+(list[ \\t]+of[ \\t]+(?:text|integer|json)|integer|boolean|json)\\b",
       "end": "$",
       "beginCaptures": {
         "1": {

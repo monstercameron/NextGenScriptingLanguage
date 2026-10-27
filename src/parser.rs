@@ -1115,7 +1115,7 @@ fn parse_flag_spelling(
 fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
     let name = parse_binding_identifier(tokens.get(1), "input name")?;
     if !word_is(tokens.get(2), "as") {
-        bail!("expected `accept <name> as <text|integer|boolean|list of text|json>`");
+        bail!("expected `accept <name> as <text|integer|boolean|list of text|list of integer|list of json|json>`");
     }
     let (kind, mut cursor) = match tokens.get(3) {
         Some(Token::Word("text")) => (InputType::Text, 4),
@@ -1127,7 +1127,17 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         {
             (InputType::TextList, 6)
         }
-        _ => bail!("input type must be text, integer, boolean, list of text, or json"),
+        Some(Token::Word("list"))
+            if word_is(tokens.get(4), "of") && word_is(tokens.get(5), "integer") =>
+        {
+            (InputType::IntegerList, 6)
+        }
+        Some(Token::Word("list"))
+            if word_is(tokens.get(4), "of") && word_is(tokens.get(5), "json") =>
+        {
+            (InputType::JsonList, 6)
+        }
+        _ => bail!("input type must be text, integer, boolean, list of text, list of integer, list of json, or json"),
     };
     let choices = if word_is(tokens.get(cursor), "one") && word_is(tokens.get(cursor + 1), "of") {
         if kind != InputType::Text {

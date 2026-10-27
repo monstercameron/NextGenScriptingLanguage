@@ -1,5 +1,5 @@
 //! Static checking and execution agree for JSON-valued iteration inputs.
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     path::Path,
@@ -151,4 +151,23 @@ fn json_applet_output_can_feed_a_loop_and_other_types_are_still_rejected() {
             assert!(!result.status.success(), "{command} accepted {source}");
         }
     }
+}
+
+#[test]
+fn list_sort_preserves_text_items_through_loop_bindings_and_argv() {
+    let root = tempfile::tempdir().unwrap();
+    let source = "run list.sort with items [\"b\", \"a\"] as sorted\nfor each x in sorted\n  run \"printf\" with arguments [\"%s\", x]\n";
+    let check = execute(root.path(), source, &["check"]);
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let run = execute(root.path(), source, &["run"]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"ab");
 }

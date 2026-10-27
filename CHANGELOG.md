@@ -7,6 +7,9 @@ original version labels.
 
 ## Unreleased
 
+- Program inputs now support `list of integer` and `list of json`; integer list
+  values are statically typed when iterated and invalid items fail before execution.
+
 - Measured comparison with bash and dash. `tools/bash_compare.py` pairs a bash
   command line with an Execute program for eight scenarios and reports median wall
   time, peak RSS and binary size; the `Execute vs bash` workflow runs it on x86_64 and

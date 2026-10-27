@@ -95,7 +95,9 @@ values are literal argument text, with no shell expansion by Execute. Shell user
 must still quote their own command-line arguments in the calling shell.
 
 Input types are `text`, `integer` (signed 64-bit), `boolean` (`true`/`false`),
-`list of text` and `json` as described above. A text list is supplied as JSON:
+`list of text`, `list of integer`, `list of json`, and `json`. List inputs are
+supplied as JSON arrays and each item is checked before execution. Integer lists
+contain signed 64-bit integers; JSON lists contain JSON values. A text list is supplied as JSON:
 
 ```text
 accept files as list of text with default ["notes.txt"]
@@ -103,6 +105,7 @@ run "cksum" with arguments files
 ```
 
 Run `execute checksums.program --input 'files=["first file.txt","second.txt"]'`.
+`execute report.program --input 'ports=[80,443]'` supplies an integer list.
 Empty strings and lists are valid at the input-schema level; an applet manifest
 can impose tighter constraints. Defaults must be literal values of the declared
 type, including literal text lists. Scalar and text-list inputs reject references,
@@ -155,7 +158,7 @@ values, for example `input "mode" must be one of "light", "dark"; got "blue"`.
 `execute inspect` lists each input's `choices`, and `execute explain --json` lists the
 program's inputs under `inputs` with the same field. `described as` works with
 `one of` in either position relative to `with default`. `one of` is not allowed on
-`integer`, `boolean`, `list of text`, or `json` inputs.
+`integer`, `boolean`, any list input, or `json` inputs.
 
 ### Program location
 

@@ -14,7 +14,7 @@ use crate::graph::{
     RuntimeGraphExecutor,
 };
 use crate::structured;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
@@ -2340,6 +2340,7 @@ fn schema_for_record(schema: &ValueSchema, required: Option<Vec<String>>) -> Res
         fields: schema.fields.clone(),
         required: required.unwrap_or_else(|| schema.required.clone()),
         enum_values: schema.enum_values.clone(),
+        same_as_parameter: None,
         trim_final_lf: false,
     };
     output.validate()?;
@@ -2450,7 +2451,7 @@ mod terminal_tests {
 #[cfg(all(test, unix))]
 mod private_renderer_asset_tests {
     use super::{PrivateRendererAssets, QUICKSHELL_SOURCE};
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::process::Command;
 
     #[test]

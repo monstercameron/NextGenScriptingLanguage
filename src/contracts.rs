@@ -5,7 +5,7 @@
 //! permit.
 
 use crate::ast::{InputType, Value};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -502,6 +502,9 @@ pub struct OutputSchema {
         skip_serializing_if = "Option::is_none"
     )]
     pub enum_values: Option<Vec<String>>,
+    /// Preserve the declared item type of a named list parameter in this output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_as_parameter: Option<String>,
     /// Remove exactly one final LF from raw UTF-8 text or path output. No other
     /// whitespace or line ending is normalized.
     #[serde(default)]
@@ -1041,6 +1044,18 @@ impl OutputSchema {
             false,
             true,
         )?;
+        if self
+            .same_as_parameter
+            .as_ref()
+            .is_some_and(|name| name.is_empty() || name.contains('\0'))
+        {
+            bail!("same_as_parameter must name a parameter");
+        }
+        if self.same_as_parameter.is_some()
+            && !matches!(self.kind, OutputType::Json | OutputType::List)
+        {
+            bail!("same_as_parameter applies only to json or list output");
+        }
         match (self.kind, self.encoding) {
             (OutputType::Bytes, OutputEncoding::Raw)
             | (OutputType::Text | OutputType::Path, OutputEncoding::Raw | OutputEncoding::Json)
@@ -1087,6 +1102,8 @@ impl OutputSchema {
             OutputType::Json | OutputType::Record => Some(InputType::Json),
             OutputType::List => Some(match self.items.as_deref().map(|item| item.kind) {
                 Some(OutputType::Text | OutputType::Path) => InputType::TextList,
+                Some(OutputType::Integer) => InputType::IntegerList,
+                Some(OutputType::Json) => InputType::JsonList,
                 _ => InputType::Json,
             }),
         }

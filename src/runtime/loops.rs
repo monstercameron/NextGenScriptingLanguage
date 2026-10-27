@@ -63,6 +63,8 @@ pub(super) fn element_type(
     match value {
         Value::Reference(name) => match types.get(name).copied() {
             Some(InputType::TextList) => Ok(InputType::Text),
+            Some(InputType::IntegerList) => Ok(InputType::Integer),
+            Some(InputType::JsonList) => Ok(InputType::Json),
             Some(InputType::Json) => Ok(InputType::Json),
             Some(kind) => bail!("for each requires a list or JSON array, {name:?} is {kind}"),
             // Untyped component bindings retain the historical text-list
@@ -70,6 +72,9 @@ pub(super) fn element_type(
             None => Ok(InputType::Text),
         },
         Value::List(items) if items.iter().all(is_text_item) => Ok(InputType::Text),
+        Value::List(items) if items.iter().all(|item| matches!(item, Value::Integer(_))) => {
+            Ok(InputType::Integer)
+        }
         Value::List(_) => Ok(InputType::Json),
         _ => Err(ForEachInputTypeError::default().into()),
     }

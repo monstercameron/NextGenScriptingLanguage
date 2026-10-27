@@ -46,7 +46,8 @@
     },
     "output": {
       "type": "json",
-      "encoding": "json"
+      "encoding": "json",
+      "same_as_parameter": "items"
     },
     "capabilities": [
       "data.transform"

@@ -6,7 +6,7 @@ pub use crate::contracts::{
     OutputEncoding, OutputSchema, OutputType, PortDelivery, ProgramModule, RemoteAuthSource,
     RemoteEndpointConfig, Sensitivity, StdioContract, StdioDisposition, ValueSchema,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
@@ -1657,7 +1657,7 @@ impl Manifest {
             values: &BTreeMap<String, serde_json::Value>,
             out: &mut Vec<serde_json::Value>,
         ) {
-            use serde_json::{json, Value as J};
+            use serde_json::{Value as J, json};
             fn scalar(value: &J) -> J {
                 match value {
                     J::String(_) | J::Object(_) => value.clone(),
@@ -1981,6 +1981,15 @@ fn parameter_accepts_reference(
             item_type,
             Some(ParameterType::String | ParameterType::Path | ParameterType::Scalar)
         ))
+        || (expected == ParameterType::List
+            && actual == InputType::IntegerList
+            && matches!(
+                item_type,
+                Some(ParameterType::Integer | ParameterType::Scalar)
+            ))
+        || (expected == ParameterType::List
+            && actual == InputType::JsonList
+            && item_type == Some(ParameterType::Json))
 }
 
 /// A reference used as one list item must resolve to a single scalar of the
@@ -2909,6 +2918,18 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
             }
         }
         contract.validate()?;
+        if let Some(parameter) = contract
+            .output
+            .as_ref()
+            .and_then(|output| output.same_as_parameter.as_deref())
+        {
+            let Some(spec) = parameters.get(parameter) else {
+                bail!("same_as_parameter names unknown parameter {parameter:?}");
+            };
+            if !matches!(spec.kind, ParameterType::Json | ParameterType::List) {
+                bail!("same_as_parameter requires a json or list parameter");
+            }
+        }
         if contract.backend == AppletBackend::InProcess && raw.binary != "@execute-applet" {
             bail!("in_process backend requires binary \"@execute-applet\"");
         }
@@ -3018,7 +3039,9 @@ fn validate_parameter_alternatives(
                         || *minimum < -9_007_199_254_740_992
                         || *maximum > 9_007_199_254_740_992 =>
                     {
-                        bail!("number_range predicate requires a numeric parameter and ordered integer bounds within binary64 exact range");
+                        bail!(
+                            "number_range predicate requires a numeric parameter and ordered integer bounds within binary64 exact range"
+                        );
                     }
                     _ => {}
                 }
@@ -3232,6 +3255,16 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
                     && schema.items.as_deref().is_some_and(|item| {
                         matches!(item.kind, OutputType::Text | OutputType::Path)
                     }))
+                || (kind == InputType::IntegerList
+                    && schema
+                        .items
+                        .as_deref()
+                        .is_some_and(|item| item.kind == OutputType::Integer))
+                || (kind == InputType::JsonList
+                    && schema
+                        .items
+                        .as_deref()
+                        .is_some_and(|item| item.kind == OutputType::Json))
         }
     }
 }
@@ -3343,8 +3376,12 @@ fn parameter_input_kind(spec: &ParameterSpec) -> Result<InputType> {
         {
             InputType::TextList
         }
+        ParameterType::List if spec.item_type == Some(ParameterType::Integer) => {
+            InputType::IntegerList
+        }
+        ParameterType::List if spec.item_type == Some(ParameterType::Json) => InputType::JsonList,
         ParameterType::List => {
-            bail!("program modules support only text-valued list parameters")
+            bail!("program modules support only text, integer, and JSON-valued list parameters")
         }
         ParameterType::Scalar => bail!("scalar is only valid as a parameter-list item type"),
     })

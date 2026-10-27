@@ -10,10 +10,10 @@ use crate::ast::{
 };
 pub use crate::contracts::ProgramModule;
 use crate::contracts::{
-    deserialize_present, AppletBackend, AppletContract, AppletPorts, Lifecycle, OutcomeKind,
-    OutcomeSpec, OutputSchema, OutputType, PortDelivery, ValueSchema,
+    AppletBackend, AppletContract, AppletPorts, Lifecycle, OutcomeKind, OutcomeSpec, OutputSchema,
+    OutputType, PortDelivery, ValueSchema, deserialize_present,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -193,7 +193,7 @@ mod portable_module_path {
                 _ => {
                     return Err(serde::ser::Error::custom(
                         "module lock path is not relative",
-                    ))
+                    ));
                 }
             }
         }
@@ -1539,11 +1539,7 @@ fn load_package_inner(
                     PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
                     lifecycle @ (ModuleLifecycle::Schedule | ModuleLifecycle::Listener),
                 ) => {
-                    validate_service_source(
-                        &program,
-                        export_name,
-                        Some(lifecycle),
-                    )?;
+                    validate_service_source(&program, export_name, Some(lifecycle))?;
                     if export.entry != PROGRAM_MODULE_SERVICE_ROOT_ENTRY {
                         bail!(
                             "program module service export {export_name:?} must select reserved root entry {:?}",
@@ -1957,6 +1953,20 @@ fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
                     !item.nullable && matches!(item.kind, OutputType::Text | OutputType::Path)
                 })
         }
+        InputType::IntegerList => {
+            schema.kind == OutputType::List
+                && schema
+                    .items
+                    .as_deref()
+                    .is_some_and(|item| !item.nullable && item.kind == OutputType::Integer)
+        }
+        InputType::JsonList => {
+            schema.kind == OutputType::List
+                && schema
+                    .items
+                    .as_deref()
+                    .is_some_and(|item| item.kind == OutputType::Json)
+        }
         InputType::Json => schema.kind != OutputType::Bytes,
     }
 }
@@ -2268,8 +2278,8 @@ impl PartialOrd for SemVer {
 
 impl Ord for PrereleaseIdentifier {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
         use PrereleaseIdentifier::{AlphaNumeric, Numeric};
+        use std::cmp::Ordering;
         match (self, other) {
             (Numeric(left), Numeric(right)) => left.cmp(right),
             (Numeric(_), AlphaNumeric(_)) => Ordering::Less,
@@ -2484,6 +2494,7 @@ mod tests {
             ]),
             required: vec!["text".into(), "length".into()],
             enum_values: None,
+            same_as_parameter: None,
             trim_final_lf: false,
         }
     }

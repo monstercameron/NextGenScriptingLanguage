@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -40,11 +40,11 @@ fn malformed_input_diagnostics_keep_one_line_number_and_actionable_cause() {
     for (declaration, cause) in [
         (
             "accept path text",
-            "expected `accept <name> as <text|integer|boolean|list of text|json>`",
+            "expected `accept <name> as <text|integer|boolean|list of text|list of integer|list of json|json>`",
         ),
         (
             "accept path as string",
-            "input type must be text, integer, boolean, list of text, or json",
+            "input type must be text, integer, boolean, list of text, list of integer, list of json, or json",
         ),
         ("accept path as text garbage", "stray token `garbage`"),
         (
@@ -208,6 +208,39 @@ fn known_input_values_are_checked_against_manifest_constraints_before_effects() 
     let result = run(d.path(), source, &[]);
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("at least 1"));
+    assert!(!d.path().join("forbidden").exists());
+}
+
+#[test]
+fn integer_list_inputs_iterate_as_integers_and_reject_bad_items_before_effects() {
+    let d = tempfile::tempdir().unwrap();
+    let source = "accept ports as list of integer\nfor each port in ports\n  run \"printf\" with arguments [\"%s\", port]\n";
+    let file = d.path().join("job.program");
+    fs::write(&file, source).unwrap();
+    for mode in ["check", "run"] {
+        let valid = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg(mode)
+            .arg(&file)
+            .args(["--input", "ports=[80,443]"])
+            .current_dir(d.path())
+            .output()
+            .unwrap();
+        check(&valid);
+        if mode == "run" {
+            assert_eq!(valid.stdout, b"80443");
+        }
+    }
+
+    let source = "accept ports as list of integer\nrun \"touch\" with arguments [\"forbidden\"]\n";
+    fs::write(&file, source).unwrap();
+    let invalid = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("run")
+        .arg(&file)
+        .args(["--input", "ports=[80,\"bad\"]"])
+        .current_dir(d.path())
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
     assert!(!d.path().join("forbidden").exists());
 }
 

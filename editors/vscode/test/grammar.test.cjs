@@ -88,7 +88,7 @@ test('keyword-shaped applets, parameter names and references retain their role',
   scope('run worker with first as and second cache', 'as', 'variable.other.readwrite');
 });
 test('top-level program inputs distinguish types, defaults and values from component ports', () => {
-  for (const type of ['text', 'integer', 'boolean', 'list of text', 'json']) {
+  for (const type of ['text', 'integer', 'boolean', 'list of text', 'list of integer', 'list of json', 'json']) {
     const line = `accept setting as ${type} with default []`;
     scope(line, 'accept', 'keyword.declaration.input');
     scope(line, 'setting', 'variable.parameter.input');

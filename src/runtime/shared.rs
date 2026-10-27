@@ -16,6 +16,50 @@ fn check_value(value: &Value, names: &BTreeSet<String>) -> Result<()> {
     }
     Ok(())
 }
+
+fn polymorphic_output_kind(
+    manifest: &crate::manifest::Manifest,
+    call: &Invocation,
+    types: &BTreeMap<String, crate::ast::InputType>,
+) -> Option<crate::ast::InputType> {
+    let output = manifest.execution_contract()?.output.as_ref()?;
+    let parameter = output.same_as_parameter.as_deref()?;
+    let value = call.parameters.get(parameter)?;
+    let item_kind = match value {
+        Value::Reference(name) => match types.get(name).copied()? {
+            crate::ast::InputType::TextList => crate::ast::InputType::Text,
+            crate::ast::InputType::IntegerList => crate::ast::InputType::Integer,
+            _ => crate::ast::InputType::Json,
+        },
+        Value::List(items) => {
+            let item_type = |item: &Value| match item {
+                Value::String(_) => Some(crate::ast::InputType::Text),
+                Value::Integer(_) => Some(crate::ast::InputType::Integer),
+                Value::Bool(_) => Some(crate::ast::InputType::Boolean),
+                Value::Reference(name) => Some(
+                    types
+                        .get(name)
+                        .copied()
+                        .unwrap_or(crate::ast::InputType::Json),
+                ),
+                _ => Some(crate::ast::InputType::Json),
+            };
+            let mut kinds = items.iter().filter_map(item_type);
+            let first = kinds.next().unwrap_or(crate::ast::InputType::Json);
+            if kinds.all(|kind| kind == first) { first } else { crate::ast::InputType::Json }
+        }
+        _ => return None,
+    };
+    Some(match output.kind {
+        crate::contracts::OutputType::List => match item_kind {
+            crate::ast::InputType::Text => crate::ast::InputType::TextList,
+            crate::ast::InputType::Integer => crate::ast::InputType::IntegerList,
+            _ => crate::ast::InputType::JsonList,
+        },
+        crate::contracts::OutputType::Json => item_kind,
+        _ => return None,
+    })
+}
 /// Exit status operands are literal integers in range or integer bindings.
 /// The range check happens before any effect; a binding is type-checked here.
 fn validate_exit_operand(
@@ -1876,12 +1920,10 @@ fn validate_range(
                         // contracts can make this a statically known scalar or
                         // JSON value, which lets later conditions and JSON
                         // selections be checked before any command runs.
-                        flow.bind_type(
-                            name,
-                            manifest
-                                .output_kind()
-                                .unwrap_or(crate::ast::InputType::Text),
-                        )?;
+                        let kind = polymorphic_output_kind(&manifest, call, &flow.types)
+                            .or_else(|| manifest.output_kind())
+                            .unwrap_or(crate::ast::InputType::Text);
+                        flow.bind_type(name, kind)?;
                     }
                     binding(
                         &call.status_binding,

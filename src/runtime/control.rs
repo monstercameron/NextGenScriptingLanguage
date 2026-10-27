@@ -299,6 +299,15 @@ fn scalar_kind(value: &Value, types: &BTreeMap<String, InputType>) -> Result<Opt
         {
             Some(InputType::TextList)
         }
+        Value::List(values)
+            if values.iter().all(|item| match item {
+                Value::Integer(_) => true,
+                Value::Reference(name) => types.get(name) == Some(&InputType::Integer),
+                _ => false,
+            }) =>
+        {
+            Some(InputType::IntegerList)
+        }
         Value::List(_) => Some(InputType::Json),
         Value::Record(_) | Value::Null | Value::Number(_) => Some(InputType::Json),
     };
@@ -329,7 +338,14 @@ pub(super) fn validate_condition(
         crate::ast::ConditionOperator::Equals => validate_equality_types(left, right)?,
         crate::ast::ConditionOperator::Contains => {
             match left {
-                Some(InputType::Text | InputType::TextList | InputType::Json) | None => {}
+                Some(
+                    InputType::Text
+                    | InputType::TextList
+                    | InputType::IntegerList
+                    | InputType::JsonList
+                    | InputType::Json,
+                )
+                | None => {}
                 Some(kind) => {
                     bail!("contains is unsupported for {kind}; use text, a list, or a JSON object")
                 }

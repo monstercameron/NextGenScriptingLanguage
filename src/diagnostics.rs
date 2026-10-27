@@ -963,11 +963,83 @@ fn collect_program_diagnostics(
             crate::ast::InputType::Integer => Some(OutputType::Integer),
             crate::ast::InputType::Boolean => Some(OutputType::Boolean),
             crate::ast::InputType::TextList => Some(OutputType::List),
+            crate::ast::InputType::IntegerList | crate::ast::InputType::JsonList => {
+                Some(OutputType::List)
+            }
             crate::ast::InputType::Json => Some(OutputType::Json),
             crate::ast::InputType::Bytes => Some(OutputType::Bytes),
         };
         if let Some(kind) = kind {
             known_types.insert(input.name.clone(), kind);
+        }
+    }
+    let mut list_item_types = BTreeMap::<String, OutputType>::new();
+    for input in &program.inputs {
+        let item_kind = match input.kind {
+            crate::ast::InputType::TextList => Some(OutputType::Text),
+            crate::ast::InputType::IntegerList => Some(OutputType::Integer),
+            crate::ast::InputType::JsonList | crate::ast::InputType::Json => Some(OutputType::Json),
+            _ => None,
+        };
+        if let Some(kind) = item_kind {
+            list_item_types.insert(input.name.clone(), kind);
+        }
+    }
+    let mut polymorphic_outputs = BTreeMap::<String, OutputType>::new();
+    // Resolve list item contracts before checking call sites. A few bounded
+    // passes allow an applet result to feed another list applet and then a loop.
+    for _ in 0..top_level_call_count.saturating_add(1) {
+        let mut changed = false;
+        for (_, call) in calls.iter().take(top_level_call_count).copied() {
+            let Some(binding) = &call.binding else {
+                continue;
+            };
+            let Ok(manifest) = registry.resolve_call(call) else {
+                continue;
+            };
+            let Some(output) = manifest
+                .execution_contract()
+                .and_then(|contract| contract.output.as_ref())
+            else {
+                continue;
+            };
+            let Some(parameter) = output.same_as_parameter.as_deref() else {
+                continue;
+            };
+            let Some(value) = call.parameters.get(parameter) else {
+                continue;
+            };
+            let Some(item_kind) = known_list_item_type(value, &known_types, &list_item_types)
+            else {
+                continue;
+            };
+            if output.kind == OutputType::List {
+                changed |= list_item_types.insert(binding.clone(), item_kind) != Some(item_kind);
+            } else {
+                changed |=
+                    polymorphic_outputs.insert(binding.clone(), item_kind) != Some(item_kind);
+            }
+        }
+        for step in &program.steps {
+            if let StepKind::Loop {
+                kind: crate::ast::LoopKind::ForEach { binding, values },
+                ..
+            } = &step.kind
+            {
+                if let Some(kind) = known_list_item_type(values, &known_types, &list_item_types) {
+                    let before = known_types.get(binding).copied();
+                    known_types.insert(binding.clone(), kind);
+                    changed |= before != Some(kind);
+                }
+            }
+        }
+        for (name, kind) in &polymorphic_outputs {
+            let before = known_types.get(name).copied();
+            known_types.insert(name.clone(), *kind);
+            changed |= before != Some(*kind);
+        }
+        if !changed {
+            break;
         }
     }
     let mut top_level_types = known_types.clone();
@@ -1053,7 +1125,11 @@ fn collect_program_diagnostics(
         );
         if index < top_level_call_count {
             if let Some(binding) = &call.binding {
-                if let Some(kind) = manifest_output_type(manifest) {
+                if let Some(kind) = polymorphic_outputs
+                    .get(binding)
+                    .copied()
+                    .or_else(|| manifest_output_type(manifest))
+                {
                     record_binding_type(&mut known_types, &mut ambiguous_types, binding, kind);
                 }
             }
@@ -1670,6 +1746,37 @@ fn known_value_type(
         Value::Bool(_) => Some(OutputType::Boolean),
         Value::List(_) => Some(OutputType::List),
         Value::Null | Value::Record(_) => Some(OutputType::Json),
+    }
+}
+
+fn known_list_item_type(
+    value: &Value,
+    known_types: &BTreeMap<String, OutputType>,
+    list_item_types: &BTreeMap<String, OutputType>,
+) -> Option<OutputType> {
+    match value {
+        Value::Reference(name) => list_item_types.get(name).copied().or_else(|| {
+            (known_types.get(name) == Some(&OutputType::Json)).then_some(OutputType::Json)
+        }),
+        Value::List(items) => {
+            if items.is_empty() {
+                return Some(OutputType::Json);
+            }
+            let Some(kinds) = items
+                .iter()
+                .map(|item| known_value_type(item, known_types))
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Some(OutputType::Json);
+            };
+            let first = kinds[0];
+            Some(if kinds.iter().all(|kind| *kind == first) {
+                first
+            } else {
+                OutputType::Json
+            })
+        }
+        _ => None,
     }
 }
 

@@ -6,8 +6,8 @@
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
 use crate::terminal_text::escape_controls;
-use anyhow::{anyhow, bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, anyhow, bail};
+use serde_json::{Value, json};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -135,6 +135,8 @@ fn type_label(kind: InputType) -> &'static str {
         InputType::Integer => "integer",
         InputType::Boolean => "boolean",
         InputType::TextList => "list of text",
+        InputType::IntegerList => "list of integer",
+        InputType::JsonList => "list of json",
         InputType::Json => "json",
         InputType::Bytes => "bytes",
     }

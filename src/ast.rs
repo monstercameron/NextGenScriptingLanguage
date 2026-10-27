@@ -642,6 +642,8 @@ pub enum InputType {
     Integer,
     Boolean,
     TextList,
+    IntegerList,
+    JsonList,
     Json,
     /// A raw byte capture (`then capture bytes as NAME`). Never valid as text.
     Bytes,

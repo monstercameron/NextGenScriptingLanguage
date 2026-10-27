@@ -1734,7 +1734,7 @@ may be omitted. Trigger-only limits are rejected on programs that cannot use the
 
 ## Warm daemon (`--daemon`)
 
-`execute daemon serve` keeps a per-user process running behind a Unix socket, by default under `$XDG_RUNTIME_DIR`. `execute daemon status` reports whether it is running, and `execute daemon stop` stops it. Nothing runs in the background unless you start the daemon.
+`execute daemon serve` keeps a per-user process running behind a Unix socket, by default under `$XDG_RUNTIME_DIR`. `execute daemon status` reports whether it is running, and `execute daemon stop` stops it. Nothing runs in the background unless you start the daemon. The daemon limits concurrent forwarded runs to twice the available CPU count, capped at 64. Set `EXECUTE_DAEMON_MAX_RUNS` on the daemon to an integer from 1 through 4096 to choose another limit. At capacity the daemon declines new runs and the client runs them locally; existing forwarded runs continue. `daemon status` reports the current `runs` and `max_runs`.
 
 The socket defaults to `$XDG_RUNTIME_DIR/execute-<uid>/daemon.sock` (the temporary directory when unset). `--socket PATH` selects another socket for `serve`, `status` and `stop`. The daemon is Unix only, and checks socket ownership, directory permissions and peer identity.
 

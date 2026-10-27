@@ -181,6 +181,23 @@ mod imp {
     use std::time::{Duration, Instant};
 
     const IO_TIMEOUT: Duration = Duration::from_secs(2);
+    const MAX_CONFIGURED_RUNS: usize = 4096;
+
+    fn concurrent_run_limit() -> Result<usize> {
+        match std::env::var("EXECUTE_DAEMON_MAX_RUNS") {
+            Ok(value) => {
+                let limit = value.parse::<usize>().ok().filter(|n| (1..=MAX_CONFIGURED_RUNS).contains(n))
+                    .ok_or_else(|| anyhow!("EXECUTE_DAEMON_MAX_RUNS must be an integer from 1 through {MAX_CONFIGURED_RUNS}"))?;
+                Ok(limit)
+            }
+            Err(std::env::VarError::NotPresent) => Ok(std::thread::available_parallelism()
+                .map_or(2, |count| count.get().saturating_mul(2))
+                .clamp(1, 64)),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                bail!("EXECUTE_DAEMON_MAX_RUNS must be a valid integer")
+            }
+        }
+    }
     const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
     const MAX_HEADER_BYTES: usize = 256 * 1024;
     /// Room in the control buffer for one descriptor-passing message.
@@ -391,6 +408,7 @@ mod imp {
         registry: Registry,
         prepare: PrepareHook,
     ) -> Result<()> {
+        let max_runs = concurrent_run_limit()?;
         let directory = socket
             .parent()
             .ok_or_else(|| anyhow!("socket path {} has no directory", socket.display()))?;
@@ -420,6 +438,7 @@ mod imp {
             run,
             registry,
             children: Vec::new(),
+            max_runs,
             started: Instant::now(),
             served: 0,
             wake,
@@ -558,6 +577,7 @@ mod imp {
         run: RunCallback,
         registry: Registry,
         children: Vec<Child>,
+        max_runs: usize,
         started: Instant,
         served: u64,
         wake: ChildWake,
@@ -704,6 +724,7 @@ mod imp {
                 "uptime_ms": u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "requests_served": self.served,
                 "runs": self.children.len(),
+                "max_runs": self.max_runs,
             })
         }
 
@@ -727,6 +748,19 @@ mod imp {
                 let _ = write_line(
                     &mut stream,
                     &json!({"ok": false, "error": "a run needs exactly three descriptors"}),
+                );
+                return;
+            }
+            // Drain exited children before admission, including when a burst of accepts
+            // prevents the outer event loop from reaching its next reap.
+            self.reap();
+            if self.children.len() >= self.max_runs {
+                let _ = write_line(
+                    &mut stream,
+                    &json!({
+                        "event": "fallback",
+                        "reason": format!("daemon concurrency limit ({}) reached", self.max_runs),
+                    }),
                 );
                 return;
             }

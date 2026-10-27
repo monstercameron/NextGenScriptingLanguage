@@ -163,8 +163,10 @@ faithful `sh` form and refuses the rest by name and line; see
 `execute daemon serve` provides per-user status and management on Unix. Run forwarding is
 disabled by default because the daemon cannot preserve the client's OS confinement. `--daemon` and `EXECUTE_DAEMON=1` execute locally with a notice.
 Set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` to explicitly accept the daemon context and
-restore forwarding. Avoid `EXECUTE_DAEMON=1` in sandboxed environments with older
-versions that forward without this opt-in.
+restore forwarding. The daemon bounds concurrent forwarded runs; set
+`EXECUTE_DAEMON_MAX_RUNS` when starting it to configure the limit. At capacity,
+additional clients fall back to local execution. Avoid `EXECUTE_DAEMON=1` in
+sandboxed environments with older versions that forward without this opt-in.
 See the [daemon section](docs/language.md#warm-daemon---daemon).
 
 ## Terminal apps with control flow you can read

@@ -26,6 +26,7 @@ fn daemon_command(runtime_dir: &Path, arguments: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
     command.env("XDG_RUNTIME_DIR", runtime_dir);
     command.env_remove("EXECUTE_DAEMON");
+    command.env_remove("EXECUTE_DAEMON_MAX_RUNS");
     command.arg("daemon").args(arguments);
     command
 }
@@ -156,6 +157,7 @@ fn daemon_serve_answers_status_and_stop_removes_its_socket() {
 
     let status = daemon_output(runtime.path(), &["status"]);
     let reply: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert!((1..=64).contains(&reply["max_runs"].as_u64().unwrap()));
     assert_eq!(reply["running"], true);
     assert!(socket.exists(), "socket at {}", socket.display());
 
@@ -1197,5 +1199,121 @@ fn a_forwarded_run_keeps_the_clients_file_size_limit() {
             length <= 10,
             "{label} run wrote {length} bytes past a 10-byte limit"
         );
+    }
+}
+
+#[test]
+fn daemon_limits_forwarded_runs_and_reuses_capacity_after_exit() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon(Some(
+        daemon_command(runtime.path(), &["serve"])
+            .env("EXECUTE_DAEMON_MAX_RUNS", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let output = daemon_output(runtime.path(), &["status"]);
+        let reply: Value = serde_json::from_slice(&output.stdout).unwrap();
+        if reply["running"] == true {
+            assert_eq!(reply["max_runs"], 1);
+            break;
+        }
+        assert!(daemon.0.as_mut().unwrap().try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline, "daemon failed to start");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let slow = work.path().join("slow.program");
+    fs::write(&slow, "run time.sleep with milliseconds 5000\n").unwrap();
+    let spawn_slow = || {
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+            .env_remove("EXECUTE_DAEMON")
+            .current_dir(work.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .args([
+                "run",
+                slow.to_str().unwrap(),
+                "--manifest-dir",
+                manifests().to_str().unwrap(),
+                "--daemon",
+            ])
+            .spawn()
+            .unwrap()
+    };
+    let mut first = spawn_slow();
+    let wait_for_runs = |count: u64| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = daemon_output(runtime.path(), &["status"]);
+            let reply: Value = serde_json::from_slice(&status.stdout).unwrap();
+            if reply["runs"] == count {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "daemon did not reach {count} running children: {reply}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+    wait_for_runs(1);
+    let fast = work.path().join("fast.program");
+    fs::write(&fast, "run printf with message \"local\"\n").unwrap();
+    let fallback = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .args([
+            "run",
+            fast.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+            "--daemon",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        fallback.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(fallback.stdout, b"local\n");
+    assert!(
+        String::from_utf8_lossy(&fallback.stderr).contains("daemon concurrency limit (1) reached")
+    );
+    assert!(
+        first.try_wait().unwrap().is_none(),
+        "existing run ended during fallback"
+    );
+    wait_for_runs(1);
+    assert!(first.wait().unwrap().success());
+    wait_for_runs(0);
+    let mut next = spawn_slow();
+    wait_for_runs(1);
+    assert!(next.wait().unwrap().success());
+    wait_for_runs(0);
+}
+
+#[test]
+fn daemon_rejects_invalid_run_limits_before_listening() {
+    for value in ["0", "4097", "invalid"] {
+        let runtime = tempfile::tempdir().unwrap();
+        let output = daemon_command(runtime.path(), &["serve"])
+            .env("EXECUTE_DAEMON_MAX_RUNS", value)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("EXECUTE_DAEMON_MAX_RUNS"));
+        assert!(!default_socket_under(runtime.path()).exists());
     }
 }

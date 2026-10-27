@@ -24,7 +24,7 @@ impl LocatedParseError {
         }
     }
 
-    fn source_range(message: String, source_range: Range<usize>) -> Self {
+    fn at_source_range(message: String, source_range: Range<usize>) -> Self {
         Self {
             message,
             token_index: None,
@@ -1640,7 +1640,7 @@ fn tokenize_with_ranges_into<'source>(
                     }
                 }
                 if !closed {
-                    return Err(LocatedParseError::source_range(
+                    return Err(LocatedParseError::at_source_range(
                         "unterminated quoted string".into(),
                         start..bytes.len(),
                     )
@@ -1651,7 +1651,7 @@ fn tokenize_with_ranges_into<'source>(
                 } else {
                     let literal = &line[start..i];
                     let value = serde_json::from_str::<String>(literal).map_err(|_| {
-                        LocatedParseError::source_range(
+                        LocatedParseError::at_source_range(
                             format!("malformed quoted string {literal}"),
                             start..i,
                         )

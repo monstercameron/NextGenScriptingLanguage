@@ -238,14 +238,19 @@ pub(crate) fn parse_at_with_snapshot(
 ) -> (Result<Program>, SourceLoadSnapshot) {
     let snapshot = std::cell::RefCell::new(replay.cloned().unwrap_or_default());
     let parsed = match path {
-        Some(path) if snapshot.borrow().replay_only => parse_source_resolved_inner(
-            path,
-            source,
-            access,
-            #[cfg(feature = "lsp")]
-            None,
-            Some(&snapshot),
-        ),
+        Some(path) if snapshot.borrow().replay_only => {
+            // A replay must use the same canonical parent used when the request
+            // keys were captured, while still avoiding filesystem reads of callees.
+            let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            parse_source_resolved_inner(
+                &canonical,
+                source,
+                access,
+                #[cfg(feature = "lsp")]
+                None,
+                Some(&snapshot),
+            )
+        }
         Some(path) => {
             match fs::canonicalize(path).with_context(|| format!("resolving {}", path.display())) {
                 Ok(canonical) => parse_source_resolved_inner(
@@ -280,14 +285,14 @@ pub(crate) fn parse_at_scoped<'a>(
                     source,
                     access,
                     scope,
-                    scope.map(|scope| &scope.snapshot),
+                    scope.map(|scope| &*scope.snapshot),
                 );
             }
             let canonical =
                 fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))?;
             let snapshot = scope
                 .filter(|scope| scope.capture_sources || scope.replay_only)
-                .map(|scope| &scope.snapshot);
+                .map(|scope| &*scope.snapshot);
             parse_source_resolved_inner(&canonical, source, access, scope, snapshot)
         }
         None => parser::parse(source),
@@ -415,7 +420,7 @@ impl Loader<'_> {
         if self.called.len() >= MAX_CALLED_FILES {
             bail!("line {line}: a program may call at most {MAX_CALLED_FILES} program files");
         }
-        let overlay = {
+        let overlay: Option<&&str> = {
             #[cfg(feature = "lsp")]
             {
                 self.scope

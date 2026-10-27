@@ -652,23 +652,23 @@ fn analyze_source_impl(
             std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
         }
     });
-    let mut captured_snapshot = None;
     #[cfg(feature = "lsp")]
-    let parsed = if scope.is_some() {
-        crate::program_files::parse_at_scoped(source, path, Some(access), scope)
+    let (parsed, captured_snapshot) = if scope.is_some() {
+        (
+            crate::program_files::parse_at_scoped(source, path, Some(access), scope),
+            None,
+        )
     } else {
         let (parsed, loaded) =
             crate::program_files::parse_at_with_snapshot(source, path, Some(access), snapshot);
-        captured_snapshot = Some(loaded);
-        parsed
+        (parsed, Some(loaded))
     };
     #[cfg(not(feature = "lsp"))]
-    let (parsed, loaded) =
-        crate::program_files::parse_at_with_snapshot(source, path, Some(access), snapshot);
-    #[cfg(not(feature = "lsp"))]
-    {
-        captured_snapshot = Some(loaded);
-    }
+    let (parsed, captured_snapshot) = {
+        let (parsed, loaded) =
+            crate::program_files::parse_at_with_snapshot(source, path, Some(access), snapshot);
+        (parsed, Some(loaded))
+    };
     match parsed {
         Ok(program) => {
             collect_lint_diagnostics(source, &program, &line_starts, &mut diagnostics);
@@ -687,9 +687,14 @@ fn analyze_source_impl(
                 });
             }
             let mut local_program = program.clone();
-            local_program
-                .definitions
-                .retain(|name, _| !name.starts_with("file:"));
+            local_program.definitions = std::sync::Arc::new(
+                program
+                    .definitions
+                    .iter()
+                    .filter(|(name, _)| !name.starts_with("file:"))
+                    .map(|(name, definition)| (name.clone(), definition.clone()))
+                    .collect(),
+            );
             collect_program_diagnostics(
                 source,
                 &local_program,
@@ -712,7 +717,7 @@ fn analyze_source_impl(
                     .map(crate::program_files::SourceLoadSnapshot::replay);
                 let mut calls = Vec::new();
                 collect_file_calls(&program.steps, &mut calls);
-                for (name, definition) in &program.definitions {
+                for (name, definition) in program.definitions.iter() {
                     if name.starts_with("file:") {
                         continue;
                     }
@@ -1227,6 +1232,7 @@ fn collect_lint_diagnostics(
                 message: format!("quoted executable name {:?} is treated as one filename; split the executable from its arguments", call.operation),
                 span,
                 fixes: Vec::new(),
+                related: Vec::new(),
             };
             if !call.parameters.contains_key("arguments") {
                 let mut words = call.operation.split_whitespace();
@@ -1285,6 +1291,7 @@ fn collect_lint_diagnostics(
                     message: format!("argument {index} contains shell expansion syntax, but Execute passes it literally; declare an environment input or format the value explicitly"),
                     span,
                     fixes,
+                    related: Vec::new(),
                 });
             }
         }
@@ -1665,6 +1672,7 @@ fn collect_path_literal_diagnostics(
                     message: format!("path parameter {name:?} contains shell expansion syntax, but Execute passes it literally; use an explicit environment input or format the path"),
                     span: parameter_value_span_at(source, line, name, line_starts).unwrap_or_else(|| line_starts.span(source, line)),
                     fixes,
+                    related: Vec::new(),
                 });
             }
         }
@@ -1686,6 +1694,7 @@ fn collect_path_literal_diagnostics(
                 message: "path contains shell expansion syntax, but Execute treats it literally; use an explicit environment input or format the path".into(),
                 span: line_starts.span(source, step.line),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
     }
@@ -1788,6 +1797,7 @@ fn collect_unused_names(
                 message: format!("input {:?} is declared but never read", input.name),
                 span: binding_span(source, line_starts, input.line, &input.name),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
     }
@@ -1801,6 +1811,7 @@ fn collect_unused_names(
                 message: format!("binding {name:?} is never read"),
                 span: binding_span(source, line_starts, line, &name),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
     }
@@ -2049,6 +2060,7 @@ fn collect_step_lints(
                 message: "repeat 0 times never executes its body".into(),
                 span: line_starts.span(source, step.line),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
     }
@@ -2091,6 +2103,7 @@ fn collect_unreachable_lints(
                         .into(),
                 span: line_starts.span(source, step.line),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
         if matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. }) {
@@ -2174,6 +2187,7 @@ fn collect_model_lints(
                 span: find_phrase_span_at(source, *line, &call.operation, line_starts)
                     .unwrap_or_else(|| line_starts.span(source, *line)),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
     }
@@ -2239,6 +2253,7 @@ fn collect_model_lints(
                 ),
                 span: line_starts.span(source, *line),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
     }
@@ -2338,6 +2353,7 @@ fn collect_model_lints(
                 message: "model-generated text is passed as a shell command; keep it as data and use fixed, reviewed commands".into(),
                 span: parameter_value_span_at(source, line, "arguments", line_starts).unwrap_or_else(|| line_starts.span(source, line)),
                 fixes: Vec::new(),
+                related: Vec::new(),
             });
         }
     }
@@ -3626,7 +3642,27 @@ fn collect_step_value_references(
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for step in steps {
+    let mut program_input_scopes = Vec::<(usize, Vec<String>)>::new();
+    for (index, step) in steps.iter().enumerate() {
+        while program_input_scopes
+            .last()
+            .is_some_and(|(end, _)| index >= *end)
+        {
+            if let Some((_, names)) = program_input_scopes.pop() {
+                for name in names {
+                    known_names.remove(&name);
+                }
+            }
+        }
+        if let StepKind::CallProgram { inputs, end, .. } = &step.kind {
+            let mut names_to_remove = Vec::new();
+            for input in inputs {
+                if known_names.insert(input.name.clone()) {
+                    names_to_remove.push(input.name.clone());
+                }
+            }
+            program_input_scopes.push((index.saturating_add(*end), names_to_remove));
+        }
         let mut values = Vec::new();
         match &step.kind {
             StepKind::If { condition, .. } => {

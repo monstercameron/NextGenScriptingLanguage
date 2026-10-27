@@ -6956,7 +6956,7 @@ mod first_token_rule_tests {
     #[test]
     fn arbitrary_shadow_manifests_keep_unrestricted_string_parameters() {
         let custom = parse_manifest(
-            r#"{"name":"fs.ensure_file","binary":"custom-helper","parameters":{"mode":{"type":"string"}},"arguments":[{"parameter":"mode"}]}"#,
+            r#"{"name":"fs.ensure_file","binary":"custom-helper","parameters":{"mode":{"type":"string","required":true}},"arguments":[{"parameter":"mode"}]}"#,
         )
         .unwrap();
         let supplied = BTreeMap::from([("mode".into(), Value::String("custom-format".into()))]);

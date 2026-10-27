@@ -510,6 +510,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         required: required.clone(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     };
     let mut inputs = BTreeMap::from([("properties".into(), PortSchema::single(properties))]);
     let updates = ValueSchema {
@@ -525,6 +526,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     };
     inputs.insert("property_updates".into(), PortSchema::records(updates));
     let events = if component == "button" {
@@ -543,6 +545,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
                 required: Vec::new(),
                 enum_values: None,
                 single_line: false,
+                minimum: None,
             }),
         )])
     } else {
@@ -662,6 +665,7 @@ fn node_for_call(
                 required: schema.required.clone(),
                 enum_values: schema.enum_values.clone(),
                 single_line: false,
+                minimum: None,
             })
             .unwrap_or_else(|| leaf_schema(OutputType::Bytes));
         outputs.insert(
@@ -817,6 +821,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
                 })
                 .unwrap_or_default();
             let enum_values = parse_string_enum(value)?;
+            let minimum = parse_numeric_minimum(value)?;
             return Ok(ValueSchema {
                 scalar_only: false,
                 additional_properties: None,
@@ -830,6 +835,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
                 items: None,
                 enum_values,
                 single_line: false,
+                minimum,
             });
         }
         return Ok(leaf_schema(OutputType::Json));
@@ -843,6 +849,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
         None
     };
     let enum_values = parse_string_enum(value)?;
+    let minimum = parse_numeric_minimum(value)?;
     Ok(ValueSchema {
         scalar_only: false,
         additional_properties: None,
@@ -856,7 +863,16 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
         items,
         enum_values,
         single_line: false,
+        minimum,
     })
+}
+
+fn parse_numeric_minimum(value: &serde_json::Value) -> Result<Option<serde_json::Number>> {
+    match value.get("minimum") {
+        None => Ok(None),
+        Some(serde_json::Value::Number(minimum)) => Ok(Some(minimum.clone())),
+        Some(_) => bail!("numeric schema minimum must be a JSON number"),
+    }
 }
 
 fn leaf_schema(kind: OutputType) -> ValueSchema {
@@ -873,6 +889,7 @@ fn leaf_schema(kind: OutputType) -> ValueSchema {
         items: None,
         enum_values: None,
         single_line: false,
+        minimum: None,
     }
 }
 

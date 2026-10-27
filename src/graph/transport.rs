@@ -1610,6 +1610,7 @@ mod payload_size_tests {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         }
     }
 
@@ -3342,6 +3343,7 @@ mod input_cursor_tests {
                 required: Vec::new(),
                 enum_values: None,
                 single_line: false,
+                minimum: None,
             }),
         )]);
         node_io_with_initial(
@@ -3433,6 +3435,7 @@ mod input_cursor_tests {
                 required: Vec::new(),
                 enum_values: None,
                 single_line: false,
+                minimum: None,
             }),
         )]);
         let mut io = node_io_with_initial(
@@ -3913,6 +3916,7 @@ mod emit_fanout_tests {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         }
     }
 

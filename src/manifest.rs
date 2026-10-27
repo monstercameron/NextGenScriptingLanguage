@@ -4158,6 +4158,7 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         });
     }
     let mut schema = parameter_field_value_schema(
@@ -4264,6 +4265,7 @@ fn parameter_field_value_schema(
         required,
         enum_values: None,
         single_line: false,
+        minimum: None,
     })
 }
 
@@ -4281,6 +4283,7 @@ fn output_value_schema(output: &OutputSchema) -> ValueSchema {
         required: output.required.clone(),
         enum_values: output.enum_values.clone(),
         single_line: false,
+        minimum: None,
     }
 }
 
@@ -4298,6 +4301,7 @@ fn leaf_value_schema(kind: OutputType) -> ValueSchema {
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     }
 }
 

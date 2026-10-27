@@ -614,6 +614,13 @@ pub struct ValueSchema {
     /// Empty text remains valid.
     #[serde(default, skip_serializing_if = "is_false")]
     pub single_line: bool,
+    /// Inclusive numeric lower bound when `type` is `integer` or `number`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub minimum: Option<serde_json::Number>,
 }
 
 /// A named typed port on a versioned applet interface.
@@ -727,6 +734,7 @@ impl ValueSchema {
             self.enum_values.as_deref(),
             self.single_line,
             self.nullable,
+            self.minimum.as_ref(),
             true,
         )
     }
@@ -745,6 +753,7 @@ impl ValueSchema {
             self.enum_values.as_deref(),
             self.single_line,
             self.nullable,
+            self.minimum.as_ref(),
         )
     }
 
@@ -786,6 +795,23 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
     let target_accepts_null = target.nullable || target.kind == OutputType::Json;
     if source_may_be_null && !target_accepts_null {
         return false;
+    }
+    if let Some(target_minimum) = target.minimum.as_ref() {
+        let minimum_satisfied = match source.kind {
+            OutputType::Integer => {
+                let lower_bound = effective_integer_minimum(source.minimum.as_ref());
+                compare_integer_to_number(lower_bound, target_minimum)
+                    .is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
+            }
+            OutputType::Number => source.minimum.as_ref().is_some_and(|source_minimum| {
+                compare_numbers(source_minimum, target_minimum)
+                    .is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
+            }),
+            _ => true,
+        };
+        if !minimum_satisfied {
+            return false;
+        }
     }
     if source.kind != target.kind {
         return true;
@@ -938,9 +964,15 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
             }
             Ok(())
         }
-        (OutputType::Integer, Value::Integer(_))
-        | (OutputType::Number, Value::Integer(_) | Value::Number(_))
-        | (OutputType::Boolean, Value::Bool(_)) => Ok(()),
+        (OutputType::Integer, Value::Integer(value))
+        | (OutputType::Number, Value::Integer(value)) => validate_numeric_minimum(
+            schema.minimum.as_ref(),
+            NumericValue::Integer(i128::from(*value)),
+        ),
+        (OutputType::Number, Value::Number(value)) => {
+            validate_numeric_minimum(schema.minimum.as_ref(), NumericValue::Number(value))
+        }
+        (OutputType::Boolean, Value::Bool(_)) => Ok(()),
         (OutputType::Json, value) => {
             if schema.scalar_only
                 && !matches!(
@@ -987,6 +1019,106 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
         }
         (kind, _) => bail!("expected {kind:?} value"),
     }
+}
+
+fn validate_numeric_minimum(
+    minimum: Option<&serde_json::Number>,
+    value: NumericValue<'_>,
+) -> Result<()> {
+    if let Some(minimum) = minimum {
+        let ordering = match value {
+            NumericValue::Integer(value) => compare_integer_to_number(value, minimum),
+            NumericValue::Number(value) => compare_numbers(value, minimum),
+        }
+        .ok_or_else(|| anyhow!("numeric value or schema minimum is not finite"))?;
+        if ordering == std::cmp::Ordering::Less {
+            bail!("numeric value is below the minimum {minimum}");
+        }
+    }
+    Ok(())
+}
+
+enum NumericValue<'a> {
+    Integer(i128),
+    Number(&'a serde_json::Number),
+}
+
+fn compare_numbers(
+    left: &serde_json::Number,
+    right: &serde_json::Number,
+) -> Option<std::cmp::Ordering> {
+    match (integer_number(left), integer_number(right)) {
+        (Some(left), Some(right)) => Some(left.cmp(&right)),
+        (Some(left), None) => compare_integer_to_float(left, right.as_f64()?),
+        (None, Some(right)) => compare_integer_to_float(right, left.as_f64()?)
+            .map(std::cmp::Ordering::reverse),
+        (None, None) => {
+            let left = left.as_f64()?;
+            let right = right.as_f64()?;
+            if left.is_finite() && right.is_finite() {
+                left.partial_cmp(&right)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn integer_number(number: &serde_json::Number) -> Option<i128> {
+    number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+}
+
+fn compare_integer_to_number(
+    integer: i128,
+    number: &serde_json::Number,
+) -> Option<std::cmp::Ordering> {
+    match integer_number(number) {
+        Some(number) => Some(integer.cmp(&number)),
+        None => compare_integer_to_float(integer, number.as_f64()?),
+    }
+}
+
+fn compare_integer_to_float(integer: i128, float: f64) -> Option<std::cmp::Ordering> {
+    if !float.is_finite() {
+        return None;
+    }
+    if float >= 2_f64.powi(127) {
+        return Some(std::cmp::Ordering::Less);
+    }
+    if float < -2_f64.powi(127) {
+        return Some(std::cmp::Ordering::Greater);
+    }
+    // Compare against the exact integer part of the f64, then inspect its
+    // fractional remainder. Never cast `integer` to f64: that loses unit
+    // precision above 2^53.
+    let truncated = float.trunc() as i128;
+    Some(match integer.cmp(&truncated) {
+        std::cmp::Ordering::Equal if float.fract() > 0.0 => std::cmp::Ordering::Less,
+        std::cmp::Ordering::Equal if float.fract() < 0.0 => std::cmp::Ordering::Greater,
+        ordering => ordering,
+    })
+}
+
+fn effective_integer_minimum(minimum: Option<&serde_json::Number>) -> i128 {
+    let Some(minimum) = minimum else {
+        return i128::from(i64::MIN);
+    };
+    if let Some(minimum) = integer_number(minimum) {
+        return minimum.max(i128::from(i64::MIN));
+    }
+    let Some(minimum) = minimum.as_f64() else {
+        return i128::from(i64::MIN);
+    };
+    if minimum <= i64::MIN as f64 {
+        return i128::from(i64::MIN);
+    }
+    if minimum >= 2_f64.powi(63) {
+        return i128::from(i64::MAX) + 1;
+    }
+    minimum.ceil() as i128
 }
 
 impl AppletPort {
@@ -1175,6 +1307,7 @@ impl OutputSchema {
             self.enum_values.as_deref(),
             false,
             false,
+            None,
             true,
         )?;
         if self
@@ -1363,6 +1496,7 @@ impl OutputSchema {
             self.enum_values.as_deref(),
             false,
             false,
+            None,
         );
         let object = schema
             .as_object_mut()
@@ -1391,8 +1525,17 @@ fn validate_schema_parts(
     enum_values: Option<&[String]>,
     single_line: bool,
     nullable: bool,
+    minimum: Option<&serde_json::Number>,
     top_level: bool,
 ) -> Result<()> {
+    if let Some(minimum) = minimum {
+        if !matches!(kind, OutputType::Integer | OutputType::Number) {
+            bail!("minimum constraints apply only to numeric schemas");
+        }
+        if !minimum.as_f64().is_some_and(f64::is_finite) {
+            bail!("numeric schema minimum must be finite");
+        }
+    }
     if kind != OutputType::Record
         && (!fields.is_empty()
             || !required.is_empty()
@@ -1461,6 +1604,7 @@ fn validate_schema_parts(
             schema.enum_values.as_deref(),
             schema.single_line,
             schema.nullable,
+            schema.minimum.as_ref(),
             false,
         )?;
     }
@@ -1481,6 +1625,7 @@ fn validate_schema_parts(
             schema.enum_values.as_deref(),
             schema.single_line,
             schema.nullable,
+            schema.minimum.as_ref(),
             false,
         )?;
     }
@@ -1501,6 +1646,7 @@ fn validate_schema_parts(
             items.enum_values.as_deref(),
             items.single_line,
             items.nullable,
+            items.minimum.as_ref(),
             false,
         )?;
     }
@@ -1526,6 +1672,7 @@ fn schema_json(
     enum_values: Option<&[String]>,
     single_line: bool,
     nullable: bool,
+    minimum: Option<&serde_json::Number>,
 ) -> serde_json::Value {
     let mut schema = match kind {
         OutputType::Bytes => serde_json::json!({"type":"bytes"}),
@@ -1583,6 +1730,7 @@ fn schema_json(
                             schema.enum_values.as_deref(),
                             schema.single_line,
                             schema.nullable,
+                            schema.minimum.as_ref(),
                         ),
                     )
                 })
@@ -1602,6 +1750,7 @@ fn schema_json(
                         schema.enum_values.as_deref(),
                         schema.single_line,
                         schema.nullable,
+                        schema.minimum.as_ref(),
                     )
                 });
             let mut object = serde_json::json!({
@@ -1633,11 +1782,15 @@ fn schema_json(
                     item.enum_values.as_deref(),
                     item.single_line,
                     item.nullable,
+                    item.minimum.as_ref(),
                 )
             });
             list
         }
     };
+    if let Some(minimum) = minimum {
+        schema["minimum"] = serde_json::Value::Number(minimum.clone());
+    }
     if nullable && kind != OutputType::Json {
         if enum_values.is_some() {
             return serde_json::json!({"anyOf":[schema,{"type":"null"}]});
@@ -2225,6 +2378,7 @@ impl AppletContract {
             required: output.required.clone(),
             enum_values: output.enum_values.clone(),
             single_line: false,
+            minimum: None,
         };
         let text_schema = || ValueSchema {
             scalar_only: false,
@@ -2239,6 +2393,7 @@ impl AppletContract {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         };
         let integer_schema = ValueSchema {
             scalar_only: false,
@@ -2253,6 +2408,7 @@ impl AppletContract {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         };
         let fields = BTreeMap::from([
             ("value".into(), value_schema),
@@ -2280,6 +2436,7 @@ impl AppletContract {
             ],
             enum_values: None,
             single_line: false,
+            minimum: None,
         })
     }
 

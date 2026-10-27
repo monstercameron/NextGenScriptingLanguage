@@ -75,6 +75,7 @@ pub(crate) fn value_schema_from_output(output: &OutputSchema) -> ValueSchema {
         required: output.required.clone(),
         enum_values: output.enum_values.clone(),
         single_line: false,
+        minimum: None,
     }
 }
 
@@ -828,6 +829,7 @@ impl GraphPlan {
                                 required: Vec::new(),
                                 enum_values: None,
                                 single_line: false,
+                                minimum: None,
                             }),
                         )]),
                         crate::ast::ListenSource::Applet(_)
@@ -868,6 +870,7 @@ impl GraphPlan {
                                 required: Vec::new(),
                                 enum_values: None,
                                 single_line: false,
+                                minimum: None,
                             }),
                         )]),
                     };
@@ -1616,6 +1619,7 @@ fn validate_result_event_node(
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         }
     };
     if node.events[event_port].schema != canonical_result_schema {

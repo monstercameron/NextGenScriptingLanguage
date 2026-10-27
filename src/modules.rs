@@ -1988,6 +1988,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         required: output.required.clone(),
         enum_values: output.enum_values.clone(),
         single_line: false,
+        minimum: None,
     };
     if !result_envelope {
         return Ok(value_schema);
@@ -2005,6 +2006,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     };
     let integer_schema = ValueSchema {
         scalar_only: false,
@@ -2019,6 +2021,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         required: Vec::new(),
         enum_values: None,
         single_line: false,
+        minimum: None,
     };
     Ok(ValueSchema {
         scalar_only: false,
@@ -2051,6 +2054,7 @@ fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<
         ],
         enum_values: None,
         single_line: false,
+        minimum: None,
     })
 }
 
@@ -2508,6 +2512,7 @@ mod tests {
                         required: Vec::new(),
                         enum_values: None,
                         single_line: false,
+                        minimum: None,
                     },
                 ),
                 (
@@ -2525,6 +2530,7 @@ mod tests {
                         required: Vec::new(),
                         enum_values: None,
                         single_line: false,
+                        minimum: None,
                     },
                 ),
             ]),
@@ -2957,6 +2963,7 @@ mod tests {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         };
         assert!(port_schema_accepts_input(&path_schema, InputType::Text));
 
@@ -2973,6 +2980,7 @@ mod tests {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            minimum: None,
         };
         assert!(port_schema_accepts_input(
             &path_list_schema,

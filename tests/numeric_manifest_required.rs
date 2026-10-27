@@ -155,6 +155,63 @@ fn rounding_and_format_controls_remain_optional_and_usable() {
 }
 
 #[test]
+fn format_size_rejects_negative_values_but_accepts_fractional_and_dynamic_inputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("format-size.program");
+    let run = |source: &str, action: &str| {
+        fs::write(&path, source).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg(action)
+            .arg(&path)
+            .arg("--manifest-dir")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/manifests"))
+            .output()
+            .unwrap()
+    };
+
+    let negative = run("run number.format_size with value -1\n", "check");
+    assert!(!negative.status.success());
+    assert!(String::from_utf8_lossy(&negative.stderr).contains("minimum"));
+
+    let fractional = run("run number.format_size with value 0.5\n", "check");
+    assert!(
+        fractional.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fractional.stderr)
+    );
+    let fractional_run = run("run number.format_size with value 0.5\n", "run");
+    assert!(
+        fractional_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fractional_run.stderr)
+    );
+
+    let dynamic_source = concat!(
+        "run json.parse with text \"-0.5\" as amount\n",
+        "run number.format_size with value amount\n"
+    );
+    let dynamic_check = run(dynamic_source, "check");
+    assert!(
+        dynamic_check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dynamic_check.stderr)
+    );
+    let dynamic_run = run(dynamic_source, "run");
+    assert!(!dynamic_run.status.success());
+
+    let dynamic_fractional_source = concat!(
+        "run json.parse with text \"0.5\" as amount\n",
+        "run number.format_size with value amount\n"
+    );
+    let dynamic_fractional = run(dynamic_fractional_source, "run");
+    assert!(
+        dynamic_fractional.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dynamic_fractional.stderr)
+    );
+}
+
+#[test]
 fn default_catalog_checks_and_runs_numeric_contracts() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("default.program");

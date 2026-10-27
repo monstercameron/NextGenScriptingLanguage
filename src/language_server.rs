@@ -2038,6 +2038,38 @@ mod tests {
         }), "{diagnostics:#?}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn open_callee_overlay_survives_backing_file_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let caller = root.join("caller.program");
+        let callee = root.join("callee.program");
+        let caller_text = "run program file \"callee.program\"\n";
+        let overlay_text = "accept theme as text\nrun \"printf\" with arguments [them]\n";
+        fs::write(&caller, caller_text).unwrap();
+        fs::write(&callee, "run \"printf\" with arguments [\"disk\"]\n").unwrap();
+        let mut overlays = BTreeMap::new();
+        overlays.insert(callee.clone(), overlay_text);
+        let scope = crate::program_files::SourceScope::new(&root, &overlays)
+            .with_source_snapshots();
+        let registry = Registry::default();
+        let access = crate::program_files::Access {
+            registry: &registry,
+            cwd: &root,
+        };
+        fs::remove_file(&callee).unwrap();
+
+        crate::program_files::parse_at_scoped(
+            caller_text,
+            Some(&caller),
+            Some(access),
+            Some(&scope),
+        )
+        .expect("an open callee overlay should be usable without its disk file");
+        assert_eq!(scope.loaded_source(&callee).as_deref(), Some(overlay_text));
+    }
+
     #[test]
     fn routed_callee_diagnostics_refresh_when_the_caller_closes_or_error_is_fixed() {
         let dir = tempfile::tempdir().unwrap();

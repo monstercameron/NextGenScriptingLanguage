@@ -49,6 +49,33 @@ impl SourceLoadSnapshot {
     }
 }
 
+#[cfg(feature = "lsp")]
+fn canonicalize_called_path(path: &Path, scope: Option<&SourceScope<'_>>) -> std::io::Result<PathBuf> {
+    match fs::canonicalize(path) {
+        Ok(canonical) => Ok(canonical),
+        Err(error) => {
+            // A dirty editor buffer remains a valid source after its backing file is
+            // removed. Recover only an exact open-document path whose parent still
+            // resolves; workspace containment is checked by the loader afterwards.
+            let Some(scope) = scope else {
+                return Err(error);
+            };
+            let Some(name) = path.file_name() else {
+                return Err(error);
+            };
+            let Some(parent) = path.parent().and_then(|parent| fs::canonicalize(parent).ok()) else {
+                return Err(error);
+            };
+            let candidate = parent.join(name);
+            if scope.open_documents.contains_key(&candidate) {
+                Ok(candidate)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
 /// What a load may consult: the registry, which carries the capability policy, and
 /// the working directory that relative policy grants resolve against.
 #[derive(Clone, Copy)]
@@ -313,8 +340,15 @@ impl Loader<'_> {
         }
         let canonical = match &replayed {
             Some((canonical, _)) => canonical.clone(),
-            None => fs::canonicalize(path)
-                .with_context(|| format!("line {line}: program file {} not found", path.display()))?,
+            None => {
+                #[cfg(feature = "lsp")]
+                let resolved = canonicalize_called_path(path, self.scope);
+                #[cfg(not(feature = "lsp"))]
+                let resolved = fs::canonicalize(path);
+                resolved.with_context(|| {
+                    format!("line {line}: program file {} not found", path.display())
+                })?
+            }
         };
         let shown = display_path(&canonical);
         #[cfg(feature = "lsp")]
@@ -358,30 +392,35 @@ impl Loader<'_> {
         if self.called.len() >= MAX_CALLED_FILES {
             bail!("line {line}: a program may call at most {MAX_CALLED_FILES} program files");
         }
-        let disk_source = if let Some((_, source)) = &replayed {
-            source.clone()
-        } else {
-            authorize_read(access, &canonical, &shown, line)?;
-            read_program_file(&canonical, &shown, line)?
-        };
-        let source = if let Some((_, source)) = &replayed {
-            source.as_str()
-        } else {
+        let overlay = {
             #[cfg(feature = "lsp")]
-            if let Some(edited) = self
-                .scope
-                .and_then(|scope| scope.open_documents.get(&canonical))
             {
-                if edited.len() as u64 > MAX_PROGRAM_FILE_BYTES {
-                    bail!("line {line}: program file {shown} is larger than 1 MiB");
-                }
-                *edited
-            } else {
-                disk_source.as_str()
+                self.scope.and_then(|scope| scope.open_documents.get(&canonical))
             }
             #[cfg(not(feature = "lsp"))]
-            disk_source.as_str()
+            {
+                None
+            }
         };
+        if let Some(edited) = overlay {
+            if edited.len() as u64 > MAX_PROGRAM_FILE_BYTES {
+                bail!("line {line}: program file {shown} is larger than 1 MiB");
+            }
+        }
+        if replayed.is_none() {
+            authorize_read(access, &canonical, &shown, line)?;
+        }
+        let disk_source = if replayed.is_some() || overlay.is_some() {
+            None
+        } else {
+            Some(read_program_file(&canonical, &shown, line)?)
+        };
+        let source = replayed
+            .as_ref()
+            .map(|(_, source)| source.as_str())
+            .or(overlay.copied())
+            .or_else(|| disk_source.as_deref())
+            .expect("a source is available from replay, overlay, or disk");
         if let Some(snapshot) = self.snapshot {
             let mut snapshot = snapshot.borrow_mut();
             #[cfg(feature = "lsp")]

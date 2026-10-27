@@ -366,3 +366,85 @@ fn timeout_and_interval_ranges_match_check_and_runtime() {
         }
     }
 }
+
+#[test]
+fn tcp_port_range_is_conditional_and_dynamic_values_remain_runtime_checked() {
+    let root = tempfile::tempdir().unwrap();
+    let valid_literals = [0, 65535];
+    let invalid_literals = [-1, 65536];
+
+    for disk_manifests in [false, true] {
+        for port in valid_literals {
+            let source = format!(
+                "run wait.until with probe \"tcp_port_open\" and host \"127.0.0.1\" and port {port} and timeout_ms 0\n"
+            );
+            for command in ["check", "run"] {
+                let output = execute(root.path(), command, &source, disk_manifests);
+                assert!(
+                    output.status.success(),
+                    "{command} rejected valid TCP port {port}; disk_manifests={disk_manifests}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+
+        for port in invalid_literals {
+            let source = format!(
+                "run wait.until with probe \"tcp_port_open\" and host \"127.0.0.1\" and port {port} and timeout_ms 0\n"
+            );
+            for command in ["check", "run"] {
+                let output = execute(root.path(), command, &source, disk_manifests);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    !output.status.success()
+                        && stderr.contains("port must be an integer from 0 through 65535"),
+                    "{command} accepted invalid TCP port {port}; disk_manifests={disk_manifests}: {stderr}"
+                );
+            }
+        }
+
+        // Other probe kinds ignore port, so the TCP-only bound does not apply.
+        let ignored_port = "run wait.until with probe \"file_exists\" and path \".\" and port 65536 and timeout_ms 0\n";
+        let output = execute(root.path(), "check", ignored_port, disk_manifests);
+        assert!(
+            output.status.success(),
+            "check applied the TCP port bound to file_exists; disk_manifests={disk_manifests}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let dynamic_port = "accept port as integer\nrun wait.until with probe \"tcp_port_open\" and host \"127.0.0.1\" and port port and timeout_ms 0\n";
+        let checked = execute(root.path(), "check", dynamic_port, disk_manifests);
+        assert!(
+            checked.status.success(),
+            "check rejected dynamic TCP port; disk_manifests={disk_manifests}: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        for port in valid_literals {
+            let output = execute_with_input(
+                root.path(),
+                dynamic_port,
+                &format!("port={port}"),
+                disk_manifests,
+            );
+            assert!(
+                output.status.success(),
+                "run rejected dynamic TCP port {port}; disk_manifests={disk_manifests}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        for port in invalid_literals {
+            let output = execute_with_input(
+                root.path(),
+                dynamic_port,
+                &format!("port={port}"),
+                disk_manifests,
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success()
+                    && stderr.contains("port must be an integer from 0 through 65535"),
+                "runtime accepted invalid dynamic TCP port {port}; disk_manifests={disk_manifests}: {stderr}"
+            );
+        }
+    }
+}

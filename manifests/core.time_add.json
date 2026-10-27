@@ -6,15 +6,15 @@
   "parameters": {
     "amount": {
       "type": "integer",
-      "required": false
+      "required": true
     },
     "unit": {
       "type": "string",
-      "required": false
+      "required": true
     },
     "epoch": {
       "type": "integer",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

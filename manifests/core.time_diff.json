@@ -6,15 +6,15 @@
   "parameters": {
     "left": {
       "type": "integer",
-      "required": false
+      "required": true
     },
     "right": {
       "type": "integer",
-      "required": false
+      "required": true
     },
     "unit": {
       "type": "string",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

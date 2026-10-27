@@ -6,11 +6,11 @@
   "parameters": {
     "text": {
       "type": "string",
-      "required": false
+      "required": true
     },
     "format": {
       "type": "string",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

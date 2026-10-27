@@ -6,7 +6,7 @@
   "parameters": {
     "format": {
       "type": "string",
-      "required": false
+      "required": true
     },
     "zone": {
       "type": "string",
@@ -14,7 +14,7 @@
     },
     "epoch": {
       "type": "integer",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

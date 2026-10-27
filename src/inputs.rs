@@ -239,7 +239,18 @@ impl InputDeclaration {
             (InputType::UnsignedIntegerList, serde_json::Value::Array(items))
                 if items.iter().all(|item| item.as_u64().is_some()) =>
             {
-                Value::List(items.iter().cloned().map(Value::Number).collect())
+                Value::List(
+                    items
+                        .iter()
+                        .map(|item| {
+                            Value::Number(
+                                item.as_number()
+                                    .expect("validated unsigned integer array")
+                                    .clone(),
+                            )
+                        })
+                        .collect(),
+                )
             }
             (InputType::UsizeList, serde_json::Value::Array(items))
                 if items.iter().all(|item| {
@@ -247,7 +258,18 @@ impl InputDeclaration {
                         .is_some_and(|value| value <= usize::MAX as u64)
                 }) =>
             {
-                Value::List(items.iter().cloned().map(Value::Number).collect())
+                Value::List(
+                    items
+                        .iter()
+                        .map(|item| {
+                            Value::Number(
+                                item.as_number()
+                                    .expect("validated usize array")
+                                    .clone(),
+                            )
+                        })
+                        .collect(),
+                )
             }
             (InputType::JsonList, serde_json::Value::Array(items)) => Value::List(
                 items
@@ -861,6 +883,25 @@ mod tests {
         assert!(overflow.unwrap_err().to_string().contains("64-bit integer"));
         let nul = declaration(InputType::Text).validate_value(&Value::String("x\0y".into()));
         assert!(nul.unwrap_err().to_string().contains("NUL byte"));
+    }
+
+    #[cfg(all(feature = "live", not(target_arch = "wasm32")))]
+    #[test]
+    fn live_unsigned_integer_lists_preserve_exact_json_numbers() {
+        let cases = [
+            (InputType::UnsignedIntegerList, u64::MAX),
+            (InputType::UsizeList, 42),
+        ];
+
+        for (kind, value) in cases {
+            let parsed = declaration(kind)
+                .parse_json(&serde_json::json!([value]))
+                .unwrap();
+            assert_eq!(
+                parsed,
+                Value::List(vec![Value::Number(serde_json::Number::from(value))])
+            );
+        }
     }
 
     #[test]

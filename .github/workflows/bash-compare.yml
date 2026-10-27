@@ -32,10 +32,14 @@ jobs:
         with:
           key: ${{ matrix.variant }}
       - run: sudo apt-get install -y --no-install-recommends time strace musl-tools
+      - name: Install perf for instruction counts (best effort)
+        run: sudo apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic || true
       - name: Check benchmark workload contracts
         run: python3 -m unittest tests/test_bash_compare.py -v
       - name: Check stored Execute/Bash ratio regression gate
         run: python3 -m unittest tests/test_bash_ratio_regression.py -v
+      - name: Check CPU-bound instruction regression gate
+        run: python3 -m unittest tests/test_instruction_regression.py -v
       - name: Build
         env:
           VARIANT: ${{ matrix.variant }}

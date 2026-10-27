@@ -32,7 +32,10 @@ the inventory, grouping and shell oracles.
 
 The bash-compare.yml workflow runs the contract test and then compares all configured
 release/profile variants on ubuntu-24.04 and ubuntu-24.04-arm. The report includes
-scenario group, medians, peak RSS when GNU time is available, and binary sizes. Defaults
+scenario group, medians with bootstrap 95% confidence intervals, peak RSS when GNU
+time is available, median user instruction counts when Linux perf is available, and
+binary sizes. `tools/check_instruction_regression.py` gates the CPU-bound rows at +2%
+against a stored baseline. Defaults
 are two warmups and twenty samples, with fewer samples for the larger workloads. A
 285-second end-to-end budget (300-second maximum) bounds each run. Scenarios that write
 files or checkpoint state reset their temporary outputs between invocations. Each report

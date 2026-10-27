@@ -209,12 +209,20 @@ pipeline equivalent for the dash arm.
 
 Each timed scenario has 2 warmups and 20 samples (10 for the spawn, 10,000-line,
 command-substitution cases; 5 for the 100 MB pipe and 1 MB capture; 4 for the 1,000-file
-file-test case), reported as medians.
+file-test case), reported as medians. Each median carries a deterministic bootstrap
+95% confidence interval computed from its own samples (1,000 resamples, fixed seed),
+retained per arm in the JSON report.
 Bash uses --norc --noprofile; dash runs for all 22 scenarios. Execute runs
 execute run FILE with the workflow's explicit manifest directory. Peak RSS uses GNU
 /usr/bin/time -f %M, at most three runs per arm, with the same temporary working
-directory and fresh output/checkpoint fixtures. Every child has a 30-second timeout and
-the harness stops at a 285-second end-to-end budget (hard maximum 300 seconds).
+directory and fresh output/checkpoint fixtures. On Linux with a working perf counter,
+each arm also reports the median user instruction count (`perf stat -e
+instructions:u`, three samples) next to wall time, and
+[tools/check_instruction_regression.py](../tools/check_instruction_regression.py)
+gates the CPU-bound rows at +2% against a stored baseline. Where perf is missing or
+forbidden from counting, those rows report `-` instead of a count. Every child has a
+30-second timeout and the harness stops at a 285-second end-to-end budget (hard maximum
+300 seconds).
 [bash-compare.yml](../.github/workflows/bash-compare.yml) runs the workload-contract
 test and comparison for each release/profile variant on ubuntu-24.04 and
 ubuntu-24.04-arm, retaining a grouped JSON report. The local macOS expanded table above
@@ -222,8 +230,8 @@ is diagnostic; the Linux eight-scenario table below is a historical snapshot. Th
 latest Linux workflow artifacts remain the source for per-profile CI results.
 What it does not show. The pairs use each runtime's natural operation, so they compare
 jobs rather than isolating interpreter overhead. The runners are shared machines, files
-are warm in the page cache, and the 20-run medians have no confidence intervals; small
-differences are within noise. The 100 MB case checks the byte count through a pipe; the
+are warm in the page cache, and wall-time point estimates stay noisy; use the retained
+bootstrap intervals before reading a few-percent gap as a win or a regression. The 100 MB case checks the byte count through a pipe; the
 1 MB case compares command substitution with a captured Execute binding. The checkpoint
 case compares checkpoint creation for a finite Execute loop with shell recomputation.
 These workloads do not measure Omarchy scripts, network or disk-bound work, Windows or

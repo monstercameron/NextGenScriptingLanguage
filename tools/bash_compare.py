@@ -3,7 +3,10 @@
 
 Each scenario pairs a bash command line with an Execute program that does the same
 work, feeds both the same stdin, and reports the median wall time and, on POSIX,
-the peak resident set size of each. The report ends with the size of each binary.
+the peak resident set size of each. Every timed arm also reports a deterministic
+bootstrap 95% confidence interval for its median wall time, and on Linux with a
+working perf counter the median user instruction count (`instructions:u`) next to
+wall time. The report ends with the size of each binary.
 Bash runs with `--norc --noprofile`; nothing is cached between runs except what
 the OS caches for both.
 
@@ -16,6 +19,7 @@ import hashlib
 import json
 import os
 import platform
+import random
 import signal
 import shutil
 import statistics
@@ -425,7 +429,33 @@ def peak_rss_kb(command, stdin_path, time_binary, repeats=3, cwd=None, before_ea
     return peak
 
 
-def measure(command, stdin_path, runs, warmup, label, time_binary, cwd=None, before_each=None, deadline=None):
+BOOTSTRAP_RESAMPLES = 1000
+BOOTSTRAP_SEED = 0xC10C
+
+
+def median_confidence_interval(samples, *, resamples=BOOTSTRAP_RESAMPLES, seed=BOOTSTRAP_SEED):
+    """Bootstrap 95% confidence interval for the median of wall-time samples.
+
+    Deterministic: a fixed seed drives every resample, so the same samples
+    always produce the same interval. Pure standard library.
+    """
+    if not samples:
+        raise ValueError("cannot build a confidence interval without samples")
+    if resamples < 1:
+        raise ValueError("resample count must be positive")
+    rng = random.Random(seed)
+    count = len(samples)
+    medians = []
+    for _ in range(resamples):
+        medians.append(statistics.median(samples[rng.randrange(count)] for _ in range(count)))
+    medians.sort()
+    low = medians[min(len(medians) - 1, max(0, round(0.025 * (len(medians) - 1))))]
+    high = medians[min(len(medians) - 1, max(0, round(0.975 * (len(medians) - 1))))]
+    return (low, high)
+
+
+def measure(command, stdin_path, runs, warmup, label, time_binary, cwd=None, before_each=None, deadline=None,
+            perf_binary=None, instruction_repeats=3):
     for _ in range(warmup):
         if before_each:
             before_each()
@@ -440,11 +470,20 @@ def measure(command, stdin_path, runs, warmup, label, time_binary, cwd=None, bef
         if returncode != 0:
             raise RuntimeError(f"{label} failed with status {returncode}: {message}")
         samples.append(elapsed)
+    ci_low_ms, ci_high_ms = median_confidence_interval(samples)
+    instructions = perf_instructions(
+        command, stdin_path, perf_binary, cwd=cwd, before_each=before_each,
+        deadline=deadline, repeats=instruction_repeats,
+    )
     return {
         "median_ms": statistics.median(samples),
         "min_ms": min(samples),
         "runs": runs,
         "samples_ms": samples,
+        "median_ci_low_ms": ci_low_ms,
+        "median_ci_high_ms": ci_high_ms,
+        "median_instructions": statistics.median(instructions) if instructions else None,
+        "instruction_samples": instructions,
         "max_rss_kb": peak_rss_kb(
             command, stdin_path, time_binary, cwd=cwd, before_each=before_each, deadline=deadline
         ),
@@ -458,6 +497,88 @@ def gnu_time():
     result = subprocess.run([str(candidate), "--version"], capture_output=True, text=True, check=False)
     version_text = f"{result.stdout}\n{result.stderr}".casefold()
     return str(candidate) if result.returncode == 0 and "gnu time" in version_text else None
+
+
+def perf_stat():
+    """Return a perf binary that can count user instructions, or None.
+
+    perf is Linux-only and may be unavailable or forbidden from counting
+    (perf_event_paranoid) on shared runners. A failed probe disables
+    instruction counts without affecting wall-time or RSS measurement.
+    """
+    if sys.platform != "linux":
+        return None
+    candidate = shutil.which("perf")
+    if not candidate:
+        return None
+    try:
+        probe = subprocess.run(
+            [candidate, "stat", "-e", "instructions:u", "-x,", "--",
+             sys.executable, "-c", "pass"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if probe.returncode != 0 or parse_perf_instructions(f"{probe.stdout}\n{probe.stderr}") is None:
+        return None
+    return candidate
+
+
+def parse_perf_instructions(output):
+    """Parse a user-instruction count from `perf stat -x,` output, or None.
+
+    Lines that report `<not counted>` or `<not supported>` carry no number
+    and are skipped, so a restricted counter reads as unavailable, not zero.
+    """
+    for line in output.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 2 or not any("instructions" in part for part in parts[1:]):
+            continue
+        try:
+            return int(parts[0])
+        except ValueError:
+            try:
+                return int(float(parts[0]))
+            except ValueError:
+                continue
+    return None
+
+
+def perf_instructions(command, stdin_path, perf_binary, *, repeats=3, cwd=None, before_each=None, deadline=None):
+    """Median user instructions for a command through perf, or None without it.
+
+    Instruction counts are near-deterministic, so a few repeats suffice; the
+    median of the successful samples is reported alongside the raw samples.
+    Every sample runs the literal command with no shell, and any perf failure
+    degrades to None rather than failing the comparison.
+    """
+    if not perf_binary or repeats < 1:
+        return None
+    stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
+    try:
+        counts = []
+        for _ in range(repeats):
+            if before_each:
+                before_each()
+            if stdin_path:
+                stdin.seek(0)
+            try:
+                result = run_process(
+                    [perf_binary, "stat", "-e", "instructions:u", "-x,", "--", *command],
+                    stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    cwd=cwd, timeout=remaining_timeout(deadline),
+                )
+            except (OSError, TimeoutError):
+                continue
+            if result.returncode != 0:
+                continue
+            count = parse_perf_instructions(result.stderr.decode("utf-8", "replace"))
+            if count is not None:
+                counts.append(count)
+    finally:
+        if stdin_path:
+            stdin.close()
+    return counts or None
 
 
 def binary_size(path):
@@ -475,10 +596,20 @@ def format_kb(value):
     return "-" if value is None else f"{value:.0f}"
 
 
+def format_instructions(value):
+    return "-" if value is None else f"{int(value):,}"
+
+
+def format_ci(low, high):
+    if low is None or high is None:
+        return "-"
+    return f"{low:.2f}–{high:.2f}"
+
+
 def render(results, sizes):
     lines = [
-        "| group | scenario | bash ms | dash ms | execute ms | execute/bash | bash KiB | execute KiB |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| group | scenario | bash ms | dash ms | execute ms | execute/bash | bash KiB | execute KiB | bash instr | execute instr | exec median 95% CI |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in results:
         bash, dash, execute = row["bash"], row.get("dash"), row["execute"]
@@ -486,7 +617,10 @@ def render(results, sizes):
         lines.append(
             f"| {row['group']} | {row['label']} | {format_ms(bash['median_ms'])} | "
             f"{format_ms(dash['median_ms'] if dash else None)} | {format_ms(execute['median_ms'])} | "
-            f"{ratio:.2f}x | {format_kb(bash['max_rss_kb'])} | {format_kb(execute['max_rss_kb'])} |"
+            f"{ratio:.2f}x | {format_kb(bash['max_rss_kb'])} | {format_kb(execute['max_rss_kb'])} | "
+            f"{format_instructions(bash.get('median_instructions'))} | "
+            f"{format_instructions(execute.get('median_instructions'))} | "
+            f"{format_ci(execute.get('median_ci_low_ms'), execute.get('median_ci_high_ms'))} |"
         )
     lines += ["", "| binary | bytes |", "|---|---:|"]
     for name, size in sizes.items():
@@ -517,6 +651,9 @@ def main(argv=None):
     parser.add_argument("--bash", default=shutil.which("bash"))
     parser.add_argument("--dash", default=shutil.which("dash"))
     parser.add_argument("--time", default=gnu_time(), help="GNU time, for peak RSS")
+    parser.add_argument("--perf", default=perf_stat(), help="perf binary, for user instruction counts (empty disables)")
+    parser.add_argument("--instruction-repeats", type=int, default=3,
+                        help="perf instruction samples per arm (default: 3)")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--only", action="append", help="run only these scenario keys")
@@ -610,12 +747,14 @@ def main(argv=None):
             )
             row["bash"] = measure(
                 [args.bash, "--norc", "--noprofile", "-c", scenario.bash], stdin_path, runs, args.warmup,
-                f"bash {scenario.key}", args.time, cwd=root, before_each=reset_before_run, deadline=deadline
+                f"bash {scenario.key}", args.time, cwd=root, before_each=reset_before_run, deadline=deadline,
+                perf_binary=args.perf or None, instruction_repeats=args.instruction_repeats
             )
             if scenario.dash and args.dash:
                 row["dash"] = measure(
                     [args.dash, "-c", scenario.dash_command or scenario.bash], stdin_path, runs, args.warmup,
-                    f"dash {scenario.key}", args.time, cwd=root, before_each=reset_before_run, deadline=deadline
+                    f"dash {scenario.key}", args.time, cwd=root, before_each=reset_before_run, deadline=deadline,
+                    perf_binary=args.perf or None, instruction_repeats=args.instruction_repeats
                 )
             row["execute"] = measure(
                 execute_command(args.binary, program, args.manifest_dir, scenario),
@@ -627,9 +766,13 @@ def main(argv=None):
                 cwd=root,
                 before_each=reset_before_run,
                 deadline=deadline,
+                perf_binary=args.perf or None,
+                instruction_repeats=args.instruction_repeats,
             )
             results.append(row)
-            print(f"{scenario.key}: bash {row['bash']['median_ms']:.2f} ms, execute {row['execute']['median_ms']:.2f} ms")
+            execute_instr = row["execute"]["median_instructions"]
+            print(f"{scenario.key}: bash {row['bash']['median_ms']:.2f} ms, execute {row['execute']['median_ms']:.2f} ms"
+                  + (f", execute instructions {int(execute_instr):,}" if execute_instr is not None else ""))
 
     if args.validate_only:
         print("All selected output and file oracles passed.")
@@ -666,6 +809,10 @@ def main(argv=None):
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "manifest_dir": manifest_location,
             "time_binary": args.time,
+            "perf_binary": args.perf or None,
+            "instruction_repeats": args.instruction_repeats,
+            "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
+            "bootstrap_seed": BOOTSTRAP_SEED,
             "max_runtime_seconds": args.max_runtime_seconds,
             "elapsed_seconds": round(time.monotonic() - benchmark_started, 3),
         }

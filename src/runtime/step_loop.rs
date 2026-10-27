@@ -233,7 +233,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     } = start;
     // Literal components of explicitly secret-producing calls must be masked
     // before their invocation trace or any dynamic binding can be observed.
-    crate::record::register_sensitive_program(registry, program)?;
+    crate::security::register_sensitive_program(registry, program)?;
     let sensitive_bindings = crate::runtime::sensitive_binding_names(program, registry);
     // Nested finite module and task calls share one admission/output budget.
     // The last returning lexical run drops the slot, so repeated service
@@ -411,7 +411,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         .filter(|input| crate::ast::is_sensitive(input))
     {
         if let Some(value) = bindings.get(&input.name) {
-            crate::record::register_sensitive_value(registry, value)?;
+            crate::security::register_sensitive_value(registry, value)?;
         }
     }
     if preflight_context {
@@ -1022,7 +1022,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     pipeline_sensitive = value_references_sensitive(source, &sensitive_bindings);
                     let bytes = text_value_bytes(source, &bindings, step.line)?;
                     if pipeline_sensitive {
-                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
                     data = Input::Bytes(bytes);
                 }
@@ -1031,11 +1031,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_bindings.contains(binding) || sensitive_source;
                     if sensitive_bindings.contains(binding) || sensitive_source {
-                        crate::record::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(registry, &value)?;
                     }
                     let bytes = bound_value_bytes(&value, options.max_output_bytes)?;
                     if sensitive_bindings.contains(binding) || sensitive_source {
-                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
                     data = Input::Bytes(bytes);
                     bindings.insert(binding.clone(), value);
@@ -1047,7 +1047,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         options.command_timeout,
                     )?;
                     if sensitive_bindings.contains(binding) {
-                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
                     pipeline_sensitive |= sensitive_bindings.contains(binding);
                     byte_bindings.insert(binding.clone(), bytes.clone());
@@ -1118,7 +1118,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             ),
                         );
                         if sensitive_bindings.contains(name) {
-                            crate::record::register_sensitive_value(
+                            crate::security::register_sensitive_value(
                                 registry,
                                 bindings.get(name).expect("just inserted sensitive binding"),
                             )?;
@@ -1136,8 +1136,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let value = crate::structured::parse(&bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_bindings.contains(binding) {
-                        crate::record::register_sensitive_bytes(registry, &bytes)?;
-                        crate::record::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_value(registry, &value)?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1158,7 +1158,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         .with_context(|| format!("line {}", step.line))?;
                     let value = value.clone();
                     if sensitive_bindings.contains(binding) {
-                        crate::record::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(registry, &value)?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1182,7 +1182,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         .with_context(|| format!("line {}", step.line))?
                         .clone();
                     if sensitive_bindings.contains(binding) {
-                        crate::record::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(registry, &value)?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1198,7 +1198,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_source {
-                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
                     lazy_event(
                         options.trace,
@@ -1353,8 +1353,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             .with_context(|| format!("line {}: task group output", step.line))?
                     };
                     if sensitive_bindings.contains(binding) {
-                        crate::record::register_sensitive_value(registry, &value)?;
-                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
                     bindings.insert(binding.clone(), value);
                     pipeline_sensitive = sensitive_bindings.contains(binding);
@@ -2193,17 +2193,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 .as_ref()
                                 .is_some_and(|name| sensitive_bindings.contains(name));
                         if sensitive_output {
-                            crate::record::register_sensitive_bytes(registry, &bytes)?;
+                            crate::security::register_sensitive_bytes(registry, &bytes)?;
                             if let Some(stderr) = stderr {
-                                crate::record::register_sensitive_bytes(registry, stderr)?;
+                                crate::security::register_sensitive_bytes(registry, stderr)?;
                             }
                             for stage_stderr in
                                 stages.iter().filter_map(|stage| stage.stderr.as_deref())
                             {
-                                crate::record::register_sensitive_bytes(registry, stage_stderr)?;
+                                crate::security::register_sensitive_bytes(registry, stage_stderr)?;
                             }
                             if let Some(value) = typed_json.as_ref() {
-                                crate::record::register_sensitive_value(
+                                crate::security::register_sensitive_value(
                                     registry,
                                     &crate::structured::from_json(value.clone()),
                                 )?;

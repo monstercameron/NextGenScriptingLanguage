@@ -3191,7 +3191,7 @@ fn register_sensitive_group_output(
         }
     }
     if let Some(value) = &output.typed_json {
-        crate::record::register_sensitive_value(
+        crate::security::register_sensitive_value(
             registry,
             &crate::structured::from_json(value.clone()),
         )?;
@@ -3241,7 +3241,7 @@ fn register_sensitive_group_failure(
         }
     }
     if let Some(value) = &result.value {
-        crate::record::register_sensitive_value(registry, value)?;
+        crate::security::register_sensitive_value(registry, value)?;
     }
     Ok(())
 }

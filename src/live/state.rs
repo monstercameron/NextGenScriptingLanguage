@@ -1222,10 +1222,10 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 .filter(|input| crate::ast::is_sensitive(input))
             {
                 if let Some(value) = candidate.bindings.get(&input.name) {
-                    crate::record::register_sensitive_value(&shared.registry, &argument(value))?;
+                    crate::security::register_sensitive_value(&shared.registry, &argument(value))?;
                 }
             }
-            crate::record::register_sensitive_program(&shared.registry, &plan.program)?;
+            crate::security::register_sensitive_program(&shared.registry, &plan.program)?;
             if plan.screen.is_some() && !shared.headless {
                 use std::io::IsTerminal;
                 if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {

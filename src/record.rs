@@ -22,6 +22,7 @@
 use crate::manifest::Registry;
 use crate::runtime::observe::{Observer, StepRequest, StepResult};
 use crate::security::{self, PersistenceKind, SecretRedactor, SensitivitySet};
+pub use crate::security::{register_sensitive_inputs, register_sensitive_program};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
@@ -366,196 +367,6 @@ impl Recorder {
             "truncated": false,
         }))
     }
-}
-
-/// Register sensitive input values before the recorder computes or writes the plan.
-pub fn register_sensitive_inputs(
-    registry: &Registry,
-    declarations: &[crate::ast::InputDeclaration],
-    inputs: &BTreeMap<String, crate::ast::Value>,
-) -> Result<()> {
-    let resolved = crate::inputs::resolve(declarations, inputs, false)?;
-    for declaration in declarations
-        .iter()
-        .filter(|input| crate::ast::is_sensitive(input))
-    {
-        if let Some(value) = resolved.get(&declaration.name) {
-            register_sensitive_value(registry, value)?;
-        }
-    }
-    Ok(())
-}
-
-/// Register exact string and numeric leaves of an explicitly sensitive value.
-/// Booleans, nulls and references are metadata, not secret material.
-pub(crate) fn register_sensitive_value(
-    registry: &Registry,
-    value: &crate::ast::Value,
-) -> Result<()> {
-    fn register(redactor: &SecretRedactor, value: &crate::ast::Value) -> Result<()> {
-        let text = match value {
-            crate::ast::Value::String(value) => value.clone(),
-            crate::ast::Value::Integer(value) => value.to_string(),
-            crate::ast::Value::Number(value) => value.to_string(),
-            crate::ast::Value::List(values) => {
-                return values
-                    .iter()
-                    .try_for_each(|value| register(redactor, value));
-            }
-            crate::ast::Value::Record(values) => {
-                for (key, value) in values {
-                    redactor
-                        .register(key.as_bytes())
-                        .map_err(|error| anyhow!("registering sensitive value key: {error}"))?;
-                    register(redactor, value)?;
-                }
-                return Ok(());
-            }
-            crate::ast::Value::Bool(_)
-            | crate::ast::Value::Null
-            | crate::ast::Value::Reference(_) => return Ok(()),
-        };
-        redactor
-            .register(text.as_bytes())
-            .map_err(|error| anyhow!("registering sensitive value: {error}"))
-    }
-    register(&security::secret_redactor(registry), value)
-}
-
-/// Register opaque bytes derived from a sensitive value before they reach a
-/// live binding, observer, or diagnostic surface.
-pub(crate) fn register_sensitive_bytes(registry: &Registry, bytes: &[u8]) -> Result<()> {
-    security::secret_redactor(registry)
-        .register(bytes)
-        .map_err(|error| anyhow!("registering sensitive bytes: {error}"))
-}
-
-/// Register literal leaves from `and keep secret` invocations before records
-/// store their source copy. Runtime-acquired values are added when produced.
-pub fn register_sensitive_program(
-    registry: &Registry,
-    program: &crate::ast::Program,
-) -> Result<()> {
-    let redactor = security::secret_redactor(registry);
-    fn register_call(redactor: &SecretRedactor, call: &crate::ast::Invocation) -> Result<()> {
-        for value in call.parameters.values() {
-            register_sensitive_ast_value(redactor, value)?;
-        }
-        Ok(())
-    }
-    fn register_embedded_calls(
-        redactor: &SecretRedactor,
-        step: &crate::ast::Step,
-        only_marked: bool,
-    ) -> Result<()> {
-        use crate::ast::{LoopKind, StepKind};
-        let calls: Vec<&crate::ast::Invocation> = match &step.kind {
-            StepKind::TaskGroup { tasks, .. } => tasks.iter().collect(),
-            StepKind::SpawnJob { stages, .. } => stages.iter().map(|stage| &stage.call).collect(),
-            StepKind::IfCommand { call, .. }
-            | StepKind::Loop {
-                kind: LoopKind::WhileCommand { call, .. },
-                ..
-            } => vec![call],
-            _ => Vec::new(),
-        };
-        for call in calls {
-            if !only_marked || call.marks_sensitive_output() {
-                register_call(redactor, call)?;
-            }
-        }
-        Ok(())
-    }
-    fn register_region(
-        redactor: &SecretRedactor,
-        steps: &[crate::ast::Step],
-        start: usize,
-        end: usize,
-    ) -> Result<()> {
-        use crate::ast::StepKind;
-        let mut index = start;
-        while index < end {
-            let step = &steps[index];
-            match &step.kind {
-                StepKind::Invoke { call, .. } => register_call(redactor, call)?,
-                StepKind::CallProgram {
-                    call, end: span, ..
-                } => {
-                    register_call(redactor, call)?;
-                    let body_end = index.saturating_add((*span).max(1)).min(end);
-                    if body_end > index + 1 {
-                        register_region(redactor, steps, index + 1, body_end - 1)?;
-                    }
-                    index = body_end.saturating_sub(1);
-                }
-                StepKind::UseValue { source } | StepKind::BindValue { source, .. } => {
-                    register_sensitive_ast_value(redactor, source)?;
-                }
-                StepKind::EncodeJson { source } => register_sensitive_ast_value(redactor, source)?,
-                _ => {}
-            }
-            register_embedded_calls(redactor, step, false)?;
-            index += 1;
-        }
-        Ok(())
-    }
-
-    fn scan(redactor: &SecretRedactor, steps: &[crate::ast::Step]) -> Result<()> {
-        use crate::ast::StepKind;
-        for (index, step) in steps.iter().enumerate() {
-            match &step.kind {
-                StepKind::Invoke { call, .. } if call.marks_sensitive_output() => {
-                    register_call(redactor, call)?;
-                }
-                StepKind::CallProgram { call, end, .. } if call.marks_sensitive_output() => {
-                    register_call(redactor, call)?;
-                    let body_end = index.saturating_add(*end).min(steps.len());
-                    if body_end > index + 1 {
-                        register_region(redactor, steps, index + 1, body_end - 1)?;
-                    }
-                }
-                _ => register_embedded_calls(redactor, step, true)?,
-            }
-        }
-        Ok(())
-    }
-
-    scan(&redactor, &program.steps)?;
-    for definition in program.definitions.values() {
-        scan(&redactor, &definition.steps)?;
-    }
-    Ok(())
-}
-
-fn register_sensitive_ast_value(
-    redactor: &SecretRedactor,
-    value: &crate::ast::Value,
-) -> Result<()> {
-    let text = match value {
-        crate::ast::Value::String(value) => value.clone(),
-        crate::ast::Value::Integer(value) => value.to_string(),
-        crate::ast::Value::Number(value) => value.to_string(),
-        crate::ast::Value::List(values) => {
-            return values
-                .iter()
-                .try_for_each(|value| register_sensitive_ast_value(redactor, value));
-        }
-        crate::ast::Value::Record(values) => {
-            for (key, value) in values {
-                redactor
-                    .register(key.as_bytes())
-                    .map_err(|error| anyhow!("registering sensitive source key: {error}"))?;
-                register_sensitive_ast_value(redactor, value)?;
-            }
-            return Ok(());
-        }
-        crate::ast::Value::Bool(_) | crate::ast::Value::Null | crate::ast::Value::Reference(_) => {
-            return Ok(());
-        }
-    };
-    redactor
-        .register(text.as_bytes())
-        .map_err(|error| anyhow!("registering sensitive program value: {error}"))
 }
 
 impl Observer for Recorder {
@@ -1369,7 +1180,7 @@ mod tests {
             key.to_owned(),
             crate::ast::Value::String("public value".into()),
         )]));
-        register_sensitive_value(&registry, &value).unwrap();
+        security::register_sensitive_value(&registry, &value).unwrap();
         let serialized = json!({(key): "public value"});
         let redacted = redact_json(&security::secret_redactor(&registry), &serialized);
         assert!(!redacted.to_string().contains(key));

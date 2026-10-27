@@ -522,10 +522,10 @@ fn dispatch(
             .filter(|input| crate::ast::is_sensitive(input))
         {
             if let Some(value) = doc.bindings.get(&input.name) {
-                crate::record::register_sensitive_value(&registry, &state::argument(value))?;
+                crate::security::register_sensitive_value(&registry, &state::argument(value))?;
             }
         }
-        crate::record::register_sensitive_program(&registry, &plan.program)?;
+        crate::security::register_sensitive_program(&registry, &plan.program)?;
         if plan.screen.is_some()
             && !opts.headless
             && (!std::io::stdin().is_terminal() || !std::io::stdout().is_terminal())

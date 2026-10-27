@@ -1885,12 +1885,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     if checkpoint.is_some() {
                         bail!("--record cannot be combined with checkpoints");
                     }
-                    flow::record::register_sensitive_inputs(
+                    flow::security::register_sensitive_inputs(
                         &registry,
                         &program.inputs,
                         &options.inputs,
                     )?;
-                    flow::record::register_sensitive_program(&registry, &program)?;
+                    flow::security::register_sensitive_program(&registry, &program)?;
                     record_cli::run_recorded(directory, &args.file, &program, &registry, &options)
                         .map_err(|error| redact_runtime_error(&registry, error))?
                 } else {

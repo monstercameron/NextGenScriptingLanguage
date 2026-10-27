@@ -4154,70 +4154,63 @@ struct ControlContext<'program, 'frames> {
     job_supervisor: &'program mut jobs::Supervisor,
 }
 
-fn apply_control_action<'a>(
-    action: control_flow::ControlAction,
-    context: ControlContext<'_, 'a>,
-) -> Result<AppliedControl> {
-    let ControlContext {
-        program,
-        state,
-        call_frames,
-        loop_frames,
-        bindings,
-        cwd,
-        job_supervisor,
-    } = context;
-    fn remove_bindings(bindings: &mut BTreeMap<String, Value>, names: Vec<String>) {
-        for name in names {
-            bindings.remove(&name);
-        }
-    }
+impl<'program, 'frames> ControlContext<'program, 'frames> {
     fn unwind(
+        &mut self,
         unwind: control_flow::UnwindTo,
         collect_loop_jobs: bool,
-        state: &mut control_flow::RuntimeState,
-        call_frames: &mut Vec<calls::Frame<'_>>,
-        loop_frames: &mut loops::LoopStack,
-        bindings: &mut BTreeMap<String, Value>,
-        cwd: &mut crate::working_dir::WorkingDirectory,
-        job_supervisor: &mut jobs::Supervisor,
     ) -> Result<()> {
         let control_flow::UnwindTo {
             call_depth,
             loop_depth,
             drop_bindings,
         } = unwind;
-        if call_depth > call_frames.len() {
+        if call_depth > self.call_frames.len() {
             bail!("control transfer targets an inactive program scope");
         }
-        while call_frames.len() > call_depth {
-            let scope = call_frames
+        while self.call_frames.len() > call_depth {
+            let scope = self
+                .call_frames
                 .last()
                 .expect("active frame while above target depth")
                 .job_scope;
-            job_supervisor
+            self.job_supervisor
                 .cancel_scope(scope)
                 .context("cancelling background jobs during reusable-program unwind")?;
-            let frame = call_frames.pop().expect("call depth checked");
-            *bindings = frame.bindings;
-            *cwd = frame.cwd;
+            let frame = self.call_frames.pop().expect("call depth checked");
+            *self.bindings = frame.bindings;
+            *self.cwd = frame.cwd;
         }
-        let popped = loop_frames.unwind_to(loop_depth, bindings)?;
+        let popped = self.loop_frames.unwind_to(loop_depth, self.bindings)?;
         for (parent, scope) in popped {
             if collect_loop_jobs {
-                job_supervisor.collect_loop_iteration(parent, scope)?;
+                self.job_supervisor.collect_loop_iteration(parent, scope)?;
             } else {
-                job_supervisor.cancel_scope(scope)?;
+                self.job_supervisor.cancel_scope(scope)?;
             }
         }
-        remove_bindings(bindings, drop_bindings);
-        state.apply_unwind(&control_flow::UnwindTo::new(call_depth, loop_depth));
+        for name in drop_bindings {
+            self.bindings.remove(&name);
+        }
+        self.state
+            .apply_unwind(&control_flow::UnwindTo::new(call_depth, loop_depth));
         Ok(())
+    }
+}
+
+fn apply_control_action(
+    action: control_flow::ControlAction,
+    mut context: ControlContext<'_, '_>,
+) -> Result<AppliedControl> {
+    fn remove_bindings(bindings: &mut BTreeMap<String, Value>, names: Vec<String>) {
+        for name in names {
+            bindings.remove(&name);
+        }
     }
 
     match action {
         control_flow::ControlAction::Continue { drop_bindings } => {
-            remove_bindings(bindings, drop_bindings);
+            remove_bindings(context.bindings, drop_bindings);
             Ok(AppliedControl::Continue)
         }
         control_flow::ControlAction::Jump {
@@ -4230,27 +4223,21 @@ fn apply_control_action<'a>(
                 transfer,
                 Some(control_flow::TransferKind::Continue | control_flow::TransferKind::Break)
             );
-            unwind(
-                target_scope,
-                collect_loop_jobs,
-                state,
-                call_frames,
-                loop_frames,
-                bindings,
-                cwd,
-                job_supervisor,
-            )?;
+            context.unwind(target_scope, collect_loop_jobs)?;
             if continuing {
                 let Some(StepKind::EndLoop { back }) =
-                    program.steps.get(target).map(|step| &step.kind)
+                    context.program.steps.get(target).map(|step| &step.kind)
                 else {
                     bail!("continue target is not an end-loop marker");
                 };
                 let header = target
                     .checked_sub(*back)
                     .context("invalid continue loop edge")?;
-                if let Some((parent, scope)) = loop_frames.end_iteration(header, bindings)? {
-                    job_supervisor.collect_loop_iteration(parent, scope)?;
+                if let Some((parent, scope)) = context
+                    .loop_frames
+                    .end_iteration(header, context.bindings)?
+                {
+                    context.job_supervisor.collect_loop_iteration(parent, scope)?;
                 }
             }
             Ok(AppliedControl::Jump(target))
@@ -4262,20 +4249,14 @@ fn apply_control_action<'a>(
             job_scope,
             unwind: target_scope,
         } => {
-            job_supervisor
+            context
+                .job_supervisor
                 .cancel_scope_preserving(job_scope)
                 .context("cancelling background jobs before entering catch")?;
-            unwind(
-                target_scope,
-                false,
-                state,
-                call_frames,
-                loop_frames,
-                bindings,
-                cwd,
-                job_supervisor,
-            )?;
-            bindings.insert(binding, execution_result::error_value(&error));
+            context.unwind(target_scope, false)?;
+            context
+                .bindings
+                .insert(binding, execution_result::error_value(&error));
             Ok(AppliedControl::Jump(target))
         }
         control_flow::ControlAction::Rethrow(error) => Ok(AppliedControl::Rethrow(error)),

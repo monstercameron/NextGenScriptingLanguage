@@ -23,6 +23,13 @@ pub(crate) struct JobSession {
 }
 
 #[cfg(feature = "live")]
+pub(crate) struct JobNode {
+    pub(crate) session: Arc<JobSession>,
+    pub(crate) last_uses: BTreeMap<String, usize>,
+    pub(crate) final_node: bool,
+}
+
+#[cfg(feature = "live")]
 impl JobSession {
     pub(crate) fn new() -> Self {
         Self {
@@ -61,9 +68,11 @@ pub(crate) fn execute_node(
         options,
         state,
         cancelled,
-        Arc::new(JobSession::new()),
-        job_last_uses(&node.steps),
-        true,
+        JobNode {
+            session: Arc::new(JobSession::new()),
+            last_uses: job_last_uses(&node.steps),
+            final_node: true,
+        },
     )
 }
 
@@ -74,12 +83,15 @@ pub(crate) fn execute_node_with_session(
     options: &RunOptions,
     state: NodeState,
     cancelled: Arc<AtomicBool>,
-    job_session: Arc<JobSession>,
-    last_job_uses: BTreeMap<String, usize>,
-    final_node: bool,
+    job_node: JobNode,
 ) -> Result<(RunResult, NodeState)> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run_if_missing();
+    let JobNode {
+        session: job_session,
+        last_uses: last_job_uses,
+        final_node,
+    } = job_node;
     let signals = Signals::with_cancellation_and_deadline(
         cancelled,
         true,

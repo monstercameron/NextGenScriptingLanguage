@@ -103,9 +103,11 @@ fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
         &options(directory.path()),
         context,
         Arc::new(AtomicBool::new(false)),
-        Arc::clone(&jobs),
-        BTreeMap::new(),
-        false,
+        JobNode {
+            session: Arc::clone(&jobs),
+            last_uses: BTreeMap::new(),
+            final_node: false,
+        },
     )?;
     let (result, _) = execute_node_with_session(
         &second,
@@ -113,9 +115,11 @@ fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
         &options(directory.path()),
         state,
         Arc::new(AtomicBool::new(false)),
-        jobs,
-        BTreeMap::from([("item".into(), 0)]),
-        true,
+        JobNode {
+            session: jobs,
+            last_uses: BTreeMap::from([("item".into(), 0)]),
+            final_node: true,
+        },
     )?;
     assert_eq!(result.output, b"xx");
     Ok(())
@@ -168,9 +172,11 @@ fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
         &node_options,
         context,
         Arc::new(AtomicBool::new(false)),
-        Arc::clone(&jobs),
-        first_last_uses,
-        false,
+        JobNode {
+            session: Arc::clone(&jobs),
+            last_uses: first_last_uses,
+            final_node: false,
+        },
     )?;
     std::thread::sleep(Duration::from_millis(180));
     let (result, _) = execute_node_with_session(
@@ -179,9 +185,11 @@ fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
         &node_options,
         state,
         Arc::new(AtomicBool::new(false)),
-        jobs,
-        second_last_uses,
-        true,
+        JobNode {
+            session: jobs,
+            last_uses: second_last_uses,
+            final_node: true,
+        },
     )?;
     assert_eq!(result.output, b"second");
     Ok(())

@@ -336,12 +336,10 @@ fn catch_body_jobs_are_reaped_if_the_catch_fails_before_await() -> anyhow::Resul
         "the catch body deliberately fails before its await"
     );
     let job_pid: libc::pid_t = std::fs::read_to_string(&pid)?.trim().parse()?;
-    // SAFETY: this probes the child PID written by the catch-owned job above.
-    assert_eq!(
-        unsafe { libc::kill(job_pid, 0) },
-        -1,
-        "catch job remained alive"
-    );
+    // SAFETY: this probes the numeric PID written by the test-owned child. The
+    // zero signal only checks whether a process currently has that PID.
+    let job_is_alive = unsafe { libc::kill(job_pid, 0) } == 0;
+    assert!(!job_is_alive, "catch job remained alive");
     Ok(())
 }
 
@@ -393,11 +391,10 @@ fn sigterm_to_service_reaps_service_setup_jobs() -> anyhow::Result<()> {
         anyhow::bail!("service-owned setup job did not start");
     }
     let job_pid: libc::pid_t = std::fs::read_to_string(&pid_path)?.trim().parse()?;
-    // SAFETY: the PID is the child service process started by this test.
-    assert_eq!(
-        unsafe { libc::kill(service.id() as libc::pid_t, libc::SIGTERM) },
-        0
-    );
+    // SAFETY: `service` is the child process started by this test and has not
+    // been waited on yet, so its PID is still owned and stable here.
+    let signal_result = unsafe { libc::kill(service.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(signal_result, 0);
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while service.try_wait()?.is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -407,12 +404,10 @@ fn sigterm_to_service_reaps_service_setup_jobs() -> anyhow::Result<()> {
         let _ = service.wait();
         panic!("service did not stop after SIGTERM");
     }
-    // SAFETY: this probes the PID written by the service-owned job started above.
-    assert_eq!(
-        unsafe { libc::kill(job_pid, 0) },
-        -1,
-        "service job remained alive"
-    );
+    // SAFETY: this probes the numeric PID written by the service-owned child.
+    // The zero signal only checks whether a process currently has that PID.
+    let job_is_alive = unsafe { libc::kill(job_pid, 0) } == 0;
+    assert!(!job_is_alive, "service job remained alive");
     Ok(())
 }
 

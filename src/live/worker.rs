@@ -390,9 +390,11 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
                     &options,
                     context,
                     token,
-                    job_session,
-                    job_last_uses,
-                    final_node,
+                    runtime::live::JobNode {
+                        session: job_session,
+                        last_uses: job_last_uses,
+                        final_node,
+                    },
                 )
             };
             if shared.run_mode {

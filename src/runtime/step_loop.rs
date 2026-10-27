@@ -1661,12 +1661,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     | execution_result::ExecutionKind::Failure
                                     | execution_result::ExecutionKind::Retryable
                             );
-                        if stage_failed
-                            || (terminal.kind != execution_result::ExecutionKind::Success && !kept)
+                        if (stage_failed
+                            || (terminal.kind != execution_result::ExecutionKind::Success && !kept))
+                            && aggregate_failure.is_none()
                         {
-                            if aggregate_failure.is_none() {
-                                aggregate_failure = Some(terminal.clone());
-                            }
+                            aggregate_failure = Some(terminal.clone());
                         }
                         let status = terminal.status.unwrap_or(1);
                         if aggregate_status == 0 && status != 0 {

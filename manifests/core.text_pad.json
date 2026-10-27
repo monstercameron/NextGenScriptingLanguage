@@ -39,6 +39,25 @@
       "json_arguments": true
     }
   ],
+  "parameter_alternatives": [
+    {
+      "message": "text.pad fill must be nonempty when supplied",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "fill"
+          }
+        ],
+        [
+          {
+            "test": "nonempty",
+            "parameter": "fill"
+          }
+        ]
+      ]
+    }
+  ],
   "contract": {
     "backend": "in_process",
     "version": 1,

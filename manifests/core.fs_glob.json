@@ -23,6 +23,19 @@
       "json_arguments": true
     }
   ],
+  "parameter_alternatives": [
+    {
+      "message": "fs.glob pattern must be nonempty",
+      "any_of": [
+        [
+          {
+            "test": "nonempty",
+            "parameter": "pattern"
+          }
+        ]
+      ]
+    }
+  ],
   "contract": {
     "version": 1,
     "backend": "in_process",

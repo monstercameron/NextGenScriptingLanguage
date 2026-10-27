@@ -153,6 +153,90 @@ fn unknown_values_are_deferred_to_execution() {
 }
 
 #[test]
+fn applet_nonempty_parameters_reject_known_empty_and_keep_optional_fill_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty_cases = [
+        (
+            "run text.pad with text \"x\" and width 3 and fill \"\"\n",
+            "fill",
+        ),
+        (
+            "run text.replace with text \"abc\" and old \"\" and new \"x\"\n",
+            "old",
+        ),
+        ("run fs.glob with pattern \"\"\n", "pattern"),
+        ("run text.count_lines_by with delimiter \"\"\n", "delimiter"),
+    ];
+
+    for (source, parameter) in empty_cases {
+        for command in ["check", "run"] {
+            let output = invoke(dir.path(), source, command, &[]);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success() && stderr.contains(parameter),
+                "{command} accepted empty {parameter}: {stderr}"
+            );
+        }
+    }
+
+    // `fill` stays optional and the applet's existing default remains in effect.
+    let without_fill = "run text.pad with text \"x\" and width 3\n";
+    for command in ["check", "run"] {
+        let output = invoke(dir.path(), without_fill, command, &[]);
+        assert!(
+            output.status.success(),
+            "{command} rejected absent fill: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if command == "run" {
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim_end_matches('\n'),
+                "x  "
+            );
+        }
+    }
+}
+
+#[test]
+fn applet_nonempty_parameters_still_validate_dynamic_values_at_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "fill",
+            "run text.pad with text \"x\" and width 3 and fill fill\n",
+        ),
+        (
+            "old",
+            "run text.replace with text \"abc\" and old old and new \"x\"\n",
+        ),
+        ("pattern", "run fs.glob with pattern pattern\n"),
+        (
+            "delimiter",
+            "run text.count_lines_by with delimiter delimiter\n",
+        ),
+    ];
+
+    for (parameter, source) in cases {
+        let source = format!("accept {parameter} as text\n{source}");
+        let checked = invoke(dir.path(), &source, "check", &[]);
+        assert!(
+            checked.status.success(),
+            "static check rejected dynamic {parameter}: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        let supplied = format!("{parameter}=");
+        let output = invoke(dir.path(), &source, "run", &["--input", supplied.as_str()]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success()
+                && stderr.contains(parameter)
+                && (stderr.contains("nonempty") || stderr.contains("cannot be empty")),
+            "runtime accepted empty dynamic {parameter}: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn optional_numeric_ranges_reject_literals_and_resolved_values() {
     let dir = tempfile::tempdir().unwrap();
     let cases = [

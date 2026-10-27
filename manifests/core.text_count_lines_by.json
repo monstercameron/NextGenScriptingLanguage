@@ -27,6 +27,19 @@
       "json_arguments": true
     }
   ],
+  "parameter_alternatives": [
+    {
+      "message": "text.count_lines_by delimiter must be nonempty",
+      "any_of": [
+        [
+          {
+            "test": "nonempty",
+            "parameter": "delimiter"
+          }
+        ]
+      ]
+    }
+  ],
   "contract": {
     "version": 1,
     "backend": "in_process",

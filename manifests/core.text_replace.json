@@ -27,6 +27,19 @@
       "json_arguments": true
     }
   ],
+  "parameter_alternatives": [
+    {
+      "message": "text.replace old must be nonempty",
+      "any_of": [
+        [
+          {
+            "test": "nonempty",
+            "parameter": "old"
+          }
+        ]
+      ]
+    }
+  ],
   "contract": {
     "version": 1,
     "backend": "in_process",

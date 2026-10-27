@@ -1022,7 +1022,9 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         fn simple_option(shell: &str, flag: char) -> bool {
             match shell {
                 "bash" => "abefhiklmnprstuvxB".contains(flag),
-                "sh" | "dash" | "zsh" | "ksh" => "efhkmnuvx".contains(flag),
+                "sh" | "dash" => "aefhkmnuvx".contains(flag),
+                "zsh" => "aefhklmnuvx".contains(flag),
+                "ksh" => "aefhkmnuvx".contains(flag),
                 "fish" => "ilnpsqvx".contains(flag),
                 _ => false,
             }

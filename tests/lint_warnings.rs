@@ -40,6 +40,8 @@ fn explicit_shell_command_script_is_not_mistaken_for_a_literal_argument() {
         "run \"bash\" with arguments [\"-O\", \"extglob\", \"-c\", \"echo $HOME\"]\n",
         "run \"bash\" with arguments [\"-xc\", \"echo $HOME\"]\n",
         "run \"bash\" with arguments [\"-lc\", \"echo $HOME\"]\n",
+        "run \"zsh\" with arguments [\"-lc\", \"echo $HOME\"]\n",
+        "run \"sh\" with arguments [\"-ac\", \"echo $HOME\"]\n",
         "run \"fish\" with arguments [\"-c\", \"echo $HOME\"]\n",
         "run \"env\" with arguments [\"bash\", \"-c\", \"echo $HOME\"]\n",
         "run \"busybox\" with arguments [\"sh\", \"-c\", \"echo $HOME\"]\n",
@@ -383,6 +385,8 @@ fn model_text_passed_to_shell_c_is_flagged_but_data_arguments_are_allowed() {
         "run llm.ask with prompt \"write something\" as generated\nrun \"sh\" with arguments [\"-c\", generated]\n",
         "run llm.ask with prompt \"write something\" as generated\nrun \"bash\" with arguments [\"-xc\", generated]\n",
         "run llm.ask with prompt \"write something\" as generated\nrun \"bash\" with arguments [\"-lc\", generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"zsh\" with arguments [\"-lc\", generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"sh\" with arguments [\"-ac\", generated]\n",
     ] {
         let bad_diagnostics = analyze_source(bad, &Registry::default());
         assert!(

@@ -1834,7 +1834,8 @@ fn known_for_each_item_type(
     list_item_types: &BTreeMap<String, OutputType>,
 ) -> Option<OutputType> {
     let item_kind = |item: &Value| match item {
-        Value::String(_) => OutputType::Text,
+        Value::String(text) if !text.contains('\0') => OutputType::Text,
+        Value::String(_) => OutputType::Json,
         Value::Integer(_) => OutputType::Integer,
         Value::Bool(_) => OutputType::Boolean,
         Value::Reference(name) => match known_types.get(name).copied() {
@@ -1880,8 +1881,7 @@ struct CallTypeScope {
 }
 
 /// Infer call-site types while walking the flattened AST with lexical loop
-/// scopes. Loop bindings shadow outer names only inside their body; after the
-/// body, the prior scope is restored.
+/// scopes. Loop-local bindings and types are discarded after the body.
 fn collect_scoped_call_types(
     steps: &[Step],
     registry: &Registry,
@@ -1938,6 +1938,12 @@ fn collect_scoped_call_types(
                     },
                 );
                 infer_call_output_type(call, registry, scope);
+                if let Some(binding) = &call.status_binding {
+                    set_scoped_binding_type(scope, binding, OutputType::Integer);
+                }
+                if let Some(binding) = &call.result_binding {
+                    set_scoped_binding_type(scope, binding, OutputType::Json);
+                }
             }
             StepKind::IfCommand { call, .. } => {
                 calls.insert(
@@ -1960,11 +1966,72 @@ fn collect_scoped_call_types(
                     {
                         scope.list_item_types.insert(binding.clone(), item_kind);
                     }
+                } else {
+                    scope.known_types.remove(binding);
+                    scope.list_item_types.remove(binding);
+                }
+            }
+            StepKind::Read { binding, .. }
+            | StepKind::ReadStdin { binding }
+            | StepKind::ReadCallInput { binding } => {
+                if let Some(binding) = binding {
+                    set_scoped_binding_type(scope, binding, OutputType::Text);
+                }
+            }
+            StepKind::TempScope { binding, .. } => {
+                set_scoped_binding_type(scope, binding, OutputType::Text);
+            }
+            StepKind::ParseJson { binding }
+            | StepKind::Catch { binding, .. }
+            | StepKind::TaskGroup { binding, .. }
+            | StepKind::InspectJob { binding, .. } => {
+                set_scoped_binding_type(scope, binding, OutputType::Json);
+            }
+            StepKind::TakeJson { kind, binding, .. }
+            | StepKind::TakeJsonDynamic { kind, binding, .. } => {
+                set_scoped_binding_type(scope, binding, output_type_for_input(*kind));
+            }
+            StepKind::CaptureBytes { binding } => {
+                set_scoped_binding_type(scope, binding, OutputType::Bytes);
+            }
+            StepKind::AwaitJob {
+                status_binding,
+                result_binding,
+                ..
+            } => {
+                if let Some(binding) = status_binding {
+                    set_scoped_binding_type(scope, binding, OutputType::Integer);
+                }
+                if let Some(binding) = result_binding {
+                    set_scoped_binding_type(scope, binding, OutputType::Json);
+                }
+            }
+            StepKind::CallProgram { call, .. } => {
+                if let Some(binding) = &call.binding {
+                    set_scoped_binding_type(scope, binding, OutputType::Text);
                 }
             }
             _ => {}
         }
         index += 1;
+    }
+}
+
+fn set_scoped_binding_type(scope: &mut InferredTypeScope, binding: &str, kind: OutputType) {
+    scope.known_types.insert(binding.to_owned(), kind);
+    scope.list_item_types.remove(binding);
+}
+
+fn output_type_for_input(kind: crate::ast::InputType) -> OutputType {
+    match kind {
+        crate::ast::InputType::Text => OutputType::Text,
+        crate::ast::InputType::Integer => OutputType::Integer,
+        crate::ast::InputType::Boolean => OutputType::Boolean,
+        crate::ast::InputType::TextList
+        | crate::ast::InputType::IntegerList
+        | crate::ast::InputType::JsonList => OutputType::List,
+        crate::ast::InputType::Json => OutputType::Json,
+        crate::ast::InputType::Bytes => OutputType::Bytes,
     }
 }
 
@@ -3040,6 +3107,37 @@ mod tests {
             })
             .unwrap();
         assert_eq!(line_two_required.span.line, 2);
+    }
+
+    #[test]
+    fn loop_local_take_json_types_reach_static_applet_validation() {
+        let fixture = json!({
+            "name": "fixture.boolean",
+            "binary": "fixture-boolean",
+            "parameters": {"flag": {"type": "boolean", "required": true}},
+            "arguments": [{"parameter": "flag"}]
+        });
+        let registry = Registry::from_sources(&[fixture.to_string()]).unwrap();
+        let source = "for each item in [{\"n\":1}]\n  take integer at \"/n\" from item as n\n  run fixture.boolean with flag n\n";
+        let diagnostics = analyze_source(source, &registry);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "applet.parameter.type"
+                    && diagnostic.message.contains("result \"n\" is integer")
+            }),
+            "loop-local typed take was not propagated: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn loop_item_inference_treats_nul_text_as_json_like_runtime() {
+        let item = Value::String("text\0with-nul".into());
+        let items = Value::List(vec![item]);
+        let types = BTreeMap::new();
+        assert_eq!(
+            known_for_each_item_type(&items, &types, &types),
+            Some(OutputType::Json)
+        );
     }
 
     #[test]

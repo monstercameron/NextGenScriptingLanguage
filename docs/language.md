@@ -752,6 +752,10 @@ shortest decimal representation of its binary64 value, then converts the
 result back to binary64. A result outside the finite float range returns an
 `overflow` error; non-finite inputs are invalid JSON numbers.
 
+`number.format` accepts an integer `precision` from 0 through 15, defaulting to
+0 when omitted. `number.format_size` accepts 0 through 6, defaulting to 1.
+A supplied precision outside the applicable range or of another type is invalid.
+
 <a id="reusable-finite-programs-pending-source-candidate"></a>
 
 ### Reusable finite programs

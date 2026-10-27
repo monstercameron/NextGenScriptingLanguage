@@ -8,6 +8,21 @@ fn number<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a Number, Ap
         .ok_or_else(|| invalid(format!("args.{name} must be a JSON number")))
 }
 
+fn precision(args: &Map<String, Value>, default: u64, maximum: u64) -> Result<usize, AppletError> {
+    let precision = match args.get("precision") {
+        None => default,
+        Some(value) => value
+            .as_u64()
+            .filter(|value| *value <= maximum)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "args.precision must be an integer from 0 through {maximum}"
+                ))
+            })?,
+    };
+    Ok(precision as usize)
+}
+
 fn as_integer(value: &Number) -> Option<i128> {
     value
         .as_i64()
@@ -94,11 +109,7 @@ fn round_float(value: f64, digits: i64) -> Result<Value, AppletError> {
 pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, AppletError> {
     if operation == "number.format" {
         let value = number(args, "value")?;
-        let precision = args.get("precision").and_then(Value::as_u64).unwrap_or(0);
-        if precision > 15 {
-            return Err(invalid("args.precision must be from 0 through 15"));
-        }
-        let precision = precision as usize;
+        let precision = precision(args, 0, 15)?;
         let mut text = if let Some(integer) = as_integer(value) {
             let negative = integer < 0;
             let digits = integer.unsigned_abs().to_string();
@@ -152,11 +163,7 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
             "si" => (1000.0, &["B", "kB", "MB", "GB", "TB", "PB", "EB"]),
             _ => return Err(invalid("args.system must be si or iec")),
         };
-        let precision = args.get("precision").and_then(Value::as_u64).unwrap_or(1);
-        if precision > 6 {
-            return Err(invalid("args.precision must be from 0 through 6"));
-        }
-        let precision = precision as usize;
+        let precision = precision(args, 1, 6)?;
         let mut scaled = value;
         let mut unit = 0;
         while scaled >= base && unit + 1 < units.len() {

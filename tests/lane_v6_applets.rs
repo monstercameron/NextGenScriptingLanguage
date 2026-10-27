@@ -407,3 +407,107 @@ fn list_range_retains_validation_and_item_limit() {
         assert!(error.message.contains("100000 item limit"), "{error:?}");
     }
 }
+
+#[test]
+fn numeric_formatters_validate_present_precision() {
+    for (operation, value, maximum, default, lower, upper) in [
+        (
+            "number.format",
+            json!(1.5),
+            15,
+            "2",
+            "2",
+            "1.500000000000000",
+        ),
+        (
+            "number.format_size",
+            json!(1024),
+            6,
+            "1.0 KiB",
+            "1 KiB",
+            "1.000000 KiB",
+        ),
+    ] {
+        assert_eq!(
+            run(operation, json!({"value":value})).unwrap(),
+            json!(default)
+        );
+        assert_eq!(
+            run(operation, json!({"value":value,"precision":0})).unwrap(),
+            json!(lower)
+        );
+        assert_eq!(
+            run(operation, json!({"value":value,"precision":maximum})).unwrap(),
+            json!(upper)
+        );
+        for invalid in [
+            json!(-1),
+            json!(maximum + 1),
+            json!(u64::MAX),
+            json!(1.5),
+            json!(1.0),
+            json!("1"),
+            json!(null),
+            json!(true),
+            json!([]),
+            json!({}),
+        ] {
+            let error = run(operation, json!({"value":value,"precision":invalid})).unwrap_err();
+            assert_eq!(error.code, "invalid_request", "{operation}: {invalid}");
+            assert!(error.message.contains("args.precision"), "{error:?}");
+        }
+    }
+}
+
+#[test]
+fn numeric_precision_errors_reach_helper_and_runtime() {
+    for operation in ["number.format", "number.format_size"] {
+        let helper = std::process::Command::new(env!("CARGO_BIN_EXE_execute-applet"))
+            .args([operation, "--args", r#"{"value":1024,"precision":-1}"#])
+            .output()
+            .unwrap();
+        assert_eq!(helper.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&helper.stderr);
+        assert!(
+            stderr.contains("invalid_request") && stderr.contains("args.precision"),
+            "{stderr}"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("case.program");
+        std::fs::write(
+            &program,
+            format!("run {operation} with value 1024 and precision -1\n"),
+        )
+        .unwrap();
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("run")
+            .arg(&program)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("args.precision"), "{stderr}");
+
+        std::fs::write(
+            &program,
+            format!("try\n  run {operation} with value 1024 and precision -1\ncatch failure\n  then encode failure as json\n"),
+        ).unwrap();
+        let caught = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("run")
+            .arg(&program)
+            .output()
+            .unwrap();
+        assert!(
+            caught.status.success(),
+            "{}",
+            String::from_utf8_lossy(&caught.stderr)
+        );
+        let failure: Value = serde_json::from_slice(&caught.stdout).unwrap();
+        assert_eq!(failure["kind"], "failure");
+        assert_eq!(failure["status"], 2);
+        assert!(failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("invalid_request"));
+    }
+}

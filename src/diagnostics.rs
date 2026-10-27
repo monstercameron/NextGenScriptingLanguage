@@ -1018,23 +1018,87 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(executable);
-    let command_flag = |index: usize| {
-        matches!(arguments.get(index + 1), Some(Value::String(flag)) if flag == "-c")
-            .then_some(index + 2)
-    };
+    fn shell_script_index(arguments: &[Value]) -> Option<usize> {
+        for (index, argument) in arguments.iter().enumerate() {
+            let Value::String(argument) = argument else {
+                return None;
+            };
+            if argument == "-c" {
+                return Some(index + 1);
+            }
+            if argument == "--" || !argument.starts_with('-') {
+                return None;
+            }
+        }
+        None
+    }
+    fn env_command_index(arguments: &[Value]) -> Option<usize> {
+        let mut index = 0;
+        while let Some(Value::String(argument)) = arguments.get(index) {
+            if argument == "--" {
+                index += 1;
+                break;
+            }
+            if argument.starts_with('-') {
+                if matches!(
+                    argument.as_str(),
+                    "-u" | "--unset" | "-C" | "--chdir" | "-S" | "--split-string"
+                ) {
+                    index += 2;
+                    continue;
+                }
+                if argument.starts_with("--unset=")
+                    || argument.starts_with("--chdir=")
+                    || argument.starts_with("--split-string=")
+                    || matches!(
+                        argument.as_str(),
+                        "-i" | "--ignore-environment" | "-0" | "--null" | "--debug"
+                    )
+                {
+                    index += 1;
+                    continue;
+                }
+                return None;
+            }
+            let Some((name, _)) = argument.split_once('=') else {
+                return Some(index);
+            };
+            if name.is_empty()
+                || !name.chars().enumerate().all(|(position, ch)| {
+                    ch == '_'
+                        || ch.is_ascii_alphanumeric() && (position > 0 || !ch.is_ascii_digit())
+                })
+            {
+                return Some(index);
+            }
+            index += 1;
+        }
+        arguments.get(index).and_then(|value| match value {
+            Value::String(_) => Some(index),
+            _ => None,
+        })
+    }
     if shell_name(executable) {
-        return arguments.iter().enumerate().find_map(|(index, value)| {
-            matches!(value, Value::String(flag) if flag == "-c").then_some(index + 1)
-        });
+        return shell_script_index(arguments);
     }
-    match executable {
-        "env" | "busybox" => arguments.iter().enumerate().find_map(|(index, value)| {
-            matches!(value, Value::String(name) if shell_name(name))
-                .then(|| command_flag(index))
-                .flatten()
-        }),
-        _ => None,
-    }
+    let (child_index, child_args) = match executable {
+        "env" => {
+            let child_index = env_command_index(arguments)?;
+            (child_index, &arguments[child_index + 1..])
+        }
+        "busybox" => {
+            let applet_index =
+                usize::from(matches!(arguments.first(), Some(Value::String(flag)) if flag == "--"));
+            (applet_index, arguments.get(applet_index + 1..)?)
+        }
+        _ => return None,
+    };
+    let Value::String(child) = arguments.get(child_index)? else {
+        return None;
+    };
+    shell_name(child)
+        .then(|| shell_script_index(child_args).map(|index| child_index + 1 + index))
+        .flatten()
 }
 
 fn shell_expansion_argument_fix(

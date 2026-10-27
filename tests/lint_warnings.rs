@@ -69,6 +69,23 @@ fn shell_command_arguments_after_the_script_remain_literal() {
 }
 
 #[test]
+fn shell_looking_later_arguments_are_not_treated_as_a_command_string() {
+    for source in [
+        "run \"sh\" with arguments [\"script.sh\", \"-c\", \"echo $HOME\"]\n",
+        "run \"env\" with arguments [\"echo\", \"bash\", \"-c\", \"echo $HOME\"]\n",
+        "run \"busybox\" with arguments [\"echo\", \"sh\", \"-c\", \"echo $HOME\"]\n",
+    ] {
+        let diagnostics = analyze_source(source, &Registry::default());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"),
+            "{source}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
 fn safe_first_command_expansion_fix_declares_environment_and_formats_value() {
     let source = "run \"echo\" with arguments [\"$HOME/x\"]\n";
     let registry = format_registry();
@@ -375,6 +392,15 @@ fn model_text_from_extract_and_env_shell_invocation_are_flagged() {
     let source = "run llm.extract with model model_name and instruction \"draft\" and schema schema as raw\nthen parse json as response\ntake text at \"/value\" from response as generated\nrun \"env\" with arguments [\"bash\", \"-c\", generated]\n";
     let diagnostics = analyze_source(source, &Registry::default());
     assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "model.text_to_command"));
+}
+
+#[test]
+fn shell_looking_later_env_arguments_do_not_mark_model_text_as_shell_code() {
+    let source = "run llm.ask with prompt \"write something\" as generated\nrun \"env\" with arguments [\"echo\", \"bash\", \"-c\", generated]\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(!diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "model.text_to_command"));
 }

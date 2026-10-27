@@ -837,6 +837,12 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
 
     let out_file = std::fs::File::from(out_read);
     let (sender, receiver) = std::sync::mpsc::channel();
+    // Progress counter for the bounded quiet wait before teardown: conhost
+    // forwards client frames to the output pipe asynchronously, so the
+    // harness must observe pipe quiet rather than assume the wait above
+    // means every frame has arrived.
+    let screen_len = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let screen_len_reader = std::sync::Arc::clone(&screen_len);
     std::thread::spawn(move || {
         use std::io::Read as _;
         let mut file = out_file;
@@ -845,7 +851,10 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         while screen.len() < 65536 {
             match file.read(&mut chunk) {
                 Ok(0) => break,
-                Ok(read) => screen.extend_from_slice(&chunk[..read]),
+                Ok(read) => {
+                    screen.extend_from_slice(&chunk[..read]);
+                    screen_len_reader.store(screen.len(), std::sync::atomic::Ordering::Relaxed);
+                }
                 Err(_) => break,
             }
         }
@@ -875,6 +884,27 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         "ConPTY exit code query failed: {}",
         std::io::Error::last_os_error()
     );
+    // Bounded quiet period before teardown: conhost forwards client frames to
+    // the output pipe asynchronously, so a frame written just before the
+    // child exits may still be in flight when the wait above returns. Closing
+    // the session first would discard that final frame and leave only the
+    // early VT setup on screen. Poll for pipe quiet while the reader keeps
+    // draining; EOF still arrives only from ClosePseudoConsole below, so the
+    // reader can never deadlock this wait, and the budget forces progress
+    // even if conhost keeps emitting (e.g. cursor updates).
+    let quiet_start = Instant::now();
+    let mut last_len = screen_len.load(std::sync::atomic::Ordering::Relaxed);
+    let mut last_change = Instant::now();
+    while last_change.elapsed() < Duration::from_millis(400)
+        && quiet_start.elapsed() < Duration::from_secs(8)
+    {
+        std::thread::sleep(Duration::from_millis(25));
+        let len = screen_len.load(std::sync::atomic::Ordering::Relaxed);
+        if len != last_len {
+            last_len = len;
+            last_change = Instant::now();
+        }
+    }
     if let Some(hpc) = session.hpc.take() {
         // SAFETY: the console is live and closed exactly once here; Drop sees None.
         unsafe {
@@ -913,5 +943,51 @@ fn conpty_console_replaces_invalid_utf8_with_replacement_char() {
             .any(|window| window == [0xEF, 0xBF, 0xBD, 0x41]),
         "ConPTY screen must show U+FFFD followed by A, got: {}",
         String::from_utf8_lossy(&screen)
+    );
+}
+
+/// Lines the in-console probe reported on the captured screen, or a marker
+/// when the report itself never arrived (a routing finding in its own right).
+fn probe_report_lines(screen: &[u8]) -> String {
+    let text = String::from_utf8_lossy(screen);
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("PROBE-REPORT"))
+        .collect();
+    if lines.is_empty() {
+        return "<no PROBE-REPORT bytes on screen>".to_owned();
+    }
+    lines.join("\n")
+}
+
+/// Measures ConPTY child stdio routing from inside the session: the fixture
+/// probe reports its inherited handle types, console-mode status and which
+/// write path reaches the screen. A WriteConsoleW marker must be present,
+/// proving the child stdout is a console; the report lines pin down the rest.
+#[test]
+fn conpty_child_stdio_is_a_console_and_write_console_reaches_screen() {
+    let (screen, status) = run_under_conpty(&fixture(), &["conpty-probe"], Duration::from_secs(30));
+    let text = String::from_utf8_lossy(&screen);
+    assert_eq!(
+        status,
+        0,
+        "ConPTY probe child must exit 0; screen ({} bytes):\n{}",
+        screen.len(),
+        text
+    );
+    let file_marker = screen
+        .windows(b"CONPTY-PROBE-FILE-OK".len())
+        .any(|window| window == b"CONPTY-PROBE-FILE-OK");
+    assert!(
+        screen
+            .windows(b"CONPTY-PROBE-CONSOLE-OK".len())
+            .any(|window| window == b"CONPTY-PROBE-CONSOLE-OK"),
+        "ConPTY child stdout must be a console: WriteConsoleW bytes never reached the screen.\n\
+         Measured child routing (from screen):\n{}\n\
+         WriteFile marker on screen: {file_marker}\n\
+         Full screen ({} bytes):\n{}",
+        probe_report_lines(&screen),
+        screen.len(),
+        text
     );
 }

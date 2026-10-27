@@ -9,6 +9,91 @@ fn spawn_detached_child(command: &mut std::process::Command) -> std::io::Result<
     Ok(())
 }
 
+/// Report ConPTY child stdio routing from inside the pseudo-console session:
+/// the inherited standard-handle values, their file types, console-mode
+/// status, and which write path reaches the screen. Every line is short ASCII
+/// so the captured VT stream keeps each line (and marker) contiguous for the
+/// harness byte-window assertions.
+#[cfg(windows)]
+fn conpty_probe_report() {
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        Storage::FileSystem::{GetFileType, FILE_TYPE_CHAR, FILE_TYPE_DISK, FILE_TYPE_PIPE},
+        System::Console::{
+            GetConsoleMode, GetStdHandle, WriteConsoleW, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE,
+        },
+    };
+    for (name, kind) in [
+        ("stdin", STD_INPUT_HANDLE),
+        ("stdout", STD_OUTPUT_HANDLE),
+        ("stderr", STD_ERROR_HANDLE),
+    ] {
+        // SAFETY: kind is one of the three standard-handle constants.
+        // GetStdHandle takes no pointers, and its borrowed result is never
+        // closed here.
+        let handle = unsafe { GetStdHandle(kind) };
+        let null = handle.is_null();
+        let invalid = handle == INVALID_HANDLE_VALUE;
+        let file_type = if null || invalid {
+            "NONE"
+        } else {
+            // SAFETY: the handle is live here (neither null nor invalid),
+            // and GetFileType takes no out-pointers.
+            let kind = unsafe { GetFileType(handle) };
+            if kind == FILE_TYPE_CHAR {
+                "CHAR"
+            } else if kind == FILE_TYPE_DISK {
+                "DISK"
+            } else if kind == FILE_TYPE_PIPE {
+                "PIPE"
+            } else {
+                "OTHER"
+            }
+        };
+        let mut mode = 0u32;
+        let console = if null || invalid {
+            false
+        } else {
+            // SAFETY: mode is a live local u32 for the out-parameter, and
+            // the handle is neither null nor invalid here.
+            unsafe { GetConsoleMode(handle, &mut mode) != 0 }
+        };
+        println!(
+            "PROBE-REPORT {name} null={null} invalid={invalid} type={file_type} console={console} mode={mode:#X}"
+        );
+    }
+    // SAFETY: STD_OUTPUT_HANDLE is re-queried as a borrowed handle that is
+    // never closed. WriteConsoleW runs only when GetConsoleMode succeeds
+    // above, so the handle is a console; the marker buffer is in bounds for
+    // its length, written is a live local out-parameter, and the reserved
+    // argument is null.
+    let (console_ok, console_written) = unsafe {
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        let mut mode = 0u32;
+        if out.is_null() || out == INVALID_HANDLE_VALUE || GetConsoleMode(out, &mut mode) == 0 {
+            (false, 0)
+        } else {
+            let marker: Vec<u16> = "\r\nCONPTY-PROBE-CONSOLE-OK\r\n".encode_utf16().collect();
+            let mut written = 0u32;
+            let ok = WriteConsoleW(
+                out,
+                marker.as_ptr().cast(),
+                marker.len() as u32,
+                &mut written,
+                std::ptr::null(),
+            ) != 0;
+            (ok, written)
+        }
+    };
+    println!("PROBE-REPORT write_console ok={console_ok} written={console_written}");
+    let file_ok = std::io::stdout()
+        .write_all(b"CONPTY-PROBE-FILE-OK\n")
+        .is_ok()
+        && std::io::stdout().flush().is_ok();
+    println!("PROBE-REPORT write_file ok={file_ok}");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str).unwrap_or("") {
@@ -26,6 +111,16 @@ fn main() {
             let mut stdout = std::io::stdout();
             stdout.write_all(&[0xFF, 0x41]).unwrap();
             stdout.flush().unwrap();
+        }
+        "conpty-probe" => {
+            // Bounded ConPTY routing probe: report the inherited standard
+            // handles, console status and write-path delivery from inside the
+            // pseudo-console child, so the next native run measures routing
+            // instead of guessing it.
+            #[cfg(windows)]
+            conpty_probe_report();
+            #[cfg(not(windows))]
+            println!("PROBE-REPORT windows-only");
         }
         "repeat-byte" => {
             let mut remaining: usize = args[1].parse().unwrap();

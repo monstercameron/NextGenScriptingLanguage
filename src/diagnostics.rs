@@ -4552,7 +4552,7 @@ fn validate_call(
                     ));
                 }
             }
-        } else if !value_matches_schema(value, schema) {
+        } else if !value_matches_schema_with_types(value, schema, known_types) {
             diagnostics.push(Diagnostic::error(
                 "applet.parameter.type",
                 format!(
@@ -4827,16 +4827,25 @@ fn collect_invalid_pointers(
     }
 }
 
+#[cfg(test)]
 fn value_matches_schema(value: &Value, schema: &JsonValue) -> bool {
+    value_matches_schema_with_types(value, schema, &BTreeMap::new())
+}
+
+fn value_matches_schema_with_types(
+    value: &Value,
+    schema: &JsonValue,
+    known_types: &BTreeMap<String, OutputType>,
+) -> bool {
     if let Some(variants) = schema.get("anyOf").and_then(JsonValue::as_array) {
         return variants
             .iter()
-            .any(|variant| value_matches_schema(value, variant));
+            .any(|variant| value_matches_schema_with_types(value, variant, known_types));
     }
     if let Some(variants) = schema.get("oneOf").and_then(JsonValue::as_array) {
         return variants
             .iter()
-            .filter(|variant| value_matches_schema(value, variant))
+            .filter(|variant| value_matches_schema_with_types(value, variant, known_types))
             .count()
             == 1;
     }
@@ -4844,8 +4853,13 @@ fn value_matches_schema(value: &Value, schema: &JsonValue) -> bool {
         return kinds.iter().filter_map(JsonValue::as_str).any(|kind| {
             let mut variant = schema.clone();
             variant["type"] = JsonValue::String(kind.to_owned());
-            value_matches_schema(value, &variant)
+            value_matches_schema_with_types(value, &variant, known_types)
         });
+    }
+    if let Value::Reference(name) = value {
+        return known_types
+            .get(name)
+            .is_none_or(|kind| output_type_matches_parameter(*kind, schema));
     }
     let kind = schema.get("type").and_then(JsonValue::as_str).unwrap_or("");
     let matches_kind = match (kind, value) {
@@ -4866,19 +4880,26 @@ fn value_matches_schema(value: &Value, schema: &JsonValue) -> bool {
         ("boolean", Value::Bool(_)) => true,
         ("array", Value::List(values)) => schema.get("items").is_none_or(|item_schema| {
             values.iter().all(|item| {
-                matches!(item, Value::Reference(_)) || value_matches_schema(item, item_schema)
+                matches!(item, Value::Reference(_))
+                    || value_matches_schema_with_types(item, item_schema, known_types)
             })
         }),
-        ("object", Value::Record(values)) => schema
-            .get("properties")
-            .and_then(JsonValue::as_object)
-            .is_none_or(|fields| {
-                values.iter().all(|(name, value)| {
-                    fields
-                        .get(name)
-                        .is_some_and(|field_schema| value_matches_schema(value, field_schema))
-                })
-            }),
+        ("object", Value::Record(values)) => {
+            let fields = schema.get("properties").and_then(JsonValue::as_object);
+            values.iter().all(|(name, value)| {
+                if let Some(field_schema) = fields.and_then(|fields| fields.get(name)) {
+                    value_matches_schema_with_types(value, field_schema, known_types)
+                } else {
+                    match schema.get("additionalProperties") {
+                        Some(JsonValue::Bool(false)) => false,
+                        Some(JsonValue::Bool(true)) | None => true,
+                        Some(additional_schema) => {
+                            value_matches_schema_with_types(value, additional_schema, known_types)
+                        }
+                    }
+                }
+            })
+        }
         ("null", Value::Null) => true,
         ("", _) => true,
         _ => false,
@@ -6221,6 +6242,60 @@ mod tests {
             &union
         ));
         assert_eq!(schema_type(&union), "integer or boolean");
+    }
+
+    #[test]
+    fn parameter_type_checks_honor_additional_properties() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"known": {"type": "string"}},
+            "additionalProperties": {"type": "integer"}
+        });
+        let allowed = Value::Record(BTreeMap::from([
+            ("known".into(), Value::String("value".into())),
+            ("dynamic".into(), Value::Integer(7)),
+        ]));
+        assert!(value_matches_schema(&allowed, &schema));
+
+        let invalid_additional = Value::Record(BTreeMap::from([(
+            "dynamic".into(),
+            Value::String("wrong type".into()),
+        )]));
+        assert!(!value_matches_schema(&invalid_additional, &schema));
+
+        let closed = json!({
+            "type": "object",
+            "properties": {"known": {"type": "string"}},
+            "additionalProperties": false
+        });
+        assert!(!value_matches_schema(&allowed, &closed));
+
+        let scalar_object = json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": {"anyOf": [
+                {"type": "string"},
+                {"type": "integer"},
+                {"type": "number"},
+                {"type": "boolean"}
+            ]}
+        });
+        let values = Value::Record(BTreeMap::from([(
+            "json".into(),
+            Value::Reference("dashboard".into()),
+        )]));
+        let known_types = BTreeMap::from([("dashboard".into(), OutputType::Text)]);
+        assert!(value_matches_schema_with_types(
+            &values,
+            &scalar_object,
+            &known_types
+        ));
+        let mismatched_types = BTreeMap::from([("dashboard".into(), OutputType::Record)]);
+        assert!(!value_matches_schema_with_types(
+            &values,
+            &scalar_object,
+            &mismatched_types
+        ));
     }
 
     #[test]

@@ -361,7 +361,7 @@ fn missing_program_file_is_distinct_and_points_at_path() {
 }
 
 #[test]
-fn one_hundred_invalid_sources_never_fall_back_to_check_failed() {
+fn representative_invalid_sources_never_fall_back_to_check_failed() {
     let registry = Registry::from_sources(&[
         serde_json::json!({
             "name": "fixture.reader",

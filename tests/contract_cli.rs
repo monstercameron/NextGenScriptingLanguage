@@ -160,6 +160,17 @@ fn set_private_windows_test_acl(path: &Path) {
     assert_eq!(status, 0);
 }
 
+#[cfg(any(unix, windows))]
+fn set_private_policy_fixture_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    set_private_windows_test_acl(path);
+}
+
 #[cfg(all(unix, feature = "live"))]
 fn live_request(socket: &Path, request: Value) -> Value {
     use std::os::unix::net::UnixStream;
@@ -286,6 +297,7 @@ fn strict_policy_preflights_every_invocation_before_the_first_command_runs() {
         r#"{"version":1,"applets":{"before":{"capabilities":["process.exec"]}}}"#,
     )
     .unwrap();
+    set_private_policy_fixture_permissions(&policy);
 
     let output = cli(
         root.path(),
@@ -325,6 +337,7 @@ fn live_policy_rejects_a_source_patch_before_committing_it() {
         r#"{"version":1,"applets":{"before":{"capabilities":["process.exec"]}}}"#,
     )
     .unwrap();
+    set_private_policy_fixture_permissions(&policy);
     let program = root.path().join("live.program");
     let source = "run before with path \"never-created\"\n";
     fs::write(&program, source).unwrap();
@@ -438,7 +451,7 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
         .unwrap(),
     )
     .unwrap();
-    fs::set_permissions(&policy_file, fs::Permissions::from_mode(0o600)).unwrap();
+    set_private_policy_fixture_permissions(&policy_file);
     let socket = root.path().join("control.sock");
     let child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args([
@@ -504,13 +517,7 @@ fn policy_input_is_bounded_and_check_json_reports_parse_failures() {
     fs::write(&program, "run \"true\"\n").unwrap();
     let policy = root.path().join("policy.json");
     fs::write(&policy, "{\"version\":1,\"unexpected\":true}").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).unwrap();
-    }
-    #[cfg(windows)]
-    set_private_windows_test_acl(&policy);
+    set_private_policy_fixture_permissions(&policy);
 
     let invalid = cli(
         root.path(),

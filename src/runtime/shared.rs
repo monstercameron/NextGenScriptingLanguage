@@ -1537,14 +1537,20 @@ fn validate_range(
                     flow.started = true;
                 }
                 StepKind::TempScope { binding: name, .. } => {
-                    binding(
-                        &Some(name.clone()),
-                        &mut flow.names,
-                        allow_rebinding || flow.loop_depth > 0,
-                    )?;
+                    // Runtime scopes cannot replace a binding that is already live.
+                    // Keep this stricter than ordinary loop/live result rebinding.
+                    binding(&Some(name.clone()), &mut flow.names, false)?;
                     flow.bind_type(name, crate::ast::InputType::Text)?;
                 }
-                StepKind::EndTempScope { .. } => {}
+                StepKind::EndTempScope { back } => {
+                    let header = index
+                        .checked_sub(*back)
+                        .context("invalid temporary scope end")?;
+                    if let StepKind::TempScope { binding: name, .. } = &steps[header].kind {
+                        flow.names.remove(name);
+                        flow.types.remove(name);
+                    }
+                }
                 StepKind::CaptureBytes { binding: name } => {
                     if !flow.has_data {
                         bail!("capture bytes requires preceding output");
@@ -2734,6 +2740,24 @@ mod binding_type_tests {
     use crate::manifest::Registry;
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[cfg(feature = "live")]
+    #[test]
+    fn live_validation_rejects_a_temporary_scope_reusing_a_live_name() {
+        let registry = Registry::from_sources(&[] as &[&str]).unwrap();
+        let program = crate::parser::parse(
+            "with temporary file as t\n  use value \"inside\"\n  then save to t\n",
+        )
+        .unwrap();
+        let names = std::collections::BTreeSet::from(["t".to_owned()]);
+
+        let error = super::validate_live(&program, &registry, names, true, false)
+            .expect_err("temporary scopes must not replace live bindings");
+        assert!(
+            format!("{error:#}").contains("result \"t\" is already defined"),
+            "unexpected error: {error:#}"
+        );
+    }
 
     #[test]
     fn nul_strings_and_lists_are_json_typed_while_plain_text_lists_stay_text() {

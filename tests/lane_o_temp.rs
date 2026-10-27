@@ -120,6 +120,78 @@ fn a_scope_name_is_not_visible_after_its_body() {
 }
 
 #[test]
+fn check_rejects_a_temporary_name_used_after_its_scope() {
+    let directory = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let program = write_program(
+        directory.path(),
+        "use value \"ran\"\nthen save to \"marker.txt\"\nwith temporary file as t\n  use value \"inside\"\n  then save to t\nrun \"printf\" with arguments [t]\n",
+    );
+    let output = execute_in(
+        &["check", program.to_str().unwrap()],
+        directory.path(),
+        temp.path(),
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "check accepted an out-of-scope name"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("line 6"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("undefined result \"t\""),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn check_accepts_sequential_temporary_scopes_with_the_same_name() {
+    let directory = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let program = write_program(
+        directory.path(),
+        "with temporary file as t\n  use value \"x\"\n  then save to t\nwith temporary file as t\n  use value \"y\"\n  then save to t\n",
+    );
+    let output = execute_in(
+        &["check", program.to_str().unwrap()],
+        directory.path(),
+        temp.path(),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_rejects_a_temporary_scope_reusing_an_outer_name_inside_a_loop() {
+    let directory = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let program = write_program(
+        directory.path(),
+        "with temporary file as t\n  use value \"outer\"\n  then save to t\n  for each item in [\"x\"]\n    with temporary file as t\n      use value \"inner\"\n      then save to t\n",
+    );
+    let output = execute_in(
+        &["check", program.to_str().unwrap()],
+        directory.path(),
+        temp.path(),
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "check accepted a temporary scope that replaces a live binding"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("result \"t\" is already defined"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn temporary_scopes_are_refused_under_checkpoints() {
     let directory = tempdir().unwrap();
     let temp = tempdir().unwrap();

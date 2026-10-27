@@ -15,8 +15,6 @@ use anyhow::{bail, Result};
 use std::cell::RefCell;
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
-#[cfg(target_os = "linux")]
-use std::collections::HashSet;
 use std::ffi::OsStr;
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
@@ -90,10 +88,10 @@ pub(crate) fn preflight(grant: &AppletGrant, binary: &Path, cwd: &Path) -> Resul
 }
 
 #[cfg(target_os = "linux")]
-type ProbeKey = (PathBuf, String, PathBuf, PathBuf, String);
+type ProbeKey = (PathBuf, AppletGrant, PathBuf, PathBuf, String);
 
 #[cfg(target_os = "linux")]
-type ProbeCache = HashSet<ProbeKey>;
+type ProbeCache = Vec<ProbeKey>;
 
 #[cfg(target_os = "linux")]
 thread_local! {
@@ -113,7 +111,7 @@ pub(crate) struct ProbeRunGuard(Option<ProbeCache>);
 
 #[cfg(target_os = "linux")]
 pub(crate) fn begin_probe_run() -> ProbeRunGuard {
-    let previous = ACTIVE_PROBE_CACHE.with(|active| active.replace(Some(HashSet::new())));
+    let previous = ACTIVE_PROBE_CACHE.with(|active| active.replace(Some(Vec::new())));
     ProbeRunGuard(previous)
 }
 
@@ -144,16 +142,14 @@ fn cache_successful_probe(
         return probe();
     }
     // The applet-specific mount probe depends on all four inputs. Keep the
-    // validated path grant in the key so a successful probe is never reused
+    // validated grant itself in the key so a successful probe is never reused
     // for a different executable or working directory.
-    let grant =
-        serde_json::to_string(grant).context("serializing sandbox grant for probe cache")?;
     let Some(identity) = execution_identity(bwrap) else {
         return probe();
     };
     let key = (
         bwrap.to_path_buf(),
-        grant,
+        grant.clone(),
         binary.to_path_buf(),
         cwd.to_path_buf(),
         identity.clone(),
@@ -173,11 +169,11 @@ fn remember_successful_probe(
     key: ProbeKey,
     probe: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    if cache.contains(&key) {
+    if cache.iter().any(|cached| cached == &key) {
         return Ok(());
     }
     probe()?;
-    cache.insert(key);
+    cache.push(key);
     Ok(())
 }
 
@@ -1216,6 +1212,36 @@ mod tests {
         .unwrap();
         drop(outer);
         assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn probe_cache_requires_exact_grant_equality() {
+        let root = tempfile::tempdir().unwrap();
+        let grant = grant_for(root.path());
+        let mut changed_grant = grant.clone();
+        changed_grant.network = true;
+        let bwrap = PathBuf::from("/usr/bin/bwrap");
+        let binary = PathBuf::from("/usr/bin/true");
+        let cwd = root.path().to_path_buf();
+        let mut cache = ProbeCache::new();
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+
+        for current_grant in [&grant, &grant, &changed_grant, &changed_grant] {
+            let key = (
+                bwrap.clone(),
+                current_grant.clone(),
+                binary.clone(),
+                cwd.clone(),
+                "same execution identity".to_owned(),
+            );
+            remember_successful_probe(&mut cache, key, || {
+                probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     /// Linux CI acceptance measurement for issue #572. This deliberately runs

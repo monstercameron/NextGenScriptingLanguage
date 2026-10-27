@@ -1146,7 +1146,7 @@ files, and Windows device names, matching append and redirect safety.
 
 ### Hand over and detached launch
 
-`hand over to "program" with arguments [...]` replaces the script with one native program, so it must be the last statement of the program. On Unix the process is replaced with `execve`, keeping its process id and exit status. Windows has no in-place replacement, so the program starts with inherited stdio, the script waits for it, and its exit code becomes the script's exit code; codes outside 0-255 are reported as 1.
+`hand over to "program" with arguments [...]` replaces the script with one native program, so it must be the last statement of the program. On Unix the process is replaced with `execve`, keeping its process id and exit status. Windows has no in-place replacement, so the program starts with inherited stdio inside a job object that ends it if the script's process is killed, the script waits for it while observing cancellation and the workflow deadline, and its exit code becomes the script's exit code; codes outside 0-255 are reported as 1.
 
 `launch detached "program" with arguments [...]` starts the program and continues without waiting. The script does not own the child: exiting the script neither waits for nor cancels it. An optional `and output to "file"` sends stdout and stderr to that file, which is truncated and checked exactly like a redirect target: the write grant and persistence policy apply, and a link is refused. A detached command produces no pipeline data, so it cannot feed a `then` or `pipe to` statement.
 

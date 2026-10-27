@@ -4,6 +4,10 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[path = "support/private_answers.rs"]
+#[cfg(windows)]
+mod private_answers;
+
 fn execute() -> Command {
     Command::new(env!("CARGO_BIN_EXE_execute"))
 }
@@ -91,11 +95,25 @@ fn service_generate_forwards_private_answers_file_by_path() {
 #[test]
 fn service_generate_accepts_answers_option_and_rejects_nonprivate_acl() {
     let work = tempfile::tempdir().unwrap();
-    fs::write(
-        work.path().join("answers.json"),
-        r#"{"token":"CANARY-SVC-1"}"#,
-    )
-    .unwrap();
+    let answers = work.path().join("answers.json");
+    fs::write(&answers, r#"{"token":"CANARY-SVC-1"}"#).unwrap();
+    // make_private pins ownership to the current user with a protected
+    // owner-only DACL. Broadening that DACL keeps the owner while making the
+    // file deterministically nonprivate, so the refusal must come from the ACL
+    // check rather than an owner mismatch from an inherited tempdir ACL.
+    private_answers::make_private(&answers);
+    let grant = Command::new("icacls")
+        .arg(&answers)
+        .arg("/grant")
+        .arg("*S-1-1-0:(R)")
+        .output()
+        .unwrap();
+    assert!(
+        grant.status.success(),
+        "icacls grant failed: {}{}",
+        text(&grant.stdout),
+        text(&grant.stderr)
+    );
     let result = output(
         work.path(),
         &[
@@ -107,7 +125,7 @@ fn service_generate_accepts_answers_option_and_rejects_nonprivate_acl() {
             "answers.json",
         ],
     );
-    assert!(!result.status.success());
+    assert!(!result.status.success(), "{}", text(&result.stderr));
     let error = text(&result.stderr);
     assert!(
         error.contains("private Windows DACL")
@@ -115,7 +133,14 @@ fn service_generate_accepts_answers_option_and_rejects_nonprivate_acl() {
             || error.contains("inherited Windows ACL"),
         "{error}"
     );
-    assert!(!error.contains("unsupported service option --answers"));
+    assert!(
+        !error.contains("unsupported service option --answers"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("CANARY-SVC-1") && !text(&result.stdout).contains("CANARY-SVC-1"),
+        "refused answers must not surface the secret: {error}"
+    );
 }
 
 #[cfg(feature = "module-tools")]

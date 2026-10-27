@@ -634,8 +634,8 @@ fn analyze_source_impl(
         registry,
         cwd: &cwd,
     };
-    let replay_only = snapshot.is_some_and(crate::program_files::SourceLoadSnapshot::is_replay_only)
-        || {
+    let replay_only =
+        snapshot.is_some_and(crate::program_files::SourceLoadSnapshot::is_replay_only) || {
             #[cfg(feature = "lsp")]
             {
                 scope.is_some_and(|scope| scope.is_replay_only())
@@ -723,9 +723,7 @@ fn analyze_source_impl(
                     .filter(|(_, call)| call.operation.starts_with("file:"))
                 {
                     let key = &call.operation;
-                    let Some(child_path) = key
-                        .strip_prefix("file:")
-                        .map(std::path::PathBuf::from)
+                    let Some(child_path) = key.strip_prefix("file:").map(std::path::PathBuf::from)
                     else {
                         continue;
                     };
@@ -741,7 +739,9 @@ fn analyze_source_impl(
                     let child_source = captured_snapshot
                         .as_ref()
                         .and_then(|snapshot| snapshot.loaded_source(&child_path));
-                    let Some(child_source) = child_source else { continue; };
+                    let Some(child_source) = child_source else {
+                        continue;
+                    };
                     let mut child = analyze_child_source(
                         &child_source,
                         &child_path,
@@ -771,12 +771,13 @@ fn analyze_source_impl(
             let replay_snapshot = captured_snapshot
                 .as_ref()
                 .map(crate::program_files::SourceLoadSnapshot::replay);
-            if let Some(path_text) = message
-                .split_once("called program file ")
-                .and_then(|(_, tail)| {
-                    tail.split_once(" is not valid program text")
-                        .map(|(path, _)| path)
-                })
+            if let Some(path_text) =
+                message
+                    .split_once("called program file ")
+                    .and_then(|(_, tail)| {
+                        tail.split_once(" is not valid program text")
+                            .map(|(path, _)| path)
+                    })
             {
                 let child_path = std::path::PathBuf::from(path_text);
                 #[cfg(feature = "lsp")]
@@ -840,12 +841,18 @@ fn analyze_source_impl(
             || !warning_suppressed(source, diagnostic.span.line, &diagnostic.code)
     });
     diagnostics.sort_by(|left, right| {
-        (&left.span.path, left.span.start_byte, &left.code, &left.message).cmp(&(
-            &right.span.path,
-            right.span.start_byte,
-            &right.code,
-            &right.message,
-        ))
+        (
+            &left.span.path,
+            left.span.start_byte,
+            &left.code,
+            &left.message,
+        )
+            .cmp(&(
+                &right.span.path,
+                right.span.start_byte,
+                &right.code,
+                &right.message,
+            ))
     });
     if let Some(path) = source_path.as_deref() {
         let display = path.display().to_string();
@@ -5660,10 +5667,13 @@ mod tests {
             None,
             Some(&snapshot.replay()),
         );
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "check.undefined_name"
-                && diagnostic.span.path.as_deref() == canonical_callee.to_str()
-                && diagnostic.span.line == 2
-        }), "{diagnostics:#?}");
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "check.undefined_name"
+                    && diagnostic.span.path.as_deref() == canonical_callee.to_str()
+                    && diagnostic.span.line == 2
+            }),
+            "{diagnostics:#?}"
+        );
     }
 }

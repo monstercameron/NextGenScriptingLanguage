@@ -69,16 +69,25 @@ pub fn fill_missing(
 /// The answers in a JSON object file, as text values for `--input`-style parsing.
 /// Strings are used as they are; numbers and booleans are written as their JSON text.
 pub fn answers_from_file(path: &Path) -> Result<BTreeMap<String, String>> {
-    let metadata = std::fs::metadata(path)
+    #[cfg(not(any(unix, windows)))]
+    bail!(
+        "cannot verify that answers file {} is private on this platform",
+        path.display()
+    );
+    #[cfg(any(unix, windows))]
+    let file = crate::security::open_private_file(path)
+        .with_context(|| format!("opening private answers file {}", path.display()))?;
+    #[cfg(windows)]
+    crate::security::validate_private_windows_acl(&file, path)?;
+    let mut text = String::new();
+    #[cfg(any(unix, windows))]
+    file.take(MAX_ANSWERS_FILE_BYTES + 1)
+        .read_to_string(&mut text)
         .with_context(|| format!("reading answers file {}", path.display()))?;
-    if !metadata.is_file() || metadata.len() > MAX_ANSWERS_FILE_BYTES {
-        bail!(
-            "answers file {} must be a regular file of at most 64 KiB",
-            path.display()
-        );
+    #[cfg(any(unix, windows))]
+    if text.len() as u64 > MAX_ANSWERS_FILE_BYTES {
+        bail!("answers file {} must be at most 64 KiB", path.display());
     }
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading answers file {}", path.display()))?;
     let object: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&text).context("the answers file must be a JSON object")?;
     let mut answers = BTreeMap::new();
@@ -263,6 +272,10 @@ impl Drop for EchoOff<'_> {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/private_answers.rs"]
+mod private_answers;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::InputType;
@@ -354,6 +367,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("answers.json");
         std::fs::write(&path, r#"{"name":"ada","count":3,"ok":true}"#).unwrap();
+        super::private_answers::make_private(&path);
         let answers = answers_from_file(&path).unwrap();
         assert_eq!(answers["name"], "ada");
         assert_eq!(answers["count"], "3");

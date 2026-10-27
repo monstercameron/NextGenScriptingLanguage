@@ -1314,7 +1314,10 @@ accept mode as text one of ["light", "dark"] from prompt "Theme?" with default "
 
 An answer is supplied in one of three ways, and the first that applies wins:
 `--input NAME=VALUE`, then an answers file given as `--answers FILE` (a JSON object
-whose values are text, numbers, or booleans), then the terminal. A prompt with a
+whose values are text, numbers, or booleans), then the terminal. The answers file
+must be a private regular file owned by the current user; symbolic links and
+reparse points are refused. On Unix it must grant no group or other access; on
+Windows it must have a non-inherited owner-only ACL. A prompt with a
 default takes it for an empty answer. A prompt that has no answer and no terminal
 fails the run before any step starts, and the error names the question. Set
 `EXECUTE_NO_PROMPT=1` to turn terminal prompts off, so an unattended run fails the

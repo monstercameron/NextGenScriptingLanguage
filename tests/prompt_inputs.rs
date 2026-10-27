@@ -27,6 +27,9 @@ fn execute(root: &Path, arguments: &[&str]) -> Output {
         .unwrap()
 }
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
@@ -68,6 +71,7 @@ fn a_prompt_is_pre_answered_with_input_or_an_answers_file() {
     );
 
     fs::write(root.path().join("answers.json"), r#"{"name":"grace"}"#).unwrap();
+    private_answers::make_private(&root.path().join("answers.json"));
     fs::remove_file(root.path().join("out.txt")).unwrap();
     let output = execute(
         root.path(),
@@ -85,6 +89,7 @@ fn an_input_value_wins_over_the_answers_file() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("job.program"), NAME_PROGRAM).unwrap();
     fs::write(root.path().join("answers.json"), r#"{"name":"from-file"}"#).unwrap();
+    private_answers::make_private(&root.path().join("answers.json"));
     let output = execute(
         root.path(),
         &[
@@ -236,4 +241,83 @@ fn assert_no_file_contains(directory: &Path, needle: &str) {
             );
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn answers_must_be_private_regular_files_and_never_follow_symlinks() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("job.program"), NAME_PROGRAM).unwrap();
+    let answers = root.path().join("answers.json");
+    fs::write(&answers, r#"{"name":"private-value"}"#).unwrap();
+    for mode in [0o644, 0o640, 0o604] {
+        fs::set_permissions(&answers, fs::Permissions::from_mode(mode)).unwrap();
+        let output = execute(
+            root.path(),
+            &["run", "job.program", "--answers", "answers.json"],
+        );
+        assert!(!output.status.success(), "mode {mode:o}");
+        assert!(stderr(&output).contains("answers file"));
+        assert!(!root.path().join("out.txt").exists());
+    }
+    fs::set_permissions(&answers, fs::Permissions::from_mode(0o600)).unwrap();
+    symlink(&answers, root.path().join("link.json")).unwrap();
+    let output = execute(
+        root.path(),
+        &["run", "job.program", "--answers", "link.json"],
+    );
+    assert!(!output.status.success());
+    assert!(!root.path().join("out.txt").exists());
+    let output = execute(
+        root.path(),
+        &["run", "job.program", "--answers", "answers.json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        fs::read_to_string(root.path().join("out.txt")).unwrap(),
+        "private-value"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn answers_file_size_is_bounded_and_directories_are_rejected() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("answers.json");
+    fs::write(&path, vec![b' '; 64 * 1024 + 1]).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        format!("{:#}", flow::prompt::answers_from_file(&path).unwrap_err()).contains("64 KiB")
+    );
+    assert!(flow::prompt::answers_from_file(root.path()).is_err());
+    let fifo = root.path().join("answers.fifo");
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    assert!(flow::prompt::answers_from_file(&fifo).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn answers_reject_inherited_acls_and_reparse_points() {
+    let root = tempfile::tempdir().unwrap();
+    let answers = root.path().join("answers.json");
+    fs::write(&answers, r#"{"name":"private-value"}"#).unwrap();
+    private_answers::make_private(&answers);
+    assert!(flow::prompt::answers_from_file(&answers).is_ok());
+    let link = root.path().join("link.json");
+    if std::os::windows::fs::symlink_file(&answers, &link).is_ok() {
+        assert!(flow::prompt::answers_from_file(&link).is_err());
+    }
+    let status = Command::new("icacls")
+        .arg(&answers)
+        .arg("/inheritance:e")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(flow::prompt::answers_from_file(&answers).is_err());
 }

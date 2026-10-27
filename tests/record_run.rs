@@ -3,6 +3,9 @@
 //! from its record, the record is private and bounded, and declared secrets never
 //! appear in it.
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -171,6 +174,7 @@ fn sensitive_prompt_values_are_redacted_everywhere_in_the_record() {
     .unwrap();
     let answers = work.path().join("answers.json");
     fs::write(&answers, serde_json::json!({"token": canary}).to_string()).unwrap();
+    private_answers::make_private(&answers);
     let record = work.path().join("record");
     let _run = execute(
         work.path(),

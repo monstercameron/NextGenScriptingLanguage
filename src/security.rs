@@ -9,6 +9,8 @@
 use crate::contracts::Sensitivity;
 use crate::manifest::Registry;
 use crate::manifest::{AppletBackend, Manifest};
+#[cfg(windows)]
+use anyhow::{bail, Context, Result};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1097,7 +1099,7 @@ fn valid_environment_name(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn open_private_file(path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {
     use std::fs::OpenOptions;
     let mut options = OpenOptions::new();
     options.read(true);
@@ -1520,4 +1522,178 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(DataFlowPolicy::load(&path).is_err());
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<()> {
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    const INHERITED_ACE_FLAG: u8 = 0x10;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{
+            AclSizeInformation,
+            Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+            EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorDacl, GetTokenInformation,
+            TokenUser, ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    let mut owner = std::ptr::null_mut();
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: file owns a live handle, and all output pointers are live local slots.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        if !descriptor.is_null() {
+            // SAFETY: GetSecurityInfo allocated this descriptor with LocalAlloc.
+            unsafe { LocalFree(descriptor) };
+        }
+        return Err(std::io::Error::from_raw_os_error(status as i32))
+            .context("reading answers file Windows ACL");
+    }
+    let result = (|| {
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle that requires no closing.
+        let process = unsafe { GetCurrentProcess() };
+        let mut token = std::ptr::null_mut();
+        // SAFETY: process is the valid pseudo-handle above and token is a writable out-slot.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("reading current user SID");
+        }
+        // SAFETY: OpenProcessToken succeeded and returned an owned token handle.
+        let token = unsafe { OwnedHandle::from_raw_handle(token) };
+        let mut needed = 0;
+        // SAFETY: A null buffer with length zero requests the required TokenUser buffer size.
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            );
+        }
+        if needed == 0 {
+            return Err(std::io::Error::last_os_error()).context("sizing current user SID");
+        }
+        let mut token_data = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
+        // SAFETY: token_data is aligned and at least `needed` bytes long; the token remains live.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                token_data.as_mut_ptr().cast(),
+                needed,
+                &mut needed,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error()).context("reading current user SID");
+        }
+        // SAFETY: GetTokenInformation wrote a TOKEN_USER at the start of the aligned buffer.
+        let user = unsafe { &*(token_data.as_ptr().cast::<TOKEN_USER>()) };
+        if owner.is_null() || user.User.Sid.is_null() {
+            bail!(
+                "answers file {} must be owned by the current user",
+                path.display()
+            );
+        }
+        // SAFETY: both SIDs are non-null and remain live in the descriptor and token buffer.
+        if unsafe { EqualSid(owner, user.User.Sid) } == 0 {
+            bail!(
+                "answers file {} must be owned by the current user",
+                path.display()
+            );
+        }
+
+        let mut present = 0;
+        let mut acl_defaulted = 0;
+        let mut descriptor_dacl = std::ptr::null_mut();
+        // SAFETY: descriptor is the live descriptor returned by GetSecurityInfo.
+        if unsafe {
+            GetSecurityDescriptorDacl(
+                descriptor,
+                &mut present,
+                &mut descriptor_dacl,
+                &mut acl_defaulted,
+            )
+        } == 0
+            || present == 0
+            || descriptor_dacl.is_null()
+            || dacl != descriptor_dacl
+        {
+            bail!(
+                "answers file {} must have an explicit private Windows DACL",
+                path.display()
+            );
+        }
+        let mut size = ACL_SIZE_INFORMATION {
+            AceCount: 0,
+            AclBytesInUse: 0,
+            AclBytesFree: 0,
+        };
+        // SAFETY: dacl is the valid ACL returned in the live security descriptor.
+        if unsafe {
+            GetAclInformation(
+                dacl,
+                (&mut size as *mut ACL_SIZE_INFORMATION).cast(),
+                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+        } == 0
+            || size.AceCount == 0
+        {
+            bail!(
+                "answers file {} must have a nonempty private Windows DACL",
+                path.display()
+            );
+        }
+        for index in 0..size.AceCount {
+            let mut raw_ace = std::ptr::null_mut();
+            // SAFETY: index is below the ACE count reported for this valid ACL.
+            if unsafe { GetAce(dacl, index, &mut raw_ace) } == 0 || raw_ace.is_null() {
+                return Err(std::io::Error::last_os_error())
+                    .context("reading answers file ACL entry");
+            }
+            // SAFETY: GetAce returned a pointer to an ACE stored inside the live ACL.
+            let header = unsafe { &*(raw_ace.cast::<windows_sys::Win32::Security::ACE_HEADER>()) };
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE
+                || header.AceFlags & INHERITED_ACE_FLAG != 0
+            {
+                bail!(
+                    "answers file {} has a nonprivate or inherited Windows ACL entry",
+                    path.display()
+                );
+            }
+            // SAFETY: ACCESS_ALLOWED_ACE_TYPE guarantees this ACE layout; SidStart begins its SID.
+            let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
+            let ace_sid = std::ptr::addr_of!(ace.SidStart).cast_mut().cast();
+            // SAFETY: the ACE SID lies inside the validated ACL and the token SID buffer is live.
+            if unsafe { EqualSid(ace_sid, user.User.Sid) } == 0 {
+                bail!(
+                    "answers file {} grants access to another Windows principal",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    })();
+    if !descriptor.is_null() {
+        // SAFETY: GetSecurityInfo allocated this descriptor with LocalAlloc.
+        unsafe { LocalFree(descriptor) };
+    }
+    result
 }

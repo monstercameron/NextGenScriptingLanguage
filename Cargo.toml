@@ -164,7 +164,7 @@ required-features = ["test-fixtures"]
 
 [[test]]
 name = "checkpoint_resolve_elements"
-required-features = ["test-fixtures"]
+required-features = ["test-fixtures", "agent-advisory"]
 
 [[test]]
 name = "execution_results"

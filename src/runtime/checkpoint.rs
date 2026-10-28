@@ -2044,8 +2044,11 @@ pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::*;
+        use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*};
+        // `restrict_file` calls SetSecurityInfo, which needs WRITE_DAC on the
+        // handle; a plain read/write open fails with Access denied on Windows.
         options
+            .access_mode(GENERIC_READ | GENERIC_WRITE | WRITE_DAC | READ_CONTROL)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
     }

@@ -299,16 +299,39 @@ pub(crate) fn append_resolution_locked(
     line.push(b'\n');
     let path = directory.join(RESOLUTIONS_LOG);
     let mut options = fs::OpenOptions::new();
-    options.create(true).append(true).write(true);
+    options.create(true).write(true);
+    #[cfg(not(windows))]
+    options.append(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{
+            Foundation::GENERIC_WRITE,
+            Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, READ_CONTROL, WRITE_DAC},
+        };
+        // `restrict_file` calls SetSecurityInfo, which needs WRITE_DAC on the
+        // handle; a plain append/write open fails with Access denied on
+        // Windows. This handle starts at offset zero, so it is positioned at
+        // the end below (under the resolve lock) instead of using append mode.
+        options
+            .access_mode(GENERIC_WRITE | WRITE_DAC | READ_CONTROL)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let mut file = options
         .open(&path)
         .with_context(|| format!("appending {}", path.display()))?;
     crate::runtime::checkpoint::restrict_file(&file)?;
+    #[cfg(windows)]
+    {
+        use std::io::Seek;
+        file.seek(std::io::SeekFrom::End(0))
+            .context("appending checkpoint resolution")?;
+    }
     file.write_all(&line)
         .context("appending checkpoint resolution")?;
     file.sync_all().context("syncing checkpoint resolution")?;

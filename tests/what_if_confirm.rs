@@ -6,6 +6,9 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 const POLICY: &str = r#"{"version":1,"applets":{"text.concat":{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{"read":["."],"write":["."]}}}}"#;
 
 const POLICY_DENY_PRIVILEGED: &str = r#"{"version":1,"deny_privileged":true,"applets":{"text.concat":{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{"read":["."],"write":["."]}}}}"#;
@@ -361,12 +364,18 @@ then save to \"out.txt\"
     );
     manifests(root.path(), "--version");
     write(root.path(), "policy.json", POLICY);
+    // A capability policy is security-sensitive: without a private ACL Windows
+    // refuses the review before any fingerprint runs.
+    private_answers::make_private(&root.path().join("policy.json"));
     let (fingerprint, _) = review(
         root.path(),
         "literal.program",
         &["--capability-policy", "policy.json"],
     );
     write(root.path(), "policy.json", POLICY_DENY_PRIVILEGED);
+    // Truncating keeps the private ACL, but re-assert it so the confirm refusal
+    // proves a policy change, not a privacy error.
+    private_answers::make_private(&root.path().join("policy.json"));
     let output = confirm(
         root.path(),
         "literal.program",

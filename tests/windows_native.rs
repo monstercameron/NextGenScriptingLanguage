@@ -1,8 +1,10 @@
 #![cfg(windows)]
 //! Real native executables, files, pipes, jobs and named-pipe state control.
+#[cfg(feature = "live")]
+use std::io::{BufRead, BufReader};
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
@@ -396,6 +398,7 @@ impl Drop for Server {
         let _ = self.0.wait();
     }
 }
+#[cfg(feature = "live")]
 fn live(socket: &Path, args: &[&str]) -> serde_json::Value {
     let result = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("live")
@@ -408,6 +411,7 @@ fn live(socket: &Path, args: &[&str]) -> serde_json::Value {
     serde_json::from_slice(&result.stdout).unwrap()
 }
 #[test]
+#[cfg(feature = "live")]
 fn owner_checked_named_pipe_supports_live_crud_execution_and_shutdown() {
     let folder = tempfile::tempdir().unwrap();
     let source = folder.path().join("live.program");
@@ -473,6 +477,7 @@ fn owner_checked_named_pipe_supports_live_crud_execution_and_shutdown() {
     }
 }
 #[test]
+#[cfg(all(feature = "screens", feature = "model"))]
 fn headless_widgets_and_bundled_model_helper_are_native() {
     let folder = tempfile::tempdir().unwrap();
     let source=format!("open a screen titled \"Native Windows\"\nplace main on the left\ndefine a program named main\n  show a badge named status with text \"waiting\"\n  whenever the program opens\n    {}    then show the result in status\n",native(&["write","native done"]));

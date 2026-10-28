@@ -163,6 +163,10 @@ path = "tests/fixtures/native_fixture.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "checkpoint_resolve_elements"
+required-features = ["test-fixtures", "agent-advisory"]
+
+[[test]]
 name = "execution_results"
 required-features = ["test-fixtures", "remote"]
 
@@ -204,6 +208,10 @@ required-features = ["test-fixtures"]
 
 [[test]]
 name = "named_background_jobs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "inherited_stdio_nonblocking"
 required-features = ["test-fixtures"]
 
 [[test]]

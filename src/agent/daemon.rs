@@ -117,6 +117,8 @@ pub fn default_socket() -> PathBuf {
 }
 
 /// Forward only when the operator explicitly accepts the daemon confinement context.
+/// The daemon additionally needs its own operator opt-in for every forward; without
+/// both opt-ins the run stays local.
 pub fn forward_run(arguments: &[String]) -> Forwarding {
     // This opt-in explicitly accepts the daemon context, including for older daemons.
     if std::env::var_os("EXECUTE_DAEMON_ACCEPT_CONTEXT").is_some_and(|value| value == "1") {
@@ -164,6 +166,16 @@ mod imp {
         RunContext, Value, PROTOCOL,
     };
     use crate::ipc::peer::peer_is_owner;
+
+    /// Whether this daemon's operator accepted serving forwarded runs. This reads
+    /// the daemon's own environment, which a sandboxed client cannot set for the
+    /// daemon, so every forward needs the opt-in at both ends: the client accepts
+    /// the daemon's context and the daemon accepts serving the client. No peer
+    /// comparison can establish shared confinement, so a matching peer alone
+    /// never suffices.
+    fn daemon_accepts_foreign_context() -> bool {
+        std::env::var_os("EXECUTE_DAEMON_ACCEPT_CONTEXT").is_some_and(|value| value == "1")
+    }
     use crate::ipc::transport::{read_message, write_message};
     use anyhow::{anyhow, bail, Context};
     use serde_json::json;
@@ -692,9 +704,17 @@ mod imp {
                     Flow::Stop
                 }
                 Some("run") => {
-                    // Same-UID peers can have stricter OS confinement than this process.
-                    // Without explicit acceptance, refuse before preparing or forking.
-                    if request["accept_daemon_context"] == true {
+                    // Same-UID peers can have stricter OS confinement than this process,
+                    // and no peer comparison can prove two processes share it: chroot
+                    // without new namespaces, Landlock and other unobservable
+                    // restrictions, per-thread credentials, and non-Linux platforms
+                    // leave no complete attestation. Without explicit acceptance at
+                    // both ends, refuse before preparing or forking. The client's
+                    // acceptance flag arrives from the client, so a sandboxed peer
+                    // could assert it; forwarding additionally needs this daemon's
+                    // operator to have opted in.
+                    let accepted = request["accept_daemon_context"] == true;
+                    if accepted && daemon_accepts_foreign_context() {
                         self.start_run(stream, &request, descriptors);
                         return Flow::Continue;
                     }

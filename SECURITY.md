@@ -374,7 +374,19 @@ NFSv4, RichACL and macOS ACLs are not probed and would pass the mode check
 undetected, and other Unix systems do not expose ACLs to this gate at all.
 Windows enforces owner plus no-foreign-write/delete/EA-ACE on leaves
 and ancestors with fail-closed unreadable ACLs, re-checked on the open
-handle, but a replacement after that handle check still races. Real CLI tests require no output,
+handle, but a replacement after that handle check still races. Bundled
+helpers (`execute-applet`/`execute-model`) pass that same gate on every
+launch, plus a build-time SHA-256 sidecar check when packaged and a
+`--version` identity handshake. Residual limits specific to the helpers:
+the sidecar ships in the same directory it protects, so whoever can
+replace the helper can also rewrite the sidecar — the recorded hash binds
+the packaged artifact against stale or mismatched helpers, not against a
+same-directory attacker. The handshake is not authentication either: any
+binary printing `<name> <CARGO_PKG_VERSION>` passes it, and the handshake
+itself executes the candidate binary once (`--version`, stdin closed),
+after the ownership/writability gate but before the worker spawn. On
+Windows without a packaged sidecar, a replaced helper is refused only by
+the ACL gate and the handshake. Real CLI tests require no output,
 no later save and no native launch when an invalid cache is encountered. Unit
 regressions also cover same-user cache-byte tampering, malformed integrity tags,
 and a parent replacement after the Unix cache directory descriptor is pinned.

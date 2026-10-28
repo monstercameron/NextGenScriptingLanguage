@@ -32,10 +32,7 @@ concurrency:
 jobs:
   linux-denial:
     name: Linux sandbox denial (bubblewrap, no silent skips)
-    # Ubuntu 24.04 runners currently deny the required user namespaces.
-    # This temporary runner is retired on 2027-04-17; replace it with a
-    # 24.04+ runner that can exercise the same real sandbox before that date.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       EXECUTE_REQUIRE_OS_SANDBOX: "1"
@@ -55,6 +52,22 @@ jobs:
           bwrap --version
           test -f /usr/bin/python3 || test -f /bin/python3
           python3 --version
+      - name: Diagnose the required bubblewrap namespaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe=(bwrap --die-with-parent --new-session --unshare-user --unshare-pid
+            --unshare-ipc --unshare-uts --unshare-net --cap-drop ALL
+            --dev /dev --proc /proc --dir /tmp --chmod 0555 /tmp)
+          for path in /usr /bin /sbin /lib /lib64; do
+            if [[ -e "$path" ]]; then
+              probe+=(--dir "$path" --ro-bind "$path" "$path")
+            fi
+          done
+          if [[ -e /etc/ld.so.cache ]]; then
+            probe+=(--dir /etc --ro-bind /etc/ld.so.cache /etc/ld.so.cache)
+          fi
+          "${probe[@]}" -- /usr/bin/true
       - name: Real bubblewrap denial tests (no skips)
         run: |
           set -euo pipefail

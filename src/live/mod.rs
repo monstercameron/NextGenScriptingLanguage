@@ -771,6 +771,17 @@ impl Drop for SignalGuard {
     }
 }
 fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) -> Result<Json> {
+    if mode == Mode::Run {
+        // A finite `run --control` run hardens exactly like `run`: mask
+        // pre-registered secrets (usually none yet; hooks cover the rest)
+        // before any step can echo them. Interactive `serve` stays raw: its
+        // stdout owns the control protocol and an operator is present. Only
+        // ever enable here, never disable: the switch is process-global, so
+        // a non-CI control run must not flip hardening off while a
+        // concurrent session is streaming.
+        crate::github_actions::enable_if_ci_no_disable();
+        crate::github_actions::emit_masks_for_registry(&shared.registry);
+    }
     let listener = UnixListener::bind(socket)
         .context("could not bind socket; an existing path is never replaced")?;
     #[cfg(unix)]

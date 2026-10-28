@@ -251,11 +251,19 @@ pub(super) fn resolved_call_stdio(
         }
     }
     // A stream redirected straight to its target is attached at spawn, not captured.
+    // Under hardening the stdout-to-stderr stream must not re-attach the raw
+    // terminal descriptor: it is declined in `take_redirected_stdio` and
+    // re-emitted through the sanitizing stderr writer (already gated at HEAD).
+    // `stream_stderr` is only true for a stderr file target, whose file attach
+    // in `take_redirected_stdio` happens regardless of this disposition and
+    // stays raw by design (files never reach the terminal); gating it here is
+    // defense-in-depth that keeps the resolved disposition converged with the
+    // Windows path, which has no streamed re-inherit.
     let (stream_stdout, stream_stderr) = super::redirect::streamed_redirect();
     if stream_stdout && !hardening {
         resolved.stdout = invocation_io::StdioDisposition::Inherit;
     }
-    if stream_stderr {
+    if stream_stderr && !hardening {
         resolved.stderr = invocation_io::StdioDisposition::Inherit;
     }
     resolved
@@ -382,6 +390,25 @@ pub(super) fn check_native_abort(
         .into());
     }
     Ok(())
+}
+
+/// Carry already-captured stdout on a timeout/cancel abort so a later
+/// `stdout to stderr` error-path re-emit can restore it. Without this the
+/// abort drops `output` and the failure loses `early-out` bytes. The wait
+/// itself stays untouched: this only preserves bytes already read, and the
+/// preexisting wait-path hang concern remains explicitly unproven.
+/// No secret or runner-command handling here: the caller re-emits through the
+/// sanitizing writer after registering sensitive bytes.
+pub(super) fn attach_abort_stdout(mut error: anyhow::Error, output: &[u8]) -> anyhow::Error {
+    if output.is_empty() {
+        return error;
+    }
+    if let Some(failure) = error.downcast_mut::<execution_result::ExecutionFailure>() {
+        if failure.result.stdout.is_none() {
+            failure.result.stdout = Some(output.to_vec());
+        }
+    }
+    error
 }
 
 pub(super) fn native_spawn_failure(
@@ -841,7 +868,8 @@ pub(super) fn execute_group_with_sink(
     // failure record shows what it printed, as `keep result` would.
     let attach_stdout = sink.is_none() && terminal_io.captures_terminal_stdout();
     loop {
-        check_native_abort(calls, &children, &observed_stages, signals)?;
+        check_native_abort(calls, &children, &observed_stages, signals)
+            .map_err(|error| attach_abort_stdout(error, &output))?;
         scan_child_statuses(
             &mut children,
             StatusScan {
@@ -971,13 +999,15 @@ pub(super) fn execute_group_with_sink(
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => return Err(error).context("reading terminal pipe"),
                 }
-                check_native_abort(calls, &children, &observed_stages, signals)?;
+                check_native_abort(calls, &children, &observed_stages, signals)
+                    .map_err(|error| attach_abort_stdout(error, &output))?;
             }
         }
         if reached_eof && children.0.iter().any(|child| !child.reaped) {
             // stdout EOF can precede child exit. Recheck once before falling
             // back to the short no-descriptor poll for cancellation/deadline.
-            check_native_abort(calls, &children, &observed_stages, signals)?;
+            check_native_abort(calls, &children, &observed_stages, signals)
+                .map_err(|error| attach_abort_stdout(error, &output))?;
             scan_child_statuses(
                 &mut children,
                 StatusScan {

@@ -269,19 +269,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // The last returning lexical run drops the slot, so repeated service
     // handlers begin with a fresh per-run budget while sharing their Signals.
     let (_finite_depth, depth) = FiniteDepth::enter();
-    if depth == 0 {
-        // Outermost run in this thread: mask secrets a library host
-        // registered before hardening was enabled, then drop any line state
-        // a previous run left in the process-global sanitizers. The sweep
-        // runs first on purpose: the inherited state still tells whether
-        // the log is mid-line, so the first mask starts its own line; masks
-        // end with a newline, so the reset afterwards lands on a true line
-        // start. Both are no-ops without hardening, so non-CI runs stay
-        // byte-identical. Nested runs share the terminal stream with their
-        // parent and must neither sweep nor reset it.
-        crate::github_actions::emit_masks_for_registry(registry);
-        crate::github_actions::reset_terminal_state();
-    }
+    // Process-wide outermost boundary: always sweep this run's pre-registered
+    // secrets, and reset the shared sanitizers only when no concurrent
+    // outermost run is active (the guard releases the slot on return).
+    // Thread-local depth alone would let two concurrent outermost runs both
+    // reset and drop each other's held split prefixes. Nested runs share the
+    // terminal stream with their parent and take no boundary.
+    let _terminal_boundary =
+        (depth == 0).then(|| crate::github_actions::enter_finite_run(registry));
     // Literal components of explicitly secret-producing calls must be masked
     // before their invocation trace or any dynamic binding can be observed.
     crate::security::register_sensitive_program(registry, program)?;
@@ -2364,6 +2359,51 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             let completed = match completed {
                                 Ok(completed) => completed,
                                 Err(error) => {
+                                    // Collect every captured byte the error
+                                    // carries so a sensitive step can mask
+                                    // before anything reaches the log. Both
+                                    // failure shapes are covered: `CommandFailed`
+                                    // (non-zero exit, stdout attached) and
+                                    // `ExecutionFailure` (timeout/cancel, stdout
+                                    // attached in spawn). The preexisting
+                                    // wait-path hang is untouched and remains
+                                    // explicitly unproven.
+                                    let mut sensitive_outputs: Vec<&[u8]> = Vec::new();
+                                    let mut abort_stdout: Option<&[u8]> = None;
+                                    if let Some(failure) = error.downcast_ref::<CommandFailed>() {
+                                        if let Some(stdout) = failure.stdout.as_deref() {
+                                            sensitive_outputs.push(stdout);
+                                        }
+                                        if let Some(stderr) = failure.stderr.as_deref() {
+                                            sensitive_outputs.push(stderr);
+                                        }
+                                        for stage_stderr in failure
+                                            .stages
+                                            .iter()
+                                            .filter_map(|stage| stage.stderr.as_deref())
+                                        {
+                                            sensitive_outputs.push(stage_stderr);
+                                        }
+                                        abort_stdout = failure.stdout.as_deref();
+                                    } else if let Some(failure) =
+                                        error.downcast_ref::<execution_result::ExecutionFailure>()
+                                    {
+                                        if let Some(stdout) = failure.result.stdout.as_deref() {
+                                            sensitive_outputs.push(stdout);
+                                        }
+                                        if let Some(stderr) = failure.result.stderr.as_deref() {
+                                            sensitive_outputs.push(stderr);
+                                        }
+                                        for stage_stderr in failure
+                                            .result
+                                            .stages
+                                            .iter()
+                                            .filter_map(|stage| stage.stderr.as_deref())
+                                        {
+                                            sensitive_outputs.push(stage_stderr);
+                                        }
+                                        abort_stdout = failure.result.stdout.as_deref();
+                                    }
                                     // A sensitive step's failure bytes must be
                                     // masked before the diagnostic reaches the
                                     // log: registration emits the mask lines,
@@ -2371,38 +2411,114 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     // from the same registry. Fail closed when
                                     // the value cannot be secured.
                                     if sensitive_terminal_output {
-                                        if let Some(failure) =
-                                            error.downcast_ref::<CommandFailed>()
-                                        {
-                                            let mut outputs = Vec::new();
-                                            outputs.extend(failure.stdout.as_deref());
-                                            outputs.extend(failure.stderr.as_deref());
-                                            outputs.extend(
-                                                failure
-                                                    .stages
-                                                    .iter()
-                                                    .filter_map(|stage| stage.stderr.as_deref()),
-                                            );
-                                            for output in outputs {
-                                                if crate::security::register_sensitive_bytes(
-                                                    registry, output,
-                                                )
-                                                .is_err()
-                                                {
-                                                    return Err(anyhow::anyhow!(
-                                                        "line {}: sensitive step failed and its output could not be secured; diagnostic withheld",
-                                                        step.line
-                                                    ));
-                                                }
+                                        for output in sensitive_outputs {
+                                            if crate::security::register_sensitive_bytes(
+                                                registry, output,
+                                            )
+                                            .is_err()
+                                            {
+                                                return Err(anyhow::anyhow!(
+                                                    "line {}: sensitive step failed and its output could not be secured; diagnostic withheld",
+                                                    step.line
+                                                ));
                                             }
                                         }
                                     }
                                     // A failed command's stderr still goes to its
                                     // file target before the failure propagates; a
                                     // streamed file already holds it and is synced.
+                                    // Under hardening a `stdout to stderr` redirect
+                                    // was force-captured instead of streamed, so its
+                                    // stdout would otherwise be lost on failure and
+                                    // timeout alike. Re-emit captured stdout first
+                                    // (program order: `out` before `err`), then the
+                                    // command's own stderr, each once through the
+                                    // sanitizing writer so forged `::` lines and
+                                    // secrets stay masked. Direct-streamed output
+                                    // (`streamed`, non-hardening) already reached
+                                    // its target as written and is never replayed.
+                                    // Framed harnesses that capture diagnostics keep
+                                    // them captured.
                                     if let Some(redirect) = redirect.as_mut() {
                                         if redirect.streamed {
                                             redirect.finish_stream()?;
+                                        } else if matches!(
+                                            redirect.target,
+                                            crate::ast::RedirectTarget::StdoutToStderr
+                                        ) && crate::github_actions::enabled()
+                                            && !signals.capture_diagnostics
+                                        {
+                                            if let Some(stdout) = abort_stdout {
+                                                if !stdout.is_empty() {
+                                                    write_with_deadline(
+                                                        2,
+                                                        stdout,
+                                                        &signals.cancelled,
+                                                        signals.deadline,
+                                                    )
+                                                    .context(
+                                                        "could not write redirected stdout to stderr",
+                                                    )?;
+                                                }
+                                            }
+                                            // A `CommandFailed` diagnostic already carries
+                                            // the command's stderr (sanitized on its
+                                            // way out via `write_diagnostic`), so
+                                            // re-emitting it here would duplicate
+                                            // it in the log. Only the captured
+                                            // stdout (above, absent from the
+                                            // diagnostic) is replayed. Timeouts
+                                            // and cancellations (`ExecutionFailure`)
+                                            // carry no such diagnostic copy, so
+                                            // their stderr is replayed below.
+                                            let mut emitted_stderr = false;
+                                            if error
+                                                .downcast_ref::<CommandFailed>()
+                                                .is_some()
+                                            {
+                                            } else if let Some(failure) = error
+                                                .downcast_ref::<
+                                                    execution_result::ExecutionFailure,
+                                                >(
+                                                )
+                                            {
+                                                for stage_stderr in failure
+                                                    .result
+                                                    .stages
+                                                    .iter()
+                                                    .filter_map(|stage| stage.stderr.as_deref())
+                                                {
+                                                    if !stage_stderr.is_empty() {
+                                                        write_with_deadline(
+                                                            2,
+                                                            stage_stderr,
+                                                            &signals.cancelled,
+                                                            signals.deadline,
+                                                        )
+                                                        .context(
+                                                            "could not write workflow stderr",
+                                                        )?;
+                                                        emitted_stderr = true;
+                                                    }
+                                                }
+                                                if !emitted_stderr {
+                                                    if let Some(stderr) =
+                                                        failure.result.stderr.as_deref()
+                                                    {
+                                                        if !stderr.is_empty() {
+                                                            write_with_deadline(
+                                                                2,
+                                                                stderr,
+                                                                &signals.cancelled,
+                                                                signals.deadline,
+                                                            )
+                                                            .context(
+                                                                "could not write workflow stderr",
+                                                            )?;
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         } else if let Some(failure) =
                                             error.downcast_ref::<CommandFailed>()
                                         {
@@ -2487,21 +2603,16 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         // the log. Re-emit it sanitized on the success path to
                         // preserve the visible behavior. Merged output already
                         // flows through the stdout path and file targets stay raw
-                        // in their files, so only the terminal cases re-emit
-                        // here. Framed harnesses that capture diagnostics keep
-                        // them captured.
+                        // in their files. A `stdout to stderr` redirect emits its
+                        // stdout through `route()` below, so its stderr is deferred
+                        // until after the route to keep program order (`out`
+                        // before `err`) and to emit each stream once. Framed
+                        // harnesses that capture diagnostics keep them captured.
                         if crate::github_actions::enabled() && !signals.capture_diagnostics {
-                            let terminal_stderr = match &redirect {
-                                None => true,
-                                Some(pending) => matches!(
-                                    pending.target,
-                                    crate::ast::RedirectTarget::StdoutToStderr
-                                ),
-                            };
+                            let terminal_stderr = redirect.is_none();
                             if terminal_stderr {
-                                for stage_stderr in stages
-                                    .iter()
-                                    .filter_map(|stage| stage.stderr.as_deref())
+                                for stage_stderr in
+                                    stages.iter().filter_map(|stage| stage.stderr.as_deref())
                                 {
                                     if !stage_stderr.is_empty() {
                                         write_with_deadline(
@@ -2608,7 +2719,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     reported_stdout_captured.then(|| bytes.clone()),
                                     stderr.map(<[u8]>::to_vec),
                                     output_value,
-                                    stages,
+                                    stages.clone(),
                                 );
                                 let record = execution.to_source_value(line, applet);
                                 bindings.insert(name.clone(), record);
@@ -2624,10 +2735,41 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 bytes
                             }
                             Some(redirect) => {
+                                let is_stdout_to_stderr = matches!(
+                                    redirect.target,
+                                    crate::ast::RedirectTarget::StdoutToStderr
+                                );
+                                let was_streamed = redirect.streamed;
                                 let bytes = redirect.route(bytes, &redirected_stderr, signals)?;
                                 if journal.is_some() {
                                     if let Some(destination) = redirect.destination.as_ref() {
                                         sync_destination_parent(destination, &cwd)?;
+                                    }
+                                }
+                                // Deferred `stdout to stderr` stderr: `route()`
+                                // already wrote stdout, so writing each stage's
+                                // stderr now keeps program order (`out` before
+                                // `err`) and emits each stream once. The whole
+                                // stage list is replayed (not just the last
+                                // `redirected_stderr` blob) to match the failure
+                                // path and avoid dropping pipelined stderr.
+                                if is_stdout_to_stderr
+                                    && !was_streamed
+                                    && crate::github_actions::enabled()
+                                    && !signals.capture_diagnostics
+                                {
+                                    for stage_stderr in
+                                        stages.iter().filter_map(|stage| stage.stderr.as_deref())
+                                    {
+                                        if !stage_stderr.is_empty() {
+                                            write_with_deadline(
+                                                2,
+                                                stage_stderr,
+                                                &signals.cancelled,
+                                                signals.deadline,
+                                            )
+                                            .context("could not write workflow stderr")?;
+                                        }
                                     }
                                 }
                                 bytes

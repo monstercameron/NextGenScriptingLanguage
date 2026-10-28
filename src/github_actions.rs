@@ -15,10 +15,12 @@
 //! sequence. The bytes stay human-readable but no longer parse as a workflow
 //! command. Every newly registered secret value is additionally masked with
 //! `::add-mask::` so the runner redacts it from the log from that point on.
-//! Each mask is synchronized onto its own log line (a line break is written
-//! first when the log is mid-line) because the runner only recognizes `::`
-//! commands at a line start; the pre-registered-secret sweep at run start
-//! runs before the terminal state reset for the same reason.
+//! Each mask unconditionally opens its own log line with a leading line break
+//! (plus its trailing newline) because the runner only recognizes `::`
+//! commands at a line start; the shared sanitizer state cannot prove the
+//! shared sink is at a line start under concurrent writes, so a conditional
+//! break could still glue the mask mid-line. The pre-registered-secret sweep
+//! at run start runs before the terminal state reset for the same reason.
 //!
 //! Hardening is opt-in through [`set_enabled`]. The `execute` CLI enables it for
 //! `run` and `resume` when `GITHUB_ACTIONS` is `"true"`. Library hosts running
@@ -82,6 +84,67 @@ pub fn enable_if_ci() -> bool {
     on
 }
 
+/// Enable hardening without ever disabling it. Long-lived hosts with
+/// concurrent sessions (for example live `run --control` next to an
+/// interactive `serve`) use this so one session cannot flip the
+/// process-global switch off while another session is streaming.
+pub fn enable_if_ci_no_disable() -> bool {
+    let on = is_ci();
+    if on {
+        set_enabled(true);
+    }
+    on
+}
+
+/// Process-wide count of outermost finite runs currently setting up their
+/// terminal boundary. Thread-local depth alone cannot see a concurrent
+/// outermost run on another thread; without this two such runs would both
+/// sweep and reset, and the reset would drop held split-prefix bytes the
+/// other run is still owed.
+static ACTIVE_OUTERMOST_RUNS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Serializes the sweep-before-reset boundary so two runs starting together
+/// cannot interleave one run's sweep with the other's reset.
+static RUN_BOUNDARY_LOCK: Mutex<()> = Mutex::new(());
+
+/// Held for the whole outermost finite run. Dropping it releases the
+/// process-wide outermost slot claimed by [`enter_finite_run`].
+pub struct FiniteRunGuard {
+    claimed: bool,
+}
+
+impl Drop for FiniteRunGuard {
+    fn drop(&mut self) {
+        if self.claimed {
+            ACTIVE_OUTERMOST_RUNS.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Claim the process-wide outermost slot and run the terminal boundary for
+/// `registry`: always sweep this run's pre-registered secrets, and reset the
+/// shared sanitizers only when no other outermost run is active. The sweep
+/// runs before the reset on purpose so the inherited mid-line state tells the
+/// first mask whether it must open its own line. Callers must hold the
+/// returned guard for the whole run.
+pub fn enter_finite_run(registry: &crate::manifest::Registry) -> FiniteRunGuard {
+    let _boundary = RUN_BOUNDARY_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous = ACTIVE_OUTERMOST_RUNS.fetch_add(1, Ordering::SeqCst);
+    if previous == 0 {
+        emit_masks_for_registry(registry);
+        reset_terminal_state();
+    } else {
+        // A concurrent outermost run owns the shared line state: sweeping
+        // this run's own secrets is still required, but resetting would drop
+        // held split prefixes the other run has not yet been given.
+        emit_masks_for_registry(registry);
+    }
+    FiniteRunGuard { claimed: true }
+}
+
 /// Emit one mask line per already-registered secret in `registry`. Call after
 /// [`enable_if_ci`] (or [`set_enabled`]) when secrets may have been registered
 /// before hardening was turned on. Secrets registered afterwards mask
@@ -96,16 +159,17 @@ pub fn emit_masks_for_registry(registry: &crate::manifest::Registry) {
     }
 }
 
-/// Reset the terminal sanitizer line state. Each outermost finite run calls
-/// this after sweeping pre-registered secrets (see the depth-zero block in
-/// `run_finite_state`) so a trailing partial line (or a held prefix) from a
-/// previous run in a long-lived host cannot misclassify the next run's first
-/// chunk. The sweep runs first on purpose: the inherited state still tells
-/// whether the log is mid-line, so the first mask starts its own line; every
-/// mask ends with a newline, so resetting afterwards lands on a true line
-/// start. Tests use this between cases for the same reason. Callers must not
-/// reset while another run is concurrently streaming to the terminal: the
-/// sanitizers are process-global by design.
+/// Reset the terminal sanitizer line state. The outermost finite-run boundary
+/// ([`enter_finite_run`]) calls this after sweeping pre-registered secrets so
+/// a trailing partial line (or a held prefix) from a previous run in a
+/// long-lived host cannot misclassify the next run's first chunk. The sweep
+/// runs first on purpose: the inherited state still tells whether the log is
+/// mid-line, so the first mask starts its own line; every mask ends with a
+/// newline, so resetting afterwards lands on a true line start. Tests use
+/// this between cases for the same reason. Callers must not reset while
+/// another run is concurrently streaming to the terminal: the sanitizers are
+/// process-global by design — use [`enter_finite_run`], which resets only
+/// when no other outermost run is active.
 pub fn reset_terminal_state() {
     if let Some(slot) = STDOUT_SANITIZER.get() {
         if let Ok(mut guard) = slot.lock() {
@@ -398,9 +462,7 @@ impl StreamSanitizer {
             self.leading = false;
         }
         if self.pending_hashes > 0 {
-            for _ in 0..self.pending_hashes {
-                out.push(b'#');
-            }
+            out.extend(std::iter::repeat_n(b'#', usize::from(self.pending_hashes)));
             self.pending_hashes = 0;
             self.leading = false;
         }
@@ -610,12 +672,12 @@ pub fn mask_lines(secrets: &[Vec<u8>]) -> Vec<String> {
         .collect()
 }
 
-/// Render the exact bytes to write for one mask line. When the log is
-/// mid-line the mask is prefixed with a line break so the runner's parser
-/// (which requires `::` at a line start after `TrimStart`) recognizes the
-/// mask as its own command instead of trailing garbage on the previous line.
-/// The returned bytes always hold exactly one `\n`-terminated line and only
-/// the escaped secret — never the raw value.
+/// Render the exact bytes to write for one mask line. Callers pass
+/// `mid_line=true` (the only mode emission uses) so the mask unconditionally
+/// opens its own line with a leading break; the runner's parser requires `::`
+/// at a line start after `TrimStart`, otherwise the mask is trailing garbage
+/// on the previous line. The returned bytes always hold exactly one
+/// `\n`-terminated line and only the escaped secret — never the raw value.
 fn mask_line_bytes(line: &str, mid_line: bool) -> Vec<u8> {
     let mut buf = Vec::with_capacity(line.len() + 2);
     if mid_line {
@@ -640,34 +702,66 @@ fn mask_line_bytes(line: &str, mid_line: bool) -> Vec<u8> {
 /// and the next line-leading `::` would pass through raw. Checking both
 /// streams covers the merged job log the runner parses (stdout and stderr
 /// share its lines); when the descriptors diverge the extra break is at
-/// most one blank line in one sink. Resyncing is fail-safe — a concurrent
-/// mid-line write classified as line-start is only over-neutralized, never
-/// under — and held-back split prefixes are kept so they still join the
-/// next chunk. The line goes out in a single `write_all` so concurrent
-/// terminal bytes cannot split it.
+/// most one blank line in one sink. Held-back split prefixes are kept so
+/// they still join the next chunk.
+///
+/// Both sanitizer locks are held across the resync and the `write_all`, in
+/// fixed order (stdout, then stderr). Filtered terminal writes take only one
+/// sanitizer lock before their fd write, so they wait here instead of
+/// splitting the mask's bytes on its fd. The mask unconditionally opens its
+/// own line with a leading `\n`: the shared sanitizer state cannot prove the
+/// shared sink is at a line start (a concurrent partial may already be
+/// filtered but not yet written when the resync below runs, so a conditional
+/// break sampled here could still glue the mask mid-line in the merged log).
+/// The extra blank line when the log was already at a line start is the
+/// cost of that guarantee. The single `write_all` keeps the mask's own bytes
+/// contiguous on its fd; already-filtered bytes landing after the mask start
+/// a new line because the mask ends with a newline.
 pub fn emit_mask_for_bytes(secret: &[u8]) {
     if !enabled() || secret.is_empty() {
         return;
     }
     let line = mask_command(&String::from_utf8_lossy(secret));
     // Fixed order (stdout, then stderr): the only site holding both locks,
-    // so no reverse-order nesting can deadlock against it.
-    let mid_line = {
-        let mut stdout_guard = stdout_sanitizer()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut stderr_guard = stderr_sanitizer()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mid_line = !stdout_guard.at_line_start() || !stderr_guard.at_line_start();
-        stdout_guard.note_external_line();
-        stderr_guard.note_external_line();
-        mid_line
-    };
+    // so no reverse-order nesting can deadlock against it. The guards are
+    // held across the stdout write on purpose: releasing them before the
+    // write would let a concurrent partial split the mask's bytes.
+    let mut stdout_guard = stdout_sanitizer()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut stderr_guard = stderr_sanitizer()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    stdout_guard.note_external_line();
+    stderr_guard.note_external_line();
+    let bytes = mask_line_bytes(&line, true);
     use std::io::Write as _;
-    let bytes = mask_line_bytes(&line, mid_line);
     let mut stdout = std::io::stdout().lock();
     let _ = stdout.write_all(&bytes).and_then(|()| stdout.flush());
+}
+
+/// Test-only shared-sink emission: the same unconditional-break resync-write
+/// as [`emit_mask_for_bytes`], but appending to `sink` instead of the process
+/// stdout so a concurrent test can observe the merged byte order. Both
+/// sanitizer locks are held across the sink write, in the same fixed order.
+#[cfg(test)]
+pub(crate) fn emit_mask_to_sink(sink: &Mutex<Vec<u8>>, secret: &[u8]) {
+    if !enabled() || secret.is_empty() {
+        return;
+    }
+    let line = mask_command(&String::from_utf8_lossy(secret));
+    let mut stdout_guard = stdout_sanitizer()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut stderr_guard = stderr_sanitizer()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    stdout_guard.note_external_line();
+    stderr_guard.note_external_line();
+    let bytes = mask_line_bytes(&line, true);
+    if let Ok(mut guard) = sink.lock() {
+        guard.extend_from_slice(&bytes);
+    }
 }
 
 #[cfg(test)]
@@ -1111,6 +1205,105 @@ mod tests {
         assert_eq!(
             filter_stderr(b"::error::after-mask\n"),
             ":\u{200b}:error::after-mask\n".as_bytes()
+        );
+        assert!(flush_stdout().is_empty());
+        assert!(flush_stderr().is_empty());
+        reset_terminal_state();
+        set_enabled(was);
+    }
+
+    #[test]
+    fn concurrent_mask_emission_never_glues_to_a_shared_sink() {
+        // Shared-sink concurrency: stdout/stderr partials and mask emissions
+        // race on worker threads while appending to one merged log (the job
+        // log the runner parses). Every mask must still open its own line.
+        // Before the fix the mask sampled mid-line, released the locks, then
+        // wrote: a partial landing in between glued the mask mid-line and
+        // the runner ignored it. Holding both sanitizer locks across the
+        // sink write closes that window.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = enabled();
+        set_enabled(true);
+        reset_terminal_state();
+        let sink = std::sync::Arc::new(Mutex::new(Vec::<u8>::new()));
+        let start = std::sync::Arc::new(std::sync::Barrier::new(7));
+        let mut handles = Vec::new();
+        for writer in 0..4 {
+            let sink = std::sync::Arc::clone(&sink);
+            let start = std::sync::Arc::clone(&start);
+            handles.push(std::thread::spawn(move || {
+                start.wait();
+                for round in 0..100 {
+                    // Filter first, append second: matches production, where
+                    // the sanitizer lock is released before the fd write, so
+                    // a mask can still interleave between the two steps. The
+                    // mask's own sample+write stays atomic under both locks.
+                    let chunk = if (round + writer) % 2 == 0 {
+                        filter_stdout(b"lead-partial ")
+                    } else {
+                        filter_stderr(b"err-partial ")
+                    };
+                    if let Ok(mut guard) = sink.lock() {
+                        use std::io::Write as _;
+                        let _ = guard.write_all(&chunk);
+                    }
+                }
+            }));
+        }
+        for masker in 0..2 {
+            let sink = std::sync::Arc::clone(&sink);
+            let start = std::sync::Arc::clone(&start);
+            handles.push(std::thread::spawn(move || {
+                start.wait();
+                for round in 0..100 {
+                    let secret = format!("shared-sink-499-{masker}-{round}");
+                    emit_mask_to_sink(&sink, secret.as_bytes());
+                }
+            }));
+        }
+        // A concurrent reader keeps the stderr sanitizer hot so masks must
+        // observe the merged mid-line state, not just stdout's.
+        {
+            let sink = std::sync::Arc::clone(&sink);
+            let start = std::sync::Arc::clone(&start);
+            handles.push(std::thread::spawn(move || {
+                start.wait();
+                for _ in 0..100 {
+                    let chunk = filter_stderr(b"err-reader ");
+                    if let Ok(mut guard) = sink.lock() {
+                        use std::io::Write as _;
+                        let _ = guard.write_all(&chunk);
+                    }
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("worker panicked");
+        }
+        let bytes = sink.lock().map(|guard| guard.clone()).unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let mut mask_lines = 0usize;
+        for line in text.lines() {
+            if line.contains("::add-mask::") {
+                assert!(
+                    line.trim_start().starts_with("::add-mask::"),
+                    "mask glued mid-line in shared sink: {line:?}"
+                );
+                mask_lines += 1;
+            }
+        }
+        assert_eq!(
+            mask_lines, 200,
+            "expected every mask in the sink, got {text:?}"
+        );
+        // The concurrent storm leaves shared line state mid-line; a reset
+        // must still land the next run on a true line start.
+        reset_terminal_state();
+        assert_eq!(
+            filter_stdout(b"::error::after-storm\n"),
+            ":\u{200b}:error::after-storm\n".as_bytes()
         );
         assert!(flush_stdout().is_empty());
         assert!(flush_stderr().is_empty());

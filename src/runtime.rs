@@ -51,7 +51,8 @@ use spawn::{
 // Used by the Windows process path (windows_process.rs) through this module.
 #[cfg(windows)]
 use spawn::{
-    check_native_abort, native_output_limit_failure, native_spawn_failure, resolved_call_stdio,
+    attach_abort_stdout, check_native_abort, native_output_limit_failure, native_spawn_failure,
+    resolved_call_stdio,
 };
 use step_loop::{
     run_finite, run_finite_inner, run_finite_inner_with_state_source, run_finite_state, FiniteRun,

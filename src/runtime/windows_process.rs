@@ -567,7 +567,8 @@ fn execute_group_with_sink(
         // failure record shows what it printed, as `keep result` would.
         let attach_stdout = sink.is_none() && terminal_io.captures_terminal_stdout();
         loop {
-            check_native_abort(calls, &children, &observed_stages, signals)?;
+            check_native_abort(calls, &children, &observed_stages, signals)
+                .map_err(|error| attach_abort_stdout(error, &output))?;
             windows_statuses(
                 &mut children,
                 calls,

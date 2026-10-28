@@ -546,13 +546,13 @@ fn error_response(error: &anyhow::Error) -> Json {
 fn schema() -> Json {
     json!({"ok":true,"protocol":"execute.live/1","execute_version":env!("CARGO_PKG_VERSION"),"commands":{
         "serve":"execute live serve FILE --socket PATH [--paused] [--breakpoints LINES] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR | --manifest-catalog FILE] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
-        "token-create":"execute live token-create --agent ID --token-file FILE (creates a new private file and displays the token once)",
+        "token-create":"execute live token-create --agent ID --token-file FILE [--expires-in SECS] [--show-token] (writes the token to a new private file; prints only metadata unless --show-token is given)",
         "read":"execute live read [JSON_POINTER] --socket PATH [--agent ID --token-file FILE]",
         "create":"execute live create JSON_POINTER --json JSON --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
         "update":"execute live update JSON_POINTER --json JSON --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
         "delete":"execute live delete JSON_POINTER --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
         "patch":"execute live patch --json '[{\"op\":\"replace\",\"path\":\"/bindings/name\",\"value\":\"value\"}]' --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
-        "control":"execute live control pause|resume|step|cancel|retry|reset|restart|restart-source|stop --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
+        "control":"execute live control pause|resume|step|cancel|retry|reset|restart|restart-source|reload-agents|stop --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
         "event":"execute live event --json '{\"type\":\"press\",\"program\":\"chooser\",\"widget\":\"track\"}' --socket PATH [--agent ID --token-file FILE]",
         "send":"execute live send --json '{\"text\":\"event\\n\"}' --socket PATH [--agent ID --token-file FILE]",
         "wait":"execute live wait [JSON_POINTER] --after REVISION --timeout-ms 1000 --socket PATH [--agent ID --token-file FILE]",
@@ -574,6 +574,7 @@ struct Options {
     flags: BTreeMap<String, String>,
     paused: bool,
     headless: bool,
+    show_token: bool,
 }
 fn options(args: &[String]) -> Result<Options> {
     let mut result = Options {
@@ -581,6 +582,7 @@ fn options(args: &[String]) -> Result<Options> {
         flags: BTreeMap::new(),
         paused: false,
         headless: false,
+        show_token: false,
     };
     let mut index = 0;
     while index < args.len() {
@@ -590,6 +592,11 @@ fn options(args: &[String]) -> Result<Options> {
                 bail!("duplicate --headless");
             }
             result.headless = true;
+        } else if value == "--show-token" {
+            if result.show_token {
+                bail!("duplicate --show-token");
+            }
+            result.show_token = true;
         } else if value == "--paused" {
             if result.paused {
                 bail!("duplicate --paused");
@@ -619,6 +626,7 @@ fn options(args: &[String]) -> Result<Options> {
                 "--timeout-ms",
                 "--agent",
                 "--token-file",
+                "--expires-in",
             ];
             if !allowed.contains(&value.as_str()) {
                 bail!("unknown live option {value}");
@@ -740,7 +748,7 @@ fn dispatch(
     }
     if command == "token-create" {
         let opts = options(&args[1..])?;
-        only(&opts, &["--agent", "--token-file"], false)?;
+        only(&opts, &["--agent", "--token-file", "--expires-in"], false)?;
         if !opts.positional.is_empty() {
             bail!("token-create takes no positional arguments");
         }
@@ -752,18 +760,36 @@ fn dispatch(
             .flags
             .get("--token-file")
             .context("token-create requires --token-file FILE")?;
+        let expires_at = match numeric(&opts, "--expires-in")? {
+            Some(0) => bail!("--expires-in requires a positive number of seconds"),
+            Some(lifetime) => Some(auth::now_unix_secs().saturating_add(lifetime)),
+            None => None,
+        };
         let credential = AgentCredential::create_token_file(agent, Path::new(token_file))
             .context("creating live agent token file")?;
         let auth = credential.request_auth();
-        return Ok(json!({
+        // The raw token lives only in the new private file: stdout carries
+        // metadata (and the policy `expires_at` when requested) so transcripts,
+        // history, and logs never capture the secret. The token itself is
+        // printed only with the explicit `--show-token` flag.
+        let mut response = json!({
             "ok": true,
             "agent": auth.agent,
             "token_file": token_file,
             "token_sha256": credential.token_sha256(),
-            "token": auth.token
-        }));
+        });
+        if let Some(expires_at) = expires_at {
+            response["expires_at"] = json!(expires_at);
+        }
+        if opts.show_token {
+            response["token"] = json!(auth.token);
+        }
+        return Ok(response);
     }
     let opts = options(&args[1..])?;
+    if opts.show_token {
+        bail!("--show-token applies only to token-create");
+    }
     let socket = PathBuf::from(
         opts.flags
             .get("--socket")
@@ -986,6 +1012,7 @@ fn dispatch(
             headless: opts.headless,
             run_mode: mode == Mode::Run,
             flood: Mutex::new(FloodBudget::new()),
+            agent_policy_path: opts.flags.get("--agent-policy").map(PathBuf::from),
         });
         let options = RunOptions {
             cache_directory: opts
@@ -1353,10 +1380,10 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                 // partial senders never reach it, and a benign burst within
                 // the budget is admitted while slots are free. Only a
                 // sustained flood past the burst sheds with `busy` — inline,
-                // without a thread. The policy is fetched once per sweep; it
-                // is immutable after startup, and the per-connection check is
-                // a hash comparison, so the accept loop never touches state
-                // or policy I/O.
+                // without a thread. The policy is fetched once per sweep, so
+                // a `control reload-agents` swap is picked up on the next
+                // tick; the per-connection check is a hash comparison, so the
+                // accept loop never touches state or policy I/O.
                 let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
                 let policy = agent_policy.as_ref().as_ref();
                 let mut index = 0;
@@ -1526,10 +1553,17 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     // Uncaptured stdout has already streamed. Write what plain run writes last: the
     // pipeline output of a completed run, then its diagnostic, then the status.
     if let Some(output) = end.output {
+        // The live host is the program's stdout here, so the same TTY rule as
+        // plain run applies: pipes keep exact bytes, TTY sinks get escaped text.
+        let terminal = crate::terminal_text::stdout_is_terminal();
         let mut stdout = std::io::stdout().lock();
         match output {
-            Data::Text { text } => stdout.write_all(text.as_bytes())?,
-            Data::Bytes { bytes } => stdout.write_all(&bytes)?,
+            Data::Text { text } => stdout.write_all(
+                &crate::terminal_text::encode_pipeline_for_stdout(text.as_bytes(), terminal),
+            )?,
+            Data::Bytes { bytes } => stdout.write_all(
+                &crate::terminal_text::encode_pipeline_for_stdout(&bytes, terminal),
+            )?,
         }
         stdout.flush()?;
     }
@@ -1897,6 +1931,45 @@ mod admission_tests {
             &line(serde_json::json!({
                 "op": "wait",
                 "auth": {"agent": "reader", "token": reader_token},
+            })),
+            some,
+        ));
+    }
+
+    #[test]
+    fn reserve_demotes_expired_credentials() {
+        let now = crate::live::auth::now_unix_secs();
+        let document = serde_json::json!({
+            "version": 1,
+            "agents": {
+                "reader": {
+                    "token_sha256": token_hash(&"r".repeat(32)),
+                    "permissions": ["read"],
+                },
+                "stale": {
+                    "token_sha256": token_hash(&"s".repeat(32)),
+                    "permissions": ["read"],
+                    "expires_at": now.saturating_sub(1),
+                },
+            },
+        });
+        let policy = AgentAuthPolicy::from_json(document.to_string().as_bytes())
+            .expect("test policy parses");
+        let some = Some(&policy);
+        // The unexpired grant still claims the reserve; the expired grant is
+        // demoted exactly like any other unauthorized credential, mirroring
+        // the handler's fail-closed rejection.
+        assert!(reserve_eligible(
+            &line(serde_json::json!({
+                "op": "read",
+                "auth": {"agent": "reader", "token": "r".repeat(32)},
+            })),
+            some,
+        ));
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({
+                "op": "read",
+                "auth": {"agent": "stale", "token": "s".repeat(32)},
             })),
             some,
         ));

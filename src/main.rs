@@ -1872,6 +1872,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     "plan changed since --what-if: confirmed {expected}, current {fingerprint}; review again with --what-if"
                 );
             }
+            // Bind the reviewed bytes to the bytes each spawn launches: every
+            // native launch re-hashes against this map before its command is
+            // built, so a binary swapped after this check cannot run.
+            let confirmed = flow::capabilities::confirmed_executables_from_settings(&settings)?;
+            registry.set_host_state(Some(confirmed));
         }
     }
     #[cfg(not(feature = "agent-advisory"))]
@@ -2024,7 +2029,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 let result = runtime::run(&body, &registry, &options)
                     .map_err(|error| redact_runtime_error(&registry, error))?;
                 io::stdout()
-                    .write_all(&result.output)
+                    .write_all(&stdout_pipeline_bytes(&result.output))
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // Same contract as the finite path: flush output, report the
@@ -2125,7 +2130,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     .map_err(|error| redact_runtime_error(&registry, error))?
                 };
                 io::stdout()
-                    .write_all(&result.output)
+                    .write_all(&stdout_pipeline_bytes(&result.output))
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // The pipeline output above is already delivered. Flush it
@@ -3553,6 +3558,16 @@ pub(crate) fn usage() -> &'static str {
 fn write_json(value: &serde_json::Value) -> Result<()> {
     writeln!(io::stdout(), "{}", serde_json::to_string_pretty(value)?)?;
     Ok(())
+}
+
+/// Final pipeline bytes for this process's stdout: terminal-escaped on a TTY
+/// so untrusted model output cannot rewrite the terminal, raw into pipes and
+/// files (H17 pipe guarantee).
+fn stdout_pipeline_bytes(output: &[u8]) -> Vec<u8> {
+    flow::terminal_text::encode_pipeline_for_stdout(
+        output,
+        flow::terminal_text::stdout_is_terminal(),
+    )
 }
 
 #[cfg(feature = "tooling")]

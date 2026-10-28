@@ -81,7 +81,7 @@ pub(crate) fn open_graph_journal(
     #[cfg(unix)]
     let (directory_handle, existed) = {
         let Some((handle, created)) =
-            super::open_or_create_directory_tree(&requested, !resume, 0o700)?
+            super::open_or_create_directory_tree(&requested, "checkpoint", !resume, 0o700)?
         else {
             bail!("checkpoint directory does not exist for resume");
         };

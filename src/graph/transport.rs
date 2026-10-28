@@ -2483,7 +2483,12 @@ impl RuntimeGraphExecutor {
         let client = RemoteClient::new_with_credential_base(config, credential_base)?
             .with_secret_redactor(crate::security::secret_redactor(&self.registry))
             .with_resolver_helper(resolver_helper)
-            .with_process_observer(process_observer);
+            .with_process_observer(process_observer)
+            .with_ssrf_grant(crate::capabilities::remote_origin_is_explicitly_granted(
+                &self.registry,
+                &manifest.name,
+                &endpoint.endpoint,
+            ));
         if let Some(path) = client.descriptor_cache_path() {
             crate::capabilities::authorize_applet_host_path(
                 &self.registry,

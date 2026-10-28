@@ -34,6 +34,9 @@ fn daemon_command(runtime_dir: &Path, arguments: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
     command.env("XDG_RUNTIME_DIR", runtime_dir);
     command.env_remove("EXECUTE_DAEMON");
+    // The daemon reads its own environment for the foreign-context opt-in, so
+    // spawns stay hermetic unless a test opts in explicitly.
+    command.env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT");
     command.env_remove("EXECUTE_DAEMON_MAX_RUNS");
     command.arg("daemon").args(arguments);
     command
@@ -65,9 +68,20 @@ impl Drop for Daemon {
 }
 
 fn serve_in_background(runtime_dir: &Path) -> Daemon {
-    let child = daemon_command(runtime_dir, &["serve"])
-        .spawn()
-        .expect("spawn daemon serve");
+    serve_in_background_with(runtime_dir, false)
+}
+
+/// Serve with the daemon operator opt-in set, so dual opt-in forwards proceed.
+fn serve_in_background_accepting(runtime_dir: &Path) -> Daemon {
+    serve_in_background_with(runtime_dir, true)
+}
+
+fn serve_in_background_with(runtime_dir: &Path, accept: bool) -> Daemon {
+    let mut command = daemon_command(runtime_dir, &["serve"]);
+    if accept {
+        command.env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1");
+    }
+    let child = command.spawn().expect("spawn daemon serve");
     let mut daemon = Daemon(Some(child));
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -125,6 +139,51 @@ where
 
 fn run_program(runtime_dir: &Path, directory: &Path, extra: &[&str]) -> Output {
     run_source(runtime_dir, directory, PRINT_OUT, extra)
+}
+
+/// Run `source` with the client context opt-in, so `--daemon` actually forwards
+/// (the daemon under test must opt in as well). Mirrors `run_source`, which
+/// stays opt-out so decline tests keep a client that accepts nothing.
+fn run_source_forwarded(
+    runtime_dir: &Path,
+    directory: &Path,
+    source: &str,
+    extra: &[&str],
+) -> Output {
+    run_source_with_forwarded(runtime_dir, directory, source, extra, || Ok(()))
+}
+
+/// `run_source_with` with the client context opt-in.
+fn run_source_with_forwarded<F>(
+    runtime_dir: &Path,
+    directory: &Path,
+    source: &str,
+    extra: &[&str],
+    hook: F,
+) -> Output
+where
+    F: FnMut() -> io::Result<()> + Send + Sync + 'static,
+{
+    let path = directory.join("workflow.program");
+    fs::write(&path, source).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    command
+        .env("XDG_RUNTIME_DIR", runtime_dir)
+        .env_remove("EXECUTE_DAEMON")
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .arg("run")
+        .arg(&path)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .args(extra);
+    // SAFETY: the hooks used here only call umask and setrlimit, which are safe between
+    // fork and exec.
+    unsafe {
+        command.pre_exec(hook);
+    }
+    command.output().unwrap()
 }
 
 /// One request on a fresh connection, read up to its newline.
@@ -265,21 +324,39 @@ fn default_selection_never_contacts_a_legacy_daemon() {
 fn explicit_context_acceptance_forwards_a_run() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
     let program = work.path().join("forward.program");
     fs::write(&program, PRINT_OUT).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
-        .env("XDG_RUNTIME_DIR", runtime.path())
-        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
-        .env_remove("EXECUTE_DAEMON")
-        .current_dir(work.path())
-        .arg("run")
-        .arg(&program)
-        .arg("--manifest-dir")
-        .arg(manifests())
-        .arg("--daemon")
-        .output()
-        .unwrap();
+    let opted_in_run = || {
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+            .env_remove("EXECUTE_DAEMON")
+            .current_dir(work.path())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(manifests())
+            .arg("--daemon")
+            .output()
+            .unwrap()
+    };
+    // A client opt-in alone never forwards: the default daemon declines and the
+    // run stays local (#446).
+    let daemon = serve_in_background(runtime.path());
+    let declined = opted_in_run();
+    assert!(declined.status.success(), "{:?}", declined);
+    assert_eq!(declined.stdout, b"out\n");
+    assert!(
+        String::from_utf8_lossy(&declined.stderr)
+            .contains("client confinement cannot be preserved"),
+        "{:?}",
+        declined
+    );
+    drop(daemon);
+    let _ = fs::remove_file(default_socket_under(runtime.path()));
+    // With the daemon operator opted in as well, the same request forwards.
+    let _daemon = serve_in_background_accepting(runtime.path());
+    let output = opted_in_run();
     assert!(output.status.success(), "{:?}", output);
     assert_eq!(output.stdout, b"out\n");
     assert!(
@@ -358,7 +435,7 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
     let work = tempfile::tempdir().unwrap();
     let sandbox_cwd = work.path().join("sandbox-cwd");
     fs::create_dir(&sandbox_cwd).unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let manifest_dir = work.path().join("manifests");
     fs::create_dir(&manifest_dir).unwrap();
     fs::write(
@@ -446,12 +523,104 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
     assert!(String::from_utf8_lossy(&forwarded.stderr).contains("client-started"));
 }
 
+/// An untrusted client opt-in cannot bypass a default daemon (#446). The
+/// daemon declines, the run stays local under the client's own execution mode
+/// and capability policy, and the daemon forks nothing.
+#[test]
+fn untrusted_client_acceptance_cannot_bypass_daemon_default() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let sandbox_cwd = work.path().join("sandbox-cwd");
+    fs::create_dir(&sandbox_cwd).unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let manifest_dir = work.path().join("manifests");
+    fs::create_dir(&manifest_dir).unwrap();
+    fs::write(
+        manifest_dir.join("gated.json"),
+        serde_json::json!({
+            "name": "gated", "binary": "true", "parameters": {}, "arguments": [],
+            "contract": {
+                "version": 1,
+                "capabilities": ["process.exec", "filesystem.read"],
+                "effects": ["process.exec", "filesystem.read"]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let policy = work.path().join("policy.json");
+    fs::write(
+        &policy,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "applets": {
+                "gated": {
+                    "capabilities": ["process.exec", "filesystem.read"],
+                    "filesystem": {"read": [sandbox_cwd.display().to_string()]}
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    private_answers::make_private(&policy);
+    let program = work.path().join("workflow.program");
+    fs::write(&program, "run gated\n").unwrap();
+    let run = |forward: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+        command
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .current_dir(&sandbox_cwd)
+            .args(["run"])
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(&manifest_dir)
+            .args(["--execution-mode", "untrusted", "--capability-policy"])
+            .arg(&policy);
+        if forward {
+            command
+                .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+                .env("EXECUTE_DAEMON_TRACE", "1")
+                .arg("--daemon");
+        }
+        command.output().unwrap()
+    };
+    let cold = run(false);
+    let declined = run(true);
+    // The declined forward must behave exactly like a local run — same status
+    // and output on every platform, whether the sandbox succeeds or fails
+    // closed — plus the local-fallback notice, and the daemon forks nothing.
+    assert_eq!(
+        cold.status.code(),
+        declined.status.code(),
+        "cold={:?}, declined={:?}",
+        cold,
+        declined
+    );
+    assert_eq!(
+        cold.stdout, declined.stdout,
+        "cold={:?}, declined={:?}",
+        cold, declined
+    );
+    let stderr = String::from_utf8_lossy(&declined.stderr);
+    assert!(
+        stderr.contains("client confinement cannot be preserved"),
+        "client opt-in must not move an untrusted run: {stderr}"
+    );
+    assert!(
+        !stderr.contains("client-started"),
+        "the daemon must not fork an untrusted run without operator opt-in: {stderr}"
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn opted_in_untrusted_forwarding_denies_ungranted_write() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let manifest_dir = work.path().join("manifests");
     fs::create_dir(&manifest_dir).unwrap();
     fs::write(
@@ -568,8 +737,8 @@ fn forwarded_run_exit_status_and_output_match_a_cold_run() {
     let cold = run_source(runtime.path(), work.path(), source, &[]);
     assert_eq!(cold.status.code(), Some(7), "{:?}", cold);
 
-    let _daemon = serve_in_background(runtime.path());
-    let warm = run_source(runtime.path(), work.path(), source, &["--daemon"]);
+    let _daemon = serve_in_background_accepting(runtime.path());
+    let warm = run_source_forwarded(runtime.path(), work.path(), source, &["--daemon"]);
     assert_eq!(warm.status.code(), Some(7), "{:?}", warm);
     assert_eq!(warm.stdout, cold.stdout);
 }
@@ -577,7 +746,7 @@ fn forwarded_run_exit_status_and_output_match_a_cold_run() {
 #[test]
 fn concurrent_forwarded_runs_each_get_their_own_output_and_status() {
     let runtime = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let handles: Vec<_> = (0..4_i32)
         .map(|index| {
             let runtime = runtime.path().to_path_buf();
@@ -589,7 +758,7 @@ fn concurrent_forwarded_runs_each_get_their_own_output_and_status() {
                 );
                 (
                     index,
-                    run_source(&runtime, work.path(), &source, &["--daemon"]),
+                    run_source_forwarded(&runtime, work.path(), &source, &["--daemon"]),
                 )
             })
         })
@@ -714,6 +883,265 @@ fn linux_namespace_clients_run_locally() {
     }
 }
 
+/// The daemon must not take a namespaced client's word that the daemon context
+/// is acceptable (#446). With only the client opt-in, a cross-namespace
+/// forward is declined and runs locally; when the daemon's operator also opts
+/// in, the same forward proceeds. Both ends stay fail-closed by default.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_daemon_declines_foreign_namespace_despite_client_acceptance() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // The client maps its effective UID to zero. Serve at the path it will use,
+    // while retaining the host daemon's confinement context.
+    let socket = runtime.path().join("execute-0").join("daemon.sock");
+    let spawn_daemon = |accept: bool| -> Daemon {
+        let mut command = daemon_command(
+            runtime.path(),
+            &["serve", "--socket", socket.to_str().unwrap()],
+        );
+        if accept {
+            command.env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1");
+        }
+        let mut daemon = Daemon(Some(command.spawn().expect("spawn daemon")));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !socket.exists() {
+            assert!(Instant::now() < deadline, "daemon did not start");
+            assert!(
+                daemon.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+                "daemon exited"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        daemon
+    };
+    let namespaces = ["--mount", "--net"];
+    for namespace in namespaces {
+        let probe = Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace, "true"])
+            .output();
+        if !probe.as_ref().is_ok_and(|result| result.status.success()) {
+            let message = format!("cannot create {namespace} namespace: {probe:?}");
+            assert!(
+                std::env::var_os("EXECUTE_REQUIRE_NAMESPACE_TESTS").is_none(),
+                "{message}"
+            );
+            eprintln!("SKIP: {message}");
+            return;
+        }
+    }
+    let program = work.path().join("namespace.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    let namespaced_run = |namespace: &str| -> Output {
+        Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace])
+            .arg(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+            .env("EXECUTE_DAEMON_TRACE", "1")
+            .current_dir(work.path())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(manifests())
+            .arg("--daemon")
+            .output()
+            .unwrap()
+    };
+    // Client opt-in alone must not move the run into the daemon's context. The
+    // daemon starts without the operator opt-in, so foreign contexts decline.
+    let daemon = spawn_daemon(false);
+    // Prove this client can actually reach the daemon it would otherwise use.
+    for namespace in namespaces {
+        let status = Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace])
+            .arg(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .args(["daemon", "status"])
+            .output()
+            .unwrap();
+        let reply: Value = serde_json::from_slice(&status.stdout).expect("daemon status JSON");
+        assert_eq!(reply["running"], true, "{namespace}: {reply}");
+    }
+    for namespace in namespaces {
+        let output = namespaced_run(namespace);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{namespace}: {:?}", output);
+        assert_eq!(output.stdout, b"out\n", "{namespace}: {stderr}");
+        assert!(
+            stderr.contains("client confinement cannot be preserved"),
+            "{namespace}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("client-started"),
+            "{namespace}: the daemon must not fork a foreign-context run: {stderr}"
+        );
+    }
+    drop(daemon);
+    let _ = fs::remove_file(&socket);
+    // The daemon operator opting in as well accepts the foreign context.
+    let _daemon = spawn_daemon(true);
+    for namespace in namespaces {
+        let output = namespaced_run(namespace);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{namespace}: {:?}", output);
+        assert_eq!(output.stdout, b"out\n", "{namespace}: {stderr}");
+        assert!(
+            stderr.contains("client-started"),
+            "{namespace}: dual opt-in must forward: {stderr}"
+        );
+        assert!(
+            !stderr.contains("client confinement cannot be preserved"),
+            "{namespace}: {stderr}"
+        );
+    }
+}
+
+/// Matching namespaces are not equivalent OS confinement (#446). A client in
+/// the daemon's own namespaces that tightens its confinement with `NoNewPrivs`
+/// plus an allow-all seccomp filter must still decline with only the client
+/// opt-in and forward once the daemon operator also opts in.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_daemon_declines_filtered_seccomp_despite_shared_namespaces() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // Same uid and same namespaces as the daemon: only the status confinement
+    // (NoNewPrivs plus a seccomp filter) differs, so the default socket works.
+    let spawn_daemon = |accept: bool| -> Daemon {
+        let mut command = daemon_command(runtime.path(), &["serve"]);
+        if accept {
+            command.env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1");
+        }
+        let mut daemon = Daemon(Some(command.spawn().expect("spawn daemon")));
+        let socket = default_socket_under(runtime.path());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !socket.exists() {
+            assert!(Instant::now() < deadline, "daemon did not start");
+            assert!(
+                daemon.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+                "daemon exited"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        daemon
+    };
+    let probe = Command::new("python3").arg("--version").output();
+    if !probe.as_ref().is_ok_and(|result| result.status.success()) {
+        let message = format!("python3 is unavailable: {probe:?}");
+        assert!(
+            std::env::var_os("EXECUTE_REQUIRE_NAMESPACE_TESTS").is_none(),
+            "{message}"
+        );
+        eprintln!("SKIP: {message}");
+        return;
+    }
+    // Install NoNewPrivs plus one allow-all seccomp filter, then exec the
+    // client. Namespaces stay shared; only the status confinement changes.
+    let loader = r#"
+import ctypes, os, sys
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+PR_SET_NO_NEW_PRIVS = 38
+PR_SET_SECCOMP = 22
+SECCOMP_MODE_FILTER = 2
+SECCOMP_RET_ALLOW = 0x7FFF0000
+BPF_RET = 0x06
+BPF_K = 0x00
+class SockFilter(ctypes.Structure):
+    _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte), ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint)]
+class SockFprog(ctypes.Structure):
+    _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.POINTER(SockFilter))]
+prog = (SockFilter * 1)(SockFilter(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ALLOW))
+fprog = SockFprog(1, prog)
+libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+libc.prctl.restype = ctypes.c_int
+if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+    sys.stderr.write("prctl(NO_NEW_PRIVS) failed\n")
+    sys.exit(10)
+if libc.prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ctypes.addressof(fprog)) != 0:
+    sys.stderr.write("prctl(SECCOMP) failed\n")
+    sys.exit(11)
+os.execv(sys.argv[1], sys.argv[1:])
+"#;
+    let program = work.path().join("seccomp.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    let execute = env!("CARGO_BIN_EXE_execute");
+    let filtered_run = || {
+        Command::new("python3")
+            .arg("-c")
+            .arg(loader)
+            .arg(execute)
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(manifests())
+            .arg("--daemon")
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+            .env("EXECUTE_DAEMON_TRACE", "1")
+            .current_dir(work.path())
+            .output()
+            .unwrap()
+    };
+    // Prove the loader actually tightens confinement: same program, but print
+    // /proc/self/status instead of execing the client.
+    let status_probe = Command::new("python3")
+        .arg("-c")
+        .arg(loader.replace(
+            "os.execv(sys.argv[1], sys.argv[1:])",
+            "print(open('/proc/self/status').read())",
+        ))
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&status_probe.stdout).into_owned();
+    if !status_probe.status.success()
+        || !(status.contains("NoNewPrivs:\t1") && status.contains("Seccomp:\t2"))
+    {
+        let message = format!("cannot install seccomp filter: {status_probe:?} {status}");
+        assert!(
+            std::env::var_os("EXECUTE_REQUIRE_NAMESPACE_TESTS").is_none(),
+            "{message}"
+        );
+        eprintln!("SKIP: {message}");
+        return;
+    }
+    let daemon = spawn_daemon(false);
+    let reply: Value = serde_json::from_slice(&daemon_output(runtime.path(), &["status"]).stdout)
+        .expect("daemon status JSON");
+    assert_eq!(reply["running"], true, "{reply}");
+    let output = filtered_run();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"out\n", "{stderr}");
+    assert!(
+        stderr.contains("client confinement cannot be preserved"),
+        "filtered client must decline with only client opt-in: {stderr}"
+    );
+    assert!(
+        !stderr.contains("client-started"),
+        "the daemon must not fork a filtered run without operator opt-in: {stderr}"
+    );
+    drop(daemon);
+    let _ = fs::remove_file(default_socket_under(runtime.path()));
+    let _daemon = spawn_daemon(true);
+    let output = filtered_run();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"out\n", "{stderr}");
+    assert!(
+        stderr.contains("client-started"),
+        "dual opt-in must forward a filtered context: {stderr}"
+    );
+    assert!(
+        !stderr.contains("client confinement cannot be preserved"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn a_socket_in_a_non_private_directory_is_never_contacted() {
     let runtime = tempfile::tempdir().unwrap();
@@ -766,7 +1194,7 @@ fn a_socket_in_a_non_private_directory_is_never_contacted() {
 fn warm_round_trip_and_forwarded_run_latency_are_measured() {
     let runtime = tempfile::tempdir().unwrap();
     let socket = default_socket_under(runtime.path());
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
 
     let mut round_trips = Vec::new();
     for _ in 0..200 {
@@ -892,7 +1320,7 @@ fn run_with_manifests(
 #[test]
 fn forwarded_run_with_a_user_manifest_directory_latency_is_measured() {
     let runtime = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let user_manifests = tempfile::tempdir().unwrap();
     copy_tree(&manifests(), user_manifests.path());
     let work = tempfile::tempdir().unwrap();
@@ -937,7 +1365,7 @@ fn forwarded_run_with_a_user_manifest_directory_latency_is_measured() {
 #[test]
 fn forwarded_runs_do_not_share_capability_policies() {
     let runtime = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let root = tempfile::tempdir().unwrap();
     let sandbox_cwd = root.path().join("sandbox-cwd");
     fs::create_dir(&sandbox_cwd).unwrap();
@@ -1080,7 +1508,7 @@ fn forwarded_runs_do_not_share_capability_policies() {
 #[test]
 fn setup_heavy_forwarded_run_latency_is_measured() {
     let runtime = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let root = tempfile::tempdir().unwrap();
     let sandbox_cwd = root.path().join("sandbox-cwd");
     fs::create_dir(&sandbox_cwd).unwrap();
@@ -1204,6 +1632,7 @@ fn forwarded_run_stage_breakdown_is_measured() {
     let mut daemon = daemon_command(runtime.path(), &["serve"]);
     daemon
         .env("EXECUTE_DAEMON_TRACE", "1")
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::from(log));
     let _daemon = Daemon(Some(daemon.spawn().expect("spawn traced daemon")));
@@ -1317,17 +1746,24 @@ fn a_program_with_a_prompt_input_is_declined_before_it_runs() {
 #[test]
 fn a_forwarded_run_creates_files_with_the_clients_umask() {
     let runtime = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let source = "use value \"kept\"\nthen save to \"made.txt\"\n";
     for (label, extra) in [("cold", vec![]), ("forwarded", vec!["--daemon"])] {
         let work = tempfile::tempdir().unwrap();
         // SAFETY: umask is safe between fork and exec.
-        let output = run_source_with(runtime.path(), work.path(), source, &extra, || {
+        let hook = || {
             // SAFETY: this closure is the `pre_exec` hook, so it runs in the forked child before
             // exec. `umask` is async-signal-safe, cannot fail, and changes only that child's mask.
             unsafe { libc::umask(0o077) };
             Ok(())
-        });
+        };
+        // Only the forwarded leg opts into the daemon context; the cold leg
+        // must accept nothing.
+        let output = if label == "forwarded" {
+            run_source_with_forwarded(runtime.path(), work.path(), source, &extra, hook)
+        } else {
+            run_source_with(runtime.path(), work.path(), source, &extra, hook)
+        };
         assert!(output.status.success(), "{label}: {:?}", output);
         let mode = fs::metadata(work.path().join("made.txt"))
             .unwrap()
@@ -1344,14 +1780,14 @@ fn a_forwarded_run_creates_files_with_the_clients_umask() {
 #[test]
 fn a_forwarded_run_keeps_the_clients_file_size_limit() {
     let runtime = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let source = format!(
         "use value \"{}\"\nthen save to \"big.txt\"\n",
         "x".repeat(64)
     );
     for (label, extra) in [("cold", vec![]), ("forwarded", vec!["--daemon"])] {
         let work = tempfile::tempdir().unwrap();
-        let output = run_source_with(runtime.path(), work.path(), &source, &extra, || {
+        let hook = || {
             let limit = libc::rlimit {
                 rlim_cur: 10,
                 rlim_max: 10,
@@ -1359,7 +1795,14 @@ fn a_forwarded_run_keeps_the_clients_file_size_limit() {
             // SAFETY: setrlimit is safe between fork and exec.
             unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limit) };
             Ok(())
-        });
+        };
+        // Only the forwarded leg opts into the daemon context; the cold leg
+        // must accept nothing.
+        let output = if label == "forwarded" {
+            run_source_with_forwarded(runtime.path(), work.path(), &source, &extra, hook)
+        } else {
+            run_source_with(runtime.path(), work.path(), &source, &extra, hook)
+        };
         assert!(
             !output.status.success(),
             "{label} run wrote past the limit: {:?}",
@@ -1382,6 +1825,7 @@ fn daemon_limits_forwarded_runs_and_reuses_capacity_after_exit() {
     let mut daemon = Daemon(Some(
         daemon_command(runtime.path(), &["serve"])
             .env("EXECUTE_DAEMON_MAX_RUNS", "1")
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1494,7 +1938,7 @@ fn daemon_rejects_invalid_run_limits_before_listening() {
 #[test]
 fn forwarded_run_reloads_same_size_manifest_changes_with_restored_mtime() {
     let runtime = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    let _daemon = serve_in_background_accepting(runtime.path());
     let manifests_dir = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let path = manifests_dir.path().join("printf.json");

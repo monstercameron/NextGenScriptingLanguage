@@ -1806,9 +1806,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         if args.command == "explain" || args.what_if {
             flow::capabilities::preflight_plan(&program, &registry, &cwd)?;
-        } else {
+        } else if args.record_dir.is_none() {
             flow::capabilities::preflight(&program, &registry, &cwd)?;
         }
+        // A recorded run defers preflight to `run_recorded`, after the
+        // recorder exists: `runtime::run` enforces the same policy there,
+        // and a denial is then persisted in the record's decision audit
+        // instead of failing before any `run.json` exists.
     }
 
     #[cfg(feature = "agent-advisory")]

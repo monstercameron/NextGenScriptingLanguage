@@ -365,7 +365,7 @@ cannot be rewritten in place. See [recovery contracts](runtime-reference.md#reco
 ## Daemon execution
 
 Run forwarding defaults to local execution because the daemon cannot preserve the client's OS confinement. Set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` with `--daemon` to explicitly
-accept the daemon context and forward. Avoid `EXECUTE_DAEMON=1` in sandboxed environments
+accept the daemon context, and start the daemon itself with `EXECUTE_DAEMON_ACCEPT_CONTEXT=1`; every forward needs both opt-ins. Avoid `EXECUTE_DAEMON=1` in sandboxed environments
 when using older versions that forward without this opt-in.
 See the [language reference](runtime-reference.md#warm-daemon---daemon).
 

@@ -191,6 +191,7 @@ fn opted_in_daemon_uses_the_callers_environment_limit() {
         base(work.path())
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env("EXECUTE_CHILD_ENV_ALLOW", "LANE_PRIVATE")
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
             .args(["daemon", "serve"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())

@@ -1,16 +1,13 @@
 #![cfg(windows)]
 //! Real native executables, files, pipes, jobs and named-pipe state control.
+#[cfg(feature = "live")]
+use std::io::{BufRead, BufReader};
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
-};
-#[cfg(feature = "live")]
-use std::{
-    io::{BufRead, BufReader},
-    process::Child,
 };
 fn fixture() -> String {
     env!("CARGO_BIN_EXE_native-fixture").to_owned()
@@ -394,9 +391,7 @@ fn intervals_listeners_and_stream_cutoff_use_native_children() {
     ok(&output);
     assert_eq!(output.stdout, b"ONE\nTWO\n");
 }
-#[cfg(feature = "live")]
 struct Server(Child);
-#[cfg(feature = "live")]
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.0.kill();

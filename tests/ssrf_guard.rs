@@ -5,15 +5,67 @@
 //! name before any resolution or socket use, the rebinding case resolves
 //! through a fake helper script and is refused before connect (an owned
 //! loopback listener proves no connection arrives), and the policy checks run
-//! against in-memory registries.
+//! against in-memory registries. The granted-origin test serves an owned
+//! loopback listener, which never leaves the host.
 
 #![cfg(all(feature = "remote", feature = "model"))]
 
-use flow::capabilities::{authorize_network_endpoint, AppletGrant, CapabilityPolicy};
-use flow::contracts::{EffectCertainty, RemoteEndpointConfig};
+use flow::ast::Value as AstValue;
+use flow::capabilities::{
+    authorize_model_endpoint, authorize_model_endpoint_params, authorize_network_endpoint,
+    AppletGrant, CapabilityPolicy,
+};
+use flow::contracts::{EffectCertainty, RemoteEndpointConfig, Sensitivity};
 use flow::manifest::Registry;
 use flow::remote::{RemoteClient, RemoteErrorKind};
+use flow::security::{DataFlowPolicy, SensitivitySet};
 use std::collections::{BTreeMap, BTreeSet};
+
+fn model_registry_with_grant(origins: &[&str], network: bool, capabilities: &[&str]) -> Registry {
+    let source = serde_json::json!({
+        "name": "llm.ask",
+        "binary": "@execute-model",
+        "arguments": [],
+        "contract": {"version": 1}
+    });
+    let registry = Registry::from_sources(&[source.to_string()]).unwrap();
+    let grant = AppletGrant {
+        capabilities: capabilities.iter().map(|name| (*name).to_owned()).collect(),
+        binary_sha256: None,
+        environment: BTreeSet::new(),
+        filesystem: Default::default(),
+        network,
+        network_origins: origins.iter().map(|origin| (*origin).to_owned()).collect(),
+        sandbox_required: false,
+    };
+    registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("llm.ask".to_owned(), grant)]),
+    }));
+    registry
+}
+
+fn model_params(endpoint: Option<&str>, fixture: bool) -> BTreeMap<String, AstValue> {
+    let mut params = BTreeMap::new();
+    if let Some(endpoint) = endpoint {
+        params.insert("endpoint".to_owned(), AstValue::String(endpoint.to_owned()));
+    }
+    if fixture {
+        params.insert(
+            "fixture".to_owned(),
+            AstValue::String("/tmp/fixture.json".to_owned()),
+        );
+    }
+    params
+}
+
+fn unknown_sensitivities() -> SensitivitySet {
+    SensitivitySet::from_label(Sensitivity::Unknown)
+}
 
 fn policy_with_endpoint(endpoint: &str, origins: &[&str]) -> (Registry, &'static str) {
     let source = serde_json::json!({
@@ -555,4 +607,380 @@ fn model_live_loopback_requires_explicit_opt_in() {
         Some(value) => std::env::set_var(OPT_IN, value),
         None => std::env::remove_var(OPT_IN),
     }
+}
+
+/// An explicitly granted private origin reaches the helper's transport without
+/// the coarse loopback opt-in (#448): the parent conveys one canonical origin
+/// after authorizing it against `network_origins`, and the helper honors only
+/// that exact origin. A grant for any other origin still refuses a private
+/// destination. Only this test touches `EXECUTE_MODEL_GRANTED_ORIGIN`, and it
+/// restores the previous value, so parallel tests never race on it.
+#[test]
+fn model_explicitly_granted_private_origin_reaches_owned_loopback() {
+    const GRANT: &str = "EXECUTE_MODEL_GRANTED_ORIGIN";
+
+    let previous = std::env::var_os(GRANT);
+    std::env::remove_var(GRANT);
+    let endpoint_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint_port = endpoint_listener.local_addr().unwrap().port();
+    let origin = format!("http://127.0.0.1:{endpoint_port}");
+    let granted_endpoint = format!("{origin}/v1/responses");
+
+    // Without the grant the owned loopback destination is refused by name
+    // before any credential read or connection.
+    let args = ssrf_args(&[
+        "generate",
+        "--provider",
+        "openai",
+        "--model",
+        "model-under-test",
+        "--instruction",
+        "return a short result",
+        "--endpoint",
+        &granted_endpoint,
+    ]);
+    let mut input = &b"source text"[..];
+    let mut output = Vec::new();
+    let error = flow::models::run(&args, &mut input, &mut output).unwrap_err();
+    assert_eq!(flow::models::diagnostic(&error), "configuration");
+    assert!(output.is_empty());
+
+    // A grant naming a different origin does not open this destination.
+    std::env::set_var(GRANT, "http://127.0.0.1:1");
+    let mut output = Vec::new();
+    let error = flow::models::run(&args, &mut input, &mut output).unwrap_err();
+    assert_eq!(flow::models::diagnostic(&error), "configuration");
+    assert!(output.is_empty());
+
+    // The exact granted origin reaches the owned server with no key attached.
+    std::env::set_var(GRANT, &origin);
+    let body = openai_completed("granted").to_string().into_bytes();
+    let served = serve_once(endpoint_listener, http_ok(&body));
+    let mut output = Vec::new();
+    flow::models::run(&args, &mut input, &mut output).unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["transport"], "http_loopback");
+    assert_eq!(result["text"], "granted");
+    let received = String::from_utf8_lossy(&served.join().unwrap()).to_ascii_lowercase();
+    assert!(received.starts_with("post /v1/responses "));
+    assert!(
+        !received.contains("authorization:"),
+        "granted loopback request carried credentials"
+    );
+
+    match previous {
+        Some(value) => std::env::set_var(GRANT, value),
+        None => std::env::remove_var(GRANT),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Model origin-policy integration (#448): a custom model endpoint is
+// authorized against the same `network_origins`/data-flow grants as a remote
+// origin, before any child spawns. Refusals name the origin, never the body.
+// ---------------------------------------------------------------------------
+
+/// Custom model endpoints without a network grant are refused before any
+/// resolution or socket use, and a broad grant never preserves a non-public
+/// destination. Unparsable endpoints and fragments fail closed.
+#[test]
+fn model_policy_denies_ungranted_custom_endpoints_before_any_effect() {
+    let sensitivities = unknown_sensitivities();
+    // No network grant at all.
+    let registry = model_registry_with_grant(&[], false, &["process.exec"]);
+    let error = authorize_model_endpoint(
+        &registry,
+        "llm.ask",
+        "https://169.254.169.254/",
+        &sensitivities,
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("denies network access"),
+        "{error:?}"
+    );
+    // Network without the connect capability is an invalid policy and fails
+    // closed before any grant is consulted.
+    let registry = model_registry_with_grant(&["https://169.254.169.254"], true, &["process.exec"]);
+    let error = authorize_model_endpoint(
+        &registry,
+        "llm.ask",
+        "https://169.254.169.254/",
+        &sensitivities,
+        false,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("network.connect"), "{error:?}");
+    // A listing for one origin does not open any other origin.
+    let registry = model_registry_with_grant(
+        &["https://169.254.169.254"],
+        true,
+        &["process.exec", "network.connect"],
+    );
+    let error = authorize_model_endpoint(
+        &registry,
+        "llm.ask",
+        "https://example.test/",
+        &sensitivities,
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("denies the model endpoint origin"),
+        "{error:?}"
+    );
+    // Malformed endpoints and fragments fail closed without a grant lookup.
+    assert!(
+        authorize_model_endpoint(&registry, "llm.ask", "not a url", &sensitivities, false).is_err()
+    );
+    let error = authorize_model_endpoint(
+        &registry,
+        "llm.ask",
+        "https://169.254.169.254/#fragment",
+        &sensitivities,
+        false,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("fragment"), "{error:?}");
+    // A broad grant allows a public origin for metadata-policy checks, exactly
+    // like a remote origin, but never preserves a non-public destination.
+    let broad = model_registry_with_grant(&[], true, &["process.exec", "network.connect"]);
+    assert!(authorize_model_endpoint(
+        &broad,
+        "llm.ask",
+        "https://example.test/",
+        &sensitivities,
+        false
+    )
+    .unwrap()
+    .is_none());
+    for endpoint in [
+        "https://10.0.0.1/",
+        "https://169.254.169.254/",
+        "http://127.0.0.1:11434/v1",
+    ] {
+        let error = authorize_model_endpoint(&broad, "llm.ask", endpoint, &sensitivities, false)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("non-public"),
+            "{endpoint}: {error:?}"
+        );
+    }
+}
+
+/// Only an explicitly listed origin preserves a non-public model destination;
+/// the canonical origin returns to the spawn site so it can convey the grant
+/// to the helper. Live loopback literals need a listing, while hermetic
+/// fixture runs keep working without one.
+#[test]
+fn model_policy_preserves_exactly_the_listed_origin() {
+    let sensitivities = unknown_sensitivities();
+    let registry = model_registry_with_grant(
+        &["https://169.254.169.254", "https://10.0.0.1"],
+        true,
+        &["process.exec", "network.connect"],
+    );
+    assert_eq!(
+        authorize_model_endpoint(
+            &registry,
+            "llm.ask",
+            "https://169.254.169.254/",
+            &sensitivities,
+            false
+        )
+        .unwrap(),
+        Some("https://169.254.169.254".to_owned())
+    );
+    assert_eq!(
+        authorize_model_endpoint(
+            &registry,
+            "llm.ask",
+            "https://10.0.0.1/",
+            &sensitivities,
+            false
+        )
+        .unwrap(),
+        Some("https://10.0.0.1".to_owned())
+    );
+    // An unlisted public origin stays refused even with other listings.
+    let error = authorize_model_endpoint(
+        &registry,
+        "llm.ask",
+        "https://example.test/",
+        &sensitivities,
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("denies the model endpoint origin"),
+        "{error:?}"
+    );
+    // A live loopback literal needs an explicit listing too: the unlisted
+    // origin is denied before the SSRF check is even reached.
+    let error = authorize_model_endpoint(
+        &registry,
+        "llm.ask",
+        "http://127.0.0.1:11434/v1",
+        &sensitivities,
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("denies the model endpoint origin"),
+        "{error:?}"
+    );
+    // A hermetic fixture run never opens a socket, so the loopback literal
+    // stays usable there and returns no grant to convey. A non-public
+    // literal is still refused by name even in fixture mode.
+    let manifest = registry.resolve("llm.ask").unwrap();
+    let params = model_params(Some("http://127.0.0.1:11434/v1"), true);
+    assert!(authorize_model_endpoint_params(
+        &registry,
+        manifest,
+        &params,
+        &BTreeMap::new(),
+        &sensitivities
+    )
+    .unwrap()
+    .is_none());
+    let manifest = registry.resolve("llm.ask").unwrap();
+    let params = model_params(Some("https://169.254.169.254/"), true);
+    let error = authorize_model_endpoint_params(
+        &registry,
+        manifest,
+        &params,
+        &BTreeMap::new(),
+        &sensitivities,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("non-public"), "{error:?}");
+    // An explicitly listed loopback origin returns the grant for the helper,
+    // and default endpoints plus other binaries need no check.
+    let loopback_granted = model_registry_with_grant(
+        &["http://127.0.0.1:11434"],
+        true,
+        &["process.exec", "network.connect"],
+    );
+    let manifest = loopback_granted.resolve("llm.ask").unwrap();
+    let params = model_params(Some("http://127.0.0.1:11434/v1"), false);
+    assert_eq!(
+        authorize_model_endpoint_params(
+            &loopback_granted,
+            manifest,
+            &params,
+            &BTreeMap::new(),
+            &sensitivities
+        )
+        .unwrap(),
+        Some("http://127.0.0.1:11434".to_owned())
+    );
+    let manifest = loopback_granted.resolve("llm.ask").unwrap();
+    assert!(authorize_model_endpoint_params(
+        &loopback_granted,
+        manifest,
+        &model_params(None, false),
+        &BTreeMap::new(),
+        &sensitivities
+    )
+    .unwrap()
+    .is_none());
+    // A reference endpoint resolves through bindings; unbound names defer to
+    // argument resolution instead of reaching the transport.
+    let mut referenced = model_params(None, false);
+    referenced.insert(
+        "endpoint".to_owned(),
+        AstValue::Reference("custom".to_owned()),
+    );
+    let manifest = loopback_granted.resolve("llm.ask").unwrap();
+    assert_eq!(
+        authorize_model_endpoint_params(
+            &loopback_granted,
+            manifest,
+            &referenced,
+            &BTreeMap::from([(
+                "custom".to_owned(),
+                AstValue::String("http://127.0.0.1:11434/v1".to_owned())
+            )]),
+            &sensitivities
+        )
+        .unwrap(),
+        Some("http://127.0.0.1:11434".to_owned())
+    );
+    let manifest = loopback_granted.resolve("llm.ask").unwrap();
+    assert!(authorize_model_endpoint_params(
+        &loopback_granted,
+        manifest,
+        &referenced,
+        &BTreeMap::new(),
+        &sensitivities
+    )
+    .unwrap()
+    .is_none());
+}
+
+/// The data-flow policy gates custom model sinks: stdin plus any explicit
+/// credential travels to the origin, so a withheld sink denies the request
+/// and a granted one allows it.
+#[test]
+fn model_policy_routes_custom_endpoints_through_data_flow() {
+    let sensitivities = unknown_sensitivities();
+    let registry = model_registry_with_grant(
+        &["https://example.test"],
+        true,
+        &["process.exec", "network.connect"],
+    );
+    // Without a data-flow policy the listed sink is approved.
+    assert_eq!(
+        authorize_model_endpoint(
+            &registry,
+            "llm.ask",
+            "https://example.test/",
+            &sensitivities,
+            false
+        )
+        .unwrap(),
+        Some("https://example.test".to_owned())
+    );
+    // A data-flow policy that withholds the sink denies the exfiltration.
+    let denied = DataFlowPolicy::from_json(
+        &serde_json::to_vec(&serde_json::json!({"version": 1, "remote_sinks": {}})).unwrap(),
+    )
+    .unwrap();
+    registry.set_host_state(denied);
+    assert!(authorize_model_endpoint(
+        &registry,
+        "llm.ask",
+        "https://example.test/",
+        &sensitivities,
+        false
+    )
+    .is_err());
+    // Granting the sink for the call's labels allows it again.
+    let allowed = DataFlowPolicy::from_json(
+        &serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "remote_sinks": {"https://example.test": {"allow": ["unknown"]}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    registry.set_host_state(allowed);
+    assert_eq!(
+        authorize_model_endpoint(
+            &registry,
+            "llm.ask",
+            "https://example.test/",
+            &sensitivities,
+            false
+        )
+        .unwrap(),
+        Some("https://example.test".to_owned())
+    );
 }

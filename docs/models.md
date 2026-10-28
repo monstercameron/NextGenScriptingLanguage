@@ -156,9 +156,15 @@ grant) must list the variable explicitly. In default trusted mode without a
 policy or host filter, a program can set the variable itself via
 `use environment` or `and environment`; only policy mode (or a host filter)
 prevents that self-grant. Fixture runs never open a socket and
-do not need it. Model endpoints accept no `network_origins` grant: dependency
-#375 keeps them outside that policy, so this variable is the interim explicit
-grant until that work lands.
+do not need it. Under a capability policy a custom `--endpoint` is authorized
+like a remote origin before the child spawns: the applet needs `network: true`
+with the `network.connect` capability, the origin must be listed in
+`network_origins` (an empty list allows public origins for metadata-policy
+checks but never preserves a non-public destination), and the data-flow policy
+must authorize the sink. Only a listed origin preserves a private destination:
+the runtime conveys it to the helper as `EXECUTE_MODEL_GRANTED_ORIGIN`, which
+the helper honors only when it equals the endpoint's own canonical origin. A
+listed loopback origin therefore works without `EXECUTE_MODEL_ALLOW_LOOPBACK`.
 
 Credential rule, which is the security boundary for provider keys:
 

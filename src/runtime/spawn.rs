@@ -664,6 +664,21 @@ pub(super) fn execute_group_with_sink(
                 )?,
             }
         };
+        // A custom model endpoint is authorized like a remote origin before the
+        // child spawns. An explicitly listed origin is conveyed to the helper
+        // so it can preserve the destination; anything else stays fail-closed
+        // in the helper's own guard.
+        if manifest.binary == "@execute-model" {
+            if let Some(granted) = crate::capabilities::authorize_model_endpoint_params(
+                registry,
+                manifest,
+                &call.parameters,
+                bindings,
+                &sensitivities,
+            )? {
+                command.env(crate::capabilities::MODEL_GRANTED_ORIGIN_ENV, granted);
+            }
+        }
         let resolved_io = resolved_call_stdio(call, manifest, signals);
         let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
         command

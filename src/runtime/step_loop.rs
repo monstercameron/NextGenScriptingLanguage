@@ -1995,13 +1995,29 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             .collect::<Result<BTreeMap<_, _>>>()?;
                         let argv = manifest.build_arguments(&parameters)?;
                         let binary = binary_path(manifest.binary_for(call), &cwd)?;
-                        let command = crate::capabilities::command_for(
+                        let mut command = crate::capabilities::command_for(
                             &binary,
                             argv.iter().map(|argument| OsStr::new(argument.as_str())),
                             registry,
                             &manifest.name,
                             &cwd,
                         )?;
+                        // A custom model endpoint is authorized like a remote
+                        // origin before the handover/detach. The parameters
+                        // are already resolved, so no bindings remain.
+                        if manifest.binary == "@execute-model" {
+                            if let Some(granted) =
+                                crate::capabilities::authorize_model_endpoint_params(
+                                    registry,
+                                    manifest,
+                                    &parameters,
+                                    &BTreeMap::new(),
+                                    &signals.sensitivity_floor(),
+                                )?
+                            {
+                                command.env(crate::capabilities::MODEL_GRANTED_ORIGIN_ENV, granted);
+                            }
+                        }
                         match request {
                             handoff::ProcessRequest::HandOver => {
                                 // Output of earlier statements is written now, before the

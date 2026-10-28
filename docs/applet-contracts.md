@@ -521,12 +521,20 @@ uses its declared stdout mode. A non-captured final stdout cannot supply a
 result binding, save, downstream consumer or stream listener.
 
 These contracts do not make multi-applet or multi-file updates transactional.
-The generic filesystem helpers atomically replace one file at a time. Native
-command timeouts are not deadlines for arbitrary filesystem calls, and
-cooperative in-process checks do not interrupt a synchronous filesystem call,
-JSON parser/serializer routine, or other library operation between checkpoints.
-The interpreter's output limits are not universal bounds on a command's reads,
-writes, memory, filesystem effects or data sent through inherited descriptors.
+The generic filesystem helpers atomically replace one file at a time.
+In-process filesystem, hash and JSONC applets additionally poll the call
+budget at cooperative checkpoints: at dispatch, between targets, in 64 KiB
+file-I/O and hashing chunks, and every 5 ms while waiting on an advisory
+lock. An exceeded `--command-timeout-ms` or parent deadline surfaces as
+`timeout` (workflow cancellation as `cancelled`) with effects possibly
+incomplete. Cancelled file, symlink and directory writes remove their
+half-written temporaries instead of leaving them behind. A checkpoint cannot
+interrupt a thread already blocked inside one
+operating-system call (a stalled read, write, sync or rename, for example on
+NFS) or a library routine without checkpoints, so such a call can still return
+after the budget. The interpreter's output limits are not universal bounds on
+a command's reads, writes, memory, filesystem effects or data sent through
+inherited descriptors.
 
 ## Bundled generic operations
 
@@ -650,9 +658,20 @@ advisory and coordinate only participants that use the same lock.
 There is no transaction cleanup applet; keep the journal until its recovery and
 audit record is no longer needed, then remove it deliberately.
 
-Native command timeouts are not deadlines for arbitrary filesystem calls, and
-the interpreter's output limits are not universal bounds on a command's reads,
-writes, memory, filesystem effects or data sent through inherited descriptors.
+Advisory target and journal locks wait with 5 ms polls that recheck the call
+budget, so cancellation or an exceeded `--command-timeout-ms`/parent deadline
+preempts the wait instead of serving the full lock timeout; a wait that
+outlived its deadline reports the deadline rather than `lock_timeout`. Target
+reads, blob writes and journal updates move in 64 KiB chunks with a budget
+check per chunk. A budget failure partway through leaves the retained journal
+in its last persisted state for explicit recovery with
+`fs.transaction.recover`. A budget failure while writing a journal temporary
+or a private blob removes that half-written file, and a failure before
+publication removes the staging directory; a published journal is always
+retained for explicit recovery. As elsewhere, a thread blocked inside a single
+operating-system call can still return after the budget, and the interpreter's
+output limits are not universal bounds on a command's reads, writes, memory,
+filesystem effects or data sent through inherited descriptors.
 
 The applet catalog and failure codes are source-defined contracts, not an
 application policy layer. Workflow code chooses which generic operation to call,

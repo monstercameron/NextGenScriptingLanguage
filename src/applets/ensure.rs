@@ -18,7 +18,7 @@
 use super::filesystem::{
     atomic_replace_locked, default_lock_path, hash, resolve_path, with_path_lock,
 };
-use super::{invalid, io_error, required_string, AppletError};
+use super::{invalid, io_error, required_string, AppletError, ExecutionContext};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::{ErrorKind, Read};
@@ -36,12 +36,17 @@ struct Current {
     mode: Option<u32>,
 }
 
-pub(super) fn ensure_file(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn ensure_file(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let text = nonempty_path(args)?;
     let path = resolve_path(text, cwd);
     let content = required_string(args, "content")?;
     let mode = parse_mode(args)?;
-    let current = read_current(&path)?;
+    let current = read_current(&path, context)?;
     let content_matches = current
         .as_ref()
         .is_some_and(|current| current.bytes == content.as_bytes());
@@ -52,7 +57,7 @@ pub(super) fn ensure_file(args: &Map<String, Value>, cwd: &Path) -> Result<Value
     let changed = !(content_matches && mode_matches);
     if changed {
         let expected = expected_hash(current.as_ref());
-        write_locked(&path, content.as_bytes(), &expected, mode)?;
+        write_locked(&path, content.as_bytes(), &expected, mode, context)?;
     }
     Ok(json!({
         "changed": changed,
@@ -61,7 +66,12 @@ pub(super) fn ensure_file(args: &Map<String, Value>, cwd: &Path) -> Result<Value
     }))
 }
 
-pub(super) fn ensure_line(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn ensure_line(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let text = nonempty_path(args)?;
     let path = resolve_path(text, cwd);
     let line = required_string(args, "line")?;
@@ -74,7 +84,7 @@ pub(super) fn ensure_line(args: &Map<String, Value>, cwd: &Path) -> Result<Value
         Some(Some("absent")) => false,
         Some(_) => return Err(invalid("args.state must be \"present\" or \"absent\"")),
     };
-    let current = read_current(&path)?;
+    let current = read_current(&path, context)?;
     let existing = match &current {
         Some(current) => Some(
             std::str::from_utf8(&current.bytes)
@@ -117,12 +127,17 @@ pub(super) fn ensure_line(args: &Map<String, Value>, cwd: &Path) -> Result<Value
     };
     if let Some(content) = &updated {
         let expected = expected_hash(current.as_ref());
-        write_locked(&path, content.as_bytes(), &expected, None)?;
+        write_locked(&path, content.as_bytes(), &expected, None, context)?;
     }
     Ok(json!({"changed": updated.is_some(), "path": text}))
 }
 
-pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn ensure_symlink(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let text = nonempty_path(args)?;
     let link = resolve_path(text, cwd);
     let target = required_string(args, "target")?;
@@ -135,21 +150,29 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
         Err(error) => return Err(io_error(error, format!("checking {}", link.display()))),
     };
     // The previous target lets a caller roll the link back; it is empty when no
-    // link existed before this call.
+    // link existed before this call. Each single link or rename call below can
+    // still block inside the operating system; only the slices between calls
+    // are interruptible.
+    context.checkpoint()?;
     let (changed, previous) = match existing {
         Some(metadata) if metadata.file_type().is_symlink() => {
+            context.checkpoint()?;
             let current = fs::read_link(&link)
                 .map_err(|error| io_error(error, format!("reading {}", link.display())))?;
             let previous = current.to_string_lossy().into_owned();
             if current == Path::new(target) {
                 (false, previous)
             } else {
+                context.checkpoint()?;
                 let temp = temporary_link_path(&link);
+                let mut temp_cleanup = TempLinkCleanup(Some(temp.clone()));
                 make_link(target, &temp, &link)?;
                 // Recheck the type just before the rename: a regular file or directory that
                 // appeared since the first check must not be replaced.
+                context.checkpoint()?;
                 if let Ok(current) = fs::symlink_metadata(&link) {
                     if !current.file_type().is_symlink() {
+                        temp_cleanup.done();
                         let _ = fs::remove_file(&temp);
                         return Err(io_error(
                             std::io::Error::new(
@@ -160,13 +183,17 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
                         ));
                     }
                 }
+                context.checkpoint()?;
                 if let Err(error) = fs::rename(&temp, &link) {
+                    temp_cleanup.done();
                     let _ = fs::remove_file(&temp);
                     return Err(io_error(
                         error,
                         format!("replacing link {}", link.display()),
                     ));
                 }
+                temp_cleanup.done();
+                context.checkpoint()?;
                 (true, previous)
             }
         }
@@ -177,7 +204,9 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
             )))
         }
         None => {
+            context.checkpoint()?;
             make_link(target, &link, &link)?;
+            context.checkpoint()?;
             (true, String::new())
         }
     };
@@ -189,7 +218,12 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
     }))
 }
 
-pub(super) fn ensure_dir(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn ensure_dir(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let text = nonempty_path(args)?;
     let path = resolve_path(text, cwd);
     let mode = parse_mode(args)?;
@@ -198,10 +232,15 @@ pub(super) fn ensure_dir(args: &Map<String, Value>, cwd: &Path) -> Result<Value,
         Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => return Err(io_error(error, format!("checking {}", path.display()))),
     };
+    // Each single create or mode call below can still block inside the
+    // operating system; only the slices between calls are interruptible.
+    context.checkpoint()?;
     let changed = match metadata {
         Some(metadata) if metadata.is_dir() => match (mode, file_mode(&metadata)) {
             (Some(wanted), Some(actual)) if wanted != actual => {
+                context.checkpoint()?;
                 set_mode(&path, wanted)?;
+                context.checkpoint()?;
                 true
             }
             _ => false,
@@ -213,11 +252,14 @@ pub(super) fn ensure_dir(args: &Map<String, Value>, cwd: &Path) -> Result<Value,
             )))
         }
         None => {
+            context.checkpoint()?;
             fs::create_dir_all(&path)
                 .map_err(|error| io_error(error, format!("creating {}", path.display())))?;
+            context.checkpoint()?;
             if let Some(wanted) = mode {
                 set_mode(&path, wanted)?;
             }
+            context.checkpoint()?;
             true
         }
     };
@@ -255,7 +297,8 @@ fn parse_mode(args: &Map<String, Value>) -> Result<Option<u32>, AppletError> {
         .map_err(|_| invalid(format!("args.mode {text:?} is not an octal mode")))
 }
 
-fn read_current(path: &Path) -> Result<Option<Current>, AppletError> {
+fn read_current(path: &Path, context: &ExecutionContext<'_>) -> Result<Option<Current>, AppletError> {
+    context.checkpoint()?;
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -267,12 +310,10 @@ fn read_current(path: &Path) -> Result<Option<Current>, AppletError> {
             path.display()
         )));
     }
-    let file = fs::File::open(path)
+    let mut file = fs::File::open(path)
         .map_err(|error| io_error(error, format!("opening {}", path.display())))?;
     let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| io_error(error, format!("reading {}", path.display())))?;
+    read_chunked(&mut file, &mut bytes, path, context)?;
     if bytes.len() > MAX_FILE_BYTES {
         return Err(invalid(format!(
             "file exceeds the {MAX_FILE_BYTES}-byte limit: {}",
@@ -295,15 +336,51 @@ fn write_locked(
     content: &[u8],
     expected: &str,
     mode: Option<u32>,
+    context: &ExecutionContext<'_>,
 ) -> Result<(), AppletError> {
     let lock = default_lock_path(path)?;
-    with_path_lock(&lock, LOCK_TIMEOUT, || {
+    with_path_lock(&lock, LOCK_TIMEOUT, context, || {
         let (policy, mode) = match mode {
             Some(mode) if cfg!(unix) => ("exact", Some(mode)),
             _ => ("preserve", None),
         };
-        atomic_replace_locked(path, content, expected, "preserve", policy, mode).map(|_| ())
+        atomic_replace_locked(path, content, expected, "preserve", policy, mode, context)
+            .map(|_| ())
     })
+}
+
+/// Copy at most `MAX_FILE_BYTES + 1` bytes from `file` in chunks, checking
+/// the execution budget between chunks. Each individual `read` call can
+/// still block on a stalled filesystem; only the slices between calls are
+/// interruptible.
+fn read_chunked(
+    file: &mut fs::File,
+    bytes: &mut Vec<u8>,
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    const CHUNK_BYTES: usize = 64 * 1024;
+    let limit = MAX_FILE_BYTES + 1;
+    let mut chunk = vec![0u8; CHUNK_BYTES];
+    loop {
+        context.checkpoint()?;
+        let end = bytes.len().saturating_add(CHUNK_BYTES).min(limit);
+        let want = end.saturating_sub(bytes.len());
+        if want == 0 {
+            break;
+        }
+        let read = file
+            .read(&mut chunk[..want])
+            .map_err(|error| io_error(error, format!("reading {}", path.display())))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if bytes.len() >= limit {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// A line matches when its text, without its line break, equals `line`.
@@ -352,6 +429,24 @@ fn temporary_link_path(link: &Path) -> PathBuf {
     let mut name = super::filesystem::sibling_prefix(link.file_name().unwrap_or_default());
     name.push(format!(".{}.{sequence}.tmp", std::process::id()));
     link.with_file_name(name)
+}
+
+/// Remove a half-replaced symlink temp when a later checkpoint or rename
+/// fails. Disarm after the rename lands so the live link is never touched.
+struct TempLinkCleanup(Option<PathBuf>);
+
+impl TempLinkCleanup {
+    fn done(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for TempLinkCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 /// Create a symbolic link at `at`. `link` locates the link for relative target

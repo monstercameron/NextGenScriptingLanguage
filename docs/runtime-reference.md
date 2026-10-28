@@ -811,8 +811,13 @@ interpreter's own input worker rather than claiming to contain those processes.
 
 Timeouts kill and reap owned process groups. A timed-out effectful invocation is
 recorded as uncertain in a durable checkpoint; resuming it requires the existing
-explicit `--retry-uncertain` gate. File I/O, cache hashing, filesystem stalls, and
-final output delivery are outside this command lifetime limit. This is cooperative
+explicit `--retry-uncertain` gate. In-process filesystem, hash and JSONC applets
+observe the same call budget cooperatively instead: they checkpoint at dispatch,
+between targets, in 64 KiB I/O chunks, and every 5 ms while waiting on an advisory
+lock, reporting an exceeded budget as `timeout`/`cancelled` with effects possibly
+incomplete. A thread blocked inside a single operating-system call, a filesystem
+stall inside that call, and final output delivery are outside this command
+lifetime limit. This is cooperative
 process supervision, not a sandbox: a command that escapes its group with `setsid`
 can retain descriptors or survive, and arbitrary applets have the user's host
 permissions. Only execute trusted scripts and manifests.

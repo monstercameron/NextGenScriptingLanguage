@@ -1424,6 +1424,18 @@ fn preflight_invocations_with_policy<'a>(
                 }
             }
         }
+        // Model file reads happen in the child helper, which has no registry
+        // access. Authorize literal paths now; references and relative paths
+        // after a working-directory change are re-checked where the group
+        // spawns, against the effective directory and bindings.
+        authorize_model_file_params(
+            registry,
+            manifest,
+            &call.parameters,
+            &BTreeMap::<String, Value>::new(),
+            cwd,
+            cwd_mode.is_dynamic(),
+        )?;
         let binary = if backend != AppletBackend::InProcess
             && (grant.binary_sha256.is_some() || native_sandbox)
         {
@@ -2491,6 +2503,99 @@ pub fn authorize_applet_host_path(
     } else {
         bail!("capability policy denies applet filesystem access");
     }
+}
+
+/// File parameters of the bundled model helper that name host files read by
+/// the `execute-model` child: `fixture` replay input and `env_file`
+/// credentials. Kept for custom manifests that still declare them as
+/// `string`; the bundled manifests declare both as `path` so the generic
+/// path-parameter loop below covers them without relying on names.
+const MODEL_FILE_PARAMETERS: [&str; 2] = ["env_file", "fixture"];
+
+/// Authorize the host files a model applet will read through the bundled
+/// `execute-model` helper. The helper runs as a normal child process with no
+/// registry access, so the parent checks resolved path values against the
+/// applet's own filesystem grant before spawn; the child additionally opens
+/// the fixture without following its final link and requires a private file
+/// for `env_file`.
+///
+/// This is advisory against a concurrent ancestor swap: the parent
+/// canonicalizes (follows links) at check time while the child pins only the
+/// final component at open time. A directory renamed between the two can
+/// redirect the open. Do not treat a granted check as proof of what was
+/// opened on paths a concurrent actor can rename above. Final-component
+/// links fail closed in the child; ancestor swaps do not.
+///
+/// `bindings` resolves result references; unbound names are skipped here and
+/// rejected when the group resolves its arguments. With no capability policy
+/// this is a no-op, matching `authorize_applet_host_path`. When
+/// `defer_relative` is set, relative literals are skipped: the effective
+/// working directory is not yet known (preflight of a program that changes
+/// directories) and the spawn path re-checks every value.
+///
+/// Coverage is generic, not name-locked: every parameter the manifest declares
+/// as `path` is authorized, so a renamed helper binary or a new file
+/// parameter declared as `path` stays covered. The explicit `env_file` /
+/// `fixture` names remain as a fallback for custom manifests that still
+/// declare them as `string`.
+///
+/// A named `fixture` means the helper replays it without reading `env_file`,
+/// so only the fixture needs a grant when one is named.
+pub fn authorize_model_file_params(
+    registry: &Registry,
+    manifest: &crate::manifest::Manifest,
+    parameters: &BTreeMap<String, Value>,
+    bindings: &BTreeMap<String, Value>,
+    cwd: &Path,
+    defer_relative: bool,
+) -> Result<()> {
+    // Generic path-parameter coverage plus the legacy string-typed names for
+    // `@execute-model`. A different binary with `path` file parameters is
+    // still covered; a file parameter declared as `string` is not.
+    let mut names: BTreeSet<&str> = BTreeSet::new();
+    for name in parameters.keys() {
+        if manifest.is_path_parameter(name) {
+            names.insert(name.as_str());
+        }
+    }
+    if manifest.binary == "@execute-model" {
+        for name in MODEL_FILE_PARAMETERS {
+            if parameters.contains_key(name) {
+                names.insert(name);
+            }
+        }
+    } else if names.is_empty() {
+        return Ok(());
+    }
+    for name in names {
+        if name == "env_file" && parameters.contains_key("fixture") {
+            continue;
+        }
+        let Some(value) = parameters.get(name) else {
+            continue;
+        };
+        let text = match value {
+            Value::String(text) => text.as_str(),
+            Value::Reference(binding) => match bindings.get(binding) {
+                Some(Value::String(text)) => text.as_str(),
+                Some(_) => bail!("model parameter {name:?} must be text"),
+                // Unbound here; argument resolution rejects it before spawn.
+                None => continue,
+            },
+            // Manifest validation rejects non-text values before execution.
+            _ => bail!("model parameter {name:?} must be text"),
+        };
+        if text.is_empty() {
+            // The helper rejects empty paths fail-closed; nothing to authorize.
+            continue;
+        }
+        let path = Path::new(text);
+        if defer_relative && path.is_relative() {
+            continue;
+        }
+        authorize_applet_host_path(registry, &manifest.name, path, HostAccess::Read, cwd)?;
+    }
+    Ok(())
 }
 
 fn collect_invocations<'a>(steps: &'a [Step], calls: &mut Vec<&'a crate::ast::Invocation>) {

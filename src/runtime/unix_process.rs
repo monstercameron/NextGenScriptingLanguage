@@ -143,10 +143,13 @@ impl Drop for Children {
                 kill_group(child.child.id());
             }
         }
-        // Never hang teardown: poll briefly, re-escalate once per round, then
-        // leave any straggler to init instead of blocking the abort path.
-        // Matches the #554 bound so the double-interrupt abort stays prompt.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Never hang teardown forever: a child that outlives its SIGKILL
+        // (stopped, traced, wedged uninterruptibly, or a platform reaping
+        // quirk) must not wedge the run's abort path — the double-interrupt
+        // abort depends on this returning promptly. Poll briefly, re-escalate
+        // once per round, then leave any straggler to init instead of blocking
+        // the run.
+        let deadline = Instant::now() + Duration::from_secs(5);
         for child in &mut self.0 {
             if child.reaped {
                 continue;
@@ -155,11 +158,11 @@ impl Drop for Children {
                 match child.child.try_wait() {
                     Ok(Some(_)) => break,
                     Ok(None) => {
-                        if std::time::Instant::now() >= deadline {
+                        if Instant::now() >= deadline {
                             break;
                         }
                         kill_group(child.child.id());
-                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        std::thread::sleep(Duration::from_millis(5));
                     }
                     Err(_) => break,
                 }

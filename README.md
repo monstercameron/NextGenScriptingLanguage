@@ -273,7 +273,7 @@ theme templates, swaps the current-theme link and reloads the compositor. The he
 declares the effects it may have; `explain --json` shows every step before it runs. Its default `execute.explain/2` output includes argument templates; existing v1 consumers can use `--explain-version 1`. What-if reviews use v2 by default; select the same version when confirming.
 
 ```
-# execute-policy: allow writes process undeclared
+# execute-policy: allow reads writes process undeclared
 accept theme_name as text described as "Directory name for the theme, for example dark"
 accept themes_root as text described as "Directory that holds the theme directories"
 accept current_link as text described as "Path of the current-theme symbolic link"

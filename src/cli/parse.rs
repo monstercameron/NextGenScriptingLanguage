@@ -75,6 +75,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut max_record_bytes_seen = false;
     let mut control = false;
     let mut break_at: Vec<usize> = Vec::new();
+    let mut events: Option<String> = None;
     let mut index = first_argument;
     while index < arguments.len() {
         let argument = &arguments[index];
@@ -484,6 +485,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                 let line = parse_positive_usize(arguments, &mut index, "--break-at")?;
                 break_at.push(line);
             }
+            "--events" if matches!(command, "run" | "resume") => {
+                if events.is_some() {
+                    bail!("--events may be specified only once");
+                }
+                let value =
+                    take_option_value(arguments, &mut index, "--events", "document or jsonl")?;
+                match value.as_str() {
+                    "document" | "jsonl" => events = Some(value),
+                    _ => bail!("--events accepts document or jsonl"),
+                }
+            }
             value if value.starts_with('-') => bail!("unknown or unsupported option `{value}`"),
             _ => {
                 if file.replace(workflow_path(argument)?).is_some() {
@@ -557,6 +569,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         record_dir,
         control,
         break_at,
+        events,
     }))
 }
 

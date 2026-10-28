@@ -10,7 +10,7 @@ use std::os::windows::{
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicI32, Ordering},
     Arc, Mutex, OnceLock, Weak,
 };
 use windows_sys::Win32::{
@@ -73,11 +73,18 @@ where
 pub(crate) fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
-type Registration = (Weak<AtomicBool>, Option<Weak<std::sync::atomic::AtomicU8>>);
+type Registration = (
+    Weak<AtomicBool>,
+    Option<Weak<std::sync::atomic::AtomicU8>>,
+    Weak<AtomicBool>,
+    Weak<AtomicI32>,
+);
 
 pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
+    cleanup: Arc<AtomicBool>,
+    signal_code: Arc<AtomicI32>,
 ) -> Result<()> {
     static FLAGS: OnceLock<Mutex<Vec<Registration>>> = OnceLock::new();
     static INSTALLED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
@@ -87,17 +94,36 @@ pub(crate) fn signals(
             super::record_cancel_signal(2);
             if let Some(flags) = FLAGS.get() {
                 let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
-                flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-                for (cancel, drain) in flags.iter() {
+                flags.retain(|(cancel, _, _, _)| cancel.strong_count() != 0);
+                for (cancel, drain, cleanup, signal_code) in flags.iter() {
+                    // The run's own slot is per-run truth; the process-wide
+                    // fallback keeps the CLI entry point reporting after the
+                    // run (and its slot) is gone.
+                    if let Some(code) = signal_code.upgrade() {
+                        code.store(2, Ordering::SeqCst);
+                    }
                     // A run with an `on interrupt` body drains on its first interrupt.
+                    // A repeat interrupt also marks the shared cleanup flag so a
+                    // `finally`, `on exit` or `on interrupt` body aborts at once.
                     if let Some(drain) = drain.as_ref().and_then(|weak| weak.upgrade()) {
                         if super::request_drain(&drain) {
                             continue;
                         }
                         drain.store(super::DRAIN_CANCELLED, Ordering::SeqCst);
+                        if let Some(flag) = cancel.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        if let Some(flag) = cleanup.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        continue;
                     }
                     if let Some(flag) = cancel.upgrade() {
-                        flag.store(true, Ordering::Relaxed);
+                        if flag.swap(true, Ordering::Relaxed) {
+                            if let Some(flag) = cleanup.upgrade() {
+                                flag.store(true, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
             }
@@ -112,8 +138,13 @@ pub(crate) fn signals(
         .unwrap()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-    flags.push((Arc::downgrade(&cancel), drain.as_ref().map(Arc::downgrade)));
+    flags.retain(|(cancel, _, _, _)| cancel.strong_count() != 0);
+    flags.push((
+        Arc::downgrade(&cancel),
+        drain.as_ref().map(Arc::downgrade),
+        Arc::downgrade(&cleanup),
+        Arc::downgrade(&signal_code),
+    ));
     Ok(())
 }
 
@@ -780,6 +811,39 @@ pub(crate) fn lock(file: &File) -> Result<()> {
             .context("checkpoint is already locked or lock failed");
     }
     Ok(())
+}
+
+/// Current process user as an `S-...` SID string. The SID comes from the
+/// process token, which the process cannot spoof, so it is authoritative in
+/// the same way the effective uid is on Unix. Callers keep any `USER` name as
+/// display-only text.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn current_user_sid_text() -> Result<String> {
+    // SAFETY: GetCurrentProcess returns the current-process pseudo-handle, which is always
+    // valid and needs no closing. user_sid only queries that process's token.
+    let sid = user_sid(unsafe { GetCurrentProcess() })?;
+    let mut text = std::ptr::null_mut();
+    // SAFETY: `sid` is the valid SID copied by user_sid and is still alive during the call.
+    // On success `text` is a LocalAlloc'd, NUL-terminated string that is freed below; the
+    // failure case is the `== 0` branch.
+    if unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast(), &mut text) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("encoding user SID");
+    }
+    let mut length = 0;
+    // SAFETY: `text` is the non-null NUL-terminated string from ConvertSidToStringSidW, so
+    // every index before the terminator is inside its allocation.
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    // SAFETY: the `length` units before the terminator lie inside the string allocation, and
+    // the slice is copied into an owned String before LocalFree runs below.
+    let sid_text = String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) })?;
+    // SAFETY: `text` came from ConvertSidToStringSidW, which allocates it with LocalAlloc, so
+    // LocalFree is its matching release. It is freed once and not read afterwards.
+    unsafe {
+        LocalFree(text.cast());
+    }
+    Ok(sid_text)
 }
 
 /// One bounded reader for an inherited console, file or pipe. Shutdown cancels

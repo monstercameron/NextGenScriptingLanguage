@@ -7,6 +7,43 @@ original version labels.
 
 ## Unreleased
 
+- `execute run GRAPH --events jsonl` streams one `execute.graph-event/1` JSON
+  line per terminal event as it arrives, flushing after every event and holding
+  no collected outputs. Graphs with persistent nodes (timers, listeners, native
+  streams, program services, or renderers) stream by default so a timer graph
+  prints each tick within milliseconds and runs indefinitely; closing the
+  reader (`| head -n 3`) cancels the session and exits quietly through the
+  SIGPIPE convention (141). Finite
+  graphs keep the closing `execute.graph-run/1` document unless `--events jsonl`
+  is passed. The event schema is `docs/schemas/graph-event.v1.schema.json`.
+  Follow-up hardening: queued events are now delivered before a worker failure
+  surfaces instead of a clean EOF, each streamed line is bounded by a per-event
+  limit derived from the message byte limit, graph runs refuse `--record` and
+  `--answers` instead of ignoring them, and the daemon declines event streams
+  (explicit `--events jsonl` and unflagged persistent graphs alike) so the
+  client streams them directly. A closed reader that lands after a worker
+  failure reports the failure instead of a quiet pipe close.
+
+- Uncertain nodes and `for each` elements can now be resolved per item.
+  `execute checkpoint resolve DIR --node STEP_ID [--element N] --as committed|retry`
+  records one operator decision with who (`uid:<euid>` on Unix), when and why;
+  `committed` replays the supplied output and bindings at resume instead of
+  rerunning the effect, `retry` authorizes one item to run again without the
+  bulk `--retry-uncertain` flag. Element nodes take only per-element records;
+  parallel (`parallel for each`) elements resolve as `retry` only. Resolve holds
+  the checkpoint lock across validation and append, so concurrent resolves fail
+  closed. Journals are version 6 (in-flight element kind); versions 1-6 read,
+  graph journals 5-6 read. `checkpoint status --json` reports decisions under
+  `resolutions` and still-undecided items under `unresolved_uncertain`, using
+  the same step ids and 0-based element indices. Run records and `show-run`
+  have no checkpoint pointer and do not show resolutions.
+
+- A repeat interrupt (Ctrl-C) during a `finally`, `on exit` or `on interrupt`
+  body now aborts the cleanup at once and kills its running command, exiting
+  with status 128 plus the interrupting signal (130 for SIGINT) and a
+  `cleanup interrupted` diagnostic instead of waiting out the 5 s cleanup
+  budget. A single interrupt still runs cleanup to completion.
+
 - Run records now carry a durable policy-decision audit. `execute run
   --record` writes the allow/deny decisions into `run.json` with the execution
   mode and which policies were configured (never policy contents), including a

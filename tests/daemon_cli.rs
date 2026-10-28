@@ -34,6 +34,9 @@ fn daemon_command(runtime_dir: &Path, arguments: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
     command.env("XDG_RUNTIME_DIR", runtime_dir);
     command.env_remove("EXECUTE_DAEMON");
+    // The daemon reads its own environment for the foreign-context opt-in, so
+    // spawns stay hermetic unless a test opts in explicitly.
+    command.env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT");
     command.env_remove("EXECUTE_DAEMON_MAX_RUNS");
     command.arg("daemon").args(arguments);
     command
@@ -651,6 +654,123 @@ fn linux_namespace_clients_run_locally() {
         assert_eq!(output.stdout, b"out\n");
         assert!(String::from_utf8_lossy(&output.stderr)
             .contains("client confinement cannot be preserved"));
+    }
+}
+
+/// The daemon must not take a namespaced client's word that the daemon context
+/// is acceptable (#446). With only the client opt-in, a cross-namespace
+/// forward is declined and runs locally; when the daemon's operator also opts
+/// in, the same forward proceeds. Both ends stay fail-closed by default.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_daemon_declines_foreign_namespace_despite_client_acceptance() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // The client maps its effective UID to zero. Serve at the path it will use,
+    // while retaining the host daemon's confinement context.
+    let socket = runtime.path().join("execute-0").join("daemon.sock");
+    let spawn_daemon = |accept: bool| -> Daemon {
+        let mut command = daemon_command(
+            runtime.path(),
+            &["serve", "--socket", socket.to_str().unwrap()],
+        );
+        if accept {
+            command.env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1");
+        }
+        let mut daemon = Daemon(Some(command.spawn().expect("spawn daemon")));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !socket.exists() {
+            assert!(Instant::now() < deadline, "daemon did not start");
+            assert!(
+                daemon.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+                "daemon exited"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        daemon
+    };
+    let namespaces = ["--mount", "--net"];
+    for namespace in namespaces {
+        let probe = Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace, "true"])
+            .output();
+        if !probe.as_ref().is_ok_and(|result| result.status.success()) {
+            let message = format!("cannot create {namespace} namespace: {probe:?}");
+            assert!(
+                std::env::var_os("EXECUTE_REQUIRE_NAMESPACE_TESTS").is_none(),
+                "{message}"
+            );
+            eprintln!("SKIP: {message}");
+            return;
+        }
+    }
+    let program = work.path().join("namespace.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    let namespaced_run = |namespace: &str| -> Output {
+        Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace])
+            .arg(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+            .env("EXECUTE_DAEMON_TRACE", "1")
+            .current_dir(work.path())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(manifests())
+            .arg("--daemon")
+            .output()
+            .unwrap()
+    };
+    // Client opt-in alone must not move the run into the daemon's context. The
+    // daemon starts without the operator opt-in, so foreign contexts decline.
+    let daemon = spawn_daemon(false);
+    // Prove this client can actually reach the daemon it would otherwise use.
+    for namespace in namespaces {
+        let status = Command::new("unshare")
+            .args(["--user", "--map-root-user", namespace])
+            .arg(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
+            .args(["daemon", "status"])
+            .output()
+            .unwrap();
+        let reply: Value = serde_json::from_slice(&status.stdout).expect("daemon status JSON");
+        assert_eq!(reply["running"], true, "{namespace}: {reply}");
+    }
+    for namespace in namespaces {
+        let output = namespaced_run(namespace);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{namespace}: {:?}", output);
+        assert_eq!(output.stdout, b"out\n", "{namespace}: {stderr}");
+        assert!(
+            stderr.contains("client confinement cannot be preserved"),
+            "{namespace}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("client-started"),
+            "{namespace}: the daemon must not fork a foreign-context run: {stderr}"
+        );
+    }
+    drop(daemon);
+    let _ = fs::remove_file(&socket);
+    // The daemon operator opting in as well accepts the foreign context.
+    let _daemon = spawn_daemon(true);
+    for namespace in namespaces {
+        let output = namespaced_run(namespace);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{namespace}: {:?}", output);
+        assert_eq!(output.stdout, b"out\n", "{namespace}: {stderr}");
+        assert!(
+            stderr.contains("client-started"),
+            "{namespace}: dual opt-in must forward: {stderr}"
+        );
+        assert!(
+            !stderr.contains("client confinement cannot be preserved"),
+            "{namespace}: {stderr}"
+        );
     }
 }
 

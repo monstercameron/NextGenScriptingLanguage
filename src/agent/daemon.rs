@@ -163,7 +163,16 @@ mod imp {
         not_running, Forwarding, Path, PathBuf, PrepareHook, Registry, Result, RunCallback,
         RunContext, Value, PROTOCOL,
     };
-    use crate::ipc::peer::peer_is_owner;
+    use crate::ipc::peer::{peer_confinement_matches, peer_is_owner};
+
+    /// Whether this daemon's operator accepted serving differently-confined
+    /// clients. This reads the daemon's own environment, which a sandboxed
+    /// client cannot set for the daemon, so cross-context forwarding needs the
+    /// opt-in at both ends: the client accepts the daemon's context and the
+    /// daemon accepts serving the foreign context.
+    fn daemon_accepts_foreign_context() -> bool {
+        std::env::var_os("EXECUTE_DAEMON_ACCEPT_CONTEXT").is_some_and(|value| value == "1")
+    }
     use crate::ipc::transport::{read_message, write_message};
     use anyhow::{anyhow, bail, Context};
     use serde_json::json;
@@ -693,8 +702,14 @@ mod imp {
                 }
                 Some("run") => {
                     // Same-UID peers can have stricter OS confinement than this process.
-                    // Without explicit acceptance, refuse before preparing or forking.
-                    if request["accept_daemon_context"] == true {
+                    // Without explicit acceptance, refuse before preparing or forking. The
+                    // acceptance flag arrives from the client, so a sandboxed peer could
+                    // assert it; on Linux the daemon additionally compares kernel-attested
+                    // namespace identities and declines a foreign context unless this
+                    // daemon's operator accepted serving one.
+                    let accepted = request["accept_daemon_context"] == true;
+                    let shared = peer_confinement_matches(&stream);
+                    if accepted && (shared || daemon_accepts_foreign_context()) {
                         self.start_run(stream, &request, descriptors);
                         return Flow::Continue;
                     }

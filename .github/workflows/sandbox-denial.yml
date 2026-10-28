@@ -1,9 +1,12 @@
 name: Sandbox denial
 # Issue #457: the untrusted-mode OS-sandbox guarantee must be proven on real
-# runners, never self-skipped. Every job below fails when a denial test
-# skips: EXECUTE_REQUIRE_OS_SANDBOX turns the facility-absent skips in
-# platform::sandbox tests and lane_v8_sandbox_denial into panics, and each
-# Unix step additionally greps its own log for "skipping " as a backstop.
+# runners, never self-skipped. Each Unix job sets EXECUTE_REQUIRE_OS_SANDBOX,
+# which turns the facility-absent skips in platform::sandbox tests and
+# lane_v8_sandbox_denial into panics. Every cargo log additionally passes
+# through tools/sandbox_test_guard.py, which fails the step when the log
+# contains a "skipping " marker, ran zero tests, or lacks a
+# `test result: ok. N passed` summary with N > 0. Each CLI binary is run and
+# guarded separately so one empty binary cannot hide behind another's passes.
 #
 # Runner limitations (see issue #457):
 # - Linux needs unprivileged user namespaces for bubblewrap. A runner without
@@ -47,26 +50,23 @@ jobs:
           sudo apt-get install --yes bubblewrap
           command -v bwrap
           bwrap --version
+          test -f /usr/bin/python3 || test -f /bin/python3
           python3 --version
       - name: Real bubblewrap denial tests (no skips)
         run: |
           set -euo pipefail
           cargo test --locked --release --features full,test-fixtures --lib platform::sandbox:: \
             -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-lib.log"
-          if grep -E "skipping " "$RUNNER_TEMP/sandbox-lib.log"; then
-            echo "::error::sandbox denial tests skipped in the mandatory lane"
-            exit 1
-          fi
+          python3 tools/sandbox_test_guard.py "$RUNNER_TEMP/sandbox-lib.log" "sandbox lib (Linux)"
       - name: Untrusted-mode denial through the CLI (no skips)
         run: |
           set -euo pipefail
-          cargo test --locked --release --features full,test-fixtures \
-            --test lane_v8_sandbox_denial --test lane_v8_untrusted --test lane_v8_hosts \
-            -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-cli.log"
-          if grep -E "skipping " "$RUNNER_TEMP/sandbox-cli.log"; then
-            echo "::error::sandbox denial tests skipped in the mandatory lane"
-            exit 1
-          fi
+          for target in lane_v8_sandbox_denial lane_v8_untrusted lane_v8_hosts; do
+            cargo test --locked --release --features full,test-fixtures \
+              --test "$target" \
+              -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-$target.log"
+            python3 tools/sandbox_test_guard.py "$RUNNER_TEMP/sandbox-$target.log" "$target (Linux)"
+          done
   macos-denial:
     name: macOS sandbox denial (sandbox-exec, no silent skips)
     runs-on: macos-15
@@ -84,27 +84,23 @@ jobs:
       - name: Require the system sandbox facility and fixtures
         run: |
           test -x /usr/bin/sandbox-exec
-          /usr/bin/nc -h 2>&1 | head -1 || true
+          test -f /usr/bin/nc
           python3 --version
       - name: Real sandbox-exec denial tests (no skips)
         run: |
           set -euo pipefail
           cargo test --locked --release --features full,test-fixtures --lib platform::sandbox:: \
             -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-lib.log"
-          if grep -E "skipping " "$RUNNER_TEMP/sandbox-lib.log"; then
-            echo "::error::sandbox denial tests skipped in the mandatory lane"
-            exit 1
-          fi
+          python3 tools/sandbox_test_guard.py "$RUNNER_TEMP/sandbox-lib.log" "sandbox lib (macOS)"
       - name: Untrusted-mode denial through the CLI (no skips)
         run: |
           set -euo pipefail
-          cargo test --locked --release --features full,test-fixtures \
-            --test lane_v8_sandbox_denial --test lane_v8_untrusted --test lane_v8_hosts \
-            -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-cli.log"
-          if grep -E "skipping " "$RUNNER_TEMP/sandbox-cli.log"; then
-            echo "::error::sandbox denial tests skipped in the mandatory lane"
-            exit 1
-          fi
+          for target in lane_v8_sandbox_denial lane_v8_untrusted lane_v8_hosts; do
+            cargo test --locked --release --features full,test-fixtures \
+              --test "$target" \
+              -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-$target.log"
+            python3 tools/sandbox_test_guard.py "$RUNNER_TEMP/sandbox-$target.log" "$target (macOS)"
+          done
   windows-refusal:
     name: Windows untrusted native refusal
     runs-on: windows-2022
@@ -118,5 +114,12 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Untrusted native launches are refused without OS confinement
+        shell: bash
         run: |
-          cargo test --locked --release --features full,test-fixtures --test lane_v8_sandbox_denial --test lane_v8_untrusted --test lane_v8_hosts -- --test-threads=1
+          set -euo pipefail
+          for target in lane_v8_sandbox_denial lane_v8_untrusted lane_v8_hosts; do
+            cargo test --locked --release --features full,test-fixtures \
+              --test "$target" \
+              -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/refusal-$target.log"
+            python3 tools/sandbox_test_guard.py "$RUNNER_TEMP/refusal-$target.log" "$target (Windows)"
+          done

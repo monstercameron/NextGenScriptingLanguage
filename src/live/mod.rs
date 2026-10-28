@@ -1553,10 +1553,17 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     // Uncaptured stdout has already streamed. Write what plain run writes last: the
     // pipeline output of a completed run, then its diagnostic, then the status.
     if let Some(output) = end.output {
+        // The live host is the program's stdout here, so the same TTY rule as
+        // plain run applies: pipes keep exact bytes, TTY sinks get escaped text.
+        let terminal = crate::terminal_text::stdout_is_terminal();
         let mut stdout = std::io::stdout().lock();
         match output {
-            Data::Text { text } => stdout.write_all(text.as_bytes())?,
-            Data::Bytes { bytes } => stdout.write_all(&bytes)?,
+            Data::Text { text } => stdout.write_all(
+                &crate::terminal_text::encode_pipeline_for_stdout(text.as_bytes(), terminal),
+            )?,
+            Data::Bytes { bytes } => stdout.write_all(
+                &crate::terminal_text::encode_pipeline_for_stdout(&bytes, terminal),
+            )?,
         }
         stdout.flush()?;
     }

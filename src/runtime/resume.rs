@@ -1192,7 +1192,44 @@ pub fn run_checkpointed(
     let sensitivity_floor =
         workflow_sensitivity_floor(program, registry, &module_session, &cwd, None)?;
     signals.set_sensitivity_floor(sensitivity_floor.clone());
-    authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+    // Fail before any effect when the static floor already denies persistence:
+    // running loop bodies or task elements first would execute external side
+    // effects solely to reproduce a refusal that was knowable up front. The
+    // per-element commit gates stay in place for refusals that only become
+    // known after execution (runtime-revealed secret content), and those keep
+    // their uncertain marker (`--retry-uncertain`).
+    //
+    // Loop-item references over-approximate the floor as Unknown: a `parallel
+    // for each`/`for each` template referencing its loop binding contributes
+    // Unknown even when the list holds Public literals, so an Unknown-only
+    // floor for a loop program is a possible false positive. When declared
+    // manifest secrets exist, defer that Unknown-only denial to the
+    // per-element gates, which compare the actual element bytes/inputs against
+    // the pre-registered secrets (fail-closed, uncertain marker, journal stays
+    // clean). Secret floors still fail here before any effect; non-loop
+    // programs keep the upfront denial so no effect precedes the refusal.
+    {
+        use crate::contracts::Sensitivity;
+        let has_secret = sensitivity_floor.contains(&Sensitivity::Secret);
+        let has_unknown = sensitivity_floor.contains(&Sensitivity::Unknown);
+        let has_loop = program.steps.iter().any(|step| {
+            matches!(
+                &step.kind,
+                crate::ast::StepKind::TaskGroup { each: Some(_), .. }
+                    | crate::ast::StepKind::Loop {
+                        kind: crate::ast::LoopKind::ForEach { .. },
+                        ..
+                    }
+            )
+        });
+        let has_declared_secrets =
+            !crate::security::declared_secret_applets(registry).is_empty();
+        let defer_unknown_to_elements =
+            !has_secret && has_unknown && has_loop && has_declared_secrets;
+        if !defer_unknown_to_elements {
+            authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+        }
+    }
     let mut checkpoint = checkpoint.clone();
     checkpoint.directory = cwd.join(&checkpoint.directory);
     crate::capabilities::authorize_host_path(

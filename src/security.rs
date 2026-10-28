@@ -442,7 +442,22 @@ impl SecretRedactor {
         Ok(())
     }
 
-    /// Replace exact registered byte sequences in an emitted byte string.
+    /// Replace registered byte sequences in an emitted byte string. Besides the
+    /// exact values, the standard base64 encoding and the lowercase/uppercase
+    /// hex encoding of each secret are matched too, so a transformed echo is
+    /// still recognized as the same secret by redaction and by the checkpoint
+    /// withholding checks that build on this comparison. Derived forms are
+    /// computed at match time and never count against the registration budget.
+    ///
+    /// Explicit scope: base64url, unpadded or chunked base64, URL/percent and
+    /// JSON-unicode escapes, case-shifted or truncated echoes, and compressed
+    /// or otherwise re-encoded values are NOT matched here. Reports therefore
+    /// redact those only as best effort. Checkpoint persistence does not rely
+    /// on this byte comparison alone: the per-element commit gates additionally
+    /// refuse when the element's own inputs carry a registered secret (a
+    /// literal duplicate), which is transform-agnostic, and provenance
+    /// (`sensitive_binding` folds, `sensitive_bindings` name intersection)
+    /// withholds secret-derived outputs even with no byte match at all.
     pub fn redact_bytes(&self, input: &[u8]) -> Vec<u8> {
         const REDACTED: &[u8] = b"[REDACTED]";
         let state = self
@@ -452,16 +467,33 @@ impl SecretRedactor {
         if state.values.is_empty() || input.is_empty() {
             return input.to_vec();
         }
+        // Derived encodings across all secrets, longest first so a longer
+        // encoding wins over its own prefix at the same cursor. Computed once
+        // per call so a large registry is still one pass.
+        let mut derived: Vec<Vec<u8>> = state
+            .values
+            .iter()
+            .flat_map(|secret| derived_secret_forms(&secret.0))
+            .collect();
+        derived.sort_by_key(|form| std::cmp::Reverse(form.len()));
         let mut output = Vec::with_capacity(input.len());
         let mut cursor = 0;
         while cursor < input.len() {
-            let matched = state
+            let rest = &input[cursor..];
+            let matched_len = state
                 .values
                 .iter()
-                .find(|secret| input[cursor..].starts_with(&secret.0));
-            if let Some(secret) = matched {
+                .find(|secret| rest.starts_with(&secret.0))
+                .map(|secret| secret.0.len())
+                .or_else(|| {
+                    derived
+                        .iter()
+                        .find(|form| rest.starts_with(form.as_slice()))
+                        .map(Vec::len)
+                });
+            if let Some(len) = matched_len {
                 output.extend_from_slice(REDACTED);
-                cursor += secret.0.len();
+                cursor += len;
             } else {
                 output.push(input[cursor]);
                 cursor += 1;
@@ -474,6 +506,34 @@ impl SecretRedactor {
     pub fn redact_text(&self, input: &str) -> String {
         String::from_utf8_lossy(&self.redact_bytes(input.as_bytes())).into_owned()
     }
+}
+
+/// Encoded echoes of one secret that still identify it: standard base64 and
+/// lowercase/uppercase hex. Forms identical to the raw value are omitted so
+/// short alphanumeric secrets do not match themselves twice.
+fn derived_secret_forms(secret: &[u8]) -> Vec<Vec<u8>> {
+    use base64::Engine as _;
+    let mut forms = Vec::with_capacity(3);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(secret);
+    if encoded.as_bytes() != secret {
+        forms.push(encoded.into_bytes());
+    }
+    let lower = secret
+        .iter()
+        .flat_map(|byte| format!("{byte:02x}").into_bytes())
+        .collect::<Vec<_>>();
+    if lower != secret {
+        forms.push(lower);
+    }
+    let upper = secret
+        .iter()
+        .flat_map(|byte| format!("{byte:02X}").into_bytes())
+        .collect::<Vec<_>>();
+    if upper != secret && forms.iter().all(|form| *form != upper) {
+        forms.push(upper);
+    }
+    forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+    forms
 }
 
 /// Obtain the registry-scoped shared redactor. Registry clones share this
@@ -763,6 +823,19 @@ pub fn applet_has_declared_secret_environment(registry: &Registry, applet_name: 
             .secret_environment
             .get(applet_name)
             .is_some_and(|names| !names.is_empty())
+}
+
+/// Applets the operator declared secret-bearing environment for. Task groups
+/// pre-register every one of these manifest secrets before any element runs,
+/// even when the secret-owning applet never runs in the group: a literal or
+/// transformed echo would otherwise leak a known secret with no byte match
+/// against anything registered yet. Bounded by the policy's declared set.
+pub fn declared_secret_applets(registry: &Registry) -> Vec<String> {
+    let policy = registry.host_state::<DataFlowPolicy>();
+    if !policy.active {
+        return Vec::new();
+    }
+    policy.secret_environment.keys().cloned().collect()
 }
 
 #[cfg(unix)]

@@ -5907,6 +5907,7 @@ mod drain_tests {
         struct Recorder {
             begins: Vec<usize>,
             commits: Vec<usize>,
+            uncertain: Vec<usize>,
         }
         impl GroupSink for Recorder {
             fn begin(&mut self, index: usize) -> Result<()> {
@@ -5915,6 +5916,10 @@ mod drain_tests {
             }
             fn commit(&mut self, index: usize, _outcome: &ElementOutcome) -> Result<()> {
                 self.commits.push(index);
+                Ok(())
+            }
+            fn mark_uncertain(&mut self, index: usize) -> Result<()> {
+                self.uncertain.push(index);
                 Ok(())
             }
         }
@@ -5996,6 +6001,8 @@ mod drain_tests {
         let mut commits = recorder.commits.clone();
         commits.sort_unstable();
         assert_eq!(commits, vec![1, 2]);
+        // Nothing secret ran, so no post-effect refusal marked an element uncertain.
+        assert!(recorder.uncertain.is_empty());
         let value = crate::structured::to_json(&result.value).unwrap();
         let items = value["items"].as_array().unwrap();
         assert_eq!(items[0]["output_encoding"], "utf8");

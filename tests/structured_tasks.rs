@@ -1132,10 +1132,8 @@ fn join_fail_fast_still_redacts_secret_when_secret_task_never_launches() -> Resu
             "output": {"type": "text", "encoding": "raw"}
         }
     });
-    let registry = flow::manifest::Registry::from_sources(&[
-        source.to_string(),
-        failing.to_string(),
-    ])?;
+    let registry =
+        flow::manifest::Registry::from_sources(&[source.to_string(), failing.to_string()])?;
     registry.set_host_state(flow::security::DataFlowPolicy::from_json(
         br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
     )?);
@@ -1156,8 +1154,8 @@ fn join_fail_fast_still_redacts_secret_when_secret_task_never_launches() -> Resu
         .expect("join failure keeps typed partial results");
     assert_eq!(failure.failed_task, "failing");
     assert!(
-        !failure.uncertain,
-        "no sibling ran, so no uncertainty may be reported"
+        failure.uncertain,
+        "a nonzero command exit without a declared known_response outcome stays uncertain even when the sibling never launches"
     );
     let bytes = serde_json::to_vec(&failure.partial_results)?;
     assert!(
@@ -1201,10 +1199,7 @@ fn race_limit_one_redacts_secret_winner_output() -> Result<()> {
             "output": {"type": "text", "encoding": "raw"}
         }
     });
-    let registry = flow::manifest::Registry::from_sources(&[
-        source.to_string(),
-        slow.to_string(),
-    ])?;
+    let registry = flow::manifest::Registry::from_sources(&[source.to_string(), slow.to_string()])?;
     registry.set_host_state(flow::security::DataFlowPolicy::from_json(
         br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
     )?);
@@ -1254,10 +1249,8 @@ fn join_typed_json_value_redacts_secret_before_secret_task_launches() -> Result<
         }
     });
     let json_parse = include_str!("../manifests/core.json_parse.json");
-    let registry = flow::manifest::Registry::from_sources(&[
-        source.to_string(),
-        json_parse.to_string(),
-    ])?;
+    let registry =
+        flow::manifest::Registry::from_sources(&[source.to_string(), json_parse.to_string()])?;
     registry.set_host_state(flow::security::DataFlowPolicy::from_json(
         br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
     )?);
@@ -1285,14 +1278,22 @@ fn join_typed_json_value_redacts_secret_before_secret_task_launches() -> Result<
 #[cfg(unix)]
 #[test]
 fn parallel_for_each_with_secret_refuses_checkpoint_and_keeps_journal_clean() -> Result<()> {
+    // Knowable floor, certain refusal: the static floor already denies
+    // persistence, so no element may run. The secret applet would leave a
+    // marker file if it ever launched; its absence proves fail-before-effect.
     let temp = tempfile::tempdir()?;
     let secret = b"journal-secret-411";
+    let marker = temp.path().join("element-ran.marker");
+    let marker_script = format!(
+        "touch '{}'; printf '%s' \"$FLOW_SENTINEL\"",
+        marker.to_string_lossy()
+    );
     let source = serde_json::json!({
         "name": "secret.echo",
         "binary": "/bin/sh",
         "arguments": [
             {"literal": "-c"},
-            {"literal": "printf '%s' \"$FLOW_SENTINEL\""}
+            {"literal": marker_script}
         ],
         "contract": {
             "version": 1,
@@ -1330,32 +1331,907 @@ fn parallel_for_each_with_secret_refuses_checkpoint_and_keeps_journal_clean() ->
             ))
         }
     };
+    let message = format!("{error:#}");
     assert!(
-        !format!("{error:#}")
+        !message.contains("--retry-uncertain"),
+        "knowable-floor refusal happens before any effect, so it must stay certain: {message}"
+    );
+    // Certain persistence denial: the generic floor reports "denied by policy"
+    // while a Secret floor reports the more precise secret-persistence denial.
+    // Both happen before any effect (no marker, no retry flag).
+    assert!(
+        message.contains("denied by policy")
+            || message.contains("cannot be persisted without encryption"),
+        "unexpected upfront refusal message: {message}"
+    );
+    assert!(
+        !message
             .as_bytes()
             .windows(secret.len())
             .any(|w| w == secret),
         "checkpoint refusal must not echo the raw secret"
     );
+    assert!(
+        !marker.exists(),
+        "knowable secret floor must fail before any element runs"
+    );
     let dir = temp.path().join("ck");
     if dir.exists() {
-        let mut stack = vec![dir];
-        while let Some(path) = stack.pop() {
-            for entry in std::fs::read_dir(&path)? {
-                let entry = entry?;
-                let file_type = entry.file_type()?;
-                let path = entry.path();
-                if file_type.is_dir() {
-                    stack.push(path);
-                } else if file_type.is_file() {
-                    let bytes = std::fs::read(&path)?;
-                    assert!(
-                        !bytes.windows(secret.len()).any(|w| w == secret),
-                        "checkpoint journal must not persist the raw secret"
-                    );
-                }
+        assert_journal_has_no_secret(&dir, secret)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn hex_string(bytes: &[u8], uppercase: bool) -> String {
+    bytes
+        .iter()
+        .map(|byte| {
+            if uppercase {
+                format!("{byte:02X}")
+            } else {
+                format!("{byte:02x}")
+            }
+        })
+        .collect()
+}
+
+/// Standard RFC 4648 base64 of one value, matching the redactor's derived
+/// encoding. Implemented inline so the test does not gain a new dependency.
+#[cfg(unix)]
+fn base64_standard(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 63) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Element lines hex-encode their bytes and the redactor also matches base64,
+/// so a raw-byte scan alone cannot prove the journal is clean. Refusals must
+/// keep the raw, base64, and hex (lower- and uppercase) forms out.
+#[cfg(unix)]
+fn assert_journal_has_no_secret(directory: &std::path::Path, secret: &[u8]) -> Result<()> {
+    let encoded = base64_standard(secret);
+    let hex_lower = hex_string(secret, false);
+    let hex_upper = hex_string(secret, true);
+    let mut stack = vec![directory.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        for entry in std::fs::read_dir(&path)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                let bytes = std::fs::read(&path)?;
+                assert!(
+                    !bytes.windows(secret.len()).any(|w| w == secret),
+                    "checkpoint journal must not persist the raw secret"
+                );
+                let text = String::from_utf8_lossy(&bytes);
+                assert!(
+                    !text.contains(&encoded),
+                    "checkpoint journal must not persist the base64-encoded secret"
+                );
+                assert!(
+                    !text.contains(&hex_lower),
+                    "checkpoint journal must not persist the hex-encoded secret"
+                );
+                assert!(
+                    !text.contains(&hex_upper),
+                    "checkpoint journal must not persist the uppercase hex-encoded secret"
+                );
             }
         }
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn sequential_for_each_with_secret_refuses_checkpoint_and_keeps_journal_clean() -> Result<()> {
+    // Knowable floor, certain refusal: the static floor already denies
+    // persistence, so the loop body must never run. The secret applet would
+    // leave a marker file if it ever launched; its absence proves
+    // fail-before-effect.
+    let temp = tempfile::tempdir()?;
+    let secret = b"sequential-secret-411";
+    let marker = temp.path().join("element-ran.marker");
+    let marker_script = format!(
+        "touch '{}'; printf '%s' \"$FLOW_SENTINEL\"",
+        marker.to_string_lossy()
+    );
+    let source = serde_json::json!({
+        "name": "secret.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": marker_script}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": std::str::from_utf8(secret)?}}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[source.to_string()])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    let program_text = "for each item in [\"one\"]\n  run secret.echo\n";
+    let program = flow::parser::parse(program_text)?;
+    let program_path = temp.path().join("group.program");
+    std::fs::write(&program_path, program_text)?;
+    let checkpoint = flow::runtime::CheckpointOptions {
+        directory: temp.path().join("ck"),
+        program_path,
+        resume: false,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &checkpoint) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "secret sequential for each must refuse checkpointing"
+            ))
+        }
+    };
+    let message = format!("{error:#}");
+    assert!(
+        !message.contains("--retry-uncertain"),
+        "knowable-floor refusal happens before any effect, so it must stay certain: {message}"
+    );
+    // Certain persistence denial: the generic floor reports "denied by policy"
+    // while a Secret floor reports the more precise secret-persistence denial.
+    // Both happen before any effect (no marker, no retry flag).
+    assert!(
+        message.contains("denied by policy")
+            || message.contains("cannot be persisted without encryption"),
+        "unexpected upfront refusal message: {message}"
+    );
+    assert!(
+        !message
+            .as_bytes()
+            .windows(secret.len())
+            .any(|w| w == secret),
+        "checkpoint refusal must not echo the raw secret"
+    );
+    assert!(
+        !marker.exists(),
+        "knowable secret floor must fail before any element runs"
+    );
+    let dir = temp.path().join("ck");
+    if dir.exists() {
+        assert_journal_has_no_secret(&dir, secret)?;
+    }
+    Ok(())
+}
+
+/// A Public-floor applet: explicit public ports, no stdin, no secret
+/// environment. A leading `run public.noop` keeps the workflow floor Public so
+/// the upfront gate passes and the element genuinely reaches the post-effect
+/// input-side gate.
+#[cfg(unix)]
+fn public_noop_manifest() -> serde_json::Value {
+    serde_json::json!({
+        "name": "public.noop",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf ok"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "capabilities": [],
+            "effects": [],
+            "ports": {
+                "inputs": {},
+                "outputs": {
+                    "value": {
+                        "delivery": "single",
+                        "schema": {"type": "text"},
+                        "sensitivity": "public"
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// A Public-floor element applet with a real side effect: it touches the
+/// marker file it is given, then echoes its input (optionally base64-encoded).
+/// `uncertain_on_failure` plus the declared `test.side_effect` effect make the
+/// post-effect "uncertain side effect" refusal non-vacuous: the marker proves
+/// the element ran before the refusal.
+#[cfg(unix)]
+fn public_echoer_manifest(base64_output: bool) -> serde_json::Value {
+    let script = if base64_output {
+        "touch \"$2\"; printf '%s' \"$1\" | base64"
+    } else {
+        "touch \"$2\"; printf '%s' \"$1\""
+    };
+    serde_json::json!({
+        "name": "public.echoer",
+        "binary": "/bin/sh",
+        "uncertain_on_failure": true,
+        "parameters": {
+            "text": {"type": "string", "required": true},
+            "marker": {"type": "string", "required": true}
+        },
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": script},
+            {"literal": "sh"},
+            {"parameter": "text"},
+            {"parameter": "marker"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "capabilities": ["test.side_effect"],
+            "effects": ["test.side_effect"],
+            "ports": {
+                "inputs": {
+                    "text": {
+                        "schema": {"type": "text"},
+                        "delivery": "single",
+                        "sensitivity": "public"
+                    },
+                    "marker": {
+                        "schema": {"type": "text"},
+                        "delivery": "single",
+                        "sensitivity": "public"
+                    }
+                },
+                "outputs": {
+                    "value": {
+                        "delivery": "single",
+                        "schema": {"type": "text"},
+                        "sensitivity": "public"
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn serialized_for_each_literal_item_matching_declared_secret_refuses_checkpoint_after_effect(
+) -> Result<()> {
+    // Public floor, post-effect refusal: the secret-owning applet never runs,
+    // so the static floor stays Public and the upfront gate passes. The
+    // literal list item duplicates the declared secret (registered up front
+    // without launching anything), so the input-side gate refuses only after
+    // the element ran. `at most 1` serializes admission, so this asserts
+    // deterministic serialized behavior, not a concurrent race.
+    let temp = tempfile::tempdir()?;
+    let secret = "literal-item-secret-411";
+    let marker = temp.path().join("element-ran.marker");
+    let declared = serde_json::json!({
+        "name": "secret.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf '%s' \"$FLOW_SENTINEL\""}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": secret}}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[
+        declared.to_string(),
+        public_noop_manifest().to_string(),
+        public_echoer_manifest(false).to_string(),
+    ])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    // The list entry is an inline literal, so no static flag marks this element
+    // sensitive, yet it duplicates a registered declared secret.
+    let program_text = format!(
+        "run public.noop\nparallel for each item in [\"{secret}\"] at most 1 as results\n  run public.echoer with text item and marker \"{}\"\n",
+        marker.to_string_lossy()
+    );
+    let program = flow::parser::parse(&program_text)?;
+    let program_path = temp.path().join("group.program");
+    std::fs::write(&program_path, &program_text)?;
+    let checkpoint = flow::runtime::CheckpointOptions {
+        directory: temp.path().join("ck"),
+        program_path,
+        resume: false,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &checkpoint) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "secret-bearing literal item must refuse checkpointing"
+            ))
+        }
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("checkpoint refused for parallel for each with secret task output"),
+        "unexpected refusal message: {message}"
+    );
+    assert!(
+        message.contains("--retry-uncertain"),
+        "post-effect refusal must name the resume flag: {message}"
+    );
+    assert!(
+        !message
+            .as_bytes()
+            .windows(secret.len())
+            .any(|w| w == secret.as_bytes()),
+        "checkpoint refusal must not echo the raw secret"
+    );
+    assert!(
+        marker.exists(),
+        "post-effect refusal requires the element to have run first"
+    );
+    let dir = temp.path().join("ck");
+    if dir.exists() {
+        assert_journal_has_no_secret(&dir, secret.as_bytes())?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn join_partial_results_redact_completed_secret_when_sibling_fails() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let secret = b"partial-secret-411";
+    let source = serde_json::json!({
+        "name": "secret.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf '%s' \"$FLOW_SENTINEL\""}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": std::str::from_utf8(secret)?}}
+        }
+    });
+    let failing = serde_json::json!({
+        "name": "fail.late",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf boom; exit 9"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"}
+        }
+    });
+    let registry =
+        flow::manifest::Registry::from_sources(&[source.to_string(), failing.to_string()])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    // Limit 1 serializes the group: the secret task completes (registering its
+    // mask) before the sibling fails, so the partial record must redact it.
+    let program = flow::parser::parse(
+        "parallel at most 1 as results\n  run secret.echo as leaker\n  run fail.late as failing\n",
+    )?;
+    let error = match flow::runtime::run(&program, &registry, &options) {
+        Err(error) => error,
+        Ok(_) => return Err(anyhow!("failing task should fail the join")),
+    };
+    let failure = error
+        .downcast_ref::<flow::runtime::tasks::TaskGroupFailure>()
+        .expect("join failure keeps typed partial results");
+    assert_eq!(failure.failed_task, "failing");
+    let bytes = serde_json::to_vec(&failure.partial_results)?;
+    assert!(
+        !bytes.windows(secret.len()).any(|window| window == secret),
+        "fail-fast partial results must not carry the raw secret"
+    );
+    let _partial: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let flow::ast::Value::List(records) = &failure.partial_results else {
+        panic!("partial results should remain a list")
+    };
+    let flow::ast::Value::Record(leaker) = &records[0] else {
+        panic!("first partial result should be a record")
+    };
+    assert_eq!(
+        leaker.get("output"),
+        Some(&flow::ast::Value::List(vec![
+            flow::ast::Value::Integer(91),
+            flow::ast::Value::Integer(82),
+            flow::ast::Value::Integer(69),
+            flow::ast::Value::Integer(68),
+            flow::ast::Value::Integer(65),
+            flow::ast::Value::Integer(67),
+            flow::ast::Value::Integer(84),
+            flow::ast::Value::Integer(69),
+            flow::ast::Value::Integer(68),
+            flow::ast::Value::Integer(93),
+        ]))
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn race_records_redact_non_success_secret_when_benign_task_wins() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let secret = b"race-fail-secret-411";
+    let source = serde_json::json!({
+        "name": "secret.fail",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf '%s' \"$FLOW_SENTINEL\"; exit 3"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": std::str::from_utf8(secret)?}}
+        }
+    });
+    let slow = serde_json::json!({
+        "name": "slow.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf other"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[source.to_string(), slow.to_string()])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.fail":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    // Limit 1 serializes the race: the secret task records a non-success first,
+    // then the benign task wins. The loser's output must still redact.
+    let program = flow::parser::parse(
+        "race at most 1 as result\n  run secret.fail as f\n  run slow.echo as s\nthen encode result as json\n",
+    )?;
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    assert!(
+        !result
+            .output
+            .windows(secret.len())
+            .any(|window| window == secret),
+        "race JSON must not carry the raw secret"
+    );
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["winner"], "s");
+    assert_eq!(
+        value["tasks"][0]["output"],
+        serde_json::json!([91, 82, 69, 68, 65, 67, 84, 69, 68, 93])
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn serialized_for_each_base64_secret_echo_refuses_checkpoint_after_effect() -> Result<()> {
+    // Public floor, post-effect refusal: the leading noop keeps the static
+    // floor Public so the upfront gate passes, and the secret-owning applet
+    // never runs. The element outputs only the base64 form of the literal
+    // duplicate, which the output byte check recognizes; the input-side gate
+    // would withhold it regardless of the transform. `at most 1` serializes
+    // admission, so this asserts deterministic serialized behavior, not a
+    // concurrent race. The element touches a marker file first, so the marker
+    // proves the refusal happened after a real side effect.
+    let temp = tempfile::tempdir()?;
+    let secret = "base64-echo-secret-411";
+    let marker = temp.path().join("element-ran.marker");
+    // The declarer never runs: its manifest value still registers the secret
+    // through the task-group pre-registration of every policy-declared applet.
+    let declared = serde_json::json!({
+        "name": "secret.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf '%s' \"$FLOW_SENTINEL\""}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": secret}}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[
+        declared.to_string(),
+        public_noop_manifest().to_string(),
+        public_echoer_manifest(true).to_string(),
+    ])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    // The item duplicates the declared secret while the element outputs only
+    // its base64 form: an encoding heuristic, not full provenance, and only
+    // the exact, base64 and hex forms are recognized by the byte check.
+    let program_text = format!(
+        "run public.noop\nparallel for each item in [\"{secret}\"] at most 1 as results\n  run public.echoer with text item and marker \"{}\"\n",
+        marker.to_string_lossy()
+    );
+    let program = flow::parser::parse(&program_text)?;
+    let program_path = temp.path().join("group.program");
+    std::fs::write(&program_path, &program_text)?;
+    let checkpoint = flow::runtime::CheckpointOptions {
+        directory: temp.path().join("ck"),
+        program_path,
+        resume: false,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &checkpoint) {
+        Err(error) => error,
+        Ok(_) => return Err(anyhow!("base64 secret echo must refuse checkpointing")),
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("checkpoint refused for parallel for each with secret task output"),
+        "unexpected refusal message: {message}"
+    );
+    assert!(
+        message.contains("--retry-uncertain"),
+        "post-effect refusal must name the resume flag: {message}"
+    );
+    assert!(
+        !message
+            .as_bytes()
+            .windows(secret.len())
+            .any(|w| w == secret.as_bytes()),
+        "checkpoint refusal must not echo the raw secret"
+    );
+    assert!(
+        marker.exists(),
+        "post-effect refusal requires the element to have run first"
+    );
+    let dir = temp.path().join("ck");
+    if dir.exists() {
+        assert_journal_has_no_secret(&dir, secret.as_bytes())?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn serialized_secret_refusal_records_uncertain_marker_for_resume() -> Result<()> {
+    // Public floor, post-effect refusal: the leading noop keeps the static
+    // floor Public so the upfront gate passes, and the secret-owning applet
+    // never runs. The literal item duplicates the declared secret (registered
+    // up front without launching anything), so the input-side gate refuses
+    // only after the element ran. `at most 1` serializes admission, so this
+    // asserts deterministic serialized behavior, not a concurrent race. The
+    // marker file proves the element ran before the refusal, and the resume
+    // cycle proves the uncertain marker was recorded.
+    let temp = tempfile::tempdir()?;
+    let secret = "resume-uncertain-secret-411";
+    let marker = temp.path().join("element-ran.marker");
+    let declared = serde_json::json!({
+        "name": "secret.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf '%s' \"$FLOW_SENTINEL\""}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": secret}}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[
+        declared.to_string(),
+        public_noop_manifest().to_string(),
+        public_echoer_manifest(false).to_string(),
+    ])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    // The literal item duplicates the declared secret without tripping the
+    // static upfront gate, so the refusal happens after the element ran.
+    let program_text = format!(
+        "run public.noop\nparallel for each item in [\"{secret}\"] at most 1 as results\n  run public.echoer with text item and marker \"{}\"\n",
+        marker.to_string_lossy()
+    );
+    let program = flow::parser::parse(&program_text)?;
+    let program_path = temp.path().join("group.program");
+    std::fs::write(&program_path, &program_text)?;
+    let checkpoint_dir = temp.path().join("ck");
+    let checkpoint = flow::runtime::CheckpointOptions {
+        directory: checkpoint_dir.clone(),
+        program_path: program_path.clone(),
+        resume: false,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &checkpoint) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "secret parallel for each must refuse checkpointing"
+            ))
+        }
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("checkpoint refused for parallel for each with secret task output"),
+        "unexpected refusal message: {message}"
+    );
+    assert!(
+        message.contains("--retry-uncertain"),
+        "post-effect refusal must name the resume flag: {message}"
+    );
+    assert!(
+        !message
+            .as_bytes()
+            .windows(secret.len())
+            .any(|w| w == secret.as_bytes()),
+        "checkpoint refusal must not echo the raw secret"
+    );
+    assert!(
+        marker.exists(),
+        "post-effect refusal requires the element to have run first"
+    );
+    // Resume without the flag is rejected by the uncertain element marker the
+    // refusal recorded.
+    let resume = flow::runtime::CheckpointOptions {
+        directory: checkpoint_dir.clone(),
+        program_path: program_path.clone(),
+        resume: true,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &resume) {
+        Err(error) => error,
+        Ok(_) => return Err(anyhow!("resume without --retry-uncertain must be rejected")),
+    };
+    assert!(
+        format!("{error:#}").contains("--retry-uncertain"),
+        "unexpected resume error: {error:#}"
+    );
+    // Resume with the flag re-runs the withheld element and refuses again
+    // instead of committing secret output.
+    let retry = flow::runtime::CheckpointOptions {
+        directory: checkpoint_dir.clone(),
+        program_path,
+        resume: true,
+        retry_uncertain: true,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &retry) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "retried secret element must refuse checkpointing again"
+            ))
+        }
+    };
+    assert!(
+        format!("{error:#}")
+            .contains("checkpoint refused for parallel for each with secret task output"),
+        "unexpected retry error: {error:#}"
+    );
+    assert_journal_has_no_secret(&checkpoint_dir, secret.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn sequential_secret_refusal_records_uncertain_marker_for_resume() -> Result<()> {
+    // Public floor, post-effect refusal: the leading noop keeps the static
+    // floor Public so the upfront gate passes, and the secret-owning applet
+    // never runs. The sequential loop body is invisible to the static floor,
+    // so the literal duplicate of the declared secret (registered up front
+    // without launching anything) is refused at the loop-end gate only after
+    // the element ran. The marker file proves the element ran before the
+    // refusal, and the resume cycle proves the uncertain marker was recorded.
+    let temp = tempfile::tempdir()?;
+    let secret = "resume-sequential-secret-411";
+    let marker = temp.path().join("element-ran.marker");
+    let declared = serde_json::json!({
+        "name": "secret.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf '%s' \"$FLOW_SENTINEL\""}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": secret}}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[
+        declared.to_string(),
+        public_noop_manifest().to_string(),
+        public_echoer_manifest(false).to_string(),
+    ])?;
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    // The static floor misses loop bodies, so the refusal happens after the
+    // element ran, at the loop-end persistence gate.
+    let program_text = format!(
+        "run public.noop\nfor each item in [\"{secret}\"]\n  run public.echoer with text item and marker \"{}\"\n",
+        marker.to_string_lossy()
+    );
+    let program = flow::parser::parse(&program_text)?;
+    let program_path = temp.path().join("group.program");
+    std::fs::write(&program_path, program_text)?;
+    let checkpoint_dir = temp.path().join("ck");
+    let checkpoint = flow::runtime::CheckpointOptions {
+        directory: checkpoint_dir.clone(),
+        program_path: program_path.clone(),
+        resume: false,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &checkpoint) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "secret sequential for each must refuse checkpointing"
+            ))
+        }
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("sequential for each element with secret output cannot be checkpointed"),
+        "unexpected refusal message: {message}"
+    );
+    assert!(
+        message.contains("--retry-uncertain"),
+        "post-effect refusal must name the resume flag: {message}"
+    );
+    assert!(
+        !message
+            .as_bytes()
+            .windows(secret.len())
+            .any(|w| w == secret.as_bytes()),
+        "checkpoint refusal must not echo the raw secret"
+    );
+    assert!(
+        marker.exists(),
+        "post-effect refusal requires the element to have run first"
+    );
+    // Resume without the flag is rejected by the uncertain element marker the
+    // refusal recorded.
+    let resume = flow::runtime::CheckpointOptions {
+        directory: checkpoint_dir.clone(),
+        program_path: program_path.clone(),
+        resume: true,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &resume) {
+        Err(error) => error,
+        Ok(_) => return Err(anyhow!("resume without --retry-uncertain must be rejected")),
+    };
+    assert!(
+        format!("{error:#}").contains("--retry-uncertain"),
+        "unexpected resume error: {error:#}"
+    );
+    // Resume with the flag re-runs the withheld element and refuses again
+    // instead of committing secret output.
+    let retry = flow::runtime::CheckpointOptions {
+        directory: checkpoint_dir.clone(),
+        program_path,
+        resume: true,
+        retry_uncertain: true,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &retry) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "retried secret element must refuse checkpointing again"
+            ))
+        }
+    };
+    assert!(
+        format!("{error:#}")
+            .contains("sequential for each element with secret output cannot be checkpointed"),
+        "unexpected retry error: {error:#}"
+    );
+    assert_journal_has_no_secret(&checkpoint_dir, secret.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn task_group_env_load_validates_and_runs_on_worker_empty_stdin() -> Result<()> {
+    // `env.load` takes its file text through stdin and declares no path
+    // parameter, so task workers pass validation and run with their empty
+    // stdin: the file parses to an empty object without touching the
+    // filesystem.
+    let temp = tempfile::tempdir()?;
+    let loader = include_str!("../manifests/core.env_load.json");
+    let registry = flow::manifest::Registry::from_sources(&[loader.to_string()])?;
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    let program = flow::parser::parse(
+        "parallel at most 1 as results\n  run env.load with secret false as loaded\nthen encode results as json\n",
+    )?;
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["tasks"][0]["state"], "success");
+    assert_eq!(value["tasks"][0]["value"], serde_json::json!({}));
     Ok(())
 }

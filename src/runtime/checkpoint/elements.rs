@@ -449,6 +449,18 @@ impl GroupSink for GroupJournal<'_> {
         let fingerprint = element_fingerprint(&self.node_fingerprint, index, &self.items[index])?;
         self.journal.commit_outcome(index, fingerprint, outcome)
     }
+
+    fn mark_uncertain(&mut self, index: usize) -> Result<()> {
+        // Durable before the refusal propagates: a crash after this line still
+        // resumes behind `--retry-uncertain`. Re-recording the begin replaces
+        // any entry already recorded for this element with an uncertain one.
+        let fingerprint = element_fingerprint(&self.node_fingerprint, index, &self.items[index])?;
+        self.journal.append_element(&ElementLine::Begin {
+            index,
+            fingerprint,
+            uncertain: true,
+        })
+    }
 }
 
 /// Whether the top-level statement at `index` is an element node.
@@ -652,6 +664,26 @@ pub(in crate::runtime) fn for_each_element_due(
     tracks_in_flight(journal, program, header)
 }
 
+/// Record that the element ending at the loop end for `header` already ran
+/// before a post-effect checkpoint refusal, so resume requires
+/// `--retry-uncertain`. Re-recording the begin replaces any entry already
+/// recorded for this element with an uncertain one.
+pub(in crate::runtime) fn for_each_element_mark_uncertain(
+    journal: &mut Journal,
+    loops: &LoopStack,
+    header: usize,
+) -> Result<()> {
+    let Some((element, item)) = loops.current_element(header) else {
+        return Ok(());
+    };
+    let fingerprint = element_fingerprint(&journal.element_node_fingerprint()?, element, item)?;
+    journal.append_element(&ElementLine::Begin {
+        index: element,
+        fingerprint,
+        uncertain: true,
+    })
+}
+
 /// Commit the element that just ended at the loop end for `header`.
 pub(in crate::runtime) fn for_each_element_commit(
     journal: &mut Journal,
@@ -685,9 +717,35 @@ pub(in crate::runtime) fn group_journal<'a>(
     if !tracks_in_flight(journal, program, index) {
         return Ok(None);
     }
-    // The floor is fixed for the run, so refusing here is the same refusal the first
-    // element commit would get, and it happens before any element writes a line.
-    crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
+    // Fail before any element runs when the static floor already denies
+    // persistence: launching workers first would execute external side effects
+    // solely to reproduce a knowable refusal. Runtime-revealed secrets (a
+    // literal or transformed echo recognizable only after the element ran) are
+    // still refused per-element in `run_each` with an uncertain marker
+    // (`--retry-uncertain`); the journal stays clean either way because both
+    // paths refuse before any line is written.
+    //
+    // The template's reference to its loop binding contributes Unknown to the
+    // floor even for Public literal lists, so an Unknown-only floor here is a
+    // possible false positive. When declared manifest secrets exist, defer it
+    // to the per-element gates, which compare actual bytes/inputs against the
+    // pre-registered secrets (fail-closed, uncertain marker, no line written).
+    // Secret floors still fail here before any worker launches.
+    {
+        use crate::contracts::Sensitivity;
+        let has_secret = sensitivities.contains(&Sensitivity::Secret);
+        if has_secret {
+            crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
+        } else if sensitivities.contains(&Sensitivity::Unknown) {
+            let has_declared_secrets =
+                !crate::security::declared_secret_applets(registry).is_empty();
+            if !has_declared_secrets {
+                crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
+            }
+        } else {
+            crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
+        }
+    }
     let items = list_items(&each.values, bindings)?;
     let node_fingerprint = journal.element_node_fingerprint()?;
     let mut skip = BTreeMap::new();

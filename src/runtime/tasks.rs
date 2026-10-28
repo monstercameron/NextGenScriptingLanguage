@@ -163,6 +163,10 @@ pub(super) struct TaskGroupRequest<'a> {
 pub(in crate::runtime) trait GroupSink {
     fn begin(&mut self, index: usize) -> Result<()>;
     fn commit(&mut self, index: usize, outcome: &ElementOutcome) -> Result<()>;
+    /// Record that element `index` already ran before a post-effect checkpoint
+    /// refusal, so resume requires `--retry-uncertain`. Re-recording the begin
+    /// for the same element replaces its pending entry.
+    fn mark_uncertain(&mut self, index: usize) -> Result<()>;
 }
 
 /// Elements restored from a checkpoint, and the sink for new element records.
@@ -188,6 +192,27 @@ struct Completion {
     launched_processes: usize,
 }
 
+/// Register every policy-declared manifest secret, even for applets that never
+/// run in this scope: a literal or transformed echo can leak a declared secret
+/// with no byte match against anything registered yet. The remainder beyond
+/// `seen` is bounded by the policy's declared set. Registration alone launches
+/// nothing, so it is safe before any effect.
+pub(in crate::runtime) fn pre_register_declared_manifest_secrets(
+    registry: &Registry,
+    seen: &mut BTreeSet<String>,
+) -> Result<()> {
+    for applet in crate::security::declared_secret_applets(registry) {
+        if !seen.insert(applet.clone()) {
+            continue;
+        }
+        let snapshot = crate::capabilities::effective_environment(registry, &applet)
+            .with_context(|| format!("resolving task environment for {applet:?}"))?;
+        crate::security::capture_declared_environment_secrets(registry, &applet, &snapshot)
+            .map_err(|error| anyhow!("registering declared task secrets: {error}"))?;
+    }
+    Ok(())
+}
+
 /// Register declared-secret environment values before any task launches, so a
 /// fail-fast sibling cannot present output before the secret-owning task
 /// registers its mask. Manifest-set secrets are captured per applet via their
@@ -211,6 +236,7 @@ fn pre_register_task_group_secrets(
         crate::security::capture_declared_environment_secrets(registry, applet, &snapshot)
             .map_err(|error| anyhow!("registering declared task secrets: {error}"))?;
     }
+    pre_register_declared_manifest_secrets(registry, &mut seen)?;
     if let Some(overlay) = environment {
         let redactor = crate::security::secret_redactor(registry);
         for value in overlay.set.values() {
@@ -352,7 +378,11 @@ pub(super) fn run_group(
     .into_iter()
     .map(|(id, call)| {
         let manifest = registry.resolve_call(&call)?;
-        let sensitive = call.marks_sensitive_output()
+        // Provenance: `sensitive_binding` already folds the static mark with
+        // the task's declared secret environment; keep that fold explicit so a
+        // transformed secret-derived output is withheld even with no byte match.
+        let sensitive = call.sensitive_binding
+            || call.marks_sensitive_output()
             || sensitive_environment
             || crate::security::applet_has_declared_secret_environment(
                 registry,
@@ -788,6 +818,13 @@ pub(super) fn run_group(
 /// starts. Cancellation, the workflow deadline or the aggregate output limit
 /// stop new launches, cancel and reap running elements, and fail the group
 /// with the partial records.
+///
+/// Explicit concurrency scope: `limit` bounds how many elements are admitted
+/// at once (`at most 1` fully serializes admission order), so these paths show
+/// deterministic serialized interleavings, not true-simultaneous races.
+/// Fail-fast ordering, partial-record redaction, and checkpoint refusal hold
+/// under the bound; simultaneous-race timing is out of scope and is not
+/// claimed by the `at most 1` tests.
 pub(super) fn run_each(
     request: TaskGroupRequest<'_>,
     each: &TaskEach,
@@ -884,7 +921,11 @@ pub(super) fn run_each(
             parameters: BTreeMap::new(),
             uncertain_on_error: manifest.uncertain_on_failure,
             native_command: manifest.execution_backend() == AppletBackend::Command,
-            sensitive: call.marks_sensitive_output(),
+            // Provenance: `sensitive_binding` folds the static mark with the
+            // element's items, environment and declared secret environment, so
+            // a transformed secret-derived output is withheld even when the
+            // post-effect byte check cannot recognize it.
+            sensitive: call.sensitive_binding || call.marks_sensitive_output(),
         });
         calls.push(call);
     }
@@ -1164,6 +1205,42 @@ pub(super) fn run_each(
                 if let Some(result) = &records[index].invocation {
                     let outcome =
                         ElementOutcome::from_result(result, records[index].launched_processes);
+                    // The upfront refusal only sees statically flagged tasks. An
+                    // overlay literal, a literal list entry duplicating a known
+                    // secret, or a binding-derived parameter can still echo a
+                    // registered secret, so refuse the commit on the raw bytes.
+                    if outcome_contains_registered_secret(&secret_redactor, &outcome) {
+                        // The element already ran: leave an uncertain marker so
+                        // resume requires `--retry-uncertain`, and say so. The
+                        // upfront refusal stays certain because nothing ran yet.
+                        sink.mark_uncertain(index)?;
+                        bail!("checkpoint refused for parallel for each with secret task output; element {index} may contain an uncertain side effect, pass --retry-uncertain to retry");
+                    }
+                    // Provenance backstop for the byte check above: the output
+                    // encoding is attacker-chosen, so a non-standard transform
+                    // (base64url, case-shifted, truncated) of a literal
+                    // duplicate evades the output bytes while the inputs still
+                    // carry the registered secret. Withhold regardless of the
+                    // output transform, with the same uncertain marker.
+                    if element_inputs_contain_registered_secret(
+                        &secret_redactor,
+                        &items[index],
+                        &prepared[index].parameters,
+                    ) {
+                        sink.mark_uncertain(index)?;
+                        bail!("checkpoint refused for parallel for each with secret task output; element {index} may contain an uncertain side effect, pass --retry-uncertain to retry");
+                    }
+                    // The secret check wins so its uncertain marker and retry
+                    // flag survive; the generic floor still applies to non-secret
+                    // Unknown/Secret output before any line is written. This runs
+                    // after the element too, so it also marks uncertain.
+                    if let Err(error) = super::authorize_checkpoint_persistence(
+                        registry,
+                        &context.sensitivity_floor,
+                    ) {
+                        sink.mark_uncertain(index)?;
+                        bail!("checkpoint refused for parallel for each element {index}: {error:#}; it may contain an uncertain side effect, pass --retry-uncertain to retry");
+                    }
                     sink.commit(index, &outcome)?;
                 }
             }
@@ -1611,7 +1688,50 @@ fn each_task_value(
     Value::Record(fields)
 }
 
-fn redact_value(redactor: &crate::security::SecretRedactor, value: &Value) -> Value {
+/// Whether presenting `value` would redact it. The checkpoint refuses exactly
+/// what the reports would redact, so no committed line can outlive its mask.
+pub(in crate::runtime) fn value_contains_registered_secret(
+    redactor: &crate::security::SecretRedactor,
+    value: &Value,
+) -> bool {
+    &redact_value(redactor, value) != value
+}
+
+/// Whether presenting `outcome` would redact any of its bytes. Hex-encoding the
+/// journal line does not hide the secret: the check runs on the raw bytes.
+fn outcome_contains_registered_secret(
+    redactor: &crate::security::SecretRedactor,
+    outcome: &ElementOutcome,
+) -> bool {
+    redactor.redact_bytes(&outcome.output) != outcome.output.as_slice()
+        || redactor.redact_bytes(&outcome.stderr) != outcome.stderr.as_slice()
+        || outcome
+            .value
+            .as_ref()
+            .is_some_and(|value| value_contains_registered_secret(redactor, value))
+}
+
+/// Whether the element's own inputs already carry a registered secret: a
+/// literal list item duplicating a declared secret, or a resolved parameter
+/// echoing one. The output encoding is attacker-chosen, so an output-only byte
+/// check misses non-standard transforms (base64url, case-shifted, truncated);
+/// the input side is transform-agnostic and withholds regardless. Fail-closed:
+/// an unused secret item still refuses the commit.
+fn element_inputs_contain_registered_secret(
+    redactor: &crate::security::SecretRedactor,
+    item: &Value,
+    parameters: &BTreeMap<String, Value>,
+) -> bool {
+    value_contains_registered_secret(redactor, item)
+        || parameters
+            .values()
+            .any(|value| value_contains_registered_secret(redactor, value))
+}
+
+pub(in crate::runtime) fn redact_value(
+    redactor: &crate::security::SecretRedactor,
+    value: &Value,
+) -> Value {
     match value {
         Value::String(value) => Value::String(redactor.redact_text(value)),
         Value::Integer(value) => {

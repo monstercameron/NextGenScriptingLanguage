@@ -80,7 +80,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           EXECUTE_REQUIRE_NAMESPACE_TESTS: "1"
-        run: cargo test --locked --test daemon_cli linux_namespace_clients_run_locally -- --nocapture
+        run: cargo test --locked --test daemon_cli linux_ -- --nocapture
   workflows:
     name: Release contracts and workflow lint
     runs-on: ubuntu-24.04
@@ -116,30 +116,139 @@ jobs:
       - name: Prove Linux latency gate reports independent child RSS
         run: python3 tests/test_latency_budget_rss.py
       - name: Check Linux default release binary size
+        id: linux_binary_size
         run: |
           cargo build --locked --release --bin execute
           python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
-      - name: Compare Omarchy ports with their Bash originals
-        run: python3 tools/port_compare.py --binary target/release/execute
-      - name: Test paired latency comparison tool
-        run: python3 tools/test_paired_latency.py
-      - name: Test existing latency budget limits
-        run: python3 -m unittest tests/test_latency_budget_limits.py -v
-      - name: Test benchmark manifest command selection
-        run: python3 -m unittest tests/test_bench_budget.py -v
-      - name: Measure Linux latency budget
-        id: linux_latency
-        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests --require-rss
-      - name: Compare failed latency budget with push parent on the same runner
-        id: paired_latency
-        if: failure() && steps.linux_latency.outcome == 'failure' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+      # Temporary diagnostic for the binary-size boundary: same-runner paired
+      # comparison tells real growth apart from runner/toolchain noise without
+      # moving the absolute ceiling. Remove once the gate is green and the
+      # retained samples have justified a re-budget.
+      - name: Diagnose failed binary size with same-runner paired comparison
+        id: paired_binary_size
+        if: failure() && steps.linux_binary_size.outcome == 'failure' && ((github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000') || github.event_name == 'pull_request')
         continue-on-error: true
         env:
-          BASE_SHA: ${{ github.event.before }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE_SHA"
+          else
+            BASE_SHA="$PUSH_BASE_SHA"
+          fi
+          if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid base revision: $BASE_SHA" >&2
+            exit 1
+          fi
+          parent_worktree="$RUNNER_TEMP/binary-size-parent-src"
+          candidate_bin="$RUNNER_TEMP/execute-size-candidate"
+          baseline_bin="$RUNNER_TEMP/execute-size-baseline"
+          if [[ ! -x target/release/execute ]]; then
+            echo "target/release/execute is missing (build failed); skipping paired binary-size diagnosis to preserve the original failure." >&2
+            exit 0
+          fi
+          cp target/release/execute "$candidate_bin"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          worktree_added=0
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( worktree_added )); then
+              git worktree remove --force "$parent_worktree" || status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$parent_worktree" "$BASE_SHA"
+          worktree_added=1
+          CARGO_TARGET_DIR="$RUNNER_TEMP/binary-size-paired-target" cargo build --locked --release --manifest-path "$parent_worktree/Cargo.toml" --bin execute
+          cp "$RUNNER_TEMP/binary-size-paired-target/release/execute" "$baseline_bin"
+          python3 tools/compare_binary_size.py \
+            --baseline "$baseline_bin" \
+            --candidate "$candidate_bin" \
+            --baseline-label "$BASE_SHA" \
+            --candidate-label "$HEAD_SHA" \
+            --baseline-revision "$BASE_SHA" \
+            --candidate-revision "$HEAD_SHA" \
+            --json-out target/paired-binary-size.json
+      - name: Save paired binary-size samples
+        if: always() && steps.paired_binary_size.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-binary-size-paired-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/paired-binary-size.json
+          # warn, not error: a missing sample must never mask the gate failure above.
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 14
+      - name: Compare Omarchy ports with their Bash originals
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x target/release/execute ]]; then
+            echo "target/release/execute is missing (earlier build likely failed); skipping port comparison to preserve the original failure." >&2
+            exit 0
+          fi
+          python3 tools/port_compare.py --binary target/release/execute
+      - name: Test paired latency comparison tool
+        if: success() || failure()
+        run: python3 tools/test_paired_latency.py
+      - name: Test paired binary-size comparison tool
+        if: success() || failure()
+        run: python3 tools/test_compare_binary_size.py
+      - name: Test existing latency budget limits
+        if: success() || failure()
+        run: python3 -m unittest tests/test_latency_budget_limits.py -v
+      - name: Test latency budget regeneration contracts
+        if: success() || failure()
+        run: python3 -m unittest tests/test_regenerate_latency_budget.py -v
+      - name: Test benchmark manifest command selection
+        if: success() || failure()
+        run: python3 -m unittest tests/test_bench_budget.py -v
+      - name: Measure Linux latency budget
+        id: linux_latency
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x target/release/execute ]]; then
+            echo "target/release/execute is missing (earlier build likely failed); skipping latency measurement to preserve the original failure." >&2
+            exit 0
+          fi
+          python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests --require-rss --json-out target/linux-latency-samples.json
+      - name: Save Linux latency samples
+        if: always() && (steps.linux_latency.outcome == 'success' || steps.linux_latency.outcome == 'failure')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-latency-samples-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/linux-latency-samples.json
+          # warn, not error: a crash before --json-out must not mask the gate failure.
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 14
+      - name: Compare failed latency budget with same-runner paired comparison
+        id: paired_latency
+        if: failure() && steps.linux_latency.outcome == 'failure' && ((github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000') || github.event_name == 'pull_request')
+        continue-on-error: true
+        env:
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE_SHA"
+          else
+            BASE_SHA="$PUSH_BASE_SHA"
+          fi
           if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "invalid base revision: $BASE_SHA" >&2
             exit 1
@@ -147,6 +256,10 @@ jobs:
           parent_worktree="$RUNNER_TEMP/latency-parent-src"
           candidate_bin="$RUNNER_TEMP/execute-candidate"
           baseline_bin="$RUNNER_TEMP/execute-baseline"
+          if [[ ! -x target/release/execute ]]; then
+            echo "target/release/execute is missing (build failed); skipping paired latency diagnosis to preserve the original failure." >&2
+            exit 0
+          fi
           cp target/release/execute "$candidate_bin"
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           worktree_added=0
@@ -163,33 +276,68 @@ jobs:
           worktree_added=1
           CARGO_TARGET_DIR="$RUNNER_TEMP/latency-paired-target" cargo build --locked --release --manifest-path "$parent_worktree/Cargo.toml" --bin execute
           cp "$RUNNER_TEMP/latency-paired-target/release/execute" "$baseline_bin"
+          baseline_manifests="$parent_worktree/manifests"
+          candidate_manifests="$GITHUB_WORKSPACE/manifests"
+          baseline_manifest_args=(--baseline-manifest-dir "$baseline_manifests")
+          candidate_manifest_args=(--candidate-manifest-dir "$candidate_manifests")
+          if [[ ! -d "$baseline_manifests" ]]; then
+            echo "baseline manifests not present at $BASE_SHA; falling back to candidate manifests for both sides." >&2
+            baseline_manifest_args=(--manifest-dir "$candidate_manifests")
+            candidate_manifest_args=()
+          fi
           python3 tools/compare_latency.py \
             --baseline "$baseline_bin" \
             --candidate "$candidate_bin" \
             --baseline-label "$BASE_SHA" \
             --candidate-label "$HEAD_SHA" \
-            --manifest-dir "$GITHUB_WORKSPACE/manifests" \
+            "${baseline_manifest_args[@]}" \
+            "${candidate_manifest_args[@]}" \
             --json-out target/paired-latency.json
       - name: Save paired latency samples
         if: always() && steps.paired_latency.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: linux-latency-paired-${{ github.run_id }}
+          name: linux-latency-paired-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/paired-latency.json
-          if-no-files-found: error
+          # warn, not error: a missing sample must never mask the gate failure above.
+          if-no-files-found: warn
+          overwrite: true
           retention-days: 14
       - name: Measure hot-path benchmarks
+        if: success() || failure()
         shell: bash
+        env:
+          BENCH_BASELINE_SHA: 35483ce354f9481cbe2c6878d48e9f48b37d5a5c
         run: |
           set -euo pipefail
+          if [[ ! -x target/release/execute ]]; then
+            echo "target/release/execute is missing (earlier build likely failed); skipping benchmarks to preserve the original failure." >&2
+            exit 0
+          fi
+          if ! [[ "$BENCH_BASELINE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid bench baseline revision: $BENCH_BASELINE_SHA" >&2
+            exit 1
+          fi
           baseline_src="$RUNNER_TEMP/parallel-each-baseline-src"
           baseline_target="$RUNNER_TEMP/parallel-each-baseline-target"
-          git fetch --no-tags --depth=1 origin 35483ce
-          git worktree add --detach "$baseline_src" 35483ce
+          git fetch --no-tags --depth=1 origin "$BENCH_BASELINE_SHA"
+          worktree_added=0
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( worktree_added )); then
+              git worktree remove --force "$baseline_src" || status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$baseline_src" "$BENCH_BASELINE_SHA"
+          worktree_added=1
           CARGO_TARGET_DIR="$baseline_target" cargo build --locked --release --manifest-path "$baseline_src/Cargo.toml" --bin execute
           python3 tools/bench_budget.py target/release/execute tools/linux-bench-budget.json \
             --baseline-binary "$baseline_target/release/execute"
       - name: Check Linux minimal build size and tests
+        if: success() || failure()
         run: |
           cargo build --locked --release --bin execute --no-default-features
           python3 tools/check_binary_size.py target/release/execute tools/linux-minimal-binary-budget.json
@@ -283,5 +431,5 @@ jobs:
           if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
           Copy-Item -Path manifests -Destination $fixture -Recurse
 
-      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff -- --test-threads=1
+      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff --test checkpoint_resolve_elements -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --lib -- --test-threads=1

@@ -686,7 +686,7 @@ The socket defaults to `$XDG_RUNTIME_DIR/execute-<uid>/daemon.sock` (the tempora
 
 By default, `run --daemon` and `EXECUTE_DAEMON=1` run locally with a notice. The daemon declines requests from older clients. The protocol cannot reproduce or prove equivalence of namespaces, cgroups, security filters and other OS confinement, so a daemon may be less restricted than its client. Local execution preserves the client's execution mode and policies.
 
-To explicitly accept execution in the daemon's OS context, set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` together with `--daemon` or `EXECUTE_DAEMON=1`. Only do this when you trust that context for the program; the client does not verify equivalence. Arguments, execution mode and policy paths are forwarded and the run applies those policies in the daemon context. Do not set the acceptance variable in sandboxed environments unless you intend to let runs leave their sandbox. Avoid `EXECUTE_DAEMON=1` in sandboxed environments when using older versions, which forward without this opt-in.
+To explicitly accept execution in the daemon's OS context, set `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` together with `--daemon` or `EXECUTE_DAEMON=1`, and start the daemon itself with `EXECUTE_DAEMON_ACCEPT_CONTEXT=1`. Only do this when you trust that context for the program. Every forward needs acceptance at both ends on all platforms: a client opt-in alone never forwards, and a default daemon always declines and the client runs locally. No peer comparison can prove the client and daemon share confinement (chroot without new namespaces, Landlock and other unobservable restrictions, per-thread credentials, and non-Linux platforms leave gaps), so matching observables are never accepted as equivalent. Arguments, execution mode and policy paths are forwarded and the run applies those policies in the daemon context. Do not set the acceptance variable in sandboxed environments unless you intend to let runs leave their sandbox, and never set it on a daemon that must not serve sandboxed clients. Avoid `EXECUTE_DAEMON=1` in sandboxed environments when using older versions, which forward without this opt-in.
 
 ## Recover after a failure
 
@@ -749,11 +749,65 @@ restart their timing and cron waits for the next matching minute. Output deliver
 is not transactional and a partly delivered result can be emitted again.
 
 If a process crashes or is interrupted during a command with side effects, its
-outcome can be unknown. Resume refuses that node until you explicitly add
-`--retry-uncertain`. Inspect the external effect first. Even a reported command
+outcome can be unknown. Resume refuses that node until you explicitly decide per
+uncertain item: record a `checkpoint resolve` decision, or add `--retry-uncertain`
+for the whole run. Inspect the external effect first. Even a reported command
 failure can have partial effects; retrying it is an explicit decision. Checkpoints
 do not guarantee exactly-once external effects. An abruptly killed interpreter
 can also leave its applet running; stop or inspect it before retrying.
+
+```sh
+execute checkpoint resolve CKPT --node STEP_ID --as committed --output out.bin \
+  --binding result=ok --reason "effect verified in the ledger"
+execute checkpoint resolve CKPT --node STEP_ID --element 2 --as retry \
+  --reason "element 2 never ran"
+execute checkpoint status CKPT --json
+```
+
+`--node` takes the step id shown by `checkpoint status --json` (`in_flight.step_id`).
+`committed` replays the supplied output and bindings at resume instead of rerunning
+the effect. It requires `--output FILE` (or `--accept-empty-output`) and `--binding
+NAME=VALUE` entries (or `--accept-empty-bindings`); VALUE parses as JSON and falls
+back to plain text. `retry` authorizes one node or element to run again and carries
+no output or bindings. Element indices (`--element N`) are 0-based, matching the
+`for each element N` refusal messages. A committed element must have begun, so its
+begin fingerprint can be captured and resume refuses a changed list entry; a retry
+may also name a later element that has not begun yet, authorizing its run.
+Element nodes take only per-element records; a node-level record authorizes
+nothing there. A checkpoint that predates the version 6 element marker cannot
+tell a plain node from a loop killed before its first begin, so node-level
+records are refused there; `resolve` names this pre-marking case and resume
+re-checks it against the program, and the safe path is `--retry-uncertain` or a
+fresh checkpoint until the element log proves the node. Parallel
+(`parallel for each`) elements resolve as `retry` only: `committed` is refused
+at resolve and at resume because it cannot reproduce their value, stderr and
+outcome. Every refusal fails closed: unknown or settled targets, locked
+checkpoints, graph journals, step-id mismatches, certain elements, duplicate
+records, and a torn resolutions log are all refused without running anything.
+The running program holds the checkpoint `lock` for the whole resume, `resolve`
+holds the same lock across validation and append, and `status` probes it without
+creating it, so a resume in progress makes `resolve` fail with `locked` and
+status reports `locked`. Two concurrent resolves for the same item fail closed
+(one records, the other is refused as locked or duplicate) instead of both
+appending; there is no revoke tool, so resolve one item at a time.
+
+`checkpoint status --json` reports each recorded decision under `resolutions`
+(who, when and why; output, bindings and fingerprints stay in the checkpoint as
+resume evidence) and every begun-but-uncommitted uncertain item under
+`unresolved_uncertain`, with the same ids `resolve` takes. The actor is
+`uid:<euid>` on Unix with the login name as a display-only hint, the
+process-token `sid:S-...` on Windows the same way, and `unverified:<name>`
+elsewhere; older bare-name records still read. The reason is operator-supplied
+plaintext shown by status, and committed output and bindings may hold secrets:
+keep secrets out of the reason, and read output and bindings only from the 0600
+checkpoint, never from status. A torn or duplicate resolutions log reports how
+many valid records precede the damage and which line is damaged; remove only
+that line (or the torn trailing bytes) with an owner-controlled editor, keep the
+file 0600, and re-run `resolve` one item at a time. Status wraps those failures
+with the checkpoint status, in-flight step, and lock state so the refusal is not
+blind. An element the loop has not reached yet is not listed; it is gated when
+its begin runs and names its index. Run records and `show-run` have no
+checkpoint pointer and do not show resolutions.
 
 Services discard unreferenced checkpoint blobs after each successful handler.
 The pure-result cache has its own lifecycle.
@@ -780,6 +834,14 @@ committed ones. Entries appended to the list after the committed ones run normal
 - An element that is not [retry-safe](language.md#retry-safety) writes a durable `begin` record
   first. If the run died inside such an element, only that element is uncertain, and
   `--retry-uncertain` reruns it. The rest of the loop is not retried.
+- A per-element `checkpoint resolve` decision covers one element: sequential
+  `committed` supplies the output and bindings resume replays, `retry`
+  authorizes that element to run again. On the next resume a committed element
+  is stored as that element's commit, so repeating the resume never reruns it;
+  a committed record past the skipped prefix is refused instead of silently
+  re-running an operator-verified effect. Parallel (`parallel for each`)
+  elements resolve as `retry` only; a `committed` record for one is refused at
+  resolve and at resume.
 - Nested loops, `repeat` and `while` keep whole-node behavior.
 
 ### Journal versions

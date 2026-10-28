@@ -3787,7 +3787,7 @@ mod graph_stream_tests {
     }
 
     fn empty_registry() -> flow::manifest::Registry {
-        flow::manifest::Registry::from_sources(&[]).expect("empty registry parses")
+        flow::manifest::Registry::from_sources(&[] as &[&str]).expect("empty registry parses")
     }
 
     fn run_arguments(directory: &std::path::Path, extra: &[&str]) -> Vec<String> {

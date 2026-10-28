@@ -227,6 +227,7 @@ mod execution_tests {
             network: true,
             network_origins: BTreeSet::new(),
             sandbox_required: false,
+            resource_limits: None,
         }
     }
 
@@ -261,6 +262,276 @@ mod execution_tests {
             validate_native_enforcement(&restricted, &["network.connect".into()]).unwrap_err();
         assert!(error.downcast_ref::<SandboxRefused>().is_some());
         assert!(error.to_string().contains("network origin"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod resource_limit_tests {
+    use super::*;
+
+    fn plain_grant() -> AppletGrant {
+        AppletGrant {
+            capabilities: BTreeSet::from(["process.exec".into()]),
+            binary_sha256: None,
+            environment: BTreeSet::new(),
+            filesystem: FilesystemGrant::default(),
+            network: false,
+            network_origins: BTreeSet::new(),
+            sandbox_required: false,
+            resource_limits: None,
+        }
+    }
+
+    /// The current hard ceiling for `which`, or `u64::MAX` when the kernel
+    /// does not report one. Shared by the default-clamping tests so they
+    /// stay green in constrained containers too.
+    fn hard(which: BoundedResource) -> u64 {
+        get_hard_limit(which).unwrap_or(u64::MAX)
+    }
+
+    fn untrusted_registry(grant: AppletGrant) -> Registry {
+        let registry = Registry::from_sources(&[serde_json::json!({
+            "name": "fixture", "binary": "fixture", "arguments": [],
+            "contract": {"version": 1},
+        })
+        .to_string()])
+        .unwrap();
+        let policy = CapabilityPolicy {
+            version: CAPABILITY_POLICY_VERSION,
+            applets: BTreeMap::from([("fixture".to_owned(), grant)]),
+            host: None,
+            host_environment: BTreeSet::new(),
+            deny_privileged: false,
+            allow_wrappers: BTreeSet::new(),
+        };
+        registry.set_host_state(Some(policy));
+        registry
+    }
+
+    fn grant_with(limits: ResourceLimits) -> AppletGrant {
+        AppletGrant {
+            capabilities: BTreeSet::from(["process.exec".into()]),
+            binary_sha256: None,
+            environment: BTreeSet::new(),
+            filesystem: FilesystemGrant::default(),
+            network: false,
+            network_origins: BTreeSet::new(),
+            sandbox_required: false,
+            resource_limits: Some(limits),
+        }
+    }
+
+    #[test]
+    fn untrusted_mode_defaults_every_knob_to_a_finite_bound() {
+        let registry = untrusted_registry(plain_grant());
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        let limits = resolve_resource_limits(&registry, "fixture", &grant)
+            .expect("defaults resolve")
+            .expect("untrusted mode always bounds");
+        // Defaults clamp to the inherited hard ceiling, which is infinite
+        // for every knob on ordinary developer and CI machines.
+        assert_eq!(
+            limits.cpu_secs,
+            Some(DEFAULT_CPU_SECS.min(hard(BoundedResource::Cpu)))
+        );
+        assert_eq!(
+            limits.address_space_bytes,
+            if cfg!(target_os = "macos") {
+                None
+            } else {
+                Some(
+                    (DEFAULT_ADDRESS_SPACE_MB * BYTES_PER_MIB)
+                        .min(hard(BoundedResource::AddressSpace)),
+                )
+            }
+        );
+        assert_eq!(
+            limits.file_size_bytes,
+            Some((DEFAULT_FILE_SIZE_MB * BYTES_PER_MIB).min(hard(BoundedResource::FileSize)))
+        );
+        assert_eq!(
+            limits.max_processes,
+            Some(DEFAULT_MAX_PROCESSES.min(hard(BoundedResource::MaxProcesses)))
+        );
+        assert_eq!(
+            limits.open_files,
+            Some(DEFAULT_OPEN_FILES.min(hard(BoundedResource::OpenFiles)))
+        );
+    }
+
+    #[test]
+    fn trusted_mode_stays_unbounded_unless_the_policy_asks() {
+        let registry = untrusted_registry(plain_grant());
+        registry.set_host_state(Some(ExecutionMode::Trusted));
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        assert!(resolve_resource_limits(&registry, "fixture", &grant)
+            .unwrap()
+            .is_none());
+        let asked = grant_with(ResourceLimits {
+            cpu_secs: Some(7),
+            ..ResourceLimits::default()
+        });
+        let limits = resolve_resource_limits(&registry, "fixture", &asked)
+            .unwrap()
+            .expect("explicit bounds apply in trusted mode");
+        assert_eq!(limits.cpu_secs, Some(7));
+        assert!(limits.address_space_bytes.is_none());
+        assert!(limits.file_size_bytes.is_none());
+        assert!(limits.max_processes.is_none());
+        assert!(limits.open_files.is_none());
+    }
+
+    #[test]
+    fn explicit_bounds_win_over_defaults_in_untrusted_mode() {
+        let registry = untrusted_registry(grant_with(ResourceLimits {
+            cpu_secs: Some(7),
+            file_size_mb: Some(1),
+            ..ResourceLimits::default()
+        }));
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        let limits = resolve_resource_limits(&registry, "fixture", &grant)
+            .unwrap()
+            .expect("explicit bounds resolve");
+        assert_eq!(limits.cpu_secs, Some(7));
+        assert_eq!(limits.file_size_bytes, Some(BYTES_PER_MIB));
+        assert_eq!(
+            limits.max_processes,
+            Some(DEFAULT_MAX_PROCESSES.min(hard(BoundedResource::MaxProcesses)))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_explicit_address_space_bounds_refuse() {
+        let registry = untrusted_registry(grant_with(ResourceLimits {
+            address_space_mb: Some(64),
+            ..ResourceLimits::default()
+        }));
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        let error = resolve_resource_limits(&registry, "fixture", &grant).unwrap_err();
+        assert!(error.downcast_ref::<SandboxRefused>().is_some());
+        assert!(error.to_string().contains("macOS"));
+    }
+
+    /// The current virtual size of this test process, so the child below can
+    /// install a bound just above present usage. Adaptive: no hardcoded
+    /// megabyte guess that a debug build could exceed.
+    #[cfg(target_os = "linux")]
+    fn own_virtual_bytes() -> u64 {
+        let stat = std::fs::read_to_string("/proc/self/stat").expect("Linux reports stat");
+        let after_comm = stat.rsplit(')').next().expect("stat holds a comm field");
+        after_comm
+            .split_whitespace()
+            .nth(20)
+            .expect("stat holds vsize")
+            .parse()
+            .expect("vsize parses")
+    }
+
+    /// The installer runs between fork and exec in production; exercise that
+    /// exact function in a forked child. The child performs only
+    /// async-signal-safe calls before `_exit`, so forking the multithreaded
+    /// test runner is safe here.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_address_space_bound_bites_before_exec() {
+        const HEADROOM: u64 = 256 * 1024 * 1024;
+        const SMALL: libc::size_t = 64 * 1024 * 1024;
+        const BIG: libc::size_t = 4 * 1024 * 1024 * 1024;
+        let usage = own_virtual_bytes();
+        let limits = ChildResourceLimits {
+            cpu_secs: None,
+            address_space_bytes: Some(usage + HEADROOM),
+            file_size_bytes: None,
+            max_processes: None,
+            open_files: None,
+        };
+        // SAFETY: the child below calls only `install_child_resource_limits`,
+        // `mmap` and `_exit` before exiting; no allocator or lock state from
+        // the test runner is touched.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork for the rlimit installer test");
+        if pid == 0 {
+            let mut code = 40;
+            if install_child_resource_limits(&limits).is_ok() {
+                code = 41;
+                // SAFETY: anonymous private mapping with no file backing; the
+                // length and protections are valid for `mmap`.
+                let small = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        SMALL,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                        -1,
+                        0,
+                    )
+                };
+                if small != libc::MAP_FAILED {
+                    // SAFETY: `small` is the mapping just returned, with the
+                    // same length it was created with.
+                    unsafe { libc::munmap(small, SMALL) };
+                    // SAFETY: as for the small mapping, with a length far past
+                    // the installed bound.
+                    let big = unsafe {
+                        libc::mmap(
+                            std::ptr::null_mut(),
+                            BIG,
+                            libc::PROT_READ | libc::PROT_WRITE,
+                            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                            -1,
+                            0,
+                        )
+                    };
+                    code = if big == libc::MAP_FAILED { 42 } else { 43 };
+                }
+            }
+            // SAFETY: `_exit` terminates the forked child immediately without
+            // running destructors or touching runner state.
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        loop {
+            // SAFETY: `status` is a live integer and `pid` is our direct
+            // child; retry on signal interruption.
+            let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+            if waited == pid {
+                break;
+            }
+            assert!(
+                waited == -1
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted,
+                "waiting for the rlimit installer child"
+            );
+        }
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 42,
+            "the 64MiB mapping must succeed and the 4GiB mapping must fail under the bound (status {status})"
+        );
     }
 }
 
@@ -447,6 +718,370 @@ pub struct AppletGrant {
     pub network_origins: BTreeSet<String>,
     #[serde(default)]
     pub sandbox_required: bool,
+    /// Optional per-child resource bounds for native children. Each bound is
+    /// a finite value in the unit its name states; an absent bound falls back
+    /// to the finite untrusted-mode default, or stays unbounded in trusted
+    /// mode. Zero is rejected by policy validation.
+    #[serde(default)]
+    pub resource_limits: Option<ResourceLimits>,
+}
+
+/// Per-child resource bounds for one native applet. All fields are optional:
+/// an absent field takes the finite untrusted-mode default, or stays
+/// unbounded in trusted mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceLimits {
+    /// CPU time in seconds (`RLIMIT_CPU`); the kernel kills the child with
+    /// `SIGXCPU` past the soft limit.
+    #[serde(default)]
+    pub cpu_secs: Option<u64>,
+    /// Address-space size in MiB (`RLIMIT_AS`). Linux-only: macOS rejects
+    /// `RLIMIT_AS` changes, so an explicit bound refuses the spawn there.
+    #[serde(default)]
+    pub address_space_mb: Option<u64>,
+    /// Largest single file the child may create, in MiB (`RLIMIT_FSIZE`);
+    /// the kernel kills an over-long write with `SIGXFSZ`.
+    #[serde(default)]
+    pub file_size_mb: Option<u64>,
+    /// Process/thread count (`RLIMIT_NPROC`). This is a per-real-uid bound,
+    /// not a per-sandbox one: it counts every process of the calling user,
+    /// inside and outside the sandbox (see `SECURITY.md`).
+    #[serde(default)]
+    pub max_processes: Option<u64>,
+    /// Open file-descriptor count (`RLIMIT_NOFILE`).
+    #[serde(default)]
+    pub open_files: Option<u64>,
+}
+
+/// Finite untrusted-mode defaults: generous enough for ordinary applets,
+/// finite so no confined child runs unbounded. The process-count default
+/// stays below the stock macOS hard limit (4000) so the default install
+/// never tries to raise a hard limit.
+#[cfg(unix)]
+pub(crate) const DEFAULT_CPU_SECS: u64 = 120;
+#[cfg(unix)]
+pub(crate) const DEFAULT_ADDRESS_SPACE_MB: u64 = 1024;
+#[cfg(unix)]
+pub(crate) const DEFAULT_FILE_SIZE_MB: u64 = 1024;
+#[cfg(unix)]
+pub(crate) const DEFAULT_MAX_PROCESSES: u64 = 2048;
+#[cfg(unix)]
+pub(crate) const DEFAULT_OPEN_FILES: u64 = 1024;
+
+const BYTES_PER_MIB: u64 = 1024 * 1024;
+
+/// Resolved per-child limits: every field is an installed bound. `None`
+/// means the child runs without extra bounds (trusted mode with no explicit
+/// configuration).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChildResourceLimits {
+    pub cpu_secs: Option<u64>,
+    pub address_space_bytes: Option<u64>,
+    pub file_size_bytes: Option<u64>,
+    pub max_processes: Option<u64>,
+    pub open_files: Option<u64>,
+}
+
+impl ChildResourceLimits {
+    #[cfg(unix)]
+    fn is_empty(self) -> bool {
+        self == Self {
+            cpu_secs: None,
+            address_space_bytes: None,
+            file_size_bytes: None,
+            max_processes: None,
+            open_files: None,
+        }
+    }
+}
+
+/// Resolve one applet's effective per-child limits. Explicit policy values
+/// win; in untrusted mode every remaining knob takes its finite default, so
+/// a confined child never runs unbounded. In trusted mode absent knobs stay
+/// unbounded unless the policy explicitly sets them. Address-space bounds are
+/// Linux-only: macOS cannot install `RLIMIT_AS`, so an explicit bound there
+/// is a fail-closed refusal instead of a silently unbounded spawn.
+///
+/// Every bound is fitted to the current hard limit: an unprivileged child
+/// cannot raise hard limits, so a default above the inherited ceiling is
+/// clamped to that ceiling (which already bounds the child), while an
+/// explicit bound above it is refused before any child exists.
+pub(crate) fn resolve_resource_limits(
+    registry: &Registry,
+    applet: &str,
+    grant: &AppletGrant,
+) -> Result<Option<ChildResourceLimits>> {
+    let untrusted = execution_mode(registry) == ExecutionMode::Untrusted;
+    let configured = grant.resource_limits.clone().unwrap_or_default();
+    if configured.address_space_mb.is_some() && cfg!(target_os = "macos") {
+        return Err(SandboxRefused(
+            "address-space resource limits are not supported on macOS: the kernel rejects RLIMIT_AS changes".into(),
+        )
+        .into());
+    }
+    if cfg!(not(unix))
+        && (configured.cpu_secs.is_some()
+            || configured.address_space_mb.is_some()
+            || configured.file_size_mb.is_some()
+            || configured.max_processes.is_some()
+            || configured.open_files.is_some())
+    {
+        return Err(SandboxRefused("resource limits require a Unix rlimit backend".into()).into());
+    }
+    #[cfg(not(unix))]
+    {
+        // Non-Unix platforms have no rlimit backend; explicit bounds were
+        // refused above, so nothing remains to install.
+        let _ = (applet, &untrusted, &configured);
+        Ok(None)
+    }
+    #[cfg(unix)]
+    {
+        resolve_unix_resource_limits(applet, &configured, untrusted)
+    }
+}
+
+/// Unix resolution: explicit values win, untrusted defaults fill the rest,
+/// and every bound is fitted to the inherited hard ceiling.
+#[cfg(unix)]
+fn resolve_unix_resource_limits(
+    applet: &str,
+    configured: &ResourceLimits,
+    untrusted: bool,
+) -> Result<Option<ChildResourceLimits>> {
+    let mib = |knob: &str,
+               which: BoundedResource,
+               value: Option<u64>,
+               default: u64|
+     -> Result<Option<u64>> {
+        match value {
+            Some(mib) => {
+                let bytes = mib
+                    .checked_mul(BYTES_PER_MIB)
+                    .with_context(|| "resource limit does not fit in bytes".to_owned())?;
+                Ok(Some(fit_to_hard_limit(applet, knob, which, bytes, true)?))
+            }
+            None if untrusted => Ok(Some(fit_to_hard_limit(
+                applet,
+                knob,
+                which,
+                default * BYTES_PER_MIB,
+                false,
+            )?)),
+            None => Ok(None),
+        }
+    };
+    let plain = |knob: &str,
+                 which: BoundedResource,
+                 value: Option<u64>,
+                 default: u64|
+     -> Result<Option<u64>> {
+        match value {
+            Some(value) => Ok(Some(fit_to_hard_limit(applet, knob, which, value, true)?)),
+            None if untrusted => Ok(Some(fit_to_hard_limit(
+                applet, knob, which, default, false,
+            )?)),
+            None => Ok(None),
+        }
+    };
+    let limits = ChildResourceLimits {
+        cpu_secs: plain(
+            "cpu_secs",
+            BoundedResource::Cpu,
+            configured.cpu_secs,
+            DEFAULT_CPU_SECS,
+        )?,
+        address_space_bytes: if cfg!(target_os = "macos") {
+            // macOS documents no RLIMIT_AS support; resolve no bound rather
+            // than installing one that could never take effect. Explicit
+            // bounds were refused above, so this only drops the default.
+            None
+        } else {
+            mib(
+                "address_space_mb",
+                BoundedResource::AddressSpace,
+                configured.address_space_mb,
+                DEFAULT_ADDRESS_SPACE_MB,
+            )?
+        },
+        file_size_bytes: mib(
+            "file_size_mb",
+            BoundedResource::FileSize,
+            configured.file_size_mb,
+            DEFAULT_FILE_SIZE_MB,
+        )?,
+        max_processes: plain(
+            "max_processes",
+            BoundedResource::MaxProcesses,
+            configured.max_processes,
+            DEFAULT_MAX_PROCESSES,
+        )?,
+        open_files: plain(
+            "open_files",
+            BoundedResource::OpenFiles,
+            configured.open_files,
+            DEFAULT_OPEN_FILES,
+        )?,
+    };
+    Ok((!limits.is_empty()).then_some(limits))
+}
+
+/// Fit `value` under the inherited hard ceiling. Defaults clamp silently:
+/// the ceiling already bounds the child, so asking for more is meaningless.
+/// Explicit values above the ceiling are refused: installing them would fail
+/// with `EPERM` in the child, and failing here names the bound instead.
+#[cfg(unix)]
+fn fit_to_hard_limit(
+    applet: &str,
+    knob: &str,
+    which: BoundedResource,
+    value: u64,
+    explicit: bool,
+) -> Result<u64> {
+    let Some(hard) = get_hard_limit(which) else {
+        return Ok(value);
+    };
+    if value <= hard {
+        return Ok(value);
+    }
+    if explicit {
+        return Err(SandboxRefused(format!(
+            "applet {applet:?} resource limit {knob:?} asks for {value}, above this process's hard limit of {hard}"
+        ))
+        .into());
+    }
+    Ok(hard)
+}
+
+/// Which kernel resource bound a limit applies to. The `libc` constant
+/// types differ per platform (`__rlimit_resource_t` on Linux, `c_int` on
+/// macOS), so callers pass this enum and the two functions below match it
+/// to the constant at the call site, where the type always fits.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BoundedResource {
+    Cpu,
+    AddressSpace,
+    FileSize,
+    MaxProcesses,
+    OpenFiles,
+}
+
+/// Install one bound with `setrlimit`. Async-signal-safe: stack values
+/// only, no allocation.
+#[cfg(unix)]
+fn set_one(which: BoundedResource, value: u64) -> std::io::Result<()> {
+    let applied = libc::rlimit {
+        rlim_cur: value as libc::rlim_t,
+        rlim_max: value as libc::rlim_t,
+    };
+    // SAFETY: `applied` is a live stack value read for the duration of each
+    // call; `setrlimit` itself is async-signal-safe.
+    let installed = unsafe {
+        match which {
+            BoundedResource::Cpu => libc::setrlimit(libc::RLIMIT_CPU, &applied),
+            BoundedResource::AddressSpace => {
+                #[cfg(target_os = "macos")]
+                {
+                    // Unreachable: resolution refuses explicit address-space
+                    // bounds on macOS and drops the default, so install never
+                    // sees this variant there.
+                    debug_assert!(false, "address-space bounds never install on macOS");
+                    return Ok(());
+                }
+                #[cfg(not(target_os = "macos"))]
+                libc::setrlimit(libc::RLIMIT_AS, &applied)
+            }
+            BoundedResource::FileSize => libc::setrlimit(libc::RLIMIT_FSIZE, &applied),
+            BoundedResource::MaxProcesses => libc::setrlimit(libc::RLIMIT_NPROC, &applied),
+            BoundedResource::OpenFiles => libc::setrlimit(libc::RLIMIT_NOFILE, &applied),
+        }
+    };
+    if installed != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Read one hard ceiling with `getrlimit`, when the kernel reports it.
+#[cfg(unix)]
+fn get_hard_limit(which: BoundedResource) -> Option<u64> {
+    // SAFETY: `limit` is a live stack struct the kernel fills on success.
+    let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    // SAFETY: `getrlimit` only writes into the provided struct.
+    let queried = unsafe {
+        match which {
+            BoundedResource::Cpu => libc::getrlimit(libc::RLIMIT_CPU, limit.as_mut_ptr()),
+            BoundedResource::AddressSpace => libc::getrlimit(libc::RLIMIT_AS, limit.as_mut_ptr()),
+            BoundedResource::FileSize => libc::getrlimit(libc::RLIMIT_FSIZE, limit.as_mut_ptr()),
+            BoundedResource::MaxProcesses => {
+                libc::getrlimit(libc::RLIMIT_NPROC, limit.as_mut_ptr())
+            }
+            BoundedResource::OpenFiles => libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()),
+        }
+    };
+    if queried != 0 {
+        return None;
+    }
+    #[allow(clippy::unnecessary_cast)]
+    // SAFETY: `getrlimit` succeeded, so the struct is initialized.
+    // `rlim_t` is 64 bits on every supported target; the widening cast
+    // keeps 32-bit unix builds working if one is ever added.
+    Some(unsafe { limit.assume_init().rlim_max as u64 })
+}
+
+/// Install resolved per-child limits with `setrlimit`. This runs between
+/// `fork` and `exec` in the child, so it may call only async-signal-safe
+/// functions: `setrlimit` on stack-resident values, and nothing that
+/// allocates. Any failure is returned as the raw OS error; the caller turns
+/// it into a spawn failure, so the child never runs unbounded.
+#[cfg(unix)]
+pub(crate) fn install_child_resource_limits(limits: &ChildResourceLimits) -> std::io::Result<()> {
+    if let Some(secs) = limits.cpu_secs {
+        set_one(BoundedResource::Cpu, secs)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Some(bytes) = limits.address_space_bytes {
+        set_one(BoundedResource::AddressSpace, bytes)?;
+    }
+    if let Some(bytes) = limits.file_size_bytes {
+        set_one(BoundedResource::FileSize, bytes)?;
+    }
+    if let Some(count) = limits.max_processes {
+        set_one(BoundedResource::MaxProcesses, count)?;
+    }
+    if let Some(count) = limits.open_files {
+        set_one(BoundedResource::OpenFiles, count)?;
+    }
+    Ok(())
+}
+
+/// Validate one applet's explicit resource bounds: every configured value
+/// must be nonzero and must fit the kernel's byte counter.
+fn validate_resource_limits(name: &str, limits: &ResourceLimits) -> Result<()> {
+    for (knob, value) in [
+        ("cpu_secs", limits.cpu_secs),
+        ("address_space_mb", limits.address_space_mb),
+        ("file_size_mb", limits.file_size_mb),
+        ("max_processes", limits.max_processes),
+        ("open_files", limits.open_files),
+    ] {
+        if value.is_some_and(|value| value == 0) {
+            bail!("applet {name:?} resource limit {knob:?} must be at least 1");
+        }
+    }
+    for (knob, value) in [
+        ("address_space_mb", limits.address_space_mb),
+        ("file_size_mb", limits.file_size_mb),
+    ] {
+        if let Some(mib) = value {
+            mib.checked_mul(BYTES_PER_MIB).with_context(|| {
+                format!("applet {name:?} resource limit {knob:?} does not fit in bytes")
+            })?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -555,6 +1190,9 @@ impl CapabilityPolicy {
             {
                 validate_policy_path(path)
                     .with_context(|| format!("applet {name:?} filesystem grant"))?;
+            }
+            if let Some(limits) = &grant.resource_limits {
+                validate_resource_limits(name, limits)?;
             }
         }
         if let Some(grant) = &self.host {
@@ -1629,6 +2267,9 @@ where
     } else {
         grant
     };
+    // Resolve before preflight so an uninstallable bound (for example an
+    // address-space limit on macOS) refuses fast, before any probe or child.
+    let resource_limits = resolve_resource_limits(registry, applet_name, grant)?;
     if native_sandbox {
         validate_native_enforcement(grant, &contract.effects)?;
         preflight_native_sandbox(grant, binary, cwd)
@@ -1642,6 +2283,21 @@ where
         crate::platform::add_arguments(&mut command, arguments);
         command
     };
+    #[cfg(unix)]
+    if let Some(limits) = resource_limits {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the hook captures only the resolved `Copy` limits and calls
+        // `install_child_resource_limits`, which performs only
+        // async-signal-safe `setrlimit` calls on stack values. A failed
+        // install fails the spawn, so the child never runs unbounded. Hooks
+        // stack, so later `pre_exec` closures (terminal foreground setup)
+        // still run.
+        unsafe {
+            command.pre_exec(move || install_child_resource_limits(&limits));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = resource_limits;
     apply_child_environment(registry, applet_name, &mut command, environment)?;
     cwd.apply(&mut command);
     Ok(command)

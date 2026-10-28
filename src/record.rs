@@ -2989,6 +2989,7 @@ mod policy_audit_tests {
                 network: true,
                 network_origins: BTreeSet::from(["https://canary-origin.example".to_owned()]),
                 sandbox_required: false,
+                resource_limits: None,
             },
         );
         registry.set_host_state(Some(CapabilityPolicy {

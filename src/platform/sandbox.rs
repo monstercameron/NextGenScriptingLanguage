@@ -1159,6 +1159,7 @@ mod tests {
             network: false,
             network_origins: BTreeSet::new(),
             sandbox_required: true,
+            resource_limits: None,
         }
     }
 
@@ -1613,6 +1614,7 @@ mod tests {
             network: false,
             network_origins: BTreeSet::new(),
             sandbox_required: true,
+            resource_limits: None,
         };
 
         if !require_sandbox(&grant, &script, root.path(), "macOS file-access fixture") {
@@ -1676,6 +1678,7 @@ mod tests {
             network: false,
             network_origins: BTreeSet::new(),
             sandbox_required: true,
+            resource_limits: None,
         };
 
         if !require_sandbox(&grant, nc, root.path(), "macOS network fixture") {

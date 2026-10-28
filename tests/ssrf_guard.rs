@@ -36,6 +36,7 @@ fn policy_with_endpoint(endpoint: &str, origins: &[&str]) -> (Registry, &'static
         network: true,
         network_origins: origins.iter().map(|origin| (*origin).to_owned()).collect(),
         sandbox_required: false,
+        resource_limits: None,
     };
     registry.set_host_state(Some(CapabilityPolicy {
         host: None,

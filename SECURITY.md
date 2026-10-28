@@ -262,7 +262,47 @@ native effect or native origin restriction is refused with `SandboxRefused`.
 Linux currently uses the existing bubblewrap backend; it does not install
 Landlock or seccomp filters. Read access to system runtime files and execution
 of tools within that runtime remain available. This is filesystem/network
-confinement, not a hostile-kernel-code or resource-exhaustion boundary.
+confinement, not a hostile-kernel-code boundary; resource exhaustion is
+bounded separately, per mechanism, as follows.
+
+Every native child spawned under a capability policy carries finite resource
+bounds. Each applet grant may set `resource_limits` with `cpu_secs`,
+`address_space_mb` (Linux only), `file_size_mb`, `max_processes` and
+`open_files`; absent knobs take finite untrusted-mode defaults (120 CPU
+seconds, 1024 MiB of address space on Linux, 1024 MiB single files, 2048
+processes, 1024 open files, each fitted down to the inherited hard ceiling
+which already bounds the child) and stay unbounded in trusted mode unless the
+policy sets them. Bounds install in the child between fork and exec; a bound
+that cannot be installed refuses the spawn instead of running unbounded, and
+an explicit bound above the inherited hard limit is refused before any child
+exists. A child killed for breaching its CPU-time (`SIGXCPU`) or file-size
+(`SIGXFSZ`) bound surfaces the typed `resource_exhaust` result, not a bare
+signal death.
+
+What each bound actually constrains: CPU time is per process; file size caps
+each file's logical size, so one file cannot grow past the cap, but many
+small files, directory entries, and block consumption in aggregate are not
+bounded — including sparse files, whose logical size is capped per file while
+their blocks across many files are not. The address-space bound (Linux only;
+macOS rejects `RLIMIT_AS` changes, so an explicit bound there refuses the
+spawn instead of running unbounded) makes allocations past the cap fail inside
+the child, which then fails on its own terms; only the kernel-signal kills
+above are typed. `max_processes` (`RLIMIT_NPROC`) counts every process and
+thread of the calling real user ID, inside and outside the sandbox, so it
+bounds a fork bomb's total processes without isolating the sandbox's share;
+it is not a per-sandbox task cap, and cgroup `pids.max` management is not
+implemented. Descriptor exhaustion past the open-file bound fails closed at
+the denied call. RSS is not enforced as a kill signal on either platform, and
+an OOM-killer `SIGKILL` cannot be attributed to a bound, so it keeps its
+generic signal classification. Windows has no rlimit backend: explicit
+limits are refused there.
+
+Daemon forwarded runs are bounded separately: `EXECUTE_DAEMON_MAX_RUNS`
+(default twice the available parallelism, clamped to 1..64, at most 4096)
+caps concurrent forked runs; runs past the cap are refused with a fallback
+event naming the limit, never queued and never silently dropped. Exited
+children free their slot on the next reap, including a reap that runs before
+admission, so capacity returns as runs finish.
 `explain` and `--what-if` report `execution_mode` and each step's `enforcement`.
 `os_sandbox_required` is prospective: a real run must still pass OS preflight;
 `refused` means the current platform cannot provide the required confinement.

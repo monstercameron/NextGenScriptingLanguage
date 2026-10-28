@@ -369,9 +369,17 @@ pub fn emit_masks_for_registry_with_cancel(
     if !enabled() {
         return Ok(());
     }
+    // The secret registry lives in host-only `crate::security`, which is not
+    // built for wasm32: the browser host holds no registry secrets, so the
+    // mask snapshot is empty by construction. Gate the call instead of
+    // stubbing secrets — native masking is unchanged and wasm never invents
+    // mask values.
+    #[cfg(not(target_arch = "wasm32"))]
     for secret in crate::security::secret_redactor(registry).snapshot_secrets() {
         emit_mask_for_bytes_with_cancel(&secret, cancelled, deadline)?;
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (registry, cancelled, deadline);
     Ok(())
 }
 

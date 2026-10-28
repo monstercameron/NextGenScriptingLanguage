@@ -355,6 +355,9 @@ fn hand_over_kill_ends_the_handed_over_child() {
     let mut interpreter = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["run", program.to_str().unwrap()])
         .current_dir(directory.path())
+        // Handover is refused under Actions hardening, so never inherit an
+        // ambient CI marker: this test pins the non-hardened contract.
+        .env_remove("GITHUB_ACTIONS")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

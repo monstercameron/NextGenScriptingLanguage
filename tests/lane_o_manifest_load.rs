@@ -57,20 +57,21 @@ fn single_file_load_keeps_canonical_origin_and_parent_root() {
 
 #[cfg(unix)]
 #[test]
-fn symlinked_manifest_origin_is_its_canonical_target() {
+fn symlinked_manifest_file_is_refused() {
     let temp = tempdir().unwrap();
     let store = temp.path().join("store");
     let dir = temp.path().join("manifests");
     fs::create_dir(&store).unwrap();
     fs::create_dir(&dir).unwrap();
     fs::write(store.join("target.json"), manifest("lane.linked")).unwrap();
+    fs::write(dir.join("lane.real.json"), manifest("lane.real")).unwrap();
     std::os::unix::fs::symlink(store.join("target.json"), dir.join("link.json")).unwrap();
 
-    let registry = Registry::load(&dir).unwrap();
+    let error = format!("{:#}", Registry::load(&dir).unwrap_err());
 
-    assert_eq!(
-        registry.resolve("lane.linked").unwrap().origin().unwrap(),
-        fs::canonicalize(store.join("target.json")).unwrap()
+    assert!(
+        error.contains("link.json") && error.contains("symbolic link"),
+        "{error}"
     );
 }
 

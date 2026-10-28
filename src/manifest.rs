@@ -946,8 +946,8 @@ fn open_regular_manifest(path: &Path, nofollow: bool) -> std::io::Result<fs::Fil
     Ok(file)
 }
 
-fn read_manifest_file(path: &Path) -> std::io::Result<String> {
-    let file = open_regular_manifest(path, false)?;
+fn read_manifest_file(path: &Path, nofollow: bool) -> std::io::Result<String> {
+    let file = open_regular_manifest(path, nofollow)?;
     let size = file.metadata()?.len();
     let limit = size.checked_add(1).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "manifest is too large")
@@ -1154,12 +1154,20 @@ impl Registry {
         }))
     }
 
-    /// Load one JSON manifest file or all `.json` files in a directory.
+    /// Load one JSON manifest file or all `.json` files in a directory. The
+    /// manifest directory (or the single file's parent module root) and every
+    /// manifest file must pass the trusted-input ownership and writability
+    /// gate, and symlinked `.json` files are refused outright: a link would
+    /// let an untrusted target decide what runs under a trusted name.
     pub fn load(path: &Path) -> Result<Self> {
-        // Each entry records whether it is a plain file (not a symlink or a
-        // directory). Such a file inside the canonical directory is its own
-        // canonical path, so it needs no separate canonicalize call.
+        // Each entry records whether it is a plain file. Directory symlinks
+        // are resolved through canonicalization and verified at their target;
+        // file symlinks are refused below, before anything is read.
         let paths = if path.is_dir() {
+            let canonical = fs::canonicalize(path)
+                .with_context(|| format!("canonicalizing manifest root {}", path.display()))?;
+            crate::security::verify_trusted_input_dir(&canonical, "manifest directory")
+                .with_context(|| format!("trusting manifest directory {}", path.display()))?;
             let mut entries = fs::read_dir(path)
                 .with_context(|| format!("reading manifest directory {}", path.display()))?
                 .map(|entry| {
@@ -1173,6 +1181,14 @@ impl Registry {
             entries.sort();
             entries
         } else {
+            if fs::symlink_metadata(path)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                bail!(
+                    "manifest {} is a symbolic link; symlinked manifests are refused, pass the real file",
+                    path.display()
+                );
+            }
             vec![(path.to_path_buf(), false)]
         };
         if paths.is_empty() {
@@ -1195,18 +1211,47 @@ impl Registry {
                 .ok_or_else(|| anyhow!("manifest path has no parent directory"))?
                 .to_path_buf(),
         });
+        if let Some(root) = &module_root {
+            crate::security::verify_trusted_input_dir(root, "module root")
+                .with_context(|| format!("trusting module root {}", root.display()))?;
+        }
         let mut data = RegistryData {
             module_root,
             ..RegistryData::default()
         };
         let mut fingerprint = Vec::new();
         for (path, plain) in paths {
-            let raw = read_manifest_file(&path)
+            if !plain
+                && fs::symlink_metadata(&path)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                bail!(
+                    "manifest {} is a symbolic link; symlinked manifests are refused, pass the real file",
+                    path.display()
+                );
+            }
+            // No-follow opens close the race between the check above and this
+            // read: a file swapped for a link after the check fails here.
+            let raw = read_manifest_file(&path, true)
                 .with_context(|| format!("reading manifest {}", path.display()))?;
             let origin = match (&canonical_dir, path.file_name(), plain) {
-                (Some(root), Some(name), true) => root.join(name),
-                _ => fs::canonicalize(&path)
-                    .with_context(|| format!("canonicalizing manifest {}", path.display()))?,
+                (Some(root), Some(name), true) => {
+                    let origin = root.join(name);
+                    crate::security::verify_trusted_input_file(&origin, "manifest")
+                        .with_context(|| {
+                            format!("trusting manifest {}", path.display())
+                        })?;
+                    origin
+                }
+                _ => {
+                    let origin = fs::canonicalize(&path)
+                        .with_context(|| format!("canonicalizing manifest {}", path.display()))?;
+                    crate::security::verify_trusted_input_file(&origin, "manifest")
+                        .with_context(|| {
+                            format!("trusting manifest {}", path.display())
+                        })?;
+                    origin
+                }
             };
             fingerprint.push((
                 path.file_name().unwrap_or_default().to_owned(),
@@ -1229,14 +1274,21 @@ impl Registry {
     /// then runs in array order. A later syntax error therefore takes
     /// precedence over an earlier semantic manifest error.
     pub fn load_catalog(path: &Path) -> Result<Self> {
-        let raw = read_manifest_file(path)
+        // A catalog alias may name a symlink; it is resolved first and the
+        // canonical catalog and its module root pass the same trusted-input
+        // gate as directory loads.
+        let raw = read_manifest_file(path, false)
             .with_context(|| format!("reading manifest catalog {}", path.display()))?;
         let origin = fs::canonicalize(path)
             .with_context(|| format!("canonicalizing manifest catalog {}", path.display()))?;
+        crate::security::verify_trusted_input_file(&origin, "manifest catalog")
+            .with_context(|| format!("trusting manifest catalog {}", path.display()))?;
         let module_root = origin
             .parent()
             .ok_or_else(|| anyhow!("manifest catalog path has no parent directory"))?
             .to_path_buf();
+        crate::security::verify_trusted_input_dir(&module_root, "module root")
+            .with_context(|| format!("trusting module root {}", module_root.display()))?;
         let catalog: RawManifestCatalog<'_> = serde_json::from_str(&raw)
             .with_context(|| format!("parsing manifest catalog {}", path.display()))?;
         if catalog.format != MANIFEST_CATALOG_FORMAT {
@@ -1375,6 +1427,12 @@ impl Registry {
         root: PathBuf,
         index: &'static bundled_manifests::BundledIndex,
     ) -> Result<Self> {
+        // Installed default roots decide what runs when no explicit manifest
+        // source is given, so they pass the same ownership and writability
+        // gate as explicit directories. Per-entry content is still verified
+        // against the bundled index on first use.
+        crate::security::verify_trusted_input_dir(&root, "manifest directory")
+            .with_context(|| format!("trusting manifest directory {}", root.display()))?;
         let cells = (0..index.entries().len())
             .map(|_| OnceLock::new())
             .collect();

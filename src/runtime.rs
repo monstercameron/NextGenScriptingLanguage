@@ -1330,6 +1330,8 @@ pub(crate) fn binary_path_with_path(
 }
 
 /// Locate the version-matched generic applet helper beside this executable.
+/// The helper decides what the `@execute-applet` applets run, so it passes
+/// the same trusted-input ownership and writability gate as manifests.
 pub fn bundled_applet_helper() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
     let helper = executable.with_file_name(if cfg!(windows) {
@@ -1337,9 +1339,15 @@ pub fn bundled_applet_helper() -> Result<PathBuf> {
     } else {
         "execute-applet"
     });
-    let metadata = fs::metadata(&helper).with_context(|| {
+    let metadata = fs::symlink_metadata(&helper).with_context(|| {
         "bundled execute-applet helper missing; build the interpreter and helper binaries with cargo build --release"
     })?;
+    crate::security::verify_trusted_metadata(
+        &helper,
+        &metadata,
+        crate::security::TrustedInputKind::File,
+        "bundled execute-applet helper",
+    )?;
     if !metadata.is_file() || !crate::platform::executable(&metadata) {
         bail!("bundled execute-applet helper is not an executable file");
     }
@@ -1347,6 +1355,7 @@ pub fn bundled_applet_helper() -> Result<PathBuf> {
 }
 
 /// Locate the version-matched native model applet beside this executable.
+/// The helper passes the same trusted-input gate as the applet helper.
 pub fn bundled_model_applet() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
     let helper = executable.with_file_name(if cfg!(windows) {
@@ -1354,9 +1363,15 @@ pub fn bundled_model_applet() -> Result<PathBuf> {
     } else {
         "execute-model"
     });
-    let metadata = fs::metadata(&helper).with_context(|| {
+    let metadata = fs::symlink_metadata(&helper).with_context(|| {
         "bundled execute-model helper missing; build both binaries with cargo build --release"
     })?;
+    crate::security::verify_trusted_metadata(
+        &helper,
+        &metadata,
+        crate::security::TrustedInputKind::File,
+        "bundled execute-model helper",
+    )?;
     if !metadata.is_file() || !crate::platform::executable(&metadata) {
         bail!("bundled execute-model helper is not an executable file");
     }

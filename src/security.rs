@@ -1291,6 +1291,96 @@ fn valid_environment_name(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// Whether a trusted input must name a directory or a regular file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrustedInputKind {
+    Directory,
+    File,
+}
+
+/// Ownership, writability and link gate for files that decide what runs:
+/// manifest directories and files, module roots and sources, and the bundled
+/// helper binaries. Unix inputs must be owned by the effective user (or root,
+/// which owns installed helpers and manifest trees) and must not be
+/// group/world-writable, mirroring the cache rules in `src/runtime/cache.rs`.
+/// Symlinks are refused so a link cannot redirect a trusted name at an
+/// untrusted target; callers that accept an alias must canonicalize first and
+/// verify the canonical target with these functions. Windows inputs must not
+/// be reparse points. Windows ACLs are deliberately not enforced here:
+/// installed manifest trees and helpers must stay readable by every local user
+/// that may run the tool, so a private-DACL demand would break shared
+/// installs; see SECURITY.md for the extraction-location guidance that keeps
+/// those trees writable only by Administrators. Every check stats the path
+/// without following a trailing link, but a replacement between this check and
+/// a later open or read remains a race; callers narrow it with no-follow opens
+/// and same-load content verification, and the residual race is documented in
+/// SECURITY.md alongside the same-user limit.
+pub(crate) fn verify_trusted_input_dir(path: &Path, label: &str) -> Result<std::fs::Metadata> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| anyhow!("reading {label} {}: {error}", path.display()))?;
+    verify_trusted_metadata(path, &metadata, TrustedInputKind::Directory, label)?;
+    Ok(metadata)
+}
+
+/// See [`verify_trusted_input_dir`]: the same ownership, writability and link
+/// gate for a single trusted file.
+pub(crate) fn verify_trusted_input_file(path: &Path, label: &str) -> Result<std::fs::Metadata> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| anyhow!("reading {label} {}: {error}", path.display()))?;
+    verify_trusted_metadata(path, &metadata, TrustedInputKind::File, label)?;
+    Ok(metadata)
+}
+
+/// Enforce the trusted-input gate on already-stat metadata. Callers that
+/// fetched their own `symlink_metadata` (to keep a distinct missing-file
+/// diagnostic) use this instead of stat-ing twice.
+pub(crate) fn verify_trusted_metadata(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    kind: TrustedInputKind,
+    label: &str,
+) -> Result<()> {
+    if metadata.file_type().is_symlink() {
+        return Err(anyhow!(
+            "{label} {} is a symbolic link; pass the real path",
+            path.display()
+        ));
+    }
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(metadata) {
+        return Err(anyhow!(
+            "{label} {} is a reparse point; pass the real path",
+            path.display()
+        ));
+    }
+    let kind_ok = match kind {
+        TrustedInputKind::Directory => metadata.is_dir(),
+        TrustedInputKind::File => metadata.is_file(),
+    };
+    if !kind_ok {
+        let noun = match kind {
+            TrustedInputKind::Directory => "a directory",
+            TrustedInputKind::File => "a regular file",
+        };
+        return Err(anyhow!("{label} {} is not {noun}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid takes no arguments and cannot fail; the result is
+        // compared with the owner uid in `metadata`.
+        let owned = metadata.uid() == crate::platform::unix_ffi::effective_uid()
+            || metadata.uid() == 0;
+        if !owned || metadata.mode() & 0o022 != 0 {
+            return Err(anyhow!(
+                "{label} {} must be owned by the current user or root and not group/world-writable",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {
     use std::fs::OpenOptions;
     let mut options = OpenOptions::new();

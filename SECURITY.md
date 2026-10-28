@@ -6,8 +6,16 @@ untrusted mode as described below.
 Literal argument passing prevents implicit shell expansion; it does not make an
 arbitrary command safe. An explicit shell invocation can still interpret shell
 code. Scripts, applet manifests, selected executables and their dependencies
-remain trusted inputs. Process groups and Windows jobs supervise children;
-they do not sandbox filesystem, network or detached-process access.
+remain trusted inputs. Manifest directories, manifest files, module roots and
+sources, and the bundled helper binaries pass an ownership and writability
+gate before they decide what runs: on Unix each must be owned by the
+effective user or root and must not be group/world-writable, and symlinked
+manifest or module files (and Windows reparse points) are refused. Install or
+extract release archives only into locations writable solely by their owner
+or Administrators (default per-user and Program Files locations qualify;
+shared world-writable trees such as a bare `C:\` subfolder do not), and keep
+those permissions after extraction. Process groups and Windows jobs supervise
+children; they do not sandbox filesystem, network or detached-process access.
 
 ## Cache and checkpoint state
 
@@ -270,7 +278,18 @@ capability policy does not supply those data-flow grants.
 
 The cache security regressions cover ordinary cache reuse, exact binary bytes,
 output limits, symlinked files/directories including trailing separators,
-FIFOs, sockets and Unix write permissions. Real CLI tests require no output,
+FIFOs, sockets and Unix write permissions. The manifest-trust regressions
+cover the same shape of attack on the inputs that pick the executable:
+group/world-writable manifest directories, manifest files, module roots and
+helper binaries are refused with the offending path named, symlinked and FIFO
+manifest entries fail closed without hanging, and an owned directory still
+runs. Residual limits: the gate stats each path without following a trailing
+link and re-checks content at load, but a replacement between the final check
+and use remains a race, and (as with the cache key) a same-user process can
+rewrite what it owns. Windows refuses reparse points; Windows ACLs are not
+enforced on shared manifest trees and helpers because they must stay readable
+by every local runner, so those installs depend on Administrator-only
+writability of the extraction location. Real CLI tests require no output,
 no later save and no native launch when an invalid cache is encountered. Unit
 regressions also cover same-user cache-byte tampering, malformed integrity tags,
 and a parent replacement after the Unix cache directory descriptor is pinned.

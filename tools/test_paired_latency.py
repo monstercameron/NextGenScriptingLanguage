@@ -45,7 +45,10 @@ class PairedLatencyTests(unittest.TestCase):
             "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}", workflow
         )
         self.assertIn('if [[ "$EVENT_NAME" == "pull_request" ]]; then', workflow)
-        self.assertIn('--manifest-dir "$GITHUB_WORKSPACE/manifests"', workflow)
+        self.assertIn('--baseline-manifest-dir', workflow)
+        self.assertIn('--candidate-manifest-dir', workflow)
+        self.assertIn('baseline_manifests="$parent_worktree/manifests"', workflow)
+        self.assertIn('candidate_manifests="$GITHUB_WORKSPACE/manifests"', workflow)
         self.assertIn("continue-on-error: true", workflow)
         self.assertIn("path: target/paired-latency.json", workflow)
 
@@ -61,6 +64,45 @@ class PairedLatencyTests(unittest.TestCase):
         self.assertNotIn("linux-latency-budget.json", paired)
         self.assertIn("without", workflow)
         self.assertIn("moving the absolute ceiling", workflow)
+
+    def test_binary_dependent_steps_guard_missing_executable(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for marker in (
+            "Compare Omarchy ports with their Bash originals",
+            "id: linux_latency",
+            "id: paired_latency",
+            "Measure hot-path benchmarks",
+        ):
+            section = workflow.split(marker, 1)[1].split("- name:", 1)[0]
+            self.assertIn("[[ ! -x target/release/execute ]]", section)
+            self.assertIn("is missing", section)
+            self.assertIn("preserve the original failure", section)
+            self.assertIn("exit 0", section)
+
+    def test_paired_latency_compares_each_revision_with_its_own_manifests(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        paired = workflow.split("id: paired_latency", 1)[1]
+        paired = paired.split("Save paired latency samples", 1)[0]
+        self.assertIn('baseline_manifests="$parent_worktree/manifests"', paired)
+        self.assertIn('candidate_manifests="$GITHUB_WORKSPACE/manifests"', paired)
+        self.assertIn("--baseline-manifest-dir", paired)
+        self.assertIn("--candidate-manifest-dir", paired)
+        self.assertIn('if [[ ! -d "$baseline_manifests" ]]; then', paired)
+        self.assertIn("falling back to candidate manifests", paired)
+        self.assertNotIn('--manifest-dir "$GITHUB_WORKSPACE/manifests"', paired)
+
+    def test_linux_budget_artifacts_avoid_rerun_collisions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for name in (
+            "linux-latency-samples-",
+            "linux-latency-paired-",
+            "linux-binary-size-paired-",
+        ):
+            self.assertIn(name + "${{ github.run_id }}-${{ github.run_attempt }}", workflow)
+        self.assertEqual(workflow.count("overwrite: true"), 3)
 
     def test_historical_anchor_workflow_is_manual_and_does_not_change_budgets(self) -> None:
         root = Path(__file__).resolve().parents[1]

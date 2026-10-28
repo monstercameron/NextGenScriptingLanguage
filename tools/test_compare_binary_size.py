@@ -265,6 +265,33 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertNotIn("linux-binary-budget.json", paired)
         self.assertIn("if-no-files-found: warn", workflow)
 
+    def test_paired_size_guards_missing_executable(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        paired = workflow.split("id: paired_binary_size", 1)[1]
+        paired = paired.split("Save paired binary-size samples", 1)[0]
+        self.assertIn("[[ ! -x target/release/execute ]]", paired)
+        self.assertIn("is missing", paired)
+        self.assertIn("preserve the original failure", paired)
+        self.assertIn("exit 0", paired)
+        # The guard must precede the candidate copy so a build failure
+        # skips cleanly instead of failing on `cp` noise.
+        self.assertLess(
+            paired.index("[[ ! -x target/release/execute ]]"),
+            paired.index('cp target/release/execute "$candidate_bin"'),
+        )
+
+    def test_paired_size_artifact_avoids_rerun_collisions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        save = workflow.split("Save paired binary-size samples", 1)[1].split("- name:", 1)[0]
+        self.assertIn(
+            "linux-binary-size-paired-${{ github.run_id }}-${{ github.run_attempt }}",
+            save,
+        )
+        self.assertIn("overwrite: true", save)
+        self.assertIn("if-no-files-found: warn", save)
+
 
 if __name__ == "__main__":
     unittest.main()

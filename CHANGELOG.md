@@ -7,6 +7,35 @@ original version labels.
 
 ## Unreleased
 
+- Run records now carry a durable policy-decision audit. `execute run
+  --record` writes the allow/deny decisions into `run.json` with the execution
+  mode and which policies were configured (never policy contents), including a
+  baseline on runs with no policy so a record never silently implies
+  confinement that was not there. `execute show-run` prints the audit in text
+  and JSON output. The audit keeps the most recent 256 decisions with an
+  explicit total and truncation flag.
+
+- The run-record policy audit is hash-chained and verified. Each kept decision
+  links into the record's `audit_head`, and `execute show-run` re-verifies the
+  links, the sequence order and the truncation accounting on every read: an
+  edited, deleted or reordered decision, or a truncation flag that disagrees
+  with the total, is shown labeled untrusted with an `audit_error` rather than
+  hidden. Records from the first bounded
+  audit stay readable but are labeled unverified. The chain evidences naive
+  edits and corruption, not a same-user forger who recomputes it;
+  whole-record tamper evidence remains separate record-integrity work.
+
+- The run-record policy audit is sealed and warn-open. `execute run --record`
+  seals the chain head plus the truncation accounting with `audit_mac`, an
+  HMAC under the per-user key, and names each configured policy by version
+  and a one-way content digest (never policy contents). `execute show-run`
+  always presents the audit instead of hiding it on tamper: a failed chain or
+  seal check, or a record with no usable seal, is shown labeled unsealed or
+  untrusted, with an `audit_error` in JSON output. The seal raises the bar to
+  key holders -- a same-user editor with key access can still rewrite the
+  audit and reseal it, so whole-record tamper evidence remains separate
+  record-integrity work.
+
 - `env.load` can mark loaded values secret with `secret true` or
   `secret ["NAME", ...]`; marked values are redacted from records, traces and
   diagnostics and refuse `--checkpoint` before effects. Checkpoint

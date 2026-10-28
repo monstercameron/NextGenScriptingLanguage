@@ -48,8 +48,9 @@
 //! `execute check --format github` intentionally emits workflow commands and
 //! is unaffected.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Process-wide hardening switch. Set once before execution; read on every
 /// forwarded write. `SeqCst` keeps the reasoning simple across worker threads.
@@ -121,19 +122,35 @@ static RUN_BOUNDARY_LOCK: Mutex<()> = Mutex::new(());
 /// kernel ordering cannot order that merged view, so only in-process
 /// filter+write atomicity across both streams can.
 ///
-/// Lock order is always `TERMINAL_SINK_LOCK`, then the stdout sanitizer,
-/// then the stderr sanitizer, then (for pooled writes) the output-target
-/// reservation. No path acquires them in reverse, so the nesting cannot
-/// deadlock. The lock is held across the blocking terminal write on purpose:
-/// releasing it trades a stalled terminal wedging hardened output for silent
-/// forgery/mask-loss, and the fail-closed choice is to stall together (the
-/// descriptors share one sink, so stalling together preserves destination
-/// semantics). File redirects and non-hardened writes never take this lock
-/// and stay concurrent. Cancelled or expired pooled writes keep the lock
-/// until their in-flight worker finishes (the worker observes `stop` between
-/// bounded chunks, so the wait is short) and then report the cancellation:
-/// releasing early would let the next filter run before the prior bytes
-/// land, re-opening the reorder window.
+/// Lock order is always `TERMINAL_SINK_LOCK`, then the merged-terminal
+/// claim, then (for pooled writes) the output-target reservation, then the
+/// stdout sanitizer, then the stderr sanitizer. No path acquires them in
+/// reverse, so the nesting cannot deadlock. Claiming before filtering matters
+/// for the cancel drain below: even if the drain expires while a worker is
+/// still kernel-blocked, the next hardened write — either descriptor, pooled
+/// or direct — blocks on the merged claim before it filters, so it cannot
+/// classify before the prior bytes land. At most one hardened terminal write
+/// is in flight process-wide, so filter order always matches landing order
+/// and the shared line state always reflects every preceding byte, whichever
+/// descriptor carried it. The lock is held across the blocking terminal write
+/// on purpose: releasing it trades a stalled terminal wedging hardened
+/// output for silent forgery/mask-loss, and the fail-closed choice is to
+/// stall together (the descriptors share one sink, so stalling together
+/// preserves destination semantics). File redirects and non-hardened writes
+/// never take this lock and stay concurrent. Cancelled or expired pooled
+/// writes signal `stop` and then drain the worker with a bound instead of
+/// releasing early or hanging: steady worker progress (a slow reader)
+/// extends the drain up to the caller deadline so order stays intact, while
+/// no progress expires it — at the caller deadline, or after a short grace
+/// without one — and the cancellation is reported. The in-flight worker keeps
+/// both the sink-era order and the merged claim until it finishes, so even a
+/// forced drain expiry leaves every later hardened write ordered behind it;
+/// waiters blocked on the claim keep checking their own cancel/deadline, so
+/// cancellation stays bounded while uncancelled waiters stall together rather
+/// than forge. In `debug` builds the filter/flush primitives assert this lock
+/// is held, so a future caller that filters without the sink fails tests
+/// instead of silently re-opening the split (the check is lock-state, not
+/// ownership: it cannot see which thread holds the lock).
 ///
 /// Concurrent hardened runs against one terminal are chunk-serialized by
 /// this lock (each chunk filters and lands atomically, so no raw command can
@@ -150,6 +167,115 @@ pub fn terminal_sink_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+/// Which hardened terminal write is currently in flight, if any. Pooled
+/// writers move their claim into the worker (held until the kernel write
+/// finishes); direct writers (masks, finals, the serve notice) hold theirs
+/// across the blocking `write_all`. Either way at most one hardened write is
+/// in flight, so no later filter can classify before prior bytes land —
+/// including after a forced cancel-drain expiry that released the sink lock
+/// early. The value is an owned generation token, not a plain boolean, so a
+/// stale guard (or a reset racing a finished worker) can never release
+/// another writer's claim: `Drop` clears the slot only when it still holds
+/// this guard's own token.
+static MERGED_TERMINAL_ACTIVE: Mutex<Option<u64>> = Mutex::new(None);
+static MERGED_TERMINAL_NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Proof that this thread (or its worker) is the one hardened terminal write
+/// currently in flight. Dropping releases the claim for the next writer, but
+/// only when this guard still owns it: a stale drop after a newer writer
+/// claimed the slot is a no-op instead of a false unlock.
+/// The guard holds no lock — just the token above — so it is `Send` and can
+/// move into a pool worker; the brief internal mutex is only taken
+/// momentarily inside `try_claim_merged_terminal` and `Drop`, never across
+/// other locks. Lock order stays `TERMINAL_SINK_LOCK`, then this claim.
+pub struct MergedTerminalReservation(u64);
+
+impl Drop for MergedTerminalReservation {
+    fn drop(&mut self) {
+        let mut active = MERGED_TERMINAL_ACTIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *active == Some(self.0) {
+            *active = None;
+        }
+    }
+}
+
+/// Take the merged-terminal claim without waiting, or `None` while another
+/// hardened write is in flight. Cancellable paths poll this with their own
+/// cancel/deadline via [`reserve_merged_terminal`]; paths with no cancel or
+/// deadline to report use [`reserve_merged_terminal_blocking`].
+pub(crate) fn try_claim_merged_terminal() -> Option<MergedTerminalReservation> {
+    let mut active = MERGED_TERMINAL_ACTIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if active.is_some() {
+        return None;
+    }
+    let id = MERGED_TERMINAL_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    *active = Some(id);
+    Some(MergedTerminalReservation(id))
+}
+
+fn check_merged_cancel(cancelled: &AtomicBool, deadline: Option<Instant>) -> anyhow::Result<()> {
+    if let Some(end) = deadline {
+        if Instant::now() >= end {
+            anyhow::bail!("terminal wait reached its deadline");
+        }
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        anyhow::bail!("program cancelled by signal");
+    }
+    Ok(())
+}
+
+/// Take the merged-terminal claim, waiting until the in-flight hardened
+/// write finishes. The wait keeps checking the caller's own cancel flag and
+/// deadline, so cancellation stays bounded: a cancelled waiter reports
+/// cancellation without writing anything, while an uncancelled waiter
+/// without a deadline stalls together with the wedged terminal rather than
+/// forging (fail-closed). The claim moves into the writer (or is held
+/// across the direct `write_all`), so every later hardened write — either
+/// descriptor, pooled or direct — stays ordered behind this one even after
+/// a forced cancel-drain expiry.
+pub fn reserve_merged_terminal(
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> anyhow::Result<MergedTerminalReservation> {
+    loop {
+        check_merged_cancel(cancelled, deadline)?;
+        if let Some(reservation) = try_claim_merged_terminal() {
+            return Ok(reservation);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Take the merged-terminal claim, waiting until the in-flight hardened
+/// write finishes. Only for paths with no cancel or deadline to report
+/// (process-exit diagnostics, best-effort registry-hook masks, tests): they
+/// run at stream setup or teardown, when completeness matters most, and
+/// stalling together with a wedged terminal is the fail-closed choice —
+/// skipping would drop masks (secret unmasked) or misclassify after
+/// uncertain bytes (forgery). Every path that runs under a cancellable run
+/// must use [`reserve_merged_terminal`] with that run's flag instead so a
+/// cancelled run reports instead of hanging.
+pub fn reserve_merged_terminal_blocking() -> MergedTerminalReservation {
+    let never = AtomicBool::new(false);
+    reserve_merged_terminal(&never, None)
+        .expect("uncancellable merged-terminal wait has nothing to observe")
+}
+
+/// How long a terminal-serialized caller waits with no worker progress before
+/// reporting its own cancellation or deadline. The worker checks `stop`
+/// between bounded chunks, so a draining reader finishes fast and a slow
+/// reader extends the drain via progress; only a wedged pipe (a kernel write
+/// blocked with no reader and no progress) reaches this cap. Both the pooled
+/// terminal path (`runtime::stdio`) and the direct path below share this
+/// bound so every hardened terminal write reports cancellation on the same
+/// horizon.
+pub(crate) const TERMINAL_CANCEL_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// Held for the whole outermost finite run. Dropping it releases the
 /// process-wide outermost slot claimed by [`enter_finite_run`].
@@ -180,20 +306,44 @@ impl Drop for FiniteRunGuard {
 /// and take no boundary. Library hosts that run concurrent hardened runs
 /// against one terminal must serialize those runs for exact filtering.
 pub fn enter_finite_run(registry: &crate::manifest::Registry) -> FiniteRunGuard {
+    let never = AtomicBool::new(false);
+    enter_finite_run_with_cancel(registry, &never, None)
+        .expect("uncancellable run boundary has nothing to observe")
+}
+
+/// Claim the process-wide outermost slot and run the terminal boundary for
+/// `registry` while staying cancellable: the sweep and the reset both wait
+/// on the merged-terminal claim with `cancelled`/`deadline`, so a run
+/// cancelled while a previous worker is still kernel-blocked reports instead
+/// of hanging unbounded. The sweep still precedes the reset, and the reset
+/// still waits for in-flight bytes to land before clearing line state, so
+/// merged ordering stays fail-closed.
+pub fn enter_finite_run_with_cancel(
+    registry: &crate::manifest::Registry,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> anyhow::Result<FiniteRunGuard> {
     let _boundary = RUN_BOUNDARY_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let previous = ACTIVE_OUTERMOST_RUNS.fetch_add(1, Ordering::SeqCst);
-    if previous == 0 {
-        emit_masks_for_registry(registry);
-        reset_terminal_state();
+    // If a cancellable boundary fails, release the slot: no run owns it.
+    let result = if previous == 0 {
+        (|| -> anyhow::Result<()> {
+            emit_masks_for_registry_with_cancel(registry, cancelled, deadline)?;
+            reset_terminal_state_with_cancel(cancelled, deadline)?;
+            Ok(())
+        })()
     } else {
         // A concurrent outermost run owns the shared line state: sweeping
         // this run's own secrets is still required, but resetting would drop
         // held split prefixes the other run has not yet been given.
-        emit_masks_for_registry(registry);
+        emit_masks_for_registry_with_cancel(registry, cancelled, deadline)
+    };
+    if result.is_err() {
+        ACTIVE_OUTERMOST_RUNS.fetch_sub(1, Ordering::SeqCst);
     }
-    FiniteRunGuard { claimed: true }
+    result.map(|()| FiniteRunGuard { claimed: true })
 }
 
 /// Emit one mask line per already-registered secret in `registry`. Call after
@@ -202,12 +352,27 @@ pub fn enter_finite_run(registry: &crate::manifest::Registry) -> FiniteRunGuard 
 /// themselves through the registry hook; calling this twice only repeats
 /// mask lines, which the runner tolerates.
 pub fn emit_masks_for_registry(registry: &crate::manifest::Registry) {
+    let never = AtomicBool::new(false);
+    let _ = emit_masks_for_registry_with_cancel(registry, &never, None);
+}
+
+/// Cancellable sweep used on run boundaries that run under a cancel flag.
+/// Each mask waits on the merged claim with `cancelled`/`deadline`, so a
+/// cancelled run reports instead of hanging behind a wedged worker, while an
+/// uncancelled run still stalls together with the terminal (fail-closed) so
+/// no mask is skipped and no later filter classifies before prior bytes land.
+pub fn emit_masks_for_registry_with_cancel(
+    registry: &crate::manifest::Registry,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> anyhow::Result<()> {
     if !enabled() {
-        return;
+        return Ok(());
     }
     for secret in crate::security::secret_redactor(registry).snapshot_secrets() {
-        emit_mask_for_bytes(&secret);
+        emit_mask_for_bytes_with_cancel(&secret, cancelled, deadline)?;
     }
+    Ok(())
 }
 
 /// Reset the terminal sanitizer line state. The outermost finite-run boundary
@@ -222,13 +387,33 @@ pub fn emit_masks_for_registry(registry: &crate::manifest::Registry) {
 /// process-global by design — use [`enter_finite_run`], which resets only
 /// when no other outermost run is active.
 pub fn reset_terminal_state() {
+    let never = AtomicBool::new(false);
+    let _ = reset_terminal_state_with_cancel(&never, None);
+}
+
+/// Cancellable reset that also waits on the merged-terminal claim. After a
+/// forced cancel-drain expiry the sink lock is free while the worker still
+/// holds the merged claim with bytes in flight; resetting the sanitizers
+/// underneath those bytes would misclassify the next run. Waiting on the
+/// claim keeps filter order behind landing order. A cancelled waiter reports
+/// without touching sanitizer state; the in-flight claim stays owned by its
+/// worker (no false unlock), so no later filter can classify early.
+pub fn reset_terminal_state_with_cancel(
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> anyhow::Result<()> {
     // Take the sink lock outer so a reset cannot slip between another
-    // thread's filter and its sink write. Resets only run on run boundaries
-    // (no concurrent outermost streaming) or between tests, so the hold is
-    // short and never spans a blocking write.
+    // thread's filter and its sink write, then wait on the merged claim so a
+    // reset cannot slip between a forced drain expiry and its worker's late
+    // bytes landing. Resets only run on run boundaries (no concurrent
+    // outermost streaming) or between tests, so the hold is short and never
+    // spans a blocking write — unless a worker is still kernel-blocked, in
+    // which case the wait reports `cancelled`/deadline instead of clearing
+    // state underneath uncertain bytes.
     let _sink = TERMINAL_SINK_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _merged = reserve_merged_terminal(cancelled, deadline)?;
     if let Some(slot) = STDOUT_SANITIZER.get() {
         if let Ok(mut guard) = slot.lock() {
             *guard = StreamSanitizer::new();
@@ -239,6 +424,7 @@ pub fn reset_terminal_state() {
             *guard = StreamSanitizer::new();
         }
     }
+    Ok(())
 }
 
 /// Zero-width space, inserted into a command prefix so the runner no longer
@@ -566,6 +752,10 @@ fn stderr_sanitizer() -> &'static Mutex<StreamSanitizer> {
 /// call and their sink write; calling this without the sink lock classifies
 /// correctly only when no concurrent terminal write is in flight.
 pub fn filter_stdout(bytes: &[u8]) -> Vec<u8> {
+    debug_assert!(
+        TERMINAL_SINK_LOCK.try_lock().is_err(),
+        "filter_stdout without terminal_sink_lock re-opens the filter/write reorder window"
+    );
     if !enabled() {
         return bytes.to_vec();
     }
@@ -580,6 +770,10 @@ pub fn filter_stdout(bytes: &[u8]) -> Vec<u8> {
 /// stderr writes must hold the sink lock across filter and write because both
 /// streams share the merged runner log.
 pub fn filter_stderr(bytes: &[u8]) -> Vec<u8> {
+    debug_assert!(
+        TERMINAL_SINK_LOCK.try_lock().is_err(),
+        "filter_stderr without terminal_sink_lock re-opens the filter/write reorder window"
+    );
     if !enabled() {
         return bytes.to_vec();
     }
@@ -596,6 +790,10 @@ pub fn filter_stderr(bytes: &[u8]) -> Vec<u8> {
 /// is not truncated; live streams never flush so a prefix split across writes
 /// stays neutralized.
 pub fn flush_stdout() -> Vec<u8> {
+    debug_assert!(
+        TERMINAL_SINK_LOCK.try_lock().is_err(),
+        "flush_stdout without terminal_sink_lock can release a prefix a concurrent filter is still classifying"
+    );
     if !enabled() {
         return Vec::new();
     }
@@ -607,6 +805,10 @@ pub fn flush_stdout() -> Vec<u8> {
 
 /// End-of-stream flush for the stderr sanitizer. See [`flush_stdout`].
 pub fn flush_stderr() -> Vec<u8> {
+    debug_assert!(
+        TERMINAL_SINK_LOCK.try_lock().is_err(),
+        "flush_stderr without terminal_sink_lock can release a prefix a concurrent filter is still classifying"
+    );
     if !enabled() {
         return Vec::new();
     }
@@ -619,6 +821,10 @@ pub fn flush_stderr() -> Vec<u8> {
 /// Sanitize a final stdout buffer at end of stream, preserving the shared
 /// cross-write line state with streamed output. Use for program output written
 /// after streaming has finished (`run`, `resume`, `--once`, live `host_run`).
+///
+/// Like [`filter_stdout`], callers must hold [`terminal_sink_lock`] across
+/// this call and the sink write that follows; prefer [`write_stdout_final`],
+/// which does both atomically.
 pub fn filter_stdout_final(bytes: &[u8]) -> Vec<u8> {
     if !enabled() {
         return bytes.to_vec();
@@ -629,6 +835,10 @@ pub fn filter_stdout_final(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// End-of-stream sanitize for a final stderr buffer. See [`filter_stdout_final`].
+///
+/// Like [`filter_stderr`], callers must hold [`terminal_sink_lock`] across
+/// this call and the sink write that follows; prefer [`write_stderr_final`],
+/// which does both atomically.
 pub fn filter_stderr_final(bytes: &[u8]) -> Vec<u8> {
     if !enabled() {
         return bytes.to_vec();
@@ -760,6 +970,211 @@ fn mask_line_bytes(line: &str, mid_line: bool) -> Vec<u8> {
     buf
 }
 
+/// Write already-filtered terminal bytes on a short-lived worker thread while
+/// the caller waits with the same progress-gated cancel drain as the pooled
+/// path.
+///
+/// Direct writers (masks, finals, the live serve notice) hold the sink and
+/// the merged-terminal claim across this call. A wedged fd blocks a plain
+/// `write_all` in-kernel with no reader, so writing inline ignores a
+/// SIGINT/deadline that lands mid-write; the worker instead checks `stop`
+/// between bounded chunks and reports progress, while the caller signals
+/// `stop` on cancel/deadline and reports after the drain grace when nothing
+/// moves. The worker keeps `merged` until its write finishes, so later
+/// hardened writers (either descriptor, pooled or direct) still filter behind
+/// these bytes even after a forced drain expiry: cross-fd order is preserved
+/// by the single flight, not by the released sink lock. A cancelled caller
+/// reports without writing anything more; an uncancelled caller without a
+/// deadline stalls together with the wedged terminal (fail-closed) instead
+/// of skipping bytes or misclassifying behind them.
+fn write_direct_bytes_with_cancel(
+    to_stdout: bool,
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+    merged: MergedTerminalReservation,
+) -> std::io::Result<()> {
+    if bytes.is_empty() {
+        drop(merged);
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(std::io::Error::other("program cancelled by signal"));
+        }
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            return Err(std::io::Error::other(
+                "terminal wait reached its deadline",
+            ));
+        }
+        return Ok(());
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(AtomicU64::new(0));
+    let (sender, receiver) = mpsc::sync_channel::<std::io::Result<()>>(1);
+    let data = bytes.to_vec();
+    let worker_stop = Arc::clone(&stop);
+    let worker_progress = Arc::clone(&progress);
+    std::thread::Builder::new()
+        .name("github-actions-direct-write".to_string())
+        .spawn(move || {
+            let result = write_direct_chunks(to_stdout, &data, &worker_stop, &worker_progress);
+            drop(merged);
+            let _ = sender.send(result);
+        })?;
+    // Progress-gated drain mirroring the pooled terminal path: steady worker
+    // progress (a slow reader) extends the drain up to the caller deadline,
+    // while no progress lets it expire — at the caller deadline, or after
+    // `TERMINAL_CANCEL_DRAIN_GRACE` without one — and the cancellation is
+    // reported. The worker keeps the merged claim until it finishes, so every
+    // later hardened writer still filters behind it after a forced expiry.
+    let mut drain_until: Option<Instant> = None;
+    let mut last_progress = 0u64;
+    loop {
+        let cancelled_now = cancelled.load(Ordering::Relaxed);
+        let past_deadline = deadline.is_some_and(|end| Instant::now() >= end);
+        if cancelled_now || past_deadline {
+            stop.store(true, Ordering::Release);
+            let now = Instant::now();
+            let made = progress.load(Ordering::Acquire);
+            if made != last_progress {
+                last_progress = made;
+                drain_until = Some(match deadline {
+                    Some(end) => (now + TERMINAL_CANCEL_DRAIN_GRACE).min(end),
+                    None => now + TERMINAL_CANCEL_DRAIN_GRACE,
+                });
+            } else if drain_until.is_none() {
+                drain_until = Some(match deadline {
+                    Some(end) if end < now + TERMINAL_CANCEL_DRAIN_GRACE => end,
+                    _ => now + TERMINAL_CANCEL_DRAIN_GRACE,
+                });
+            }
+        }
+        match receiver.recv_timeout(Duration::from_millis(5)) {
+            Ok(result) => {
+                // The worker finished: its bytes landed in order. Report any
+                // pending cancel/deadline first, else the worker's own result.
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(std::io::Error::other("program cancelled by signal"));
+                }
+                if let Some(end) = deadline {
+                    if Instant::now() >= end {
+                        return Err(std::io::Error::other(
+                            "terminal wait reached its deadline",
+                        ));
+                    }
+                }
+                return result;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(std::io::Error::other("program cancelled by signal"));
+                }
+                if deadline.is_some_and(|end| Instant::now() >= end) {
+                    return Err(std::io::Error::other(
+                        "terminal wait reached its deadline",
+                    ));
+                }
+                return Err(std::io::Error::other(
+                    "direct terminal writer stopped without a result",
+                ));
+            }
+        }
+        if cancelled.load(Ordering::Relaxed) || deadline.is_some_and(|end| Instant::now() >= end)
+        {
+            if let Some(until) = drain_until {
+                if Instant::now() >= until {
+                    if cancelled.load(Ordering::Relaxed) {
+                        return Err(std::io::Error::other("program cancelled by signal"));
+                    }
+                    return Err(std::io::Error::other(
+                        "terminal wait reached its deadline",
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Chunked blocking write for one direct terminal payload on the worker
+/// thread owned by [`write_direct_bytes_with_cancel`]: checks `stop` between
+/// bounded chunks and reports progress so the caller can extend its drain
+/// while a slow reader still moves. A wedged chunk blocks only this thread;
+/// the caller still reports its cancel/deadline on a bound.
+fn write_direct_chunks(
+    to_stdout: bool,
+    bytes: &[u8],
+    stop: &AtomicBool,
+    progress: &AtomicU64,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+    const CHUNK_BYTES: usize = 8 * 1024;
+    let mut offset = 0;
+    if to_stdout {
+        let mut stdout = std::io::stdout().lock();
+        while offset < bytes.len() {
+            if stop.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let end = (offset + CHUNK_BYTES).min(bytes.len());
+            stdout.write_all(&bytes[offset..end])?;
+            offset = end;
+            progress.store(offset as u64, Ordering::Release);
+        }
+        stdout.flush()
+    } else {
+        let mut stderr = std::io::stderr().lock();
+        while offset < bytes.len() {
+            if stop.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let end = (offset + CHUNK_BYTES).min(bytes.len());
+            stderr.write_all(&bytes[offset..end])?;
+            offset = end;
+            progress.store(offset as u64, Ordering::Release);
+        }
+        stderr.flush()
+    }
+}
+
+/// Direct mid-stream stderr write under the merged-sink discipline, with the
+/// same bounded cancel drain as the other direct writers.
+///
+/// The bytes are filtered under the sink and the claim inside, so
+/// classification and landing stay atomic exactly like the pooled path — a
+/// concurrent mask cannot land between them. Unlike [`write_stderr_final`]
+/// this never flushes the stderr sanitizer: only true end-of-stream
+/// diagnostics may flush, since flushing mid-stream would release a held
+/// `:` that a following chunk's `:` then completes into a forged
+/// line-leading `::`. A cancelled caller reports instead of hanging behind a
+/// wedged terminal; the worker keeps the merged claim until its bytes land,
+/// so later hardened filters stay ordered behind them.
+pub fn write_direct_stderr_with_cancel(
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> std::io::Result<()> {
+    let _sink = TERMINAL_SINK_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let merged = reserve_merged_terminal(cancelled, deadline)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(std::io::Error::other("program cancelled by signal"));
+    }
+    if let Some(end) = deadline {
+        if Instant::now() >= end {
+            return Err(std::io::Error::other(
+                "terminal wait reached its deadline",
+            ));
+        }
+    }
+    let filtered = if enabled() {
+        filter_stderr(bytes)
+    } else {
+        bytes.to_vec()
+    };
+    write_direct_bytes_with_cancel(false, &filtered, cancelled, deadline, merged)
+}
+
 /// Emit one `::add-mask::` line to standard output for a newly registered
 /// secret. Called from the secret registry, so a mask always precedes any
 /// later log line that could echo the value. Best-effort and silent when
@@ -796,16 +1211,47 @@ fn mask_line_bytes(line: &str, mid_line: bool) -> Vec<u8> {
 /// already-filtered bytes landing after the mask start a new line because
 /// the mask ends with a newline.
 pub fn emit_mask_for_bytes(secret: &[u8]) {
+    let never = AtomicBool::new(false);
+    let _ = emit_mask_for_bytes_with_cancel(secret, &never, None);
+}
+
+/// Cancellable mask emission for runs under a cancel flag. Takes the sink
+/// lock, then waits on the merged claim with `cancelled`/`deadline`, so a
+/// run cancelled while a pooled worker is still kernel-blocked reports
+/// instead of hanging unbounded inside the mask. The merged claim keeps the
+/// mask ordered behind that worker (fail-closed): on cancellation nothing is
+/// resynced or written, so the next filter still classifies behind the late
+/// bytes. An uncancelled waiter stalls together with the wedged terminal
+/// rather than skipping the mask (secret unmasked) or misclassifying. The
+/// write phase itself is bounded too: the bytes go out on a worker thread
+/// with the same progress-gated drain as the pooled path, so a SIGINT or
+/// deadline that lands mid-write is reported instead of wedging the caller
+/// in-kernel.
+pub fn emit_mask_for_bytes_with_cancel(
+    secret: &[u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> anyhow::Result<()> {
     if !enabled() || secret.is_empty() {
-        return;
+        return Ok(());
     }
     let line = mask_command(&String::from_utf8_lossy(secret));
-    // Fixed order (sink, stdout, stderr): every hardened terminal write
-    // nests the same way, so no reverse-order nesting can deadlock. The sink
-    // guard spans the blocking stdout write on purpose; see above.
+    // Fixed order (sink, merged claim, stdout, stderr): every hardened
+    // terminal write nests the same way, so no reverse-order nesting can
+    // deadlock. The sink guard spans the drain wait on purpose; see above.
+    // The merged claim keeps this mask ordered behind a pooled write whose
+    // cancel drain already expired while its worker is still kernel-blocked:
+    // without it the mask could resync and land while those uncertain bytes
+    // are still in flight. The claim moves into the direct worker below so
+    // the ordering survives a forced drain expiry on this side too.
     let _sink = TERMINAL_SINK_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let merged = reserve_merged_terminal(cancelled, deadline)?;
+    // Re-check after the claim: a cancel that fired in the gap must not
+    // resync or write, so the next filter still classifies behind the late
+    // bytes (fail-closed, mirroring the pooled path's post-wait check).
+    check_merged_cancel(cancelled, deadline)?;
     let bytes = {
         let mut stdout_guard = stdout_sanitizer()
             .lock()
@@ -817,9 +1263,8 @@ pub fn emit_mask_for_bytes(secret: &[u8]) {
         stderr_guard.note_external_line();
         mask_line_bytes(&line, true)
     };
-    use std::io::Write as _;
-    let mut stdout = std::io::stdout().lock();
-    let _ = stdout.write_all(&bytes).and_then(|()| stdout.flush());
+    write_direct_bytes_with_cancel(true, &bytes, cancelled, deadline, merged)
+        .map_err(|error| anyhow::anyhow!(error))
 }
 
 /// Atomically filter end-of-stream stdout bytes and write them to this
@@ -828,14 +1273,45 @@ pub fn emit_mask_for_bytes(secret: &[u8]) {
 /// This is the direct-write counterpart of the pooled terminal path in
 /// `runtime::stdio`: the sink guard spans the sanitize step and the blocking
 /// `write_all`, so a concurrent mask or streamed chunk cannot interleave
-/// between classification and landing. Callers that previously did
+/// between classification and landing. The merged claim additionally orders
+/// this write behind a pooled write whose cancel drain expired while its
+/// worker is still kernel-blocked. Callers that previously did
 /// `filter_stdout_final` followed by `stdout().write_all` must use this so
 /// the two steps stay atomic. File redirects stay raw and never call this.
 pub fn write_stdout_final(bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
+    let never = AtomicBool::new(false);
+    write_stdout_final_with_cancel(bytes, &never, None)
+}
+
+/// Cancellable end-of-stream stdout write. Waits on the merged claim with
+/// `cancelled`/`deadline`, so a run cancelled while a pooled worker is still
+/// kernel-blocked reports instead of hanging unbounded; on cancellation
+/// nothing is filtered or written, preserving merged order (fail-closed).
+/// Uncancelled waiters stall together with the wedged terminal. The write
+/// phase itself is bounded the same way: the filtered bytes go out on a
+/// worker thread with a progress-gated drain, so a SIGINT or deadline that
+/// lands mid-write is reported instead of wedging the caller in-kernel while
+/// an arbitrary-size program output is still in flight.
+pub fn write_stdout_final_with_cancel(
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> std::io::Result<()> {
     let _sink = TERMINAL_SINK_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let merged = reserve_merged_terminal(cancelled, deadline)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(std::io::Error::other("program cancelled by signal"));
+    }
+    if let Some(end) = deadline {
+        if Instant::now() >= end {
+            return Err(std::io::Error::other(
+                "terminal wait reached its deadline",
+            ));
+        }
+    }
     let filtered = if enabled() {
         let mut out = stdout_sanitizer()
             .lock()
@@ -851,16 +1327,76 @@ pub fn write_stdout_final(bytes: &[u8]) -> std::io::Result<()> {
     } else {
         bytes.to_vec()
     };
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(&filtered).and_then(|()| stdout.flush())
+    write_direct_bytes_with_cancel(true, &filtered, cancelled, deadline, merged)
+}
+
+/// Atomically filter end-of-stream stderr bytes and write them to this
+/// process's stderr under the merged-sink lock: the stdout counterpart of
+/// [`write_stdout_final`].
+///
+/// Without this, a stderr stream ending in a held-back prefix (a
+/// line-leading `:`, trailing `#`s, an incomplete UTF-8 tail) is silently
+/// truncated — the streaming sanitizer withholds those bytes for the next
+/// chunk, and at process exit no next chunk ever comes. Only true
+/// end-of-stream stderr writes may use this: flushing mid-stream would
+/// release a held `:` that a following chunk's `:` then completes into a
+/// forged line-leading `::`. Streaming diagnostics (warnings, progress, the
+/// pooled `write_diagnostic` path) must keep using the non-flushing filter so
+/// split prefixes stay neutralized across writes.
+pub fn write_stderr_final(bytes: &[u8]) -> std::io::Result<()> {
+    let never = AtomicBool::new(false);
+    write_stderr_final_with_cancel(bytes, &never, None)
+}
+
+/// Cancellable end-of-stream stderr write: the stderr counterpart of
+/// [`write_stdout_final_with_cancel`]. Waits on the merged claim with
+/// `cancelled`/`deadline` so cancellation stays bounded while uncancelled
+/// waiters stall together (fail-closed) instead of misclassifying. The write
+/// phase itself is bounded the same way via the direct worker below.
+pub fn write_stderr_final_with_cancel(
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> std::io::Result<()> {
+    let _sink = TERMINAL_SINK_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let merged = reserve_merged_terminal(cancelled, deadline)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(std::io::Error::other("program cancelled by signal"));
+    }
+    if let Some(end) = deadline {
+        if Instant::now() >= end {
+            return Err(std::io::Error::other(
+                "terminal wait reached its deadline",
+            ));
+        }
+    }
+    let filtered = if enabled() {
+        let mut out = stderr_sanitizer()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(bytes);
+        out.extend(
+            stderr_sanitizer()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .flush(),
+        );
+        out
+    } else {
+        bytes.to_vec()
+    };
+    write_direct_bytes_with_cancel(false, &filtered, cancelled, deadline, merged)
 }
 
 /// Test-only shared-sink emission: the same sink-serialized resync-write as
 /// [`emit_mask_for_bytes`], but appending to `sink` instead of the process
 /// stdout so a concurrent test can observe the merged byte order. The sink,
-/// both sanitizer locks, and the sink append are all held in the same fixed
-/// order as production, so the test models the production atomicity instead
-/// of a stronger in-memory-only guarantee.
+/// the merged claim, both sanitizer locks, and the sink append are all held
+/// in the same fixed order as production, so the test models the production
+/// atomicity instead of a stronger in-memory-only guarantee.
 #[cfg(test)]
 pub(crate) fn emit_mask_to_sink(sink: &Mutex<Vec<u8>>, secret: &[u8]) {
     if !enabled() || secret.is_empty() {
@@ -870,6 +1406,7 @@ pub(crate) fn emit_mask_to_sink(sink: &Mutex<Vec<u8>>, secret: &[u8]) {
     let _terminal = TERMINAL_SINK_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _merged = reserve_merged_terminal_blocking();
     let mut stdout_guard = stdout_sanitizer()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -885,15 +1422,16 @@ pub(crate) fn emit_mask_to_sink(sink: &Mutex<Vec<u8>>, secret: &[u8]) {
 }
 
 /// Test-only shared-sink filtered write: the production pooled-terminal
-/// discipline (sink lock across filter and sink append) against `sink`, so
-/// adversarial tests model the real worker-pool ordering instead of the old
-/// filter-then-release split. Pass `stdout=true` for an fd-1 write and
-/// `false` for fd-2.
+/// discipline (sink lock and merged claim across filter and sink append)
+/// against `sink`, so adversarial tests model the real worker-pool ordering
+/// instead of the old filter-then-release split. Pass `stdout=true` for an
+/// fd-1 write and `false` for fd-2.
 #[cfg(test)]
 pub(crate) fn emit_filtered_to_sink(sink: &Mutex<Vec<u8>>, bytes: &[u8], stdout: bool) -> Vec<u8> {
     let _terminal = TERMINAL_SINK_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _merged = reserve_merged_terminal_blocking();
     let filtered = if stdout {
         stdout_sanitizer()
             .lock()
@@ -920,6 +1458,19 @@ mod tests {
     /// they cannot interleave with the read-only default-off assertion.
     #[cfg(test)]
     static GLOBAL_HARDENING_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Run `body` with the merged-sink lock held, mirroring the production
+    /// discipline (filter and sink write stay atomic). Single-threaded tests
+    /// wrap direct filter/flush calls in this so the `debug_assert` sink
+    /// discipline holds there too. Never wrap [`emit_mask_for_bytes`],
+    /// [`emit_mask_to_sink`], [`emit_filtered_to_sink`] or
+    /// [`reset_terminal_state`]: they take the sink lock themselves, and the
+    /// mutex is not reentrant.
+    #[cfg(test)]
+    fn with_sink<T>(body: impl FnOnce() -> T) -> T {
+        let _sink = terminal_sink_lock();
+        body()
+    }
 
     #[test]
     fn hardening_defaults_to_off_without_touching_process_state() {
@@ -1193,14 +1744,14 @@ mod tests {
         let was = enabled();
         set_enabled(true);
         reset_terminal_state();
-        let streamed = filter_stdout(b"partial ");
+        let streamed = with_sink(|| filter_stdout(b"partial "));
         assert_eq!(streamed, b"partial ");
         // Writes a real `::add-mask::` line to the test harness output; the
         // value is a canary, and the harness captures it per test.
         emit_mask_for_bytes(b"mask-resync-canary-499");
-        let forged = filter_stdout(b"::error::after-mask\n");
+        let forged = with_sink(|| filter_stdout(b"::error::after-mask\n"));
         assert_eq!(forged, ":\u{200b}:error::after-mask\n".as_bytes());
-        assert!(flush_stdout().is_empty());
+        assert!(with_sink(flush_stdout).is_empty());
         reset_terminal_state();
         set_enabled(was);
     }
@@ -1215,19 +1766,19 @@ mod tests {
         let was = enabled();
         set_enabled(true);
         reset_terminal_state();
-        let _ = filter_stdout(b"leftover ");
-        let _ = filter_stderr(b"\n:");
+        let _ = with_sink(|| filter_stdout(b"leftover "));
+        let _ = with_sink(|| filter_stderr(b"\n:"));
         reset_terminal_state();
         assert_eq!(
-            filter_stdout(b"::error::next-run\n"),
+            with_sink(|| filter_stdout(b"::error::next-run\n")),
             ":\u{200b}:error::next-run\n".as_bytes()
         );
         assert_eq!(
-            filter_stderr(b"::error::next-run\n"),
+            with_sink(|| filter_stderr(b"::error::next-run\n")),
             ":\u{200b}:error::next-run\n".as_bytes()
         );
-        assert!(flush_stdout().is_empty());
-        assert!(flush_stderr().is_empty());
+        assert!(with_sink(flush_stdout).is_empty());
+        assert!(with_sink(flush_stderr).is_empty());
         reset_terminal_state();
         set_enabled(was);
     }
@@ -1303,7 +1854,7 @@ mod tests {
         let was = enabled();
         set_enabled(true);
         reset_terminal_state();
-        let _ = filter_stdout(b"lead");
+        let _ = with_sink(|| filter_stdout(b"lead"));
         assert!(!stdout_sanitizer()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1313,18 +1864,20 @@ mod tests {
         emit_mask_for_bytes(b"mask-resync-both-499");
         // Both streams resync even though only stdout was mid-line here;
         // either stream mid-line breaks the next mask onto its own line.
-        for filtered in [
-            filter_stdout(b"::error::after-mask\n"),
-            filter_stderr(b"::warning::after-mask\n"),
-        ] {
+        for filtered in with_sink(|| {
+            [
+                filter_stdout(b"::error::after-mask\n"),
+                filter_stderr(b"::warning::after-mask\n"),
+            ]
+        }) {
             assert!(!filtered.starts_with(b"::"), "{filtered:?}");
         }
         assert_eq!(
-            filter_stdout(b"::error::after-mask\n"),
+            with_sink(|| filter_stdout(b"::error::after-mask\n")),
             ":\u{200b}:error::after-mask\n".as_bytes()
         );
-        assert!(flush_stdout().is_empty());
-        assert!(flush_stderr().is_empty());
+        assert!(with_sink(flush_stdout).is_empty());
+        assert!(with_sink(flush_stderr).is_empty());
         reset_terminal_state();
         set_enabled(was);
     }
@@ -1340,16 +1893,16 @@ mod tests {
         let was = enabled();
         set_enabled(true);
         reset_terminal_state();
-        let _ = filter_stderr(b"err-partial ");
+        let _ = with_sink(|| filter_stderr(b"err-partial "));
         // Writes a real `::add-mask::` line to the test harness output; the
         // value is a canary, and the harness captures it per test.
         emit_mask_for_bytes(b"mask-resync-stderr-499");
         assert_eq!(
-            filter_stderr(b"::error::after-mask\n"),
+            with_sink(|| filter_stderr(b"::error::after-mask\n")),
             ":\u{200b}:error::after-mask\n".as_bytes()
         );
-        assert!(flush_stdout().is_empty());
-        assert!(flush_stderr().is_empty());
+        assert!(with_sink(flush_stdout).is_empty());
+        assert!(with_sink(flush_stderr).is_empty());
         reset_terminal_state();
         set_enabled(was);
     }
@@ -1433,11 +1986,11 @@ mod tests {
         // must still land the next run on a true line start.
         reset_terminal_state();
         assert_eq!(
-            filter_stdout(b"::error::after-storm\n"),
+            with_sink(|| filter_stdout(b"::error::after-storm\n")),
             ":\u{200b}:error::after-storm\n".as_bytes()
         );
-        assert!(flush_stdout().is_empty());
-        assert!(flush_stderr().is_empty());
+        assert!(with_sink(flush_stdout).is_empty());
+        assert!(with_sink(flush_stderr).is_empty());
         reset_terminal_state();
         set_enabled(was);
     }
@@ -1619,16 +2172,62 @@ mod tests {
         let registry = crate::manifest::Registry::default();
         let first = enter_finite_run(&registry);
         // Trailing `##` is held back: it may open a `##[` legacy command.
-        assert_eq!(filter_stdout(b"mid ##"), b"mid ");
+        assert_eq!(with_sink(|| filter_stdout(b"mid ##")), b"mid ");
         let second = enter_finite_run(&registry);
         // No reset happened between the two chunks, so the held prefix
         // rejoins and the legacy command is still neutralized.
-        assert_eq!(filter_stdout(b"[warn]\n"), "#\u{200b}#[warn]\n".as_bytes());
-        assert!(flush_stdout().is_empty());
-        assert!(flush_stderr().is_empty());
+        assert_eq!(
+            with_sink(|| filter_stdout(b"[warn]\n")),
+            "#\u{200b}#[warn]\n".as_bytes()
+        );
+        assert!(with_sink(flush_stdout).is_empty());
+        assert!(with_sink(flush_stderr).is_empty());
         drop(second);
         drop(first);
         reset_terminal_state();
         set_enabled(was);
+    }
+
+    #[test]
+    fn merged_reservation_drop_releases_only_its_own_claim() {
+        // The claim is an owned generation token, not a plain boolean: a
+        // stale guard (a finished worker racing a newer writer, a reset that
+        // already gave up waiting) must never unlock another writer's claim.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let owned = try_claim_merged_terminal().expect("claim the merged terminal");
+        assert!(try_claim_merged_terminal().is_none());
+        drop(MergedTerminalReservation(u64::MAX));
+        assert!(
+            try_claim_merged_terminal().is_none(),
+            "stale reservation drop unlocked a live claim"
+        );
+        drop(owned);
+        assert!(try_claim_merged_terminal().is_some());
+    }
+
+    #[test]
+    fn cancellable_waiters_report_cancel_without_clearing_an_in_flight_claim() {
+        // A held claim models a pooled worker still kernel-blocked after a
+        // forced drain expiry: cancelled direct waiters and a cancelled reset
+        // must report instead of hanging, and must leave the live claim (and
+        // the sanitizer state it protects) untouched — no false unlock.
+        let _guard = GLOBAL_HARDENING_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let owned = try_claim_merged_terminal().expect("claim the merged terminal");
+        let cancelled = AtomicBool::new(true);
+        assert!(reserve_merged_terminal(&cancelled, None).is_err());
+        assert!(reset_terminal_state_with_cancel(&cancelled, None).is_err());
+        let idle = AtomicBool::new(false);
+        assert!(reset_terminal_state_with_cancel(&idle, Some(Instant::now())).is_err());
+        assert!(
+            try_claim_merged_terminal().is_none(),
+            "cancelled waiter released the in-flight claim"
+        );
+        drop(owned);
+        reset_terminal_state_with_cancel(&idle, None).expect("reset after release");
+        assert!(try_claim_merged_terminal().is_some());
     }
 }

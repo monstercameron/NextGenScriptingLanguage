@@ -275,11 +275,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // Thread-local depth alone would let two concurrent outermost runs both
     // reset and drop each other's held split prefixes. Nested runs share the
     // terminal stream with their parent and take no boundary.
-    let _terminal_boundary =
-        (depth == 0).then(|| crate::github_actions::enter_finite_run(registry));
+    let _terminal_boundary = if depth == 0 {
+        Some(crate::github_actions::enter_finite_run_with_cancel(
+            registry,
+            &signals.cancelled,
+            signals.deadline,
+        )?)
+    } else {
+        None
+    };
     // Literal components of explicitly secret-producing calls must be masked
     // before their invocation trace or any dynamic binding can be observed.
-    crate::security::register_sensitive_program(registry, program)?;
+    crate::security::register_sensitive_program(registry, program, &signals.cancelled, signals.deadline)?;
     let sensitive_bindings = crate::runtime::sensitive_binding_names(program, registry);
     // Only the CLI's top-level run streams. Module, handler and library runs
     // keep capturing, because their callers consume the bytes.
@@ -468,7 +475,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         .filter(|input| crate::ast::is_sensitive(input))
     {
         if let Some(value) = bindings.get(&input.name) {
-            crate::security::register_sensitive_value(registry, value)?;
+            crate::security::register_sensitive_value(registry, value, &signals.cancelled, signals.deadline)?;
         }
     }
     if preflight_context {
@@ -912,14 +919,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         )?;
                         if frame.sensitive_binding {
                             let redactor = crate::security::secret_redactor(registry);
-                            redactor.register(&bytes).map_err(|_| {
+                            redactor.register(&bytes, &signals.cancelled, signals.deadline).map_err(|_| {
                                 anyhow!(
                                     "line {}: could not register sensitive program output",
                                     frame.line
                                 )
                             })?;
                             if bytes.ends_with(b"\n") {
-                                redactor.register(&bytes[..bytes.len() - 1]).map_err(|_| {
+                                redactor.register(&bytes[..bytes.len() - 1], &signals.cancelled, signals.deadline).map_err(|_| {
                                     anyhow!(
                                         "line {}: could not register sensitive program output",
                                         frame.line
@@ -1163,7 +1170,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     pipeline_sensitive = value_references_sensitive(source, &sensitive_bindings);
                     let bytes = text_value_bytes(source, &bindings, step.line)?;
                     if pipeline_sensitive {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes, &signals.cancelled, signals.deadline)?;
                     }
                     data = Input::Bytes(bytes);
                 }
@@ -1172,11 +1179,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_bindings.contains(binding) || sensitive_source;
                     if sensitive_bindings.contains(binding) || sensitive_source {
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(registry, &value, &signals.cancelled, signals.deadline)?;
                     }
                     let bytes = bound_value_bytes(&value, options.max_output_bytes)?;
                     if sensitive_bindings.contains(binding) || sensitive_source {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes, &signals.cancelled, signals.deadline)?;
                     }
                     data = Input::Bytes(bytes);
                     bindings.insert(binding.clone(), value);
@@ -1188,7 +1195,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         options.command_timeout,
                     )?;
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes, &signals.cancelled, signals.deadline)?;
                     }
                     pipeline_sensitive |= sensitive_bindings.contains(binding);
                     byte_bindings.insert(binding.clone(), bytes.clone());
@@ -1262,6 +1269,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             crate::security::register_sensitive_value(
                                 registry,
                                 bindings.get(name).expect("just inserted sensitive binding"),
+                                &signals.cancelled,
+                                signals.deadline,
                             )?;
                         }
                         pipeline_sensitive |= sensitive_bindings.contains(name);
@@ -1277,8 +1286,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let value = crate::structured::parse(&bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes, &signals.cancelled, signals.deadline)?;
+                        crate::security::register_sensitive_value(registry, &value, &signals.cancelled, signals.deadline)?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1299,7 +1308,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         .with_context(|| format!("line {}", step.line))?;
                     let value = value.clone();
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(registry, &value, &signals.cancelled, signals.deadline)?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1323,7 +1332,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         .with_context(|| format!("line {}", step.line))?
                         .clone();
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(registry, &value, &signals.cancelled, signals.deadline)?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1339,7 +1348,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_source {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes, &signals.cancelled, signals.deadline)?;
                     }
                     lazy_event(
                         options.trace,
@@ -1494,8 +1503,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             .with_context(|| format!("line {}: task group output", step.line))?
                     };
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_value(registry, &value)?;
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_value(registry, &value, &signals.cancelled, signals.deadline)?;
+                        crate::security::register_sensitive_bytes(registry, &bytes, &signals.cancelled, signals.deadline)?;
                     }
                     bindings.insert(binding.clone(), value);
                     pipeline_sensitive = sensitive_bindings.contains(binding);
@@ -1989,8 +1998,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 // stream. The helper holds the sink lock
                                 // across filter and write when hardening is
                                 // on, so the handover write is atomic too.
-                                crate::github_actions::write_stdout_final(&pending)
-                                    .with_context(|| format!("line {}: hand over", step.line))?;
+                                // The cancellable wait reports a cancelled run
+                                // instead of hanging behind a wedged worker.
+                                crate::github_actions::write_stdout_final_with_cancel(
+                                    &pending,
+                                    &signals.cancelled,
+                                    signals.deadline,
+                                )
+                                .with_context(|| format!("line {}: hand over", step.line))?;
                                 let code = handoff::hand_over(command)
                                     .with_context(|| format!("line {}: hand over", step.line))?;
                                 // Windows exit codes outside 0-255 cannot be represented
@@ -2412,7 +2427,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     if sensitive_terminal_output {
                                         for output in sensitive_outputs {
                                             if crate::security::register_sensitive_bytes(
-                                                registry, output,
+                                                registry,
+                                                output,
+                                                &signals.cancelled,
+                                                signals.deadline,
                                             )
                                             .is_err()
                                             {
@@ -2581,19 +2599,21 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             // the mask precedes the value in the log. A value
                             // that cannot yet be registered cannot be masked —
                             // registration failure fails closed instead.
-                            crate::security::register_sensitive_bytes(registry, &bytes)?;
+                            crate::security::register_sensitive_bytes(registry, &bytes, &signals.cancelled, signals.deadline)?;
                             if let Some(stderr) = stderr {
-                                crate::security::register_sensitive_bytes(registry, stderr)?;
+                                crate::security::register_sensitive_bytes(registry, stderr, &signals.cancelled, signals.deadline)?;
                             }
                             for stage_stderr in
                                 stages.iter().filter_map(|stage| stage.stderr.as_deref())
                             {
-                                crate::security::register_sensitive_bytes(registry, stage_stderr)?;
+                                crate::security::register_sensitive_bytes(registry, stage_stderr, &signals.cancelled, signals.deadline)?;
                             }
                             if let Some(value) = typed_json.as_ref() {
                                 crate::security::register_sensitive_value(
                                     registry,
                                     &crate::structured::from_json(value.clone()),
+                                    &signals.cancelled,
+                                    signals.deadline,
                                 )?;
                             }
                         }

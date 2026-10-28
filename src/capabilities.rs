@@ -1589,7 +1589,7 @@ fn apply_command_overlay(
     for (name, value) in &overlay.set {
         authorize_environment_override(registry, applet_name, name)?;
         crate::security::secret_redactor(registry)
-            .register(value.as_bytes())
+            .register(value.as_bytes(), &std::sync::atomic::AtomicBool::new(false), None)
             .map_err(|_| anyhow!("could not register a command environment value as a secret"))?;
         environment.retain(|(existing, _)| !same_environment_name(existing, name));
         environment.push((OsString::from(name), OsString::from(value)));

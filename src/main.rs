@@ -243,12 +243,12 @@ fn report_error(error: &anyhow::Error) -> i32 {
             })
             .to_string();
             line.push('\n');
-            runtime::write_diagnostic(line.as_bytes());
+            runtime::write_exit_diagnostic(line.as_bytes());
         } else {
             flow::agent::errors::write_stderr(error, interrupted.is_some(), status);
         }
     } else {
-        runtime::write_diagnostic(
+        runtime::write_exit_diagnostic(
             format!(
                 "execute: {}\n",
                 flow::terminal_text::escape_controls(&format!("{error:#}"))
@@ -1857,7 +1857,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     if let Some(message) = &exit.message {
                         let message =
                             flow::security::secret_redactor(&registry).redact_text(message);
-                        runtime::write_diagnostic(format!("{message}\n").as_bytes());
+                        runtime::write_exit_diagnostic(format!("{message}\n").as_bytes());
                     }
                     std::process::exit(i32::from(exit.status));
                 }
@@ -1905,8 +1905,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &registry,
                         &program.inputs,
                         &options.inputs,
+                        &std::sync::atomic::AtomicBool::new(false),
+                        None,
                     )?;
-                    flow::security::register_sensitive_program(&registry, &program)?;
+                    flow::security::register_sensitive_program(&registry, &program, &std::sync::atomic::AtomicBool::new(false), None)?;
                     record_cli::run_recorded(directory, &args.file, &program, &registry, &options)
                         .map_err(|error| redact_runtime_error(&registry, error))?
                 } else {
@@ -1960,7 +1962,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     if let Some(message) = &exit.message {
                         let message =
                             flow::security::secret_redactor(&registry).redact_text(message);
-                        runtime::write_diagnostic(format!("{message}\n").as_bytes());
+                        runtime::write_exit_diagnostic(format!("{message}\n").as_bytes());
                     }
                     std::process::exit(i32::from(exit.status));
                 }
@@ -3453,7 +3455,7 @@ mod startup_path_tests {
     fn redacted_runtime_errors_keep_broken_pipe_and_safe_message() {
         let registry = flow::manifest::Registry::default();
         flow::security::secret_redactor(&registry)
-            .register(b"PIPE-SECRET-CANARY")
+            .register(b"PIPE-SECRET-CANARY", &std::sync::atomic::AtomicBool::new(false), None)
             .unwrap();
         let error = anyhow::Error::new(std::io::Error::new(
             std::io::ErrorKind::BrokenPipe,

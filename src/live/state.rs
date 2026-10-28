@@ -1223,10 +1223,23 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 .filter(|input| crate::ast::is_sensitive(input))
             {
                 if let Some(value) = candidate.bindings.get(&input.name) {
-                    crate::security::register_sensitive_value(&shared.registry, &argument(value))?;
+                    crate::security::register_sensitive_value(
+                        &shared.registry,
+                        &argument(value),
+                        &shared.stop,
+                        None,
+                    )?;
                 }
             }
-            crate::security::register_sensitive_program(&shared.registry, &plan.program)?;
+            // Same control-stop bound as the serve path in `super`: a stop
+            // during a wedged-terminal registration reports instead of
+            // hanging the session.
+            crate::security::register_sensitive_program(
+                &shared.registry,
+                &plan.program,
+                &shared.stop,
+                None,
+            )?;
             if plan.screen.is_some() && !shared.headless {
                 use std::io::IsTerminal;
                 if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {

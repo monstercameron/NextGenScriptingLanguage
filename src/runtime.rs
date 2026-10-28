@@ -105,7 +105,7 @@ pub use service::{
     run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
     MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
 };
-pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
+pub use stdio::{write_cancellable, write_diagnostic, write_exit_diagnostic, write_with_deadline};
 
 pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
 type PreparedJobCommands = Vec<(PathBuf, Vec<String>)>;
@@ -3071,9 +3071,25 @@ fn execute_call_group_unobserved(group: GroupRequest<'_>) -> Result<GroupOutput>
         launched,
         signals,
     });
+    // Sensitive-output registration emits mask lines, so it observes the
+    // run's cancel/deadline instead of hanging on a wedged terminal; a
+    // cancelled registration fails the group instead of echoing unmasked.
     match &output {
-        Ok(output) => register_sensitive_group_output(registry, calls, bindings, output)?,
-        Err(error) => register_sensitive_group_failure(registry, calls, error)?,
+        Ok(output) => register_sensitive_group_output(
+            registry,
+            calls,
+            bindings,
+            output,
+            &signals.cancelled,
+            signals.deadline,
+        )?,
+        Err(error) => register_sensitive_group_failure(
+            registry,
+            calls,
+            error,
+            &signals.cancelled,
+            signals.deadline,
+        )?,
     }
     output
 }
@@ -3217,6 +3233,8 @@ fn register_sensitive_group_output(
     calls: &[(&Invocation, &Manifest, usize)],
     bindings: &BTreeMap<String, Value>,
     output: &GroupOutput,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     // Only the terminal pipeline stage may bind output; in-process env.load
     // cannot join a native pipeline, so every valid sensitive binding is last.
@@ -3247,7 +3265,7 @@ fn register_sensitive_group_output(
         let redactor = crate::security::secret_redactor(registry);
         for value in values {
             redactor
-                .register(value.as_bytes())
+                .register(value.as_bytes(), cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register env.load secret values"))?;
         }
         return Ok(());
@@ -3263,11 +3281,11 @@ fn register_sensitive_group_output(
         )
     {
         redactor
-            .register(bytes)
+            .register(bytes, cancelled, deadline)
             .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         if bytes.ends_with(b"\n") {
             redactor
-                .register(&bytes[..bytes.len() - 1])
+                .register(&bytes[..bytes.len() - 1], cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         }
     }
@@ -3275,6 +3293,8 @@ fn register_sensitive_group_output(
         crate::security::register_sensitive_value(
             registry,
             &crate::structured::from_json(value.clone()),
+            cancelled,
+            deadline,
         )?;
     }
     Ok(())
@@ -3284,6 +3304,8 @@ fn register_sensitive_group_failure(
     registry: &Registry,
     calls: &[(&Invocation, &Manifest, usize)],
     error: &anyhow::Error,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let Some((_, _, line)) = calls.last().copied() else {
         return Ok(());
@@ -3313,16 +3335,16 @@ fn register_sensitive_group_failure(
         )
     {
         redactor
-            .register(output)
+            .register(output, cancelled, deadline)
             .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         if output.ends_with(b"\n") {
             redactor
-                .register(&output[..output.len() - 1])
+                .register(&output[..output.len() - 1], cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         }
     }
     if let Some(value) = &result.value {
-        crate::security::register_sensitive_value(registry, value)?;
+        crate::security::register_sensitive_value(registry, value, cancelled, deadline)?;
     }
     Ok(())
 }

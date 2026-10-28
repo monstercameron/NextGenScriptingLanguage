@@ -3,9 +3,12 @@ use super::{check_deadline, Signals};
 use anyhow::{bail, Context, Result};
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
+// The direct terminal writers share the pooled path's cancel-drain grace so
+// every hardened terminal write reports cancellation on the same horizon.
+use crate::github_actions::TERMINAL_CANCEL_DRAIN_GRACE;
 
 // A worker blocked in a kernel write cannot be cancelled. Keep one active worker per output
 // target, with a fixed process-wide cap, so one stalled pipe does not block unrelated outputs.
@@ -33,9 +36,19 @@ struct WriteRequest {
     fd: OwnedFd,
     bytes: Vec<u8>,
     stop: Arc<AtomicBool>,
+    /// Bytes the worker has durably written so far. The terminal-serialized
+    /// cancel drain watches this: steady progress extends the drain (a slow
+    /// reader still converges with order intact), while no progress lets the
+    /// bounded drain expire instead of hanging on a wedged pipe.
+    progress: Arc<AtomicU64>,
     write_limit: usize,
     may_sigpipe: bool,
     reservation: WriterReservation,
+    /// Hardened terminal writes only: the merged-terminal single-flight
+    /// claim, held by the worker until the kernel write finishes so no later
+    /// hardened filter — either descriptor, pooled or direct — can classify
+    /// before these bytes land, even after a forced cancel-drain expiry.
+    merged_terminal: Option<crate::github_actions::MergedTerminalReservation>,
     worker_gate: Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>,
     result: Option<mpsc::SyncSender<Result<()>>>,
 }
@@ -133,15 +146,29 @@ fn output_worker(
             fd,
             bytes,
             stop,
+            progress,
             write_limit,
             may_sigpipe,
             reservation,
+            merged_terminal,
             worker_gate,
             result,
         } = request;
-        let result_value =
-            blocking_write_all(fd, &bytes, &stop, write_limit, may_sigpipe, worker_gate);
+        let result_value = blocking_write_all(
+            fd,
+            &bytes,
+            &stop,
+            &progress,
+            write_limit,
+            may_sigpipe,
+            worker_gate,
+        );
         drop(reservation);
+        // Release the merged single-flight claim only after the kernel write
+        // above finished: the next hardened filter (either descriptor) must
+        // wait for these bytes to land, even when the caller already gave up
+        // waiting at its cancel-drain bound.
+        drop(merged_terminal);
         busy.store(false, Ordering::Release);
         let _ = result
             .expect("submitted output requests have a result sender")
@@ -190,6 +217,39 @@ fn reserve_output_target(
         }
         drop(active);
         std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Claim the hardened merged-terminal single flight before filtering. The
+/// caller holds the merged-sink lock; the claim moves into the pool worker
+/// so it is still held when the caller stops waiting at its cancel-drain
+/// bound. Later hardened writes (either descriptor, pooled or direct) block
+/// here — still holding the sink — before they may filter, so no filter can
+/// classify before these bytes land. The wait keeps checking the caller's
+/// own cancel flag and deadline, so cancellation stays bounded: a cancelled
+/// waiter reports cancellation without writing anything, while an
+/// uncancelled waiter without a deadline stalls together with the wedged
+/// terminal rather than forging (fail-closed).
+fn reserve_merged_terminal(
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<crate::github_actions::MergedTerminalReservation> {
+    // Single implementation lives in `github_actions` so direct (mask/final)
+    // and pooled writers poll the same owned claim with the same
+    // cancel/deadline semantics; the merged single flight is what preserves
+    // cross-fd order after a forced drain expiry. Map a wait failure back
+    // onto the caller's own deadline/cancel errors so timeout classification
+    // (`CommandTimedOut`) stays intact.
+    match crate::github_actions::reserve_merged_terminal(cancelled, deadline) {
+        Ok(reservation) => Ok(reservation),
+        Err(_) => {
+            super::check_deadline(deadline)?;
+            if cancelled.load(Ordering::Relaxed) {
+                bail!("program cancelled by signal");
+            }
+            super::check_deadline(deadline)?;
+            bail!("program cancelled by signal");
+        }
     }
 }
 
@@ -291,32 +351,16 @@ fn write_with_deadline_inner_with_pool(
     // enables hardening, so it stays raw. Hardened fd 1/2 writes hold the
     // merged-sink lock across filter and worker completion so classification
     // matches landing order in the merged runner log; file targets stay
-    // concurrent.
+    // concurrent. Filtering itself happens in `write_with_deadline_owned_inner`
+    // after the merged-terminal claim and the output target reservation (see
+    // below), so a forced cancel drain still leaves every later hardened
+    // writer — either descriptor — ordered behind this write.
     let hardened_terminal = crate::github_actions::enabled() && (fd == 1 || fd == 2);
     let _sink = hardened_terminal.then(crate::github_actions::terminal_sink_lock);
-    let owned = if crate::github_actions::enabled() {
-        if fd == 1 {
-            crate::github_actions::filter_stdout(bytes)
-        } else if fd == 2 {
-            crate::github_actions::filter_stderr(bytes)
-        } else {
-            bytes.to_vec()
-        }
-    } else {
-        bytes.to_vec()
-    };
-    // A split `::` held back by the streaming sanitizer must not be lost when
-    // the write is the last of its stream in this call; flushing is harmless
-    // when nothing is pending. Flushing per write keeps each write self
-    // contained; cross-write line state is still preserved for the next call.
-    // Note: flushing here would emit a pending `:` immediately, breaking the
-    // split-`::` protection across writes. Only flush when the caller signals
-    // end-of-stream (final output paths do this explicitly); live streams keep
-    // the pending colon for the next write.
     write_with_deadline_owned_inner(
         pool,
         fd,
-        owned,
+        bytes.to_vec(),
         cancelled,
         deadline,
         worker_gate,
@@ -339,36 +383,16 @@ pub(super) fn write_with_deadline_owned_reusing(
         return Ok(());
     }
     // Same terminal choke point as the borrowing path: owned streamed writes
-    // (the hot path for step output) are neutralized before reaching the fd.
+    // (the hot path for step output) are neutralized in
+    // `write_with_deadline_owned_inner` after the target reservation.
     // Hardened fd 1/2 writes hold the merged-sink lock across filter and
     // worker completion, matching the borrowing path above.
     let hardened_terminal = crate::github_actions::enabled() && (fd == 1 || fd == 2);
     let _sink = hardened_terminal.then(crate::github_actions::terminal_sink_lock);
-    let filtered = if crate::github_actions::enabled() {
-        if fd == 1 {
-            crate::github_actions::filter_stdout(&bytes)
-        } else if fd == 2 {
-            crate::github_actions::filter_stderr(&bytes)
-        } else {
-            bytes
-        }
-    } else {
-        bytes
-    };
-    // A pending split `:` stays buffered across live writes; only an empty
-    // filtered write (a lone held colon) skips the syscall and keeps the state
-    // for the next chunk. End-of-stream callers flush explicitly.
-    if filtered.is_empty() {
-        super::check_deadline(deadline)?;
-        if cancelled.load(Ordering::Relaxed) {
-            bail!("program cancelled by signal");
-        }
-        return Ok(());
-    }
     write_with_deadline_owned_inner(
         pool,
         fd,
-        filtered,
+        bytes,
         cancelled,
         deadline,
         None,
@@ -386,18 +410,57 @@ fn write_with_deadline_owned_inner(
     terminal_serialized: bool,
 ) -> Result<()> {
     let (target, write_limit, may_sigpipe) = output_target_and_write_limit(fd)?;
+    // Claim before filtering (the caller holds the merged-sink lock across
+    // this whole call when `terminal_serialized`). The merged claim is the
+    // cross-fd single flight: it moves into the worker and is still held
+    // when the cancel drain below expires while the worker is
+    // kernel-blocked, so a later hardened filter — either descriptor, pooled
+    // or direct — waits for these bytes to land before it may classify. The
+    // per-target reservation additionally keeps same-target writers ordered
+    // behind this write (and bounds unrelated-target fan-out at the worker
+    // cap). Both are taken before filtering, in sink, merged, target order.
+    let merged_terminal = terminal_serialized
+        .then(|| reserve_merged_terminal(cancelled, deadline))
+        .transpose()?;
     let reservation = reserve_output_target(target, cancelled, deadline)?;
+    // Filter under the caller's sink guard so classification matches landing
+    // order. A pending split `:` stays buffered across live writes; only an
+    // empty filtered write (a lone held colon) skips the syscall and keeps the
+    // state for the next chunk. End-of-stream callers flush explicitly.
+    // Note: flushing here would emit a pending `:` immediately, breaking the
+    // split-`::` protection across writes.
+    let data = if crate::github_actions::enabled() {
+        if fd == 1 {
+            crate::github_actions::filter_stdout(&data)
+        } else if fd == 2 {
+            crate::github_actions::filter_stderr(&data)
+        } else {
+            data
+        }
+    } else {
+        data
+    };
+    if data.is_empty() {
+        super::check_deadline(deadline)?;
+        if cancelled.load(Ordering::Relaxed) {
+            bail!("program cancelled by signal");
+        }
+        return Ok(());
+    }
     let worker_fd = crate::platform::unix_ffi::duplicate_cloexec(fd, 3)
         .context("duplicating output descriptor")?;
     let stop = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(AtomicU64::new(0));
     let receiver = pool.submit(
         WriteRequest {
             fd: worker_fd,
             bytes: data,
             stop: Arc::clone(&stop),
+            progress: Arc::clone(&progress),
             write_limit,
             may_sigpipe,
             reservation,
+            merged_terminal,
             worker_gate,
             result: None,
         },
@@ -406,46 +469,88 @@ fn write_with_deadline_owned_inner(
     )?;
 
     // When `terminal_serialized` the caller holds the merged-sink lock across
-    // this wait. A cancel or deadline must not release it while the worker is
-    // still in flight: the next filter would then classify before the prior
-    // bytes land, re-opening the reorder forgery. Fail closed by signalling
-    // `stop`, waiting for the worker to finish (it checks `stop` between
-    // bounded chunks), and only then reporting the cancellation.
-    let wait_for_worker_then = |result: Result<()>| -> Result<()> {
-        if !terminal_serialized {
-            return result;
-        }
-        match receiver.recv() {
-            Ok(worker_result) => {
-                let _ = worker_result;
-                result
-            }
-            Err(_) => result,
-        }
-    };
+    // this wait so classification matches landing order in the merged runner
+    // log. A cancel or deadline signals `stop` and then drains the worker
+    // instead of releasing the lock early (which would let the next filter
+    // classify before the prior bytes land, re-opening the reorder forgery)
+    // or hanging without a bound (a `write(2)` blocked in-kernel on a full
+    // pipe with no reader never returns, so an unbounded wait wedges every
+    // hardened write behind this lock). The drain is progress-gated: steady
+    // worker progress (a slow reader) extends it up to the caller deadline so
+    // order stays intact, while no progress lets it expire — at the caller
+    // deadline, or after `TERMINAL_CANCEL_DRAIN_GRACE` without one — and the
+    // cancellation is reported. The in-flight worker keeps its target
+    // reservation and its merged-terminal claim until it finishes, so every
+    // later hardened writer (either descriptor, pooled or direct) still
+    // filters behind it even after a forced drain expiry: cross-fd order is
+    // preserved by the single flight, not by the released sink lock.
+    let mut drain_until: Option<Instant> = None;
+    let mut last_progress = 0u64;
     loop {
-        if cancelled.load(Ordering::Relaxed) {
+        let cancelled_now = cancelled.load(Ordering::Relaxed);
+        let past_deadline = super::check_deadline(deadline).is_err();
+        if cancelled_now || past_deadline {
             stop.store(true, Ordering::Release);
-            return wait_for_worker_then(Err(anyhow::anyhow!("program cancelled by signal")));
-        }
-        if let Err(error) = super::check_deadline(deadline) {
-            stop.store(true, Ordering::Release);
-            return wait_for_worker_then(Err(error));
+            if !terminal_serialized {
+                if cancelled_now {
+                    return Err(anyhow::anyhow!("program cancelled by signal"));
+                }
+                return Err(super::check_deadline(deadline).unwrap_err());
+            }
+            let now = Instant::now();
+            let made = progress.load(Ordering::Acquire);
+            if made != last_progress {
+                // The worker is still landing bytes: extend the drain so order
+                // stays intact, but never past the caller deadline.
+                last_progress = made;
+                drain_until = Some(match deadline {
+                    Some(end) => (now + TERMINAL_CANCEL_DRAIN_GRACE).min(end),
+                    None => now + TERMINAL_CANCEL_DRAIN_GRACE,
+                });
+            } else if drain_until.is_none() {
+                drain_until = Some(match deadline {
+                    Some(end) if end < now + TERMINAL_CANCEL_DRAIN_GRACE => end,
+                    _ => now + TERMINAL_CANCEL_DRAIN_GRACE,
+                });
+            }
         }
         match receiver.recv_timeout(Duration::from_millis(5)) {
             Ok(result) => {
-                super::check_deadline(deadline)?;
+                // The worker finished: its bytes landed in order. Report any
+                // pending cancel/deadline first, else the worker's own result.
                 if cancelled.load(Ordering::Relaxed) {
-                    stop.store(true, Ordering::Release);
-                    return wait_for_worker_then(Err(anyhow::anyhow!(
-                        "program cancelled by signal"
-                    )));
+                    return Err(anyhow::anyhow!("program cancelled by signal"));
                 }
+                super::check_deadline(deadline)?;
                 return result;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if terminal_serialized
+                    && (cancelled.load(Ordering::Relaxed)
+                        || super::check_deadline(deadline).is_err())
+                {
+                    // Draining with a dead worker: nothing is still in flight,
+                    // so report the pending cancel/deadline without waiting.
+                    if cancelled.load(Ordering::Relaxed) {
+                        return Err(anyhow::anyhow!("program cancelled by signal"));
+                    }
+                    return Err(super::check_deadline(deadline).unwrap_err());
+                }
                 bail!("output writer stopped without returning a result");
+            }
+        }
+        if terminal_serialized
+            && (cancelled.load(Ordering::Relaxed) || super::check_deadline(deadline).is_err())
+        {
+            match drain_until {
+                Some(until) if Instant::now() >= until => {
+                    if cancelled.load(Ordering::Relaxed) {
+                        return Err(anyhow::anyhow!("program cancelled by signal"));
+                    }
+                    return Err(super::check_deadline(deadline).unwrap_err());
+                }
+                _ => {}
             }
         }
     }
@@ -458,6 +563,7 @@ fn blocking_write_all(
     fd: OwnedFd,
     bytes: &[u8],
     stop: &AtomicBool,
+    progress: &AtomicU64,
     write_limit: usize,
     may_sigpipe: bool,
     mut worker_gate: Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>,
@@ -492,6 +598,7 @@ fn blocking_write_all(
             let count = unsafe { libc::write(raw_fd, bytes[offset..].as_ptr().cast(), length) };
             if count > 0 {
                 offset += count as usize;
+                progress.store(offset as u64, Ordering::Release);
                 continue;
             }
             if count == 0 {
@@ -674,6 +781,12 @@ fn poll_timeout_ms(deadline: Instant, now: Instant) -> libc::c_int {
 
 /// Final diagnostics are bounded so shutdown cannot wait forever for a full or abandoned pipe.
 /// The exit status is already non-zero, so a failed write leaves nothing else to report.
+///
+/// Streaming diagnostics (warnings, progress) use this: the stderr sanitizer
+/// keeps any held-back prefix for the next chunk, so split `::` protection
+/// survives across writes. True end-of-stream diagnostics must use
+/// [`write_exit_diagnostic`] instead so a trailing held prefix is delivered
+/// rather than silently truncated.
 pub fn write_diagnostic(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
@@ -685,6 +798,28 @@ pub fn write_diagnostic(bytes: &[u8]) {
         &AtomicBool::new(false),
         Some(deadline),
     );
+}
+
+/// Write a true end-of-stream stderr diagnostic: sink-atomic filter+flush when
+/// hardening is on (so a trailing held prefix is delivered, not truncated),
+/// otherwise the bounded pooled [`write_diagnostic`] path.
+///
+/// Only for diagnostics after which this run or process writes no more
+/// stderr: flushing mid-stream would release a held `:` that a following
+/// chunk's `:` then completes into a forged line-leading `::`. Like
+/// `github_actions::write_stdout_final` this is a direct (non-pooled) write
+/// when hardening is on, without the pooled deadline: it runs at stream end
+/// when completeness matters most. Cancellation during the write itself is
+/// still bounded through the direct worker's progress-gated drain.
+pub fn write_exit_diagnostic(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if crate::github_actions::enabled() {
+        let _ = crate::github_actions::write_stderr_final(bytes);
+    } else {
+        write_diagnostic(bytes);
+    }
 }
 
 /// Maximum time a final diagnostic waits for stderr.
@@ -901,6 +1036,7 @@ mod tests {
                         writer,
                         b"closed pipe with an older pending SIGPIPE",
                         &AtomicBool::new(false),
+                        &AtomicU64::new(0),
                         libc::PIPE_BUF,
                         true,
                         None,
@@ -1777,6 +1913,731 @@ mod tests {
             .read_to_end(&mut output)
             .unwrap();
         assert_eq!(output, b"parent nested");
+    }
+
+    /// Real pooled-fd proof for the merged sink: both terminal fds are dup2'd
+    /// onto one pipe (the runner's merged job log), and the production path —
+    /// `write_with_deadline` through the shared pool, `dup`, reservation and
+    /// `PIPE_BUF` chunking — races concurrent 8 KiB mask lines (kernel-split
+    /// past `PIPE_BUF` on every platform) against forged `::error::` chunks on
+    /// both streams. Every mask must land intact on its own line and no
+    /// forgery may parse, whichever order the scheduler chose.
+    #[cfg(unix)]
+    #[test]
+    fn hardened_pooled_sink_orders_long_masks_end_to_end() {
+        run_isolated_test(
+            "runtime::stdio::tests::hardened_pooled_sink_orders_long_masks_end_to_end",
+            "EXECUTE_TEST_HARDENED_POOLED_SINK",
+            || {
+                use std::io::Read as _;
+                let (reader, writer) = test_pipe();
+                let writer_fd = writer.as_raw_fd();
+                // SAFETY: writer_fd is the open pipe writer; targets 1 and 2
+                // are this isolated child's own descriptors (its inherited
+                // stdio is null), which is the point of the test.
+                assert_ne!(unsafe { libc::dup2(writer_fd, 1) }, -1);
+                assert_ne!(unsafe { libc::dup2(writer_fd, 2) }, -1);
+                crate::github_actions::set_enabled(true);
+                crate::github_actions::reset_terminal_state();
+
+                let long_secret = vec![b'S'; 8192];
+                let mask_line = format!("::add-mask::{}\n", "S".repeat(8192));
+                let reader_thread = std::thread::spawn(move || {
+                    let mut reader = std::fs::File::from(reader);
+                    let mut output = Vec::new();
+                    reader.read_to_end(&mut output).unwrap();
+                    output
+                });
+                let mut handles = Vec::new();
+                for writer_id in 0..4 {
+                    handles.push(std::thread::spawn(move || {
+                        let idle = AtomicBool::new(false);
+                        for round in 0..50 {
+                            let fd = if (round + writer_id) % 2 == 0 { 1 } else { 2 };
+                            let chunk: &[u8] = match round % 3 {
+                                0 => b"lead-partial ",
+                                1 => b"::error::forged\n",
+                                _ => b"trailing\n",
+                            };
+                            write_with_deadline(
+                                fd,
+                                chunk,
+                                &idle,
+                                Some(Instant::now() + Duration::from_secs(10)),
+                            )
+                            .unwrap();
+                        }
+                    }));
+                }
+                for _ in 0..2 {
+                    let secret = long_secret.clone();
+                    handles.push(std::thread::spawn(move || {
+                        for _ in 0..10 {
+                            crate::github_actions::emit_mask_for_bytes(&secret);
+                        }
+                    }));
+                }
+                for handle in handles {
+                    handle.join().expect("sink worker panicked");
+                }
+                drop(writer);
+                // SAFETY: fds 1 and 2 are the dup2 copies above; closing them
+                // lets the reader observe EOF. No terminal writes follow.
+                assert_eq!(unsafe { libc::close(1) }, 0);
+                assert_eq!(unsafe { libc::close(2) }, 0);
+                let bytes = reader_thread.join().expect("sink reader panicked");
+
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                assert!(
+                    text.contains(&mask_line),
+                    "long mask line did not survive the pooled sink intact"
+                );
+                let mut masks = 0usize;
+                let mut forged = Vec::new();
+                for line in text.lines() {
+                    if line.contains("::add-mask::") {
+                        assert!(
+                            line.trim_start().starts_with("::add-mask::"),
+                            "mask glued mid-line in merged sink: {line:?}"
+                        );
+                        masks += 1;
+                    } else if line.trim_start().starts_with("::") {
+                        forged.push(line.to_owned());
+                    }
+                }
+                assert_eq!(masks, 20, "every long mask must reach the merged log");
+                assert!(
+                    forged.is_empty(),
+                    "pooled writes forged a runner command: {forged:?}"
+                );
+                crate::github_actions::reset_terminal_state();
+                crate::github_actions::set_enabled(false);
+            },
+        );
+    }
+
+    /// Hardened cancel on a full pipe with no reader: the caller must get its
+    /// cancellation back on a bound (no unbounded hang), while the
+    /// still-in-flight worker lands at most one bounded chunk and the next
+    /// same-target write filters behind its reservation (no early release
+    /// reorder). Releasing the sink early would let the probe classify before
+    /// the late bytes land.
+    #[cfg(unix)]
+    #[test]
+    fn hardened_cancel_on_full_pipe_returns_without_releasing_the_sink_early() {
+        run_isolated_test(
+            "runtime::stdio::tests::hardened_cancel_on_full_pipe_returns_without_releasing_the_sink_early",
+            "EXECUTE_TEST_HARDENED_CANCEL_DRAIN",
+            || {
+                use std::io::Read as _;
+                let (reader, writer) = test_pipe();
+                let fd = writer.as_raw_fd();
+                // Fill the pipe, then restore blocking mode: the runtime
+                // writer below blocks in-kernel with no reader until cancelled.
+                // SAFETY: fd is the open pipe writer; F_GETFL only reads flags.
+                let original = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                assert_ne!(original, -1);
+                // SAFETY: fd stays open; F_SETFL takes flags by value.
+                assert_eq!(
+                    unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) },
+                    0
+                );
+                let filler = [b'f'; 4096];
+                let mut filled = 0usize;
+                loop {
+                    // SAFETY: filler is live; fd is the open pipe writer.
+                    let count =
+                        unsafe { libc::write(fd, filler.as_ptr().cast(), filler.len()) };
+                    if count > 0 {
+                        filled += count as usize;
+                        continue;
+                    }
+                    assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+                    break;
+                }
+                assert!(filled > 0);
+                // SAFETY: fd stays open; F_SETFL takes flags by value.
+                assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, original) }, 0);
+                // SAFETY: target 1 is this isolated child's own stdout.
+                assert_ne!(unsafe { libc::dup2(fd, 1) }, -1);
+                crate::github_actions::set_enabled(true);
+                crate::github_actions::reset_terminal_state();
+
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let worker_cancelled = Arc::clone(&cancelled);
+                let (result_sender, result_receiver) = mpsc::sync_channel(1);
+                let caller = std::thread::spawn(move || {
+                    let result = write_with_deadline(
+                        1,
+                        &vec![b'x'; 1024 * 1024],
+                        &worker_cancelled,
+                        None,
+                    );
+                    let _ = result_sender.send(result);
+                });
+                // Let the caller take the sink, reserve the target and block
+                // its worker in-kernel on the full pipe.
+                std::thread::sleep(Duration::from_millis(500));
+                cancelled.store(true, Ordering::Release);
+                let error = result_receiver
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("hardened cancel did not return on a wedged pipe")
+                    .unwrap_err();
+                assert!(error.to_string().contains("cancelled"));
+                caller.join().expect("cancelled caller panicked");
+
+                // Drain the filler so the in-flight write can land its one
+                // bounded chunk, see `stop`, and release the reservation.
+                let mut reader = std::fs::File::from(reader);
+                let mut filler_drained = vec![0u8; filled];
+                reader.read_exact(&mut filler_drained).unwrap();
+                assert!(filler_drained.iter().all(|byte| *byte == b'f'));
+                // The probe filters behind the late chunk's reservation, so it
+                // can only land after it.
+                write_with_deadline(
+                    1,
+                    b"probe",
+                    &AtomicBool::new(false),
+                    Some(Instant::now() + Duration::from_secs(5)),
+                )
+                .unwrap();
+                let mut late = Vec::new();
+                let mut chunk = [0u8; 512];
+                while !late.windows(5).any(|window| window == b"probe") {
+                    match reader.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(count) => late.extend_from_slice(&chunk[..count]),
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(error) => panic!("draining wedged pipe failed: {error}"),
+                    }
+                }
+                let position = late
+                    .windows(5)
+                    .position(|window| window == b"probe")
+                    .expect("probe did not land after the cancelled write");
+                let late_bytes = &late[..position];
+                assert!(
+                    !late_bytes.is_empty()
+                        && late_bytes.len() <= libc::PIPE_BUF as usize
+                        && late_bytes.iter().all(|byte| *byte == b'x'),
+                    "cancelled write leaked past one bounded chunk: {} bytes",
+                    late_bytes.len()
+                );
+                drop(writer);
+                // SAFETY: fd 1 is the dup2 copy above; no terminal writes follow.
+                assert_eq!(unsafe { libc::close(1) }, 0);
+                crate::github_actions::reset_terminal_state();
+                crate::github_actions::set_enabled(false);
+            },
+        );
+    }
+
+    /// Cross-fd single flight after a forced cancel-drain expiry. Fd 1 is
+    /// wedged full with no reader while fd 2 is a healthy separate pipe —
+    /// a different reservation target, so only the merged claim serializes
+    /// the two. Cancelling the wedged write must return on a bound; while
+    /// its worker is still kernel-blocked the merged claim must stay held
+    /// (no later hardened filter may classify before those uncertain bytes
+    /// land); a cross-fd probe must wait instead of filtering early, then
+    /// land intact once the pipe drains, and the claim must release without
+    /// leaking. The old split admitted the probe's filter before the late
+    /// bytes landed; this test pins the fail-closed order with real pipes,
+    /// the real pool, and real cancellation.
+    #[cfg(unix)]
+    #[test]
+    fn hardened_cancel_wedge_single_flight_orders_cross_fd() {
+        run_isolated_test(
+            "runtime::stdio::tests::hardened_cancel_wedge_single_flight_orders_cross_fd",
+            "EXECUTE_TEST_HARDENED_CROSS_FD_WEDGE",
+            || {
+                use std::io::Read as _;
+                let (reader_a, writer_a) = test_pipe();
+                let (reader_b, writer_b) = test_pipe();
+                let fd_a = writer_a.as_raw_fd();
+                let fd_b = writer_b.as_raw_fd();
+                // Fill pipe A, then restore blocking mode: the runtime
+                // writer below blocks in-kernel with no reader until cancelled.
+                // SAFETY: fd_a is the open pipe writer; F_GETFL only reads flags.
+                let original = unsafe { libc::fcntl(fd_a, libc::F_GETFL) };
+                assert_ne!(original, -1);
+                // SAFETY: fd_a stays open; F_SETFL takes flags by value.
+                assert_eq!(
+                    unsafe { libc::fcntl(fd_a, libc::F_SETFL, original | libc::O_NONBLOCK) },
+                    0
+                );
+                let filler = [b'f'; 4096];
+                let mut filled = 0usize;
+                loop {
+                    // SAFETY: filler is live; fd_a is the open pipe writer.
+                    let count = unsafe { libc::write(fd_a, filler.as_ptr().cast(), filler.len()) };
+                    if count > 0 {
+                        filled += count as usize;
+                        continue;
+                    }
+                    assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+                    break;
+                }
+                assert!(filled > 0);
+                // SAFETY: fd_a stays open; F_SETFL takes flags by value.
+                assert_eq!(unsafe { libc::fcntl(fd_a, libc::F_SETFL, original) }, 0);
+                // SAFETY: targets 1 and 2 are this isolated child's own
+                // descriptors (its inherited stdio is null).
+                assert_ne!(unsafe { libc::dup2(fd_a, 1) }, -1);
+                assert_ne!(unsafe { libc::dup2(fd_b, 2) }, -1);
+                crate::github_actions::set_enabled(true);
+                crate::github_actions::reset_terminal_state();
+
+                // Pipe B stays healthy: a reader drains it for the whole test.
+                let reader_thread_b = std::thread::spawn(move || {
+                    let mut reader = std::fs::File::from(reader_b);
+                    let mut output = Vec::new();
+                    reader.read_to_end(&mut output).unwrap();
+                    output
+                });
+
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let worker_cancelled = Arc::clone(&cancelled);
+                let (result_sender, result_receiver) = mpsc::sync_channel(1);
+                let caller = std::thread::spawn(move || {
+                    let result =
+                        write_with_deadline(1, &vec![b'x'; 1024 * 1024], &worker_cancelled, None);
+                    let _ = result_sender.send(result);
+                });
+                // Let the caller take the sink and the merged claim and block
+                // its worker in-kernel on the full pipe.
+                std::thread::sleep(Duration::from_millis(500));
+                cancelled.store(true, Ordering::Release);
+                let error = result_receiver
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("hardened cancel did not return on a wedged pipe")
+                    .unwrap_err();
+                assert!(error.to_string().contains("cancelled"));
+                caller.join().expect("cancelled caller panicked");
+
+                // The forced drain expiry released the sink, but the
+                // kernel-blocked worker still owns the merged single flight:
+                // no later hardened filter may classify yet.
+                assert!(crate::github_actions::try_claim_merged_terminal().is_none());
+
+                // A cross-fd write to the healthy pipe must wait for those
+                // uncertain bytes instead of filtering early. It cannot
+                // complete while nobody drains pipe A, so a short timeout
+                // here is a deterministic order assertion, not a race.
+                let (probe_sender, probe_receiver) = mpsc::sync_channel(1);
+                let probe_caller = std::thread::spawn(move || {
+                    let result = write_with_deadline(
+                        2,
+                        b"probe-after-wedge",
+                        &AtomicBool::new(false),
+                        Some(Instant::now() + Duration::from_secs(10)),
+                    );
+                    let _ = probe_sender.send(result);
+                });
+                assert!(
+                    matches!(
+                        probe_receiver.recv_timeout(Duration::from_millis(300)),
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    ),
+                    "cross-fd write filtered before the wedged write landed"
+                );
+
+                // Drain the filler so the in-flight write can land its one
+                // bounded chunk, see `stop`, and release the claim; the probe
+                // then filters behind it and lands intact.
+                let mut reader = std::fs::File::from(reader_a);
+                let mut filler_drained = vec![0u8; filled];
+                reader.read_exact(&mut filler_drained).unwrap();
+                assert!(filler_drained.iter().all(|byte| *byte == b'f'));
+                probe_receiver
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("cross-fd probe did not land after the drain")
+                    .expect("cross-fd probe failed");
+                probe_caller.join().expect("probe caller panicked");
+                // The in-flight worker saw `stop` after landing at most one
+                // bounded chunk and released the single flight: polling must
+                // observe the release instead of hanging on a leak.
+                let release_deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if crate::github_actions::try_claim_merged_terminal().is_some() {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < release_deadline,
+                        "merged single flight leaked after the wedged write landed"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                // A mask registered after the wedge still lands intact on its
+                // own line instead of being skipped or glued mid-line.
+                crate::github_actions::emit_mask_for_bytes(b"wedge-secret-499");
+                drop(writer_a);
+                drop(writer_b);
+                // SAFETY: fds 1 and 2 are the dup2 copies above; no terminal
+                // writes follow.
+                assert_eq!(unsafe { libc::close(1) }, 0);
+                assert_eq!(unsafe { libc::close(2) }, 0);
+                let pipe_b = reader_thread_b.join().expect("pipe B reader panicked");
+                assert_eq!(pipe_b, b"probe-after-wedge");
+                let mut late_a = Vec::new();
+                reader.read_to_end(&mut late_a).unwrap();
+                let x_run = late_a.iter().take_while(|byte| **byte == b'x').count();
+                assert!(
+                    (1..=libc::PIPE_BUF as usize).contains(&x_run),
+                    "cancelled write leaked past one bounded chunk: {x_run} bytes"
+                );
+                // The mask opened its own line immediately after the late
+                // bytes and survived intact; nothing else parses.
+                assert_eq!(late_a.get(x_run), Some(&b'\n'));
+                let text = String::from_utf8_lossy(&late_a).into_owned();
+                assert!(
+                    text.contains("\n::add-mask::wedge-secret-499\n"),
+                    "mask did not survive the wedge intact: {text:?}"
+                );
+                for line in text.lines() {
+                    if line.trim_start().starts_with("::") {
+                        assert!(
+                            line.contains("add-mask"),
+                            "wedged writes forged a runner command: {line:?}"
+                        );
+                    }
+                }
+                crate::github_actions::reset_terminal_state();
+                crate::github_actions::set_enabled(false);
+            },
+        );
+    }
+
+    /// Direct waits and reset stay bounded while a pooled worker is still
+    /// kernel-blocked. Fd 1 is wedged full with no reader; the pooled write is
+    /// cancelled and its drain expires (sink released) while the worker still
+    /// holds the merged claim. Cancelled mask/final waits and a cancelled
+    /// reset must each report on a bound without writing or clearing state —
+    /// no unbounded hang, no false unlock — and after the pipe drains the
+    /// late bytes, the mask, and the final land in order.
+    #[cfg(unix)]
+    #[test]
+    fn hardened_direct_cancel_and_reset_stay_bounded_while_worker_in_flight() {
+        run_isolated_test(
+            "runtime::stdio::tests::hardened_direct_cancel_and_reset_stay_bounded_while_worker_in_flight",
+            "EXECUTE_TEST_HARDENED_DIRECT_CANCEL_RESET",
+            || {
+                use std::io::Read as _;
+                let (reader, writer) = test_pipe();
+                let fd = writer.as_raw_fd();
+                // Fill the pipe, then restore blocking mode: the runtime
+                // writer below blocks in-kernel with no reader until cancelled.
+                // SAFETY: fd is the open pipe writer; F_GETFL only reads flags.
+                let original = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                assert_ne!(original, -1);
+                // SAFETY: fd stays open; F_SETFL takes flags by value.
+                assert_eq!(
+                    unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) },
+                    0
+                );
+                let filler = [b'f'; 4096];
+                let mut filled = 0usize;
+                loop {
+                    // SAFETY: filler is live; fd is the open pipe writer.
+                    let count =
+                        unsafe { libc::write(fd, filler.as_ptr().cast(), filler.len()) };
+                    if count > 0 {
+                        filled += count as usize;
+                        continue;
+                    }
+                    assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+                    break;
+                }
+                assert!(filled > 0);
+                // SAFETY: fd stays open; F_SETFL takes flags by value.
+                assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, original) }, 0);
+                // SAFETY: target 1 is this isolated child's own stdout.
+                assert_ne!(unsafe { libc::dup2(fd, 1) }, -1);
+                crate::github_actions::set_enabled(true);
+                crate::github_actions::reset_terminal_state();
+
+                // Wedge one pooled write on the full pipe.
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let worker_cancelled = Arc::clone(&cancelled);
+                let (result_sender, result_receiver) = mpsc::sync_channel(1);
+                let caller = std::thread::spawn(move || {
+                    let result = write_with_deadline(
+                        1,
+                        &vec![b'x'; 1024 * 1024],
+                        &worker_cancelled,
+                        None,
+                    );
+                    let _ = result_sender.send(result);
+                });
+                std::thread::sleep(Duration::from_millis(500));
+                cancelled.store(true, Ordering::Release);
+                let error = result_receiver
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("hardened cancel did not return on a wedged pipe")
+                    .unwrap_err();
+                assert!(error.to_string().contains("cancelled"));
+                caller.join().expect("cancelled caller panicked");
+
+                // The drain expired while the worker is still kernel-blocked:
+                // the merged single flight is still held, so no later filter
+                // may classify yet.
+                assert!(crate::github_actions::try_claim_merged_terminal().is_none());
+
+                // Cancelled direct waits report on a bound instead of hanging
+                // behind the wedged worker. Nothing is resynced or written, so
+                // merged order stays fail-closed.
+                let direct_cancelled = AtomicBool::new(true);
+                let mask_error = crate::github_actions::emit_mask_for_bytes_with_cancel(
+                    b"direct-cancel-499",
+                    &direct_cancelled,
+                    None,
+                )
+                .unwrap_err();
+                assert!(mask_error.to_string().contains("cancelled"));
+                let final_error =
+                    crate::github_actions::write_stdout_final_with_cancel(
+                        b"late-final",
+                        &direct_cancelled,
+                        None,
+                    )
+                    .unwrap_err();
+                assert!(final_error.to_string().contains("cancelled"));
+                let diagnostic_error =
+                    crate::github_actions::write_stderr_final_with_cancel(
+                        b"late-diagnostic",
+                        &direct_cancelled,
+                        None,
+                    )
+                    .unwrap_err();
+                assert!(diagnostic_error.to_string().contains("cancelled"));
+
+                // A cancelled reset reports without touching sanitizer state;
+                // a past-deadline reset does too. The in-flight claim stays
+                // owned by its worker in both cases: no false unlock.
+                let reset_error =
+                    crate::github_actions::reset_terminal_state_with_cancel(
+                        &direct_cancelled,
+                        None,
+                    )
+                    .unwrap_err();
+                assert!(reset_error.to_string().contains("cancelled"));
+                assert!(crate::github_actions::reset_terminal_state_with_cancel(
+                    &AtomicBool::new(false),
+                    Some(Instant::now())
+                )
+                .is_err());
+                assert!(
+                    crate::github_actions::try_claim_merged_terminal().is_none(),
+                    "cancelled direct wait or reset released the in-flight claim"
+                );
+
+                // Drain the filler so the in-flight write lands its one
+                // bounded chunk, sees `stop`, and releases the claim.
+                let mut reader = std::fs::File::from(reader);
+                let mut filler_drained = vec![0u8; filled];
+                reader.read_exact(&mut filler_drained).unwrap();
+                assert!(filler_drained.iter().all(|byte| *byte == b'f'));
+                let release_deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if crate::github_actions::try_claim_merged_terminal().is_some() {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < release_deadline,
+                        "merged single flight leaked after the wedged write landed"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+
+                // Direct writes and the reset work again once the worker
+                // finished, and the bytes land in merged order.
+                crate::github_actions::emit_mask_for_bytes(b"direct-after-drain-499");
+                crate::github_actions::write_stdout_final(b"final-after-drain")
+                    .expect("final write after the drain");
+                drop(writer);
+                // SAFETY: fd 1 is the dup2 copy above; no terminal writes follow.
+                assert_eq!(unsafe { libc::close(1) }, 0);
+                let mut late = Vec::new();
+                reader.read_to_end(&mut late).unwrap();
+                let x_run = late.iter().take_while(|byte| **byte == b'x').count();
+                assert!(
+                    (1..=libc::PIPE_BUF as usize).contains(&x_run),
+                    "cancelled write leaked past one bounded chunk: {x_run} bytes"
+                );
+                let text = String::from_utf8_lossy(&late).into_owned();
+                assert!(
+                    text.contains("\n::add-mask::direct-after-drain-499\n"),
+                    "mask did not survive the wedge intact: {text:?}"
+                );
+                assert!(
+                    text.ends_with("final-after-drain"),
+                    "final did not land after the mask: {text:?}"
+                );
+                for line in text.lines() {
+                    if line.trim_start().starts_with("::") {
+                        assert!(
+                            line.contains("add-mask"),
+                            "wedged writes forged a runner command: {line:?}"
+                        );
+                    }
+                }
+                crate::github_actions::reset_terminal_state();
+                crate::github_actions::set_enabled(false);
+            },
+        );
+    }
+
+    /// Direct writes wedged in the write phase itself stay cancellable.
+    /// Fd 1 and 2 share one full pipe with no reader, so the direct worker
+    /// (not a pooled worker, and not a claim waiter) is the thread blocked
+    /// in-kernel. Cancelling the final must return on the drain bound while
+    /// the worker keeps the merged claim; a cancellable streaming stderr
+    /// write (the live serve-notice path) must also report while waiting
+    /// behind that claim instead of hanging. After the drain, the late
+    /// bounded chunk, the notice, and a final land in merged order.
+    #[cfg(unix)]
+    #[test]
+    fn hardened_direct_write_cancel_returns_while_direct_write_wedged() {
+        run_isolated_test(
+            "runtime::stdio::tests::hardened_direct_write_cancel_returns_while_direct_write_wedged",
+            "EXECUTE_TEST_HARDENED_DIRECT_WRITE_WEDGE",
+            || {
+                use std::io::Read as _;
+                let (reader, writer) = test_pipe();
+                let fd = writer.as_raw_fd();
+                // Fill the pipe, then restore blocking mode: the direct
+                // worker below blocks in-kernel with no reader.
+                // SAFETY: fd is the open pipe writer; F_GETFL only reads flags.
+                let original = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                assert_ne!(original, -1);
+                // SAFETY: fd stays open; F_SETFL takes flags by value.
+                assert_eq!(
+                    unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) },
+                    0
+                );
+                let filler = [b'f'; 4096];
+                let mut filled = 0usize;
+                loop {
+                    // SAFETY: filler is live; fd is the open pipe writer.
+                    let count =
+                        unsafe { libc::write(fd, filler.as_ptr().cast(), filler.len()) };
+                    if count > 0 {
+                        filled += count as usize;
+                        continue;
+                    }
+                    assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+                    break;
+                }
+                assert!(filled > 0);
+                // SAFETY: fd stays open; F_SETFL takes flags by value.
+                assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, original) }, 0);
+                // SAFETY: targets 1 and 2 are this isolated child's own
+                // descriptors (its inherited stdio is null).
+                assert_ne!(unsafe { libc::dup2(fd, 1) }, -1);
+                assert_ne!(unsafe { libc::dup2(fd, 2) }, -1);
+                crate::github_actions::set_enabled(true);
+                crate::github_actions::reset_terminal_state();
+
+                // Wedge a direct final write in its write phase.
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let worker_cancelled = Arc::clone(&cancelled);
+                let (result_sender, result_receiver) = mpsc::sync_channel(1);
+                let caller = std::thread::spawn(move || {
+                    let result = crate::github_actions::write_stdout_final_with_cancel(
+                        &vec![b'y'; 1024 * 1024],
+                        &worker_cancelled,
+                        None,
+                    );
+                    let _ = result_sender.send(result);
+                });
+                std::thread::sleep(Duration::from_millis(500));
+                cancelled.store(true, Ordering::Release);
+                let error = result_receiver
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("direct cancel did not return on a wedged write")
+                    .unwrap_err();
+                assert!(error.to_string().contains("cancelled"));
+                caller.join().expect("cancelled direct caller panicked");
+
+                // The drain expired while the direct worker is still
+                // kernel-blocked: it keeps the merged single flight.
+                assert!(crate::github_actions::try_claim_merged_terminal().is_none());
+
+                // The serve-notice path waits behind that claim with its own
+                // stop flag: cancelling it reports on a bound too.
+                let notice_cancelled = Arc::new(AtomicBool::new(false));
+                let notice_flag = Arc::clone(&notice_cancelled);
+                let (notice_sender, notice_receiver) = mpsc::sync_channel(1);
+                let notice_caller = std::thread::spawn(move || {
+                    let result = crate::github_actions::write_direct_stderr_with_cancel(
+                        b"serve-notice\n",
+                        &notice_flag,
+                        None,
+                    );
+                    let _ = notice_sender.send(result);
+                });
+                std::thread::sleep(Duration::from_millis(300));
+                notice_cancelled.store(true, Ordering::Release);
+                let notice_error = notice_receiver
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("serve-notice cancel did not return behind a wedged direct write")
+                    .unwrap_err();
+                assert!(notice_error.to_string().contains("cancelled"));
+                notice_caller.join().expect("notice caller panicked");
+                assert!(crate::github_actions::try_claim_merged_terminal().is_none());
+
+                // Drain the filler so the wedged chunk lands, the worker
+                // sees `stop`, and the claim releases without leaking.
+                let mut reader = std::fs::File::from(reader);
+                let mut filler_drained = vec![0u8; filled];
+                reader.read_exact(&mut filler_drained).unwrap();
+                assert!(filler_drained.iter().all(|byte| *byte == b'f'));
+                let release_deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if crate::github_actions::try_claim_merged_terminal().is_some() {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < release_deadline,
+                        "merged single flight leaked after the wedged direct write landed"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+
+                // Both direct paths write again once the worker finished,
+                // and the bytes land in merged order behind the late chunk.
+                crate::github_actions::write_direct_stderr_with_cancel(
+                    b"serve-notice\n",
+                    &AtomicBool::new(false),
+                    Some(Instant::now() + Duration::from_secs(5)),
+                )
+                .expect("serve notice after the drain");
+                crate::github_actions::write_stdout_final(b"final-after-drain")
+                    .expect("final write after the drain");
+                drop(writer);
+                // SAFETY: fds 1 and 2 are the dup2 copies above; no
+                // terminal writes follow.
+                assert_eq!(unsafe { libc::close(1) }, 0);
+                assert_eq!(unsafe { libc::close(2) }, 0);
+                let mut late = Vec::new();
+                reader.read_to_end(&mut late).unwrap();
+                let y_run = late.iter().take_while(|byte| **byte == b'y').count();
+                assert!(
+                    (1..=8 * 1024).contains(&y_run),
+                    "cancelled direct write leaked past one bounded chunk: {y_run} bytes"
+                );
+                let text = String::from_utf8_lossy(&late).into_owned();
+                let notice_at = text
+                    .find("serve-notice\n")
+                    .expect("serve notice did not land after the drain");
+                assert!(notice_at >= y_run, "notice landed before the late chunk");
+                assert!(
+                    text.ends_with("final-after-drain"),
+                    "final did not land after the notice: {text:?}"
+                );
+                crate::github_actions::reset_terminal_state();
+                crate::github_actions::set_enabled(false);
+            },
+        );
     }
 
     fn test_pipe() -> (OwnedFd, OwnedFd) {

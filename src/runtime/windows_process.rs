@@ -426,6 +426,22 @@ fn execute_group_with_sink(
                     )?,
                 }
             };
+            // A custom model endpoint is authorized like a remote origin before
+            // the child spawns; see the Unix loop in `spawn.rs`.
+            if manifest.binary == "@execute-model" {
+                if let Some(granted) = crate::capabilities::authorize_model_endpoint_params(
+                    registry,
+                    manifest,
+                    &call.parameters,
+                    bindings,
+                    &sensitivities,
+                )? {
+                    command.env(
+                        crate::capabilities::MODEL_GRANTED_ORIGIN_ENV,
+                        granted,
+                    );
+                }
+            }
             let resolved_io = resolved_call_stdio(call, manifest, signals);
             let mut stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
             // A child that inherits a console writes through its own runtime,

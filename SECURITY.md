@@ -210,13 +210,16 @@ covers module sources and packages. Replay refuses detached launches and handove
 
 Optional `network_origins` lists canonical HTTP(S) origins, without a path,
 query, fragment, credentials or wildcard. The list requires `network: true`
-and the `network.connect` grant, and is supported only for host-managed remote
-applets. An absent or empty list allows broad network access for metadata-policy
-checks. Required OS sandboxing rejects a nonempty origin list because the
-available native sandbox backends can enforce only all-or-none network access.
-Remote endpoint authorization runs before discovery or invocation; redirects
-and environment proxies are disabled. A remote applet's bearer-file path is
-checked against that applet's own filesystem read grant.
+and the `network.connect` grant, and is supported for host-managed remote
+applets and for custom `@execute-model` endpoints. An absent or empty list
+allows broad network access for metadata-policy checks. Required OS sandboxing
+rejects a nonempty origin list because the available native sandbox backends
+can enforce only all-or-none network access. Remote endpoint authorization runs
+before discovery or invocation; redirects and environment proxies are disabled.
+A remote applet's bearer-file path is checked against that applet's own
+filesystem read grant. A custom model endpoint is authorized the same way
+before its child spawns, including the data-flow sink check for the call's
+sensitivity; the default provider endpoint needs no grant.
 
 SSRF protection is fail-closed at two layers for host-managed remote applets
 and the model helper. Before any resolution or socket use, a non-public
@@ -225,22 +228,23 @@ including 169.254.169.254, ULA, multicast, and IPv4-mapped IPv6 forms) is
 refused by name; at connect time the resolver pins the whole resolved address
 set, so a hostname that first resolves to a public address cannot rebind to a
 private one. Only an origin explicitly listed in `network_origins` preserves a
-private destination, and only for remote applets; a broad empty-list grant
-does not. The model helper accepts no origin grants (dependency #375 keeps
-model endpoints outside `network_origins`, which `Command`-backend applets
-cannot declare): its endpoints stay restricted to HTTPS, or HTTP to loopback,
-with the same guard. A script-controlled `--endpoint` therefore cannot reach
-metadata or private destinations, and live loopback endpoints additionally
-require the explicit `EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's
-environment — without it the request fails as configuration before any
-credential read or connection, so an unauthenticated local service is never
-reachable by default. Hermetic `--fixture` runs never open a socket and do
-not need the grant. The self-grant prevention holds only when the ambient
-environment is constrained: under a capability policy, or a host
-`--clear-env`/`--env-allow` filter, a program cannot grant the variable to
-itself via `use environment` or `and environment` unless the applet's
-`environment` grant lists it. In default trusted mode with full ambient
-inheritance, a program can set the variable itself.
+private destination, for remote applets and for custom model endpoints; a
+broad empty-list grant does not. The model helper additionally accepts the
+listed origin through `EXECUTE_MODEL_GRANTED_ORIGIN`, conveyed by the runtime
+parent after it authorizes the endpoint, and honors only the value that equals
+the endpoint's own canonical origin. A script-controlled `--endpoint`
+therefore cannot reach metadata or private destinations, and live loopback
+endpoints without a listed origin additionally require the explicit
+`EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's environment — without it
+the request fails as configuration before any credential read or connection,
+so an unauthenticated local service is never reachable by default. Hermetic
+`--fixture` runs never open a socket and do not need the grant. The self-grant
+prevention holds only when the ambient environment is constrained: under a
+capability policy, or a host `--clear-env`/`--env-allow` filter, a program
+cannot grant either variable to itself via `use environment` or
+`and environment` unless the applet's `environment` grant lists it. In default
+trusted mode with full ambient inheritance, a program can set the variable
+itself.
 
 `--execution-mode trusted|untrusted` selects native-child confinement. With no
 policy the default is `trusted`; a capability policy defaults to `untrusted`.

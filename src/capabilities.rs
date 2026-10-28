@@ -11,7 +11,7 @@ use crate::ast::{Program, Step, StepKind, Trigger, Value};
 use crate::contracts::AppletBackend;
 use crate::manifest::Registry;
 use crate::security::{
-    record_policy_decision, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk,
+    record_policy_decision, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk, SensitivitySet,
 };
 use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
@@ -501,8 +501,9 @@ pub struct AppletGrant {
     pub filesystem: FilesystemGrant,
     #[serde(default)]
     pub network: bool,
-    /// Exact canonical HTTP(S) origins for host-managed remote applets.
-    /// An empty set with `network: true` is an explicit broad network grant.
+    /// Exact canonical HTTP(S) origins for host-managed remote applets and for
+    /// custom `@execute-model` endpoints. An empty set with `network: true` is
+    /// an explicit broad network grant.
     #[serde(default)]
     pub network_origins: BTreeSet<String>,
     #[serde(default)]
@@ -1546,7 +1547,18 @@ fn preflight_invocations_with_policy<'a>(
                 "required OS sandbox cannot enforce network origin restrictions for applet {name:?}"
             );
         }
-        if backend != AppletBackend::Remote && !grant.network_origins.is_empty() {
+        // Origin grants also cover custom model endpoints: the bundled
+        // `@execute-model` helper is host-managed (its transport pins every
+        // resolved address), so a listed origin can preserve a non-public
+        // destination there too. Every other native backend keeps the refusal:
+        // a generic child is not pinned, and required OS sandboxing cannot
+        // enforce origin restrictions (see the `sandbox_required` check above).
+        let model_origin_grant =
+            backend != AppletBackend::Remote && manifest.binary == "@execute-model";
+        if backend != AppletBackend::Remote
+            && !model_origin_grant
+            && !grant.network_origins.is_empty()
+        {
             record_preflight_denial(registry, name, "network.connect");
             bail!("network_origins is supported only for host-managed remote applets");
         }
@@ -2469,6 +2481,251 @@ pub fn authorize_network_endpoint(
     }
     Ok(())
 }
+
+/// Authorize a custom `@execute-model` endpoint against the same policy grants
+/// as a remote origin: the applet's `network_origins`, the data-flow sinks for
+/// the call's sensitivity, and the fail-closed SSRF guard.
+///
+/// Only an explicitly listed origin succeeds for a non-public destination; a
+/// broad empty-list grant allows the origin for metadata-policy checks but
+/// does not preserve it, exactly as for remote applets. Unlisted public
+/// origins are denied here too: stdin plus any `api_key_env` credential would
+/// otherwise exfiltrate to an arbitrary host. The default provider endpoint
+/// (no custom `endpoint` parameter) needs no grant: reaching the provider is
+/// the applet's declared function, and default keys already stay on the
+/// default host.
+///
+/// Returns the canonical origin when the policy explicitly listed it, so the
+/// spawn site can convey the grant to the helper; `None` means allowed without
+/// an origin grant (or no policy was configured, in which case the helper's
+/// own SSRF guard still refuses non-public destinations). Runs before any
+/// child spawns and fails closed: an unparsable endpoint, a missing grant, or
+/// a resolution-shaped refusal never reaches the transport.
+///
+/// `allow_loopback` is true only for hermetic `--fixture` runs, which never
+/// open a socket: the endpoint selects no transport, so only the fail-fast
+/// SSRF by-name refusal applies and loopback literals stay usable without an
+/// origin grant, mirroring the helper. Live requests always pass false and
+/// need an explicit listing for any non-public destination.
+pub fn authorize_model_endpoint(
+    registry: &Registry,
+    applet_name: &str,
+    endpoint: &str,
+    sensitivities: &SensitivitySet,
+    allow_loopback: bool,
+) -> Result<Option<String>> {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
+        return Ok(None);
+    };
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "network.connect");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
+    let manifest = registry
+        .resolve(applet_name)
+        .with_context(|| format!("resolving applet {applet_name:?} for network access"))?;
+    if manifest.name != applet_name || manifest.binary != "@execute-model" {
+        // No grant covers a non-canonical or non-model applet, so the denial
+        // is recorded with the same outcome as a missing grant.
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
+        bail!("model endpoint authorization applies only to canonical model applets");
+    }
+    if !grant.network || !grant.capabilities.contains("network.connect") {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::CapabilityNotGranted,
+        );
+        bail!("capability policy denies network access for applet {applet_name:?}");
+    }
+    let parsed_endpoint = match parse_http_url(endpoint, "model endpoint") {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "network.connect",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::NetworkOriginNotGranted,
+            );
+            return Err(error);
+        }
+    };
+    if parsed_endpoint.fragment {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("model endpoint must not contain a fragment");
+    }
+    let origin = parsed_endpoint.origin.clone();
+    if allow_loopback {
+        // Hermetic fixture mode never opens a socket: the endpoint selects no
+        // transport, so only the fail-fast SSRF by-name check applies. It
+        // still refuses non-public literals, mirroring the helper, while
+        // loopback literals stay usable without an origin grant. Network and
+        // data-flow grants govern effects that never occur here.
+        if let Err(denied) =
+            ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, true, &BTreeSet::new())
+        {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "network.connect",
+                Some(&origin),
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::NetworkOriginNotGranted,
+            );
+            bail!("capability policy refuses non-public model endpoint host: {denied}");
+        }
+        return Ok(None);
+    }
+    let allowed = network_origin_is_granted(grant, &origin);
+    record_policy_decision(
+        registry,
+        applet_name,
+        "network.connect",
+        Some(&origin),
+        PolicyRisk::High,
+        if allowed {
+            PolicyDecisionOutcome::Approved
+        } else {
+            PolicyDecisionOutcome::Denied
+        },
+        if allowed {
+            PolicyDecisionReason::PolicyMatched
+        } else {
+            PolicyDecisionReason::NetworkOriginNotGranted
+        },
+    );
+    if !allowed {
+        bail!("capability policy denies the model endpoint origin");
+    }
+    // Fail fast on non-public literal hosts even though the helper pins the
+    // resolved set again at connect time. Only an explicitly listed origin
+    // preserves a private destination; a broad empty-list grant does not.
+    // Hostnames that look benign pass here and are pinned by the helper's
+    // resolver, which stops DNS rebinding.
+    let granted = if grant.network_origins.contains(&origin) {
+        BTreeSet::from([origin.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    if let Err(denied) =
+        ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, allow_loopback, &granted)
+    {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            Some(&origin),
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("capability policy refuses non-public model endpoint host: {denied}");
+    }
+    // The request body plus any explicit credential travels to this origin, so
+    // the data-flow policy must authorize the sink for the call's labels.
+    crate::security::authorize_data_flow_set(registry, applet_name, endpoint, sensitivities)?;
+    Ok(grant.network_origins.contains(&origin).then_some(origin))
+}
+
+/// Authorize the resolved custom `endpoint` parameter of an `@execute-model`
+/// applet before its child spawns. Other binaries need no check; an absent
+/// endpoint selects the provider default and needs no grant.
+///
+/// References resolve through `bindings`; unbound names return `Ok(None)` here
+/// and argument resolution rejects them before any spawn. A named `fixture`
+/// means the helper replays it without opening a socket, so loopback literals
+/// stay usable there, mirroring the helper. Returns the explicitly granted
+/// origin, if any, for the spawn site to convey to the helper.
+pub fn authorize_model_endpoint_params(
+    registry: &Registry,
+    manifest: &crate::manifest::Manifest,
+    parameters: &BTreeMap<String, Value>,
+    bindings: &BTreeMap<String, Value>,
+    sensitivities: &SensitivitySet,
+) -> Result<Option<String>> {
+    if manifest.binary != "@execute-model" {
+        return Ok(None);
+    }
+    let Some(value) = parameters.get("endpoint") else {
+        return Ok(None);
+    };
+    let text = match value {
+        Value::String(text) => text.as_str(),
+        Value::Reference(binding) => match bindings.get(binding) {
+            Some(Value::String(text)) => text.as_str(),
+            Some(_) => bail!("model parameter \"endpoint\" must be text"),
+            // Unbound here; argument resolution rejects it before spawn.
+            None => return Ok(None),
+        },
+        // Manifest validation rejects non-text values before execution.
+        _ => bail!("model parameter \"endpoint\" must be text"),
+    };
+    let allow_loopback = parameters.contains_key("fixture");
+    authorize_model_endpoint(
+        registry,
+        &manifest.name,
+        text,
+        sensitivities,
+        allow_loopback,
+    )
+}
+
+/// Environment variable carrying one explicitly granted model origin to the
+/// bundled `execute-model` helper.
+///
+/// The spawn site sets this only after [`authorize_model_endpoint`] authorized
+/// the endpoint's origin against the applet's `network_origins` grant and the
+/// data-flow policy. The helper honors only the value that equals the
+/// endpoint's own canonical origin. Under a capability policy or host
+/// environment filter the variable must additionally be allowlisted to reach
+/// the helper, mirroring `EXECUTE_MODEL_ALLOW_LOOPBACK`.
+pub(crate) const MODEL_GRANTED_ORIGIN_ENV: &str = "EXECUTE_MODEL_GRANTED_ORIGIN";
 
 /// Whether a host path is being read or written, for filesystem policy checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

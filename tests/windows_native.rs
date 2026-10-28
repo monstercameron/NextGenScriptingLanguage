@@ -650,7 +650,7 @@ fn quote_conpty_arg(arg: &str) -> String {
 fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u32) {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::{
-        Foundation::{FALSE, HANDLE, WAIT_OBJECT_0},
+        Foundation::{FALSE, HANDLE, TRUE, WAIT_OBJECT_0},
         Security::SECURITY_ATTRIBUTES,
         System::{
             Console::{ClosePseudoConsole, CreatePseudoConsole, COORD, HPCON},
@@ -665,10 +665,16 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         },
     };
 
-    // The ConPTY host pipes must never be inherited by the child: explicit
-    // FALSE keeps the host ends out of the child's handle table (no fd
-    // leaks), and CreateProcessW below uses bInheritHandles FALSE so the
-    // parent's redirected cargo-test stdio stays out as well.
+    // The ConPTY host pipe ends must never be inherited by the child, so
+    // they are created non-inheritable here; that attribute (not the
+    // CreateProcessW flag below) is what keeps the host ends out of the
+    // child's handle table. CreateProcessW itself must still use
+    // bInheritHandles TRUE: the canonical ConPTY reference (Rich Turner,
+    // "Meet the Windows pseudo console", Aug 2018) launches the hosted
+    // client with TRUE, and the native probe showed that FALSE leaves the
+    // child with the parent's redirected cargo-test pipes
+    // (type=PIPE, console=false, WriteConsoleW failing) instead of the
+    // ConPTY-provided console handles.
     let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: std::ptr::null_mut(),
@@ -756,11 +762,15 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     );
 
     // Per STARTUPINFO docs, without STARTF_USESTDHANDLES the hStd* members
-    // are ignored and stdio defaults to the console window's buffer. For a
-    // ConPTY child that buffer is the pseudo-console screen, not the
-    // parent's redirected cargo-test pipes, so attached output (including
-    // the console U+FFFD replacement) reaches the captured screen instead
-    // of leaking to the test runner. Explicit zeros lock that contract in.
+    // are ignored and stdio defaults to the console window's buffer, and
+    // per the handle-inheritance docs std handles are inherited only when
+    // STARTF_USESTDHANDLES is set. So with dwFlags 0 the parent's
+    // redirected cargo-test pipes can never become the child's std
+    // handles, even though bInheritHandles below is TRUE. For a ConPTY
+    // child that buffer is the pseudo-console screen, so attached output
+    // (including the console U+FFFD replacement) reaches the captured
+    // screen instead of leaking to the test runner. Explicit zeros lock
+    // that contract in.
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
@@ -781,14 +791,18 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     let mut info = PROCESS_INFORMATION::default();
     // SAFETY: the command buffer is a live nul-terminated mutable UTF-16
     // buffer; startup carries the pseudo-console attribute; environment and
-    // directory are inherited; no handles are inherited.
+    // directory are inherited. bInheritHandles is TRUE so the child
+    // receives the ConPTY-provided console handles (the canonical ConPTY
+    // reference launches its client with TRUE); the host pipe ends stay
+    // host-only because they were created non-inheritable, and std handles
+    // are not inherited because dwFlags omits STARTF_USESTDHANDLES.
     let created = unsafe {
         CreateProcessW(
             std::ptr::null(),
             command.as_mut_ptr(),
             std::ptr::null(),
             std::ptr::null(),
-            FALSE,
+            TRUE,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
             std::ptr::null(),
             std::ptr::null(),
@@ -972,6 +986,20 @@ fn conpty_child_stdio_is_a_console_and_write_console_reaches_screen() {
         status,
         0,
         "ConPTY probe child must exit 0; screen ({} bytes):\n{}",
+        screen.len(),
+        text
+    );
+    // The in-console report must show the child stdout as a console handle,
+    // not an inherited cargo-test pipe: this pins the bInheritHandles TRUE
+    // contract after the native probe measured type=PIPE console=false.
+    let report = probe_report_lines(&screen);
+    assert!(
+        report
+            .lines()
+            .any(|line| line.contains("stdout") && line.contains("console=true")),
+        "ConPTY child stdout must report console=true from inside the session.\n\
+         Measured child routing (from screen):\n{report}\n\
+         Full screen ({} bytes):\n{}",
         screen.len(),
         text
     );

@@ -188,6 +188,41 @@ struct Completion {
     launched_processes: usize,
 }
 
+
+/// Register declared-secret environment values before any task launches, so a
+/// fail-fast sibling cannot present output before the secret-owning task
+/// registers its mask. Manifest-set secrets are captured per applet via their
+/// effective environment; ambient declared secrets via the process snapshot;
+/// workflow overlay values are themselves secrets. Fail closed on overflow.
+fn pre_register_task_group_secrets(
+    registry: &Registry,
+    applet_names: &[String],
+    environment: &Option<crate::capabilities::CommandEnvOverlay>,
+) -> Result<()> {
+    let proc_vars = std::env::vars_os().collect::<Vec<_>>();
+    crate::security::register_declared_environment_secrets(registry, &proc_vars)
+        .map_err(|error| anyhow!("registering declared task secrets: {error}"))?;
+    let mut seen = std::collections::BTreeSet::new();
+    for applet in applet_names {
+        if !seen.insert(applet.clone()) {
+            continue;
+        }
+        let snapshot = crate::capabilities::effective_environment(registry, applet)
+            .with_context(|| format!("resolving task environment for {applet:?}"))?;
+        crate::security::capture_declared_environment_secrets(registry, applet, &snapshot)
+            .map_err(|error| anyhow!("registering declared task secrets: {error}"))?;
+    }
+    if let Some(overlay) = environment {
+        let redactor = crate::security::secret_redactor(registry);
+        for value in overlay.set.values() {
+            redactor
+                .register(value.as_bytes())
+                .map_err(|_| anyhow!("could not register a task environment value as a secret"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Resolve and validate every task's applet, parameters, and capability grant
 /// before starting any task. Parent bindings are resolved once into owned
 /// values so a child cannot observe later sibling results.
@@ -348,6 +383,10 @@ pub(super) fn run_group(
     let limit = limit.min(prepared.len());
     let max_output_bytes = options.max_output_bytes;
     let secret_redactor = crate::security::secret_redactor(registry);
+    {
+        let applet_names = prepared.iter().map(|task| task.applet.clone()).collect::<Vec<_>>();
+        pre_register_task_group_secrets(registry, &applet_names, &environment)?;
+    }
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     let not_started = records
         .iter()
@@ -843,7 +882,7 @@ pub(super) fn run_each(
             parameters: BTreeMap::new(),
             uncertain_on_error: manifest.uncertain_on_failure,
             native_command: manifest.execution_backend() == AppletBackend::Command,
-            sensitive: call.sensitive_binding,
+            sensitive: call.marks_sensitive_output(),
         });
         calls.push(call);
     }
@@ -867,6 +906,13 @@ pub(super) fn run_each(
     drop(calls);
 
     let secret_redactor = crate::security::secret_redactor(registry);
+    {
+        let applet_names = prepared.iter().map(|task| task.applet.clone()).collect::<Vec<_>>();
+        pre_register_task_group_secrets(registry, &applet_names, &environment)?;
+        if sink.is_some() && prepared.iter().any(|task| task.sensitive) {
+            bail!("checkpoint refused for parallel for each with secret task output");
+        }
+    }
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     if prepared.is_empty() {
         return Ok(TaskGroupResult {

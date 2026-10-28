@@ -375,8 +375,8 @@ fn killed_interactive_child_restores_terminal_settings() {
 
     let mut master: libc::c_int = -1;
     let mut slave: libc::c_int = -1;
-    // SAFETY: plain out-fds; defaults for name, termios and window size.
     assert_eq!(
+        // SAFETY: plain out-fds; defaults for name, termios and window size.
         unsafe {
             libc::openpty(
                 &mut master,
@@ -389,9 +389,12 @@ fn killed_interactive_child_restores_terminal_settings() {
         0,
         "openpty failed: pty tests need a Linux controlling terminal (Linux CI)"
     );
+    // SAFETY: openpty succeeded above, so master is a live owned fd.
     let master = unsafe { OwnedFd::from_raw_fd(master) };
+    // SAFETY: termios is plain data; all-zero is a valid bit pattern.
     let mut before: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(
+        // SAFETY: master is a live open pty fd; tcgetattr writes only into the live termios.
         unsafe { libc::tcgetattr(master.as_raw_fd(), &mut before) },
         0
     );
@@ -422,6 +425,7 @@ fn killed_interactive_child_restores_terminal_settings() {
         .stdin(unsafe { std::process::Stdio::from_raw_fd(slave) })
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    // SAFETY: the closure runs between fork and exec; it calls only async-signal-safe functions.
     unsafe {
         command.pre_exec(move || {
             // Become a session leader and take the pty as the controlling
@@ -444,8 +448,10 @@ fn killed_interactive_child_restores_terminal_settings() {
         assert!(Instant::now() < deadline, "the run never reached its sleep");
         std::thread::sleep(Duration::from_millis(10));
     }
+    // SAFETY: termios is plain data; all-zero is a valid bit pattern.
     let mut current: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(
+        // SAFETY: master is a live open pty fd; tcgetattr writes only into the live termios.
         unsafe { libc::tcgetattr(master.as_raw_fd(), &mut current) },
         0
     );
@@ -467,8 +473,10 @@ fn killed_interactive_child_restores_terminal_settings() {
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(143));
+    // SAFETY: termios is plain data; all-zero is a valid bit pattern.
     let mut after: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(
+        // SAFETY: master is a live open pty fd; tcgetattr writes only into the live termios.
         unsafe { libc::tcgetattr(master.as_raw_fd(), &mut after) },
         0
     );

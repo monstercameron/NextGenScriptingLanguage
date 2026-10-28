@@ -252,6 +252,66 @@ mod execution_tests {
     }
 
     #[test]
+    fn confirmed_binding_refuses_a_swapped_binary_before_spawn() {
+        let directory = tempfile::tempdir().unwrap();
+        let tool = directory.path().join("tool");
+        std::fs::write(&tool, b"reviewed bytes").unwrap();
+        let digest = sha256_file(&tool).unwrap();
+        let canonical = std::fs::canonicalize(&tool).unwrap();
+        let settings = serde_json::json!({
+            "executables": {
+                "tool@line:1": {
+                    "path": canonical.to_string_lossy(),
+                    "sha256": digest,
+                },
+            },
+        });
+        let confirmed = confirmed_executables_from_settings(&settings).unwrap();
+        let registry = crate::manifest::Registry::from_sources(&[] as &[String]).unwrap();
+        registry.set_host_state(Some(confirmed));
+        let cwd = crate::working_dir::WorkingDirectory::plain(directory.path().to_path_buf());
+
+        // The reviewed bytes build a command through the real spawn path.
+        command_for(&tool, ["--version"], &registry, "tool", &cwd).unwrap();
+
+        // A binary swapped after the review never reaches a Command.
+        std::fs::write(&tool, b"swapped bytes").unwrap();
+        let error = command_for(&tool, ["--version"], &registry, "tool", &cwd).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed after the confirmed review"),
+            "{error:?}"
+        );
+
+        // An executable the review never saw fails closed too.
+        let other = directory.path().join("other");
+        std::fs::write(&other, b"unreviewed bytes").unwrap();
+        let error = command_for(&other, ["--version"], &registry, "other", &cwd).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("was not part of the confirmed review"),
+            "{error:?}"
+        );
+
+        // Runs without `--confirm` install no pinning and skip the check.
+        let plain = crate::manifest::Registry::from_sources(&[] as &[String]).unwrap();
+        command_for(&tool, ["--version"], &plain, "tool", &cwd).unwrap();
+    }
+
+    #[test]
+    fn confirmed_binding_rejects_a_review_without_executable_identities() {
+        let error = confirmed_executables_from_settings(&serde_json::json!({})).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing its executable identities"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn native_origin_restrictions_are_typed_refusals_even_with_broad_network_access() {
         let mut restricted = grant();
         restricted
@@ -672,6 +732,10 @@ impl CapabilityPolicy {
 
     /// Recheck a pinned binary immediately before spawn. This narrows, but
     /// cannot eliminate, replacement races between hashing and `exec`.
+    ///
+    /// A `run --confirm` review installs the same check for every reviewed
+    /// executable, including direct quoted commands, which have no policy
+    /// grant to pin them. See [`ConfirmedExecutables`].
     pub fn verify_binary(&self, name: &str, binary: &Path) -> Result<()> {
         let Some(expected) = self
             .applets
@@ -687,6 +751,89 @@ impl CapabilityPolicy {
         }
         Ok(())
     }
+}
+
+/// Executable identities pinned by a `run --confirm` review. `--what-if`
+/// hashes every resolved native executable into the fingerprint; installing
+/// that map on the run's registry binds the bytes the review approved to the
+/// bytes each spawn launches. This reuses the same hash helper as the manifest
+/// `binary_sha256` pin, but also covers direct quoted commands, which have no
+/// policy grant to pin them.
+///
+/// This narrows, but cannot eliminate, the replacement race: the re-hash runs
+/// immediately before the child command is built, yet the child is still
+/// executed by path, so a replacement between the final hash and `exec`
+/// would run unverified bytes. See SECURITY.md. Any mismatch, unreadable
+/// file, or launch of an executable absent from the review fails closed.
+#[derive(Debug, Clone, Default)]
+pub struct ConfirmedExecutables {
+    entries: BTreeMap<String, String>,
+}
+
+/// Read the executable identities a `--what-if` review fingerprinted.
+/// A review without a readable executable map fails closed, so a run never
+/// executes against a review it cannot bind.
+pub fn confirmed_executables_from_settings(
+    settings: &serde_json::Value,
+) -> Result<ConfirmedExecutables> {
+    let Some(executables) = settings
+        .get("executables")
+        .and_then(|value| value.as_object())
+    else {
+        bail!("the confirmed review is missing its executable identities");
+    };
+    let mut entries = BTreeMap::new();
+    for entry in executables.values() {
+        let path = entry
+            .get("path")
+            .and_then(|value| value.as_str())
+            .context("the confirmed review has an executable without a path")?;
+        let digest = entry
+            .get("sha256")
+            .and_then(|value| value.as_str())
+            .with_context(|| format!("the confirmed review has no digest for {path:?}"))?;
+        validate_digest(digest)
+            .with_context(|| format!("the confirmed review has a bad digest for {path:?}"))?;
+        entries.insert(path.to_owned(), digest.to_ascii_lowercase());
+    }
+    Ok(ConfirmedExecutables { entries })
+}
+
+impl ConfirmedExecutables {
+    /// Re-hash the resolved executable and compare it with the reviewed
+    /// bytes. The caller canonicalizes through the same spelling the spawn
+    /// keeps for multicall dispatch, so a symlink swapped after the review
+    /// resolves to a different target and fails closed here.
+    pub fn verify(&self, binary: &Path) -> Result<()> {
+        let canonical = std::fs::canonicalize(binary)
+            .with_context(|| format!("resolving confirmed executable {}", binary.display()))?;
+        let key = canonical.to_string_lossy().into_owned();
+        let Some(expected) = self.entries.get(&key) else {
+            bail!(
+                "refusing to launch {}: it was not part of the confirmed review",
+                canonical.display()
+            );
+        };
+        let actual = sha256_file(&canonical)
+            .with_context(|| format!("hashing confirmed executable {}", canonical.display()))?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            bail!(
+                "refusing to launch {}: it changed after the confirmed review",
+                canonical.display()
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Enforce the `--confirm` binding for one launch. Runs without a confirmed
+/// review skip this; every other launch must name reviewed bytes.
+pub fn verify_confirmed_executable(registry: &Registry, binary: &Path) -> Result<()> {
+    let confirmed = registry.host_state::<Option<ConfirmedExecutables>>();
+    let Some(confirmed) = confirmed.as_ref().as_ref() else {
+        return Ok(());
+    };
+    confirmed.verify(binary)
 }
 
 fn record_contract_authorization(
@@ -1531,6 +1678,12 @@ where
     S: AsRef<OsStr>,
 {
     require_execution_policy(registry)?;
+    // A confirmed review pins the exact bytes each spawn may run. Re-hash
+    // here — the one check every spawn path reaches before a Command exists,
+    // including direct quoted commands and background-job launches — so a
+    // binary swapped after the review cannot launch. Runs without `--confirm`
+    // install no pinning and skip this.
+    verify_confirmed_executable(registry, binary)?;
     #[cfg(feature = "failpoints")]
     if std::env::var("EXECUTE_TEST_PANIC_APPLET").is_ok_and(|name| name == applet_name) {
         panic!("injected native launch panic");

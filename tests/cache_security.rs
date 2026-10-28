@@ -172,12 +172,21 @@ fn drain_pipe(reader: &mut impl Read, bytes: &mut Vec<u8>, truncated: &mut bool)
 #[test]
 fn ordinary_existing_cache_is_reused_without_launching_or_changing_key_bytes() {
     let fixture = Fixture::new();
-    let bytes = fs::read(&fixture.entry).unwrap();
+    let before = fs::read(&fixture.entry).unwrap();
     let output = fixture.run(None);
     assert!(output.status.success());
-    assert_eq!(output.stdout, bytes);
+    // The entry file stores the authenticated envelope (magic + status +
+    // payload; see `cache_output` in src/runtime.rs), while stdout replays
+    // only the payload the first run produced.
+    let payload = b"OWNED INPUT\n";
+    assert_eq!(output.stdout, payload);
+    assert!(
+        before.len() > payload.len() && before.ends_with(payload),
+        "entry file should wrap the payload in an envelope"
+    );
     assert!(String::from_utf8_lossy(&output.stderr).contains("cache_hit"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("\"event\":\"spawn\""));
+    assert_eq!(fs::read(&fixture.entry).unwrap(), before);
     assert_eq!(
         fs::read_dir(fixture.entry.parent().unwrap())
             .unwrap()

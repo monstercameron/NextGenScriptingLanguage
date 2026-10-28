@@ -80,6 +80,82 @@ fn refused(output: &Output) -> bool {
         && String::from_utf8_lossy(&output.stderr).contains("plan changed since --what-if")
 }
 
+#[cfg(unix)]
+#[test]
+fn a_binary_swapped_after_confirm_is_refused_at_spawn() {
+    // The program itself swaps the reviewed executable mid-run: the first
+    // step copies new bytes over the tool, the second step runs it. The
+    // confirm-time check passes (nothing changed yet), so only the
+    // verify-at-spawn binding can refuse the run — and the swapped bytes
+    // must never execute.
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let tool = bin.join("swaptool");
+    let swapped = bin.join("swapped");
+    fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&swapped, b"#!/bin/sh\necho swapped > pwned.txt\n").unwrap();
+    write(
+        root.path(),
+        "job.program",
+        &format!(
+            "run \"cp\" with arguments [\"{}\", \"{}\"]\nrun \"swaptool\" with arguments []\n",
+            swapped.display(),
+            tool.display(),
+        ),
+    );
+    let path = {
+        let old_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![bin.clone()];
+        paths.extend(std::env::split_paths(&old_path));
+        std::env::join_paths(paths).unwrap()
+    };
+    let review_output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run", "job.program", "--what-if"])
+        .current_dir(root.path())
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(
+        review_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&review_output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&review_output.stdout).unwrap();
+    let fingerprint = report["fingerprint"].as_str().unwrap().to_owned();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run", "job.program", "--confirm", &fingerprint])
+        .current_dir(root.path())
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(!output.status.success(), "swapped run must fail: {stderr}");
+    // The confirm-time check passed — the swap landed mid-run — so the
+    // refusal must come from the spawn-time binding, not the fingerprint.
+    assert!(
+        !stderr.contains("plan changed since --what-if"),
+        "confirm check should pass; the spawn binding must refuse: {stderr}"
+    );
+    assert!(
+        stderr.contains("changed after the confirmed review"),
+        "spawn binding must name the swap: {stderr}"
+    );
+    // The swap really happened (a pre-fix build would have executed it),
+    // yet the swapped bytes never ran.
+    assert_eq!(
+        fs::read(&tool).unwrap(),
+        b"#!/bin/sh\necho swapped > pwned.txt\n"
+    );
+    assert!(
+        !root.path().join("pwned.txt").exists(),
+        "the swapped binary must never execute"
+    );
+}
+
 #[test]
 fn an_unchanged_reviewed_plan_runs() {
     let root = tempfile::tempdir().unwrap();

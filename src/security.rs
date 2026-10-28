@@ -281,6 +281,20 @@ impl fmt::Debug for DataFlowPolicy {
     }
 }
 
+/// Lowercase hex encoding shared by the policy-audit digests and seals. A
+/// table lookup keeps every digest site on one implementation instead of
+/// each monomorphizing hex formatting; the output matches
+/// `format!("{byte:02x}")` exactly.
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(DIGITS[(byte >> 4) as usize] as char);
+        out.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 impl DataFlowPolicy {
     /// Whether a policy was installed. The default preserves legacy behavior;
     /// only a parsed policy constrains egress and persistence.
@@ -295,10 +309,7 @@ impl DataFlowPolicy {
     /// policy content.
     pub fn canonical_digest(&self) -> String {
         let encoded = serde_json::to_vec(self).expect("a parsed data-flow policy is serializable");
-        Sha256::digest(encoded)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        hex_encode(Sha256::digest(encoded).as_slice())
     }
 
     /// Load a bounded, owner-private policy file. The file contains only

@@ -2044,10 +2044,7 @@ impl CapabilityPolicy {
     pub fn canonical_digest(&self) -> String {
         let encoded =
             serde_json::to_vec(self).expect("a validated capability policy is serializable");
-        Sha256::digest(encoded)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        crate::security::hex_encode(Sha256::digest(encoded).as_slice())
     }
 }
 

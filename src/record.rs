@@ -81,10 +81,7 @@ const MAX_RUN_BYTES: usize = 1024 * 1024;
 static RECORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    security::hex_encode(Sha256::digest(bytes).as_slice())
 }
 
 /// The final state of a recorded run, written to `run.json`.
@@ -342,23 +339,20 @@ fn audit_seal_hex(
     truncated: bool,
     head_hex: &str,
 ) -> String {
-    crate::agent::what_if_key::hmac_sha256(
+    security::hex_encode(&crate::agent::what_if_key::hmac_sha256(
         key,
         &audit_seal_encoding(binding, total, truncated, head_hex),
-    )
-    .iter()
-    .map(|byte| format!("{byte:02x}"))
-    .collect()
+    ))
 }
 
 /// A seal under the retired v1 encoding, for verifying records sealed before
 /// the record identity. Its binding is weaker by construction: it covers only
 /// the total, the flag and the head, so a copied audit verifies under it.
 fn audit_seal_hex_v1(key: &[u8], total: u64, truncated: bool, head_hex: &str) -> String {
-    crate::agent::what_if_key::hmac_sha256(key, &audit_seal_encoding_v1(total, truncated, head_hex))
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    security::hex_encode(&crate::agent::what_if_key::hmac_sha256(
+        key,
+        &audit_seal_encoding_v1(total, truncated, head_hex),
+    ))
 }
 
 /// The v2 seal binding read back from a stored record: the values the seal
@@ -443,12 +437,11 @@ fn decision_audit_json(
 ) -> (Json, u64, bool, String, Json) {
     // The snapshot and the lifetime total come from one lock acquisition, so
     // the total can never run past the snapshot's own last sequence, even
-    // while other threads are still recording.
-    let (mut decisions, total) = security::policy_decisions_with_total(registry);
-    // Insertion order is already sequence order (sequences are assigned under
-    // the queue lock), but sort defensively: verification checks contiguity
-    // in sequence order.
-    decisions.sort_by_key(|decision| decision.sequence);
+    // while other threads are still recording. Snapshot order is already
+    // sequence order — sequences are assigned under the queue lock, so the
+    // queue the snapshot is cloned from is in sequence order, which is the
+    // order verification checks — so no re-sort is needed here.
+    let (decisions, total) = security::policy_decisions_with_total(registry);
     let start = decisions.len().saturating_sub(MAX_AUDIT_DECISIONS);
     let mut head = audit_genesis();
     let items = decisions[start..]
@@ -547,14 +540,15 @@ enum AuditVerification {
 
 impl AuditVerification {
     fn counts(decisions: &[Json]) -> (usize, usize) {
-        let approved = decisions
-            .iter()
-            .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("approved"))
-            .count();
-        let denied = decisions
-            .iter()
-            .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("denied"))
-            .count();
+        let mut approved = 0;
+        let mut denied = 0;
+        for decision in decisions {
+            match decision.get("outcome").and_then(Json::as_str) {
+                Some("approved") => approved += 1,
+                Some("denied") => denied += 1,
+                _ => {}
+            }
+        }
         (approved, denied)
     }
 
@@ -756,15 +750,17 @@ fn verify_audit_chain(decisions: &[Json], head: &str, total: u64) -> Result<(), 
     let Some(first_expected) = first_expected else {
         return Err(format!("policy audit total ({total}) is below its kept decisions ({}); the record may have been modified after the run", decisions.len()));
     };
-    let expected: Vec<u64> = (first_expected..=total).collect();
-    let mut ordered = sequences.clone();
-    ordered.sort_unstable();
-    if ordered != expected {
-        return Err(format!(
-            "policy audit sequences run {first_expected}..={total} with a gap; a decision was removed after the run"
-        ));
-    }
-    if sequences != expected {
+    // Compare against the expected range directly instead of collecting it:
+    // a sorted mismatch means a decision is missing, while an in-order
+    // mismatch over the same set means the audit was reordered.
+    if !sequences.iter().copied().eq(first_expected..=total) {
+        let mut ordered = sequences.clone();
+        ordered.sort_unstable();
+        if !ordered.iter().copied().eq(first_expected..=total) {
+            return Err(format!(
+                "policy audit sequences run {first_expected}..={total} with a gap; a decision was removed after the run"
+            ));
+        }
         return Err(
             "policy audit decisions are out of sequence order; the audit was reordered after the run"
                 .to_owned(),
@@ -844,10 +840,7 @@ impl Recorder {
         // stops a copied audit from verifying elsewhere.
         let mut id_bytes = [0u8; 16];
         getrandom::fill(&mut id_bytes).context("generating the record identity")?;
-        let record_id = id_bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let record_id = security::hex_encode(&id_bytes);
         let recorder = Self {
             #[cfg(not(unix))]
             directory: start.directory.to_path_buf(),

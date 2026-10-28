@@ -332,7 +332,7 @@ mod tests {
         assert!(check_endpoint_host("127.0.0.1", "https://127.0.0.1", false, &empty).is_err());
         assert!(check_endpoint_host("127.0.0.1", "https://127.0.0.1", true, &empty).is_ok());
 
-        assert_eq!(v4(10, 0, 0, 1).is_loopback(), false);
+        assert!(!v4(10, 0, 0, 1).is_loopback());
     }
 
     #[test]

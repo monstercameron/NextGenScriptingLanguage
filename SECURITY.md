@@ -182,7 +182,12 @@ require the explicit `EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's
 environment — without it the request fails as configuration before any
 credential read or connection, so an unauthenticated local service is never
 reachable by default. Hermetic `--fixture` runs never open a socket and do
-not need the grant.
+not need the grant. The self-grant prevention holds only when the ambient
+environment is constrained: under a capability policy, or a host
+`--clear-env`/`--env-allow` filter, a program cannot grant the variable to
+itself via `use environment` or `and environment` unless the applet's
+`environment` grant lists it. In default trusted mode with full ambient
+inheritance, a program can set the variable itself.
 
 `--execution-mode trusted|untrusted` selects native-child confinement. With no
 policy the default is `trusted`; a capability policy defaults to `untrusted`.

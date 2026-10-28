@@ -152,7 +152,10 @@ loopback endpoints additionally require `EXECUTE_MODEL_ALLOW_LOOPBACK` in the
 helper's environment (presence enables it); without it the request fails as
 configuration before any credential read or connection. Filtered child
 environments (`--clear-env`, `--env-allow`, or a capability-policy environment
-grant) must list the variable explicitly. Fixture runs never open a socket and
+grant) must list the variable explicitly. In default trusted mode without a
+policy or host filter, a program can set the variable itself via
+`use environment` or `and environment`; only policy mode (or a host filter)
+prevents that self-grant. Fixture runs never open a socket and
 do not need it. Model endpoints accept no `network_origins` grant: dependency
 #375 keeps them outside that policy, so this variable is the interim explicit
 grant until that work lands.

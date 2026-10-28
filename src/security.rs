@@ -2104,7 +2104,15 @@ mod tests {
         let legacy = Registry::default();
         let external = legacy_cacheable_manifest();
         assert!(authorize_cache_purity(&legacy, &external).is_ok());
-        assert!(policy_decisions(&legacy).is_empty());
+        // Legacy mode stays permissive but records an explicit
+        // `NoPolicyConfigured` approval so the audit never goes silent.
+        let legacy_decisions = policy_decisions(&legacy);
+        assert_eq!(legacy_decisions.len(), 1);
+        assert_eq!(
+            legacy_decisions[0].reason,
+            PolicyDecisionReason::NoPolicyConfigured
+        );
+        assert_eq!(legacy_decisions[0].outcome, PolicyDecisionOutcome::Approved);
 
         let registry = Registry::default();
         registry.set_host_state(policy(r#"{"version":1}"#));
@@ -2112,10 +2120,19 @@ mod tests {
             authorize_cache_purity(&registry, &external),
             Err(PolicyError::CachePurityDenied)
         );
+        let decisions = policy_decisions(&registry);
+        assert_eq!(decisions.len(), 1);
         assert_eq!(
-            policy_decisions(&registry).last().unwrap().reason,
+            decisions.last().unwrap().reason,
             PolicyDecisionReason::CachePurityDenied
         );
+        assert_eq!(
+            decisions.last().unwrap().outcome,
+            PolicyDecisionOutcome::Denied
+        );
+        // Each registry owns its audit log: the denial above must not leak
+        // into the legacy registry's log and vice versa.
+        assert_eq!(policy_decisions(&legacy).len(), 1);
     }
 
     #[test]

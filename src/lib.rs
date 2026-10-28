@@ -84,4 +84,6 @@ pub mod fuzz_entry;
 pub mod language_server;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod fs_io;
+#[cfg(not(target_arch = "wasm32"))]
 mod platform;

@@ -381,13 +381,21 @@ and a parent replacement after the Unix cache directory descriptor is pinned.
 [The security evidence](benchmarks/security-2026-10-14-cache.json) retains
 baseline reproductions and the fixed results using owned synthetic fixtures.
 
-Same-user isolation of the persisted cache key, filesystem-operation deadlines
-and broad platform fault injection remain open. Windows state operations remain
+Same-user isolation of the persisted cache key and broad platform fault
+injection remain open. Host `read` opens/reads and in-process filesystem-applet
+opens are bounded by `--fs-timeout-ms` (default two seconds, never later than
+the run deadline): FIFOs and sockets fail with the typed timeout, and other
+non-regular targets are refused before any byte moves. A single
+operating-system call that blocks inside the kernel on an already-open regular
+file (a stalled mount mid-read or mid-write) stays unbounded; only the slices
+between calls observe the deadline. Windows state operations remain
 path-based.
 Capability policy and
 OS sandboxing are source-candidate features; tests do not establish resistance
 to every same-user attack or certify every platform/package combination.
-Supported native child deadlines do not bound arbitrary filesystem operations.
+Command timeouts bound a native child's run, not filesystem operations the
+child performs itself; host `read` and applet file opens carry their own
+`--fs-timeout-ms` budget instead.
 Do not interpret passing tests as a production-completeness or arbitrary-Bash-
 compatibility claim.
 

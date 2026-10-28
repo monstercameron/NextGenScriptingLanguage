@@ -1259,9 +1259,40 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 crate::capabilities::HostAccess::Read,
                                 &cwd,
                             )?;
-                            let file = File::open(&path).with_context(|| {
-                                format!("line {}: reading {}", step.line, path.display())
-                            })?;
+                            // Bounded open (threat model H7): a nonblocking
+                            // open keeps a FIFO target from hanging, the
+                            // handle check refuses non-regular targets, and
+                            // the readiness wait is bounded by the
+                            // filesystem-operation deadline. A FIFO fails
+                            // with the typed timeout; anything else
+                            // non-regular is refused before any byte moves.
+                            let deadline =
+                                crate::fs_io::fs_deadline(signals.fs_timeout, signals.deadline);
+                            let checkpoint = || {
+                                if signals.cancelled.load(Ordering::Relaxed) {
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::Interrupted,
+                                        "workflow cancelled by signal",
+                                    ))
+                                } else {
+                                    Ok(())
+                                }
+                            };
+                            let file = crate::fs_io::open_input_file(&path, deadline, &checkpoint)
+                                .map_err(|error: std::io::Error| {
+                                    let failure = anyhow::Error::from(error).context(format!(
+                                        "line {}: reading {}",
+                                        step.line,
+                                        path.display()
+                                    ));
+                                    if failure.downcast_ref::<std::io::Error>().is_some_and(
+                                        |cause| cause.kind() == std::io::ErrorKind::TimedOut,
+                                    ) {
+                                        failure.context(super::CommandTimedOut)
+                                    } else {
+                                        failure
+                                    }
+                                })?;
                             // The grant covers the file that was opened. Authorize the resolved
                             // path too, and check that the handle is that file, so a link swapped
                             // in after the first check cannot redirect the read.

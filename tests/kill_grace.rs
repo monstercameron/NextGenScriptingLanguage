@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 fn manifests() -> PathBuf {
@@ -333,8 +333,8 @@ fn sigint_reaches_the_trapped_group_as_sigint() {
         .arg(&path)
         .arg("--manifest-dir")
         .arg(manifests())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -418,9 +418,9 @@ fn killed_interactive_child_restores_terminal_settings() {
         .arg("--manifest-dir")
         .arg(manifests())
         // SAFETY: ownership of the slave moves into the child as its stdin.
-        .stdin(unsafe { Stdio::from_raw_fd(slave) })
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdin(unsafe { std::process::Stdio::from_raw_fd(slave) })
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     unsafe {
         command.pre_exec(move || {
             // Become a session leader and take the pty as the controlling

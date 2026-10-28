@@ -58,7 +58,7 @@ fn child_exited(child: &Child) -> bool {
     // skipping a wait the drop would still perform.
     let status = unsafe {
         WaitForSingleObject(
-            child.as_handle().as_raw_handle() as isize,
+            child.as_handle().as_raw_handle(),
             0,
         )
     };
@@ -98,7 +98,7 @@ mod child_exited_tests {
 /// Never blocks longer than `grace` plus a poll slice no matter how many
 /// groups are still running, so cancellation and timeout paths stay bounded
 /// with no leaks.
-pub(super) fn windows_escalate_unreaped_for_abort(
+fn windows_escalate_unreaped_for_abort(
     children: &Children,
     grace: std::time::Duration,
 ) {

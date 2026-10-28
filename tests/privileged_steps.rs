@@ -585,9 +585,8 @@ fn launch_check_denies_new_families_by_resolved_path_alias() {
     ] {
         let resolved = directory.path().join(name);
         fs::write(&resolved, b"").unwrap();
-        let error =
-            flow::capabilities::check_privileged_launch(&registry, &["tool"], &resolved)
-                .unwrap_err();
+        let error = flow::capabilities::check_privileged_launch(&registry, &["tool"], &resolved)
+            .unwrap_err();
         assert!(
             format!("{error:#}").contains("denies privileged steps"),
             "{name}: {error:#}"
@@ -617,9 +616,13 @@ fn policy_header_without_privileged_denies_new_launchers() {
     assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
     let verdict: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
-        verdict["violations"].as_array().unwrap().iter().any(|violation| {
-            violation["category"] == "privileged" && violation["binary"] == "docker"
-        }),
+        verdict["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|violation| {
+                violation["category"] == "privileged" && violation["binary"] == "docker"
+            }),
         "{verdict}"
     );
 }

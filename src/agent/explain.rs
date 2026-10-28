@@ -1607,11 +1607,7 @@ fn is_write_effect(effect: &str) -> bool {
 /// canonical resolved path are checked, so an absolute path, symlink, or alias
 /// to a listed launcher stays privileged, matching `check_privileged_launch`.
 fn row_privileged(row: &Row) -> bool {
-    row.invocation
-        && is_privileged_step(
-            row.binary.as_deref(),
-            row.resolved_path.as_deref(),
-        )
+    row.invocation && is_privileged_step(row.binary.as_deref(), row.resolved_path.as_deref())
 }
 
 fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {

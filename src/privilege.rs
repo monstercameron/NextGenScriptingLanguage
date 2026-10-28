@@ -414,13 +414,7 @@ mod tests {
 
     #[test]
     fn dbus_and_desktop_launchers_are_privileged_wrappers() {
-        for name in [
-            "dbus-send",
-            "gdbus",
-            "busctl",
-            "xdg-open",
-            "gio",
-        ] {
+        for name in ["dbus-send", "gdbus", "busctl", "xdg-open", "gio"] {
             assert_eq!(classify(name), Privilege::Wrapper, "{name}");
             assert!(is_privileged_invocation(name), "{name}");
         }

@@ -408,6 +408,7 @@ fn live(socket: &Path, args: &[&str]) -> serde_json::Value {
     serde_json::from_slice(&result.stdout).unwrap()
 }
 #[test]
+#[cfg(feature = "live")]
 fn owner_checked_named_pipe_supports_live_crud_execution_and_shutdown() {
     let folder = tempfile::tempdir().unwrap();
     let source = folder.path().join("live.program");
@@ -473,6 +474,7 @@ fn owner_checked_named_pipe_supports_live_crud_execution_and_shutdown() {
     }
 }
 #[test]
+#[cfg(all(feature = "screens", feature = "model"))]
 fn headless_widgets_and_bundled_model_helper_are_native() {
     let folder = tempfile::tempdir().unwrap();
     let source=format!("open a screen titled \"Native Windows\"\nplace main on the left\ndefine a program named main\n  show a badge named status with text \"waiting\"\n  whenever the program opens\n    {}    then show the result in status\n",native(&["write","native done"]));

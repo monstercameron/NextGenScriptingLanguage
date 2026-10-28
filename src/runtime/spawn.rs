@@ -1037,11 +1037,18 @@ pub(super) fn execute_group_with_sink(
             break;
         }
         // Output, child-exit and cancellation descriptors wake this poll.
-        // Use a timeout only when no child-exit observer is available after
-        // stdout EOF; otherwise slow native children sleep in the kernel.
+        // Use a timeout when no child-exit observer is available after stdout
+        // EOF, and while unreaped children remain behind a live observer.
+        // The observer is only a wakeup optimization: every loop iteration
+        // still probes each child with waitid, so bounding a missed wake to
+        // 100 ms (at most 10 wakeups/s while waiting) only shortens the stall.
+        // No cause for a missed wake is established; this bounds the symptom.
+        // Otherwise slow native children sleep in the kernel.
+        let unreaped_children = children.0.iter().any(|child| !child.reaped);
         let maximum_wait_ms = if signals.unnotified_cancellation
             || signals.cancel_wakes.is_empty()
             || (eof && child_observer.is_none())
+            || (unreaped_children && child_observer.is_some())
         {
             100
         } else {

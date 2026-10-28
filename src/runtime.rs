@@ -4436,6 +4436,83 @@ mod child_observer_tests {
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_exited_child_wakes_observer_before_it_is_reaped() {
+        let observer = ChildObserver::new().expect("creating test kqueue");
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .expect("spawning child");
+        observer.observe(child.id()).expect("observing child");
+        // The child is a zombie until waited on, so the kqueue is already readable.
+        let mut descriptor = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the kqueue
+        // owned by `observer`, which lives until the end of this test.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
+        assert_eq!(ready, 1);
+        observer.drain().expect("draining exit notification");
+        let mut quiet = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(
+            // SAFETY: `quiet` is a live pollfd on the kqueue owned by `observer`, with a
+            // count of 1 and a zero timeout, so the call returns without blocking.
+            unsafe { libc::poll(&mut quiet, 1, 0) },
+            0,
+            "a drained observer must not stay readable"
+        );
+        // The observer did not reap the zombie. Killing its group is still safe;
+        // Child::wait, rather than readiness, remains the exit-status authority.
+        assert!(exited_unreaped(child.id()).expect("probing child without reaping"));
+        kill_group(child.id());
+        assert!(child.wait().expect("reaping child").success());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_repeated_short_lived_children_wake_observer() {
+        // Short-lived `sh` children are the hang report's shape: each must wake
+        // its own kqueue and reap promptly, with an outer deadline bounding the
+        // whole sequence. This covers the wake path, not any proven root cause.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        for iteration in 0..32 {
+            assert!(
+                Instant::now() < deadline,
+                "short-lived children stalled at iteration {iteration}"
+            );
+            let observer = ChildObserver::new().expect("creating test kqueue");
+            let mut child = Command::new("sh")
+                .args(["-c", "printf 'fast\n'"])
+                .process_group(0)
+                .spawn()
+                .expect("spawning child");
+            observer.observe(child.id()).expect("observing child");
+            let mut descriptor = libc::pollfd {
+                fd: observer.raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the
+            // kqueue owned by `observer`, which lives until the end of this iteration.
+            let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
+            assert_eq!(
+                ready, 1,
+                "observer missed short-lived child at iteration {iteration}"
+            );
+            observer.drain().expect("draining exit notification");
+            kill_group(child.id());
+            assert!(child.wait().expect("reaping child").success());
+        }
+    }
+
     struct RestoreSigchld(libc::sigaction);
     impl Drop for RestoreSigchld {
         fn drop(&mut self) {

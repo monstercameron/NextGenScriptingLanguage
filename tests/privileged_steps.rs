@@ -594,6 +594,7 @@ fn launch_check_denies_new_families_by_resolved_path_alias() {
     }
 }
 
+#[cfg(feature = "agent-advisory")]
 #[test]
 fn policy_header_without_privileged_denies_new_launchers() {
     let work = tempfile::tempdir().unwrap();
@@ -624,6 +625,34 @@ fn policy_header_without_privileged_denies_new_launchers() {
                 violation["category"] == "privileged" && violation["binary"] == "docker"
             }),
         "{verdict}"
+    );
+}
+
+#[cfg(not(feature = "agent-advisory"))]
+#[test]
+fn policy_header_without_agent_advisory_fails_closed() {
+    let work = tempfile::tempdir().unwrap();
+    fs::write(
+        work.path().join("probe.program"),
+        "# execute-policy: allow undeclared\nrun \"docker\"\n",
+    )
+    .unwrap();
+    let output = execute(
+        work.path(),
+        &[
+            "explain",
+            "probe.program",
+            "--json",
+            "--allow",
+            "privileged",
+            "--policy-header",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        text(&output.stderr).contains("agent-advisory"),
+        "{}",
+        text(&output.stderr)
     );
 }
 

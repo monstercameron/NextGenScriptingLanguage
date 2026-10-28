@@ -2570,6 +2570,10 @@ mod unit_tests {
     }
 }
 
+#[cfg(all(test, windows))]
+#[path = "../tests/support/private_answers.rs"]
+mod private_answers;
+
 #[cfg(test)]
 mod credential_policy_tests {
     use super::*;
@@ -2601,6 +2605,8 @@ mod credential_policy_tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
+        #[cfg(windows)]
+        super::private_answers::make_private(&path);
         path.to_string_lossy().into_owned()
     }
 

@@ -59,4 +59,10 @@ pub(crate) struct Args {
     pub(crate) control: bool,
     /// `run --control --break-at LINE`: pause before these source lines from the start.
     pub(crate) break_at: Vec<usize>,
+    /// `run --events document|jsonl`: graph terminal-event rendering. `document`
+    /// keeps the closing `execute.graph-run/1` document; `jsonl` prints one
+    /// `execute.graph-event/1` line per event as it arrives. Unset means
+    /// `jsonl` for graphs with persistent nodes, `document` otherwise.
+    #[cfg_attr(not(feature = "graph"), allow(dead_code))]
+    pub(crate) events: Option<String>,
 }

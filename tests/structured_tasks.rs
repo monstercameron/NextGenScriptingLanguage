@@ -454,6 +454,167 @@ fn parallel_for_each_preserves_input_order_when_completion_order_differs() -> Re
     Ok(())
 }
 
+/// Issue #553: `parallel for each` fans out through a bounded worker pool, so
+/// a group far larger than its limit must still run every element in order.
+/// The Linux bench harness (`parallel_each_10000`) asserts the 65-thread
+/// ceiling and wall-time budget; this portable test pins correctness at
+/// scale for every platform.
+#[test]
+fn parallel_for_each_fan_out_far_beyond_the_limit_runs_every_element() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let items = (0..1_000)
+        .map(|index| format!("\"w{index:04}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "parallel for each word in [{items}] at most 16 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\nthen encode results as json\n"
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = flow::parser::parse(&source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(8)),
+        ..flow::runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    // In-process applets launch no native processes.
+    assert_eq!(result.launched_processes, 0);
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["mode"], "for_each");
+    assert_eq!(value["succeeded"], 1000);
+    assert_eq!(value["failed"], 0);
+    assert_eq!(value["cancelled"], 0);
+    assert_eq!(value["not_started"], 0);
+    let elements = value["items"].as_array().expect("for_each items");
+    assert_eq!(elements.len(), 1000);
+    for (index, element) in elements.iter().enumerate() {
+        let expected = format!("w{index:04}");
+        assert_eq!(element["index"], index);
+        assert_eq!(element["item"], expected.as_str());
+        assert_eq!(element["state"], "success");
+    }
+    Ok(())
+}
+
+/// Issue #553: elements share the run options through `Arc` instead of each
+/// receiving a copy, so a group must still succeed when the run carries
+/// inputs. This pins that shared-inputs behavior against regressions.
+#[test]
+fn parallel_for_each_with_run_inputs_present_runs_every_element() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = "accept greeting as text\nparallel for each word in [\"a\", \"b\", \"c\"] at most 2 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\nthen encode results as json\n";
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = flow::parser::parse(source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
+    let options = flow::runtime::RunOptions {
+        inputs: std::collections::BTreeMap::from([(
+            "greeting".to_owned(),
+            flow::ast::Value::String("x".repeat(65_536)),
+        )]),
+        max_output_bytes: 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(8)),
+        ..flow::runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    assert_eq!(result.launched_processes, 0);
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["succeeded"], 3);
+    assert_eq!(value["failed"], 0);
+    assert_eq!(value["cancelled"], 0);
+    assert_eq!(value["not_started"], 0);
+    Ok(())
+}
+
+/// Issue #553: the `run_each` deadline path keeps a per-element admission-time
+/// snapshot (`total_timeout = min(T, outer - admission_now)`). This test pins
+/// that the deadline is still enforced once the sharing change is in place: a
+/// group of native `sleep` elements carrying large run inputs must fail under
+/// a short total timeout. If a future sharing optimization dropped or deferred
+/// the per-element timeout, this group would run to success instead of
+/// failing fast. (The admission-time vs worker-start microsecond difference is
+/// not observable black-box; exactness there is preserved by the snapshot in
+/// `tasks.rs` and noted here so a "simplification" back to sharing `T`
+/// unchanged is caught by review, while any loss of enforcement is caught by
+/// this test.)
+#[cfg(unix)]
+#[test]
+fn parallel_for_each_short_total_timeout_bounds_sleeping_elements() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = "accept greeting as text\nparallel for each secs in [\"5\", \"5\", \"5\", \"5\"] at most 4 as results\n  run \"sleep\" with arguments [secs]\n";
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = flow::parser::parse(source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
+    let options = flow::runtime::RunOptions {
+        inputs: std::collections::BTreeMap::from([(
+            "greeting".to_owned(),
+            flow::ast::Value::String("x".repeat(65_536)),
+        )]),
+        max_output_bytes: 4 * 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(8)),
+        total_timeout: Some(Duration::from_millis(500)),
+        ..flow::runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let result = flow::runtime::run(&program, &registry, &options);
+    assert!(
+        result.is_err(),
+        "a 500 ms total timeout must bound 5 s sleeping parallel elements"
+    );
+    Ok(())
+}
+
+/// Issue #553: `run_each` deliberately does not canonicalize the working
+/// directory once at admission. Every worker re-resolves it inside
+/// `invoke_call_with_context`, so a symlink swap or deletion after admission
+/// is observed per element. A one-time admission canonicalization would mask
+/// that: the stale canonical string still resolves after the symlink itself
+/// is removed, letting later elements silently run in the wrong (or a
+/// deleted) directory — a TOCTOU/security regression accepted for no
+/// optimization. This test detects exactly that: with `at most 1` the first
+/// element deletes the symlinked workdir itself (the real target directory
+/// survives), so the second element's per-element resolution must fail. Under
+/// stale admission-time sharing both elements would succeed; correct
+/// per-element semantics yield one success and one failure.
+#[cfg(unix)]
+#[test]
+fn parallel_for_each_re_resolves_symlinked_workdir_per_element() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let link = directory.path().join("linked-workdir");
+    std::os::unix::fs::symlink(directory.path(), &link)?;
+    // Note: the shell test keeps `$0`/`$1` unquoted, matching the existing
+    // `parallel for each` shell test below: flow string literals are
+    // double-quoted, so the script cannot contain its own double quotes. The
+    // link path is quoted with the shared `quote_path` helper below.
+    let source = format!(
+        "accept greeting as text\nparallel for each n in [\"deleter\", \"victim\"] at most 1 as results\n  run \"sh\" with arguments [\"-c\", \"if [ $0 = deleter ]; then rm $1; else printf ok; fi\", n, {}]\nthen encode results as json\n",
+        quote_path(&link)?
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = flow::parser::parse(&source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
+    let options = flow::runtime::RunOptions {
+        inputs: std::collections::BTreeMap::from([(
+            "greeting".to_owned(),
+            flow::ast::Value::String("x".repeat(65_536)),
+        )]),
+        max_output_bytes: 4 * 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(8)),
+        total_timeout: Some(Duration::from_secs(60)),
+        ..flow::runtime::RunOptions::new(link)
+    };
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["succeeded"], 1);
+    assert_eq!(value["failed"], 1);
+    assert_eq!(value["cancelled"], 0);
+    assert_eq!(value["not_started"], 0);
+    Ok(())
+}
+
 #[test]
 fn independent_task_groups_reject_sibling_binding_reads() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

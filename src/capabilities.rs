@@ -13,6 +13,7 @@ use crate::manifest::Registry;
 use crate::security::{
     record_policy_decision, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk,
 };
+use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::Deserializer;
@@ -50,12 +51,17 @@ pub fn execution_mode(registry: &Registry) -> ExecutionMode {
     registry
         .host_state::<Option<ExecutionMode>>()
         .unwrap_or_else(|| {
-            if registry.host_state::<Option<CapabilityPolicy>>().is_some() {
+            if capability_policy_active(registry) {
                 ExecutionMode::Untrusted
             } else {
                 ExecutionMode::Trusted
             }
         })
+}
+
+/// Whether a capability policy was installed for this registry.
+pub fn capability_policy_active(registry: &Registry) -> bool {
+    registry.host_state::<Option<CapabilityPolicy>>().is_some()
 }
 
 /// Prospective enforcement for graph, screen and stream advisory renderers.
@@ -119,11 +125,47 @@ fn require_execution_policy(registry: &Registry) -> Result<()> {
     if registry.host_state::<Option<CapabilityPolicy>>().is_none()
         && execution_mode(registry) == ExecutionMode::Untrusted
     {
+        // A missing policy under untrusted execution denies the run: record
+        // it so a recorded run names the denial instead of failing silent.
+        record_policy_decision(
+            registry,
+            "<workflow>",
+            "execution.require_policy",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
         return Err(
             SandboxRefused("untrusted execution requires a capability policy".into()).into(),
         );
     }
     Ok(())
+}
+
+/// Record a structural preflight denial that carries no policy material: the
+/// subject names the applet (or `<workflow>`/host when there is none) and the
+/// action names the refused operation. Identifiers are scrubbed by
+/// `record_policy_decision`, so grants, paths and origins never reach the log.
+fn record_preflight_denial(registry: &Registry, subject: &str, action: &str) {
+    record_policy_decision(
+        registry,
+        subject,
+        action,
+        None,
+        PolicyRisk::High,
+        PolicyDecisionOutcome::Denied,
+        PolicyDecisionReason::MissingGrant,
+    );
+}
+
+/// Record an invalid-policy denial: the configured policy failed validation,
+/// so the run is denied before any grant is consulted. The reason stays
+/// `MissingGrant` because the decision enum carries no `InvalidPolicy`
+/// variant; the validation detail stays in the returned error and never
+/// reaches the persisted audit.
+fn record_invalid_policy(registry: &Registry, subject: &str, action: &str) {
+    record_preflight_denial(registry, subject, action);
 }
 
 fn validate_native_enforcement(grant: &AppletGrant, effects: &[String]) -> Result<()> {
@@ -302,15 +344,39 @@ pub fn check_privileged_launch(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        // Without a policy the launch is allowed, and the audit says so
+        // explicitly instead of staying silent about the unchecked launch.
+        let shown = binary_names.first().copied().unwrap_or("host");
+        record_policy_decision(
+            registry,
+            shown,
+            "privilege.elevate",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    if !policy.deny_privileged {
-        return Ok(());
-    }
     let shown = binary_names
         .first()
         .map(|name| (*name).to_owned())
         .unwrap_or_else(|| resolved.display().to_string());
+    if !policy.deny_privileged {
+        // The policy allows privileged steps, so the launch is approved — and
+        // the audit says so instead of staying silent about the unchecked
+        // launch.
+        record_policy_decision(
+            registry,
+            shown.as_str(),
+            "privilege.elevate",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::PolicyMatched,
+        );
+        return Ok(());
+    }
     let mut names: Vec<String> = binary_names.iter().map(|name| (*name).to_owned()).collect();
     names.push(resolved.display().to_string());
     if let Ok(canonical) = std::fs::canonicalize(resolved) {
@@ -1010,35 +1076,50 @@ fn preflight_program(
     // communicate with a remote service.
     for call in &calls {
         let manifest = registry.resolve_call(call)?;
-        validate_environment_backend(manifest)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
 
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "policy.validate");
+        return Err(error);
+    }
 
     if cwd_mode.is_dynamic()
         && calls.iter().any(|call| call.cache)
         && !cache_directory.is_some_and(Path::is_absolute)
     {
+        record_preflight_denial(registry, "<workflow>", "cache.directory");
         bail!(
             "capability policy requires an absolute cache directory when the program changes working directories"
         );
     }
 
     for name in policy.applets.keys() {
-        let manifest = registry
-            .resolve(name)
-            .with_context(|| format!("capability policy names unknown applet {name:?}"))?;
+        let manifest = match registry.resolve(name) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                record_preflight_denial(registry, name, "applet.invoke");
+                return Err(error)
+                    .with_context(|| format!("capability policy names unknown applet {name:?}"));
+            }
+        };
         if manifest.name != *name {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!("capability policy applet names must use canonical manifest names");
         }
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy grant for applet {name:?} has no version-1 contract")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy grant for applet {name:?} has no version-1 contract");
+        };
         if contract.version != 1 {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!(
                 "applet {name:?} has unsupported contract version {}",
                 contract.version
@@ -1106,13 +1187,20 @@ fn preflight_invocation_plan<'a>(
     require_execution_policy(registry)?;
     let calls = calls.into_iter().collect::<Vec<_>>();
     for call in &calls {
-        validate_environment_backend(registry.resolve_call(call)?)?;
+        let manifest = registry.resolve_call(call)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "policy.validate");
+        return Err(error);
+    }
     validate_policy_names(policy, registry)?;
     preflight_invocations_with_policy(
         calls.iter().copied(),
@@ -1142,6 +1230,7 @@ fn preflight_cache_paths(
     for call in calls.iter().filter(|call| call.cache) {
         let manifest = registry.resolve_call(call)?;
         if call.direct {
+            record_preflight_denial(registry, "direct.command", "command.execute");
             bail!("capability policy denies direct quoted commands");
         }
         // A cache entry is opened for reading and may be atomically replaced
@@ -1155,16 +1244,24 @@ fn preflight_cache_paths(
 
 fn validate_policy_names(policy: &CapabilityPolicy, registry: &Registry) -> Result<()> {
     for name in policy.applets.keys() {
-        let manifest = registry
-            .resolve(name)
-            .with_context(|| format!("capability policy names unknown applet {name:?}"))?;
+        let manifest = match registry.resolve(name) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                record_preflight_denial(registry, name, "applet.invoke");
+                return Err(error)
+                    .with_context(|| format!("capability policy names unknown applet {name:?}"));
+            }
+        };
         if manifest.name != *name {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!("capability policy applet names must use canonical manifest names");
         }
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy grant for applet {name:?} has no version-1 contract")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy grant for applet {name:?} has no version-1 contract");
+        };
         if contract.version != 1 {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!(
                 "applet {name:?} has unsupported contract version {}",
                 contract.version
@@ -1208,10 +1305,12 @@ fn preflight_invocations_with_policy<'a>(
         }
         let manifest = registry.resolve_call(call)?;
         if manifest.builtin == Some(crate::manifest::Builtin::Cd) {
-            let value = call.parameters.get("path").ok_or_else(|| {
-                anyhow!("capability policy requires a literal path for the cd builtin")
-            })?;
+            let Some(value) = call.parameters.get("path") else {
+                record_preflight_denial(registry, &manifest.name, "filesystem.read");
+                bail!("capability policy requires a literal path for the cd builtin");
+            };
             let Value::String(path) = value else {
+                record_preflight_denial(registry, &manifest.name, "filesystem.read");
                 bail!(
                     "capability policy requires literal host filesystem paths that can be checked before effects"
                 );
@@ -1236,9 +1335,10 @@ fn preflight_invocations_with_policy<'a>(
             );
             bail!("capability policy has no allowlist entry for applet {name:?}");
         };
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy requires a version-1 contract for applet {name:?}")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy requires a version-1 contract for applet {name:?}");
+        };
         if let Some(environment) = &contract.environment {
             for variable in environment.set.keys() {
                 authorize_environment_override(registry, name, variable)?;
@@ -1250,32 +1350,41 @@ fn preflight_invocations_with_policy<'a>(
             AppletBackend::Command | AppletBackend::JsonLinesWorker
         ) && sandbox_required(registry, grant);
         if native_sandbox {
-            validate_native_enforcement(grant, &contract.effects)?;
+            if let Err(error) = validate_native_enforcement(grant, &contract.effects) {
+                record_preflight_denial(registry, name, "sandbox.enforce");
+                return Err(error);
+            }
         }
         match backend {
             AppletBackend::InProcess => {
                 if grant.sandbox_required {
+                    record_preflight_denial(registry, name, "sandbox.enforce");
                     bail!("required OS sandbox cannot isolate in-process applet {name:?}");
                 }
                 if grant.binary_sha256.is_some() {
+                    record_preflight_denial(registry, name, "binary.identity");
                     bail!("binary_sha256 cannot pin an in-process applet implementation");
                 }
                 if !is_policy_safe_in_process(name) || !contract.effects.is_empty() {
+                    record_preflight_denial(registry, name, "applet.invoke");
                     bail!(
                         "capability policy denies effectful or unreviewed in-process applet {name:?}"
                     );
                 }
             }
             AppletBackend::ProgramModule => {
+                record_preflight_denial(registry, name, "applet.invoke");
                 bail!(
                     "capability policy cannot isolate or fully preflight program module applet {name:?}"
                 );
             }
             AppletBackend::Remote => {
                 if grant.sandbox_required {
+                    record_preflight_denial(registry, name, "sandbox.enforce");
                     bail!("required OS sandbox cannot isolate remote applet {name:?}");
                 }
                 if grant.binary_sha256.is_some() {
+                    record_preflight_denial(registry, name, "binary.identity");
                     bail!("binary_sha256 cannot pin a remote applet implementation");
                 }
                 authorize_backend_capability(registry, name, grant, "network.connect")?;
@@ -1285,18 +1394,20 @@ fn preflight_invocations_with_policy<'a>(
             }
         }
         if grant.sandbox_required && !grant.network_origins.is_empty() {
+            record_preflight_denial(registry, name, "sandbox.enforce");
             bail!(
                 "required OS sandbox cannot enforce network origin restrictions for applet {name:?}"
             );
         }
         if backend != AppletBackend::Remote && !grant.network_origins.is_empty() {
+            record_preflight_denial(registry, name, "network.connect");
             bail!("network_origins is supported only for host-managed remote applets");
         }
         if backend == AppletBackend::Remote {
-            let remote = contract
-                .remote
-                .as_ref()
-                .ok_or_else(|| anyhow!("remote applet {name:?} has no endpoint configuration"))?;
+            let Some(remote) = contract.remote.as_ref() else {
+                record_preflight_denial(registry, name, "network.connect");
+                bail!("remote applet {name:?} has no endpoint configuration");
+            };
             authorize_network_endpoint(registry, name, &remote.endpoint)?;
             if let Some(auth) = &remote.auth {
                 match auth {
@@ -1305,6 +1416,7 @@ fn preflight_invocations_with_policy<'a>(
                     }
                     crate::contracts::RemoteAuthSource::BearerFile { path } => {
                         if !path.is_absolute() {
+                            record_preflight_denial(registry, name, "filesystem.read");
                             bail!("strict policy requires remote bearer-file paths to be absolute");
                         }
                         authorize_applet_host_path(registry, name, path, HostAccess::Read, cwd)?;
@@ -1332,12 +1444,19 @@ fn preflight_invocations_with_policy<'a>(
                 && !requested.starts_with('@')
                 && !Path::new(requested).is_absolute()
             {
+                record_preflight_denial(registry, name, "process.exec");
                 bail!(
                     "capability policy cannot resolve a relative or PATH executable after a dynamic working-directory change; use an absolute executable path"
                 );
             }
-            let resolved = crate::runtime::binary_path(requested, cwd)
-                .with_context(|| format!("resolving executable for applet {name:?}"))?;
+            let resolved = match crate::runtime::binary_path(requested, cwd) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    record_preflight_denial(registry, name, "process.exec");
+                    return Err(error)
+                        .with_context(|| format!("resolving executable for applet {name:?}"));
+                }
+            };
             Some(resolved)
         } else {
             None
@@ -1355,6 +1474,7 @@ fn preflight_invocations_with_policy<'a>(
         )?;
         if native_sandbox {
             if cwd_mode.is_dynamic() {
+                record_preflight_denial(registry, name, "sandbox.enforce");
                 bail!(
                     "required sandbox cannot preflight a program with dynamic working-directory changes"
                 );
@@ -1371,10 +1491,15 @@ fn preflight_invocations_with_policy<'a>(
     }
     // Complete declaration authorization for the whole program before probing
     // any sandbox facility, even for an earlier, otherwise authorized applet.
+    // A probe failure still denies the run, so it is recorded: otherwise a
+    // recorded run could fail with no denied entry in its audit.
     for (grant, binary, name) in sandboxes {
         if probe_sandbox {
-            preflight_native_sandbox(&grant, &binary, cwd)
-                .with_context(|| format!("preflighting required sandbox for applet {name:?}"))?;
+            if let Err(error) = preflight_native_sandbox(&grant, &binary, cwd) {
+                record_preflight_denial(registry, name, "sandbox.enforce");
+                return Err(error)
+                    .with_context(|| format!("preflighting required sandbox for applet {name:?}"));
+            }
         }
     }
     Ok(())
@@ -1411,8 +1536,17 @@ where
     // secret variable, the child environment is exactly the inherited one. The command then
     // carries no environment changes, so std passes `environ` through instead of copying
     // and rebuilding the whole environment for every child.
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            // A malformed ambient allowlist denies the launch before any
+            // child exists. Record it so a recorded run names the denial.
+            record_preflight_denial(registry, applet_name, "environment.read");
+            return Err(error);
+        }
+    };
     let inherits_environment = configured.as_ref().is_none()
-        && child_environment_allowlist()?.is_none()
+        && allowlist.is_none()
         && !command_overlay_active()
         && registry
             .resolve(applet_name)
@@ -1448,7 +1582,10 @@ where
     ) {
         bail!("command launch requested for non-process applet {applet_name:?}");
     }
-    validate_environment_backend(manifest)?;
+    if let Err(error) = validate_environment_backend(manifest) {
+        record_preflight_denial(registry, &manifest.name, "environment.overlay");
+        return Err(error);
+    }
     let Some(policy) = configured.as_ref() else {
         let mut command = Command::new(binary);
         crate::platform::add_arguments(&mut command, arguments);
@@ -1456,17 +1593,23 @@ where
         cwd.apply(&mut command);
         return Ok(command);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "applet.invoke");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     authorize_backend_capability(registry, applet_name, grant, "process.exec")?;
     if manifest.name != applet_name {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
         bail!("capability policy applet names must use canonical manifest names");
     }
-    let contract = manifest.execution_contract().ok_or_else(|| {
-        anyhow!("capability policy requires a version-1 contract for applet {applet_name:?}")
-    })?;
+    let Some(contract) = manifest.execution_contract() else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy requires a version-1 contract for applet {applet_name:?}");
+    };
     policy.authorize_validated(
         applet_name,
         false,
@@ -1632,10 +1775,27 @@ pub fn effective_environment(
         }
     };
     if let Some(manifest) = manifest {
-        validate_environment_backend(manifest)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
 
-    let allowlist = child_environment_allowlist()?;
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.read",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
+            return Err(error);
+        }
+    };
     let mut environment = std::env::vars_os()
         .filter(|(name, _)| {
             environment_name_allowed(configured.as_ref().as_ref(), applet_name, name)
@@ -1646,8 +1806,20 @@ pub fn effective_environment(
         })
         .collect::<Vec<_>>();
     if let Some(policy) = configured.as_ref() {
-        policy.validate()?;
+        if let Err(error) = policy.validate() {
+            record_invalid_policy(registry, applet_name, "environment.read");
+            return Err(error);
+        }
         if !policy.applets.contains_key(applet_name) {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.read",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::MissingGrant,
+            );
             bail!("capability policy has no allowlist entry for applet {applet_name:?}");
         }
     }
@@ -1708,6 +1880,8 @@ pub fn parse_child_environment_allowlist(value: &str) -> Result<Vec<String>> {
 
 /// Apply the host's optional ambient allowlist to a directly launched helper.
 /// Unlike applet launches, these helpers have no per-applet policy or overlays.
+/// A malformed allowlist fails closed without an audit entry: this helper
+/// takes no registry, so there is no policy log to record into.
 pub fn apply_host_child_environment(command: &mut Command) -> Result<()> {
     if let Some(allowlist) = child_environment_allowlist()? {
         let environment = std::env::vars_os().filter(|(name, _)| {
@@ -1768,11 +1942,41 @@ fn authorize_environment_override(
     applet_name: &str,
     variable_name: &str,
 ) -> Result<()> {
-    if let Some(allowlist) = child_environment_allowlist()? {
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            // A malformed ambient allowlist denies the override before any
+            // policy is consulted. Record it so a recorded run names the
+            // denial instead of failing silent.
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
+            return Err(error);
+        }
+    };
+    if let Some(allowlist) = allowlist {
         if !allowlist
             .iter()
             .any(|name| same_environment_name(OsStr::new(name), variable_name))
         {
+            // The ambient allowlist refused the override before any policy is
+            // consulted. The denial is still an audit entry, so the log states
+            // what happened instead of staying silent about it.
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
             bail!("environment override {variable_name:?} is not in EXECUTE_CHILD_ENV_ALLOW");
         }
     }
@@ -1780,15 +1984,38 @@ fn authorize_environment_override(
     let Some(policy) = configured.as_ref() else {
         // Without a policy, every other name is the author's choice (the Bash trust
         // model). The dynamic loader's variables change code that runs before the
-        // program starts, so a binding or a manifest cannot set them.
+        // program starts, so a binding or a manifest cannot set them. Both the
+        // denial and the allowance are audit entries, so the log states what
+        // happened instead of staying silent about it.
         if is_loader_variable(variable_name) {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::MissingGrant,
+            );
             bail!(
                 "{variable_name} is read by the dynamic loader before the program starts; a program cannot set it"
             );
         }
+        record_policy_decision(
+            registry,
+            applet_name,
+            "environment.set",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.set");
+        return Err(error);
+    }
     let allowed = policy
         .applets
         .get(applet_name)
@@ -1819,6 +2046,21 @@ fn authorize_environment_override(
     }
 }
 
+impl CapabilityPolicy {
+    /// Canonical content digest of the parsed policy: the SHA-256 of its
+    /// canonical JSON encoding. Run records store this digest so a reviewer
+    /// can tell which policy produced an allow/deny log. The digest records
+    /// no grant, path, or other policy content, but it is an unsalted hash:
+    /// it cannot be reversed, yet it confirms a guessed policy (cheap for a
+    /// small policy space), so it names the policy without hiding it from
+    /// someone who can guess it.
+    pub fn canonical_digest(&self) -> String {
+        let encoded =
+            serde_json::to_vec(self).expect("a validated capability policy is serializable");
+        crate::security::hex_encode(Sha256::digest(encoded).as_slice())
+    }
+}
+
 /// Stable per-applet policy identity for persistent-worker cache keys. A
 /// replaced registry grant must never reuse a worker spawned under old rights.
 pub fn policy_fingerprint(registry: &Registry, applet_name: &str) -> Result<Option<[u8; 32]>> {
@@ -1826,10 +2068,14 @@ pub fn policy_fingerprint(registry: &Registry, applet_name: &str) -> Result<Opti
     let Some(policy) = configured.as_ref() else {
         return Ok(None);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "applet.invoke");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     let encoded = serde_json::to_vec(grant).context("encoding capability grant identity")?;
     let digest = Sha256::digest(encoded);
     Ok(Some(digest.into()))
@@ -1849,10 +2095,14 @@ where
     let Some(policy) = configured.as_ref() else {
         return Ok(None);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.read");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "environment.read");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     let mut filtered = Vec::new();
     for (name, value) in environment {
         if name
@@ -1875,9 +2125,21 @@ pub fn authorize_environment_variable(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "environment.read",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.read");
+        return Err(error);
+    }
     let allowed = policy
         .applets
         .get(applet_name)
@@ -1916,9 +2178,21 @@ pub fn authorize_network_endpoint(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "network.connect");
+        return Err(error);
+    }
     let Some(grant) = policy.applets.get(applet_name) else {
         record_policy_decision(
             registry,
@@ -1935,6 +2209,17 @@ pub fn authorize_network_endpoint(
         .resolve(applet_name)
         .with_context(|| format!("resolving applet {applet_name:?} for network access"))?;
     if manifest.name != applet_name || manifest.execution_backend() != AppletBackend::Remote {
+        // No grant covers a non-canonical or non-remote applet, so the denial
+        // is recorded with the same outcome as a missing grant.
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
         bail!("network endpoint authorization applies only to canonical remote applets");
     }
     let contract = manifest.execution_contract().ok_or_else(|| {
@@ -1980,7 +2265,7 @@ pub fn authorize_network_endpoint(
         bail!("remote endpoint must not contain a fragment");
     }
     let origin = canonical_http_origin(endpoint)?;
-    let allowed = grant.network_origins.is_empty() || grant.network_origins.contains(&origin);
+    let allowed = network_origin_is_granted(grant, &origin);
     record_policy_decision(
         registry,
         applet_name,
@@ -2000,6 +2285,34 @@ pub fn authorize_network_endpoint(
     );
     if !allowed {
         bail!("capability policy denies the remote endpoint origin");
+    }
+    // Fail fast on non-public literal hosts even though the transport pins
+    // the resolved set again at connect time. Only an explicitly listed
+    // origin preserves a private destination; a broad empty-list grant does
+    // not. Hostnames that look benign pass here and are pinned at the
+    // resolver, which stops DNS rebinding.
+    let granted = if grant.network_origins.contains(&origin) {
+        BTreeSet::from([origin.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    let allow_loopback = contract
+        .remote
+        .as_ref()
+        .is_some_and(|remote| remote.allow_loopback_http_fixture);
+    if let Err(denied) =
+        ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, allow_loopback, &granted)
+    {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            Some(&origin),
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("capability policy refuses non-public remote endpoint host: {denied}");
     }
     Ok(())
 }
@@ -2022,9 +2335,30 @@ pub fn authorize_host_path(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            "host",
+            if access == HostAccess::Write {
+                "filesystem.write"
+            } else {
+                "filesystem.read"
+            },
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        let action = if access == HostAccess::Write {
+            "filesystem.write"
+        } else {
+            "filesystem.read"
+        };
+        record_invalid_policy(registry, "host", action);
+        return Err(error);
+    }
     let host = policy.host.as_ref();
     let capability = if access == HostAccess::Write {
         "filesystem.write"
@@ -2087,9 +2421,30 @@ pub fn authorize_applet_host_path(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            if access == HostAccess::Write {
+                "filesystem.write"
+            } else {
+                "filesystem.read"
+            },
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        let action = if access == HostAccess::Write {
+            "filesystem.write"
+        } else {
+            "filesystem.read"
+        };
+        record_invalid_policy(registry, applet_name, action);
+        return Err(error);
+    }
     let Some(grant) = policy.applets.get(applet_name) else {
         record_policy_decision(
             registry,
@@ -2338,17 +2693,25 @@ fn preflight_host_paths(
                         && registry.resolve_call(call)?.builtin
                             == Some(crate::manifest::Builtin::Cd) =>
                 {
-                    let path = call.parameters.get("path").ok_or_else(|| {
-                        anyhow!("capability policy requires a literal path for the cd builtin")
-                    })?;
+                    let Some(path) = call.parameters.get("path") else {
+                        record_preflight_denial(registry, "host", "filesystem.read");
+                        bail!("capability policy requires a literal path for the cd builtin");
+                    };
                     (path, HostAccess::Read)
                 }
                 _ => continue,
             };
             let Value::String(path) = path else {
+                record_preflight_denial(registry, "host", "filesystem.read");
                 bail!("capability policy requires literal host filesystem paths that can be checked before effects");
             };
-            let path = expand_home_path(path)?;
+            let path = match expand_home_path(path) {
+                Ok(path) => path,
+                Err(error) => {
+                    record_preflight_denial(registry, "host", "filesystem.read");
+                    return Err(error);
+                }
+            };
             if !cwd_mode.is_dynamic() || path.is_absolute() {
                 authorize_host_path(registry, &path, access, cwd)?;
             }
@@ -2371,9 +2734,23 @@ pub fn authorize_environment_inputs(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        // Without a policy every declared environment input is accepted, and
+        // the audit carries that baseline instead of implying a check ran.
+        record_policy_decision(
+            registry,
+            "<workflow>",
+            "environment.read",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "environment.read");
+        return Err(error);
+    }
     for declaration in declarations {
         if let Some(crate::ast::InputSource::Environment(name)) = &declaration.source {
             let allowed = policy.host_environment.contains(name);
@@ -2511,6 +2888,8 @@ fn validate_digest(value: &str) -> Result<()> {
 
 struct ParsedHttpUrl {
     origin: String,
+    /// Unbracketed, lowercased host spelling (IPv6 without brackets).
+    host: String,
     path: String,
     query: bool,
     fragment: bool,
@@ -2530,6 +2909,35 @@ pub(crate) fn canonical_http_policy_origin(value: &str) -> Result<String> {
         bail!("HTTP(S) origin must not contain a path, query, or fragment");
     }
     Ok(parsed.origin)
+}
+
+/// Whether the endpoint origin passes the grant's origin allowlist. An empty
+/// list allows broad access for metadata-policy checks; only a listed origin
+/// counts as an explicit grant for SSRF purposes.
+pub(crate) fn network_origin_is_granted(grant: &AppletGrant, origin: &str) -> bool {
+    grant.network_origins.is_empty() || grant.network_origins.contains(origin)
+}
+
+/// True only when the capability policy explicitly lists this endpoint's
+/// origin in `network_origins`. A broad empty-list grant and an absent policy
+/// do not preserve non-public destinations; only a listed origin reaches the
+/// transport as an explicit SSRF grant.
+#[cfg(feature = "remote")]
+pub(crate) fn remote_origin_is_explicitly_granted(
+    registry: &Registry,
+    applet_name: &str,
+    endpoint: &str,
+) -> bool {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        return false;
+    };
+    let Some(grant) = policy.applets.get(applet_name) else {
+        return false;
+    };
+    canonical_http_origin(endpoint)
+        .map(|origin| grant.network_origins.contains(&origin))
+        .unwrap_or(false)
 }
 
 fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
@@ -2609,7 +3017,11 @@ fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
         (host.to_ascii_lowercase(), port, false)
     };
     let default_port = if scheme == "https" { 443 } else { 80 };
-    let rendered_host = if is_ipv6 { format!("[{host}]") } else { host };
+    let rendered_host = if is_ipv6 {
+        format!("[{host}]")
+    } else {
+        host.clone()
+    };
     let origin = match port {
         Some(port) if port != default_port => format!("{scheme}://{rendered_host}:{port}"),
         _ => format!("{scheme}://{rendered_host}"),
@@ -2621,6 +3033,7 @@ fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
     let path = before_fragment.split('?').next().unwrap_or_default();
     Ok(ParsedHttpUrl {
         origin,
+        host,
         path: if path.is_empty() {
             "/".to_owned()
         } else {

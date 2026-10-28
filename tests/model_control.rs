@@ -20,6 +20,9 @@ fn run_helper(args: &[String], input: &[u8], env: &[(&str, &str)]) -> Output {
     command
         .args(args)
         .env_clear()
+        // Hermetic live-loopback cases carry the explicit #448 grant; the
+        // grantless refusal is covered in tests/ssrf_guard.rs instead.
+        .env("EXECUTE_MODEL_ALLOW_LOOPBACK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -147,6 +150,9 @@ fn invoke_execute(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
         .arg("--manifest-dir")
         .arg(manifests)
         .env_clear()
+        // Workflows under test carry the explicit #448 loopback grant so the
+        // bundled helper may reach their owned loopback servers.
+        .env("EXECUTE_MODEL_ALLOW_LOOPBACK", "1")
         .env("JEV_API_KEY", "synthetic-test-key")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1167,6 +1173,8 @@ fn cancelled_native_model_call_closes_socket_requires_retry_and_completed_resume
         .arg("--command-timeout-ms")
         .arg("30000")
         .env_clear()
+        // The owned loopback model server needs the explicit #448 grant.
+        .env("EXECUTE_MODEL_ALLOW_LOOPBACK", "1")
         .env("JEV_API_KEY", "synthetic-test-key")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

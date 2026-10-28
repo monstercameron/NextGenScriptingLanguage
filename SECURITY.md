@@ -159,8 +159,22 @@ variables a program may read through `accept ... from environment`; it is empty
 by default. `deny_privileged` classifies interpreters and text processors such
 as Python, Perl, Node, awk, sed, git, make and tar as wrappers that require
 `allow_wrappers`. The explain/effects gate marks launchers such as find, xargs,
-ssh, parallel, bwrap and tmux as privileged. Versioned executable names such as
-`python3.12` use the same classification as `python`.
+ssh, parallel, bwrap, tmux, container-host escape (`flatpak-spawn`, `host-spawn`,
+`distrobox-host-exec`, `toolbox`, `docker`, `podman`, `kubectl`), schedulers
+(`at`, `batch`, `crontab`), D-Bus launchers (`dbus-send`, `gdbus`, `busctl`), and
+desktop launchers (`xdg-open`, `gio`) as privileged, whatever their arguments. An
+absolute path or alias that keeps the listed file name, and a symlink whose
+canonical target keeps the listed file name, are classified the same way; a
+renamed copy or hardlink with an unlisted file name is not recognised because
+classification is by name, not content. Versioned
+executable names such as `python3.12` use the same classification as `python`.
+Hyphenated same-family variants that are not listed (for example
+`docker-compose`, `dbus-run-session`, `atq`) are also not recognised. The list
+is a review aid, not a sandbox or a complete boundary: unlisted or renamed
+tools are not recognised, and enforcement stays with the strict capability
+policy and OS confinement in untrusted mode. An alias that fails to resolve at
+review time falls back to its written name, so runtime enforcement remains
+authoritative.
 
 `--record` redacts secret and environment input values. The review fingerprint
 covers module sources and packages. Replay refuses detached launches and handovers.
@@ -174,6 +188,30 @@ available native sandbox backends can enforce only all-or-none network access.
 Remote endpoint authorization runs before discovery or invocation; redirects
 and environment proxies are disabled. A remote applet's bearer-file path is
 checked against that applet's own filesystem read grant.
+
+SSRF protection is fail-closed at two layers for host-managed remote applets
+and the model helper. Before any resolution or socket use, a non-public
+endpoint host (loopback, RFC1918, CGNAT including 100.100.100.200, link-local
+including 169.254.169.254, ULA, multicast, and IPv4-mapped IPv6 forms) is
+refused by name; at connect time the resolver pins the whole resolved address
+set, so a hostname that first resolves to a public address cannot rebind to a
+private one. Only an origin explicitly listed in `network_origins` preserves a
+private destination, and only for remote applets; a broad empty-list grant
+does not. The model helper accepts no origin grants (dependency #375 keeps
+model endpoints outside `network_origins`, which `Command`-backend applets
+cannot declare): its endpoints stay restricted to HTTPS, or HTTP to loopback,
+with the same guard. A script-controlled `--endpoint` therefore cannot reach
+metadata or private destinations, and live loopback endpoints additionally
+require the explicit `EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's
+environment — without it the request fails as configuration before any
+credential read or connection, so an unauthenticated local service is never
+reachable by default. Hermetic `--fixture` runs never open a socket and do
+not need the grant. The self-grant prevention holds only when the ambient
+environment is constrained: under a capability policy, or a host
+`--clear-env`/`--env-allow` filter, a program cannot grant the variable to
+itself via `use environment` or `and environment` unless the applet's
+`environment` grant lists it. In default trusted mode with full ambient
+inheritance, a program can set the variable itself.
 
 `--execution-mode trusted|untrusted` selects native-child confinement. With no
 policy the default is `trusted`; a capability policy defaults to `untrusted`.

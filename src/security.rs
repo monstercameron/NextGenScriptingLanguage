@@ -1413,7 +1413,7 @@ pub(crate) enum TrustedInputKind {
 /// NFSv4, RichACL and macOS ACLs are not probed here. Other Unix systems do
 /// not expose ACLs here and remain documented as best-effort (see
 /// SECURITY.md). Windows inputs must not be reparse points, must be owned by
-/// the current user, SYSTEM or Administrators, and must grant no write access
+/// the current user, SYSTEM, Administrators or TrustedInstaller, and must grant no write access
 /// to any other principal; an unreadable ACL fails closed. A private-DACL
 /// demand is deliberately not made: installed trees stay readable by every
 /// local runner, so read grants to others are allowed and only write grants
@@ -1606,7 +1606,7 @@ pub(crate) fn verify_trusted_fd(
     {
         // Handle-side owner/ACE re-check: an owner or DACL swap between the
         // path check and the open must fail closed here.
-        check_trusted_windows_handle(file, path, label)?;
+        check_trusted_windows_handle(file, path, label, false)?;
     }
     Ok(())
 }
@@ -1758,12 +1758,101 @@ fn has_posix_extended_acl_fd(file: &File) -> bool {
     }
 }
 
-/// Windows writability gate for trusted inputs. The path must be owned by the
-/// current user, SYSTEM or Administrators, and no other principal may hold an
-/// allow ACE granting write-level access. Read grants to others are allowed
-/// so shared installs keep working; only writes fail closed. A missing DACL
-/// (full access to everyone) or an unreadable ACL fails closed and names the
-/// path. Deny and audit ACEs grant nothing and are ignored.
+/// Allow-ACE rights that fail the trusted-input gate at the LEAF: data and
+/// extended-attribute writes, child add/delete, attribute writes, delete,
+/// DACL/owner takeover, and the generic umbrellas covering them. Read-level
+/// rights stay out, including `FILE_READ_EA` (`0x8`): standard read grants
+/// carry it, so keeping it here would refuse every path that lets another
+/// principal read, such as `C:\Users` on a shared host. `GENERIC_READ` and
+/// `GENERIC_EXECUTE` are likewise absent because they map to read-only
+/// rights.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_WRITE_MASK: u32 =
+    0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+
+/// Whether an allow-ACE access mask grants write-level rights under
+/// [`TRUSTED_WINDOWS_WRITE_MASK`]. Pure mask logic with no platform calls, so
+/// the gate's read/write boundary is pinned by unit tests on every host.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_allow_ace_grants_write(mask: u32) -> bool {
+    mask & TRUSTED_WINDOWS_WRITE_MASK != 0
+}
+
+/// Allow-ACE rights that disqualify an ANCESTOR directory: the subset of
+/// [`TRUSTED_WINDOWS_WRITE_MASK`] that lets another principal rename, delete
+/// or replace an already-verified entry inside the ancestor. Decided per bit
+/// from the ancestor threat model ("a writable ancestor lets an attacker
+/// rename or replace the verified leaf"):
+/// - `FILE_ADD_FILE` (`0x2`), `FILE_ADD_SUBDIRECTORY`/`FILE_APPEND_DATA`
+///   (`0x4`), `FILE_WRITE_EA` (`0x10`) and `FILE_WRITE_ATTRIBUTES` (`0x100`)
+///   pass: they let a principal create new entries or alter attributes, but
+///   cannot rename, delete or replace an EXISTING verified entry, so they do
+///   not break the ancestor threat model. Factory `C:\` grants
+///   `BUILTIN\Users` a create/append right (`0x4`) at the root; refusing it
+///   would refuse every manifest load on factory Windows installs.
+/// - `FILE_DELETE_CHILD` (`0x40`) refuses: it lets a principal delete any
+///   child entry, which enables removing the verified leaf to plant a
+///   replacement.
+/// - `DELETE` (`0x10000`) refuses: it lets a principal delete the ancestor
+///   itself, removing the verified path.
+/// - `WRITE_DAC` (`0x40000`) and `WRITE_OWNER` (`0x80000`) refuse: they let a
+///   principal rewrite the DACL or retake ownership, escalating to full
+///   control over the verified path.
+/// - `GENERIC_WRITE` (`0x40000000`) and `GENERIC_ALL` (`0x10000000`) refuse:
+///   umbrella rights that include the refused rights above.
+///
+/// `FILE_READ_EA` (`0x8`) is a read right and refuses nowhere (already
+/// excluded from the leaf mask).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK: u32 =
+    0x40 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+
+/// Whether an allow-ACE access mask on an ANCESTOR directory disqualifies it
+/// under [`TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK`]. Pure mask logic with no
+/// platform calls, so the ancestor create/replace boundary is pinned by unit
+/// tests on every host. Mirrors the discipline of
+/// [`windows_owner_sid_is_trusted`]: one pure predicate per gate boundary.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_ancestor_mask_is_disqualifying(mask: u32) -> bool {
+    mask & TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK != 0
+}
+
+/// String form of the well-known `NT AUTHORITY\SYSTEM` principal.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_SYSTEM_SID: &str = "S-1-5-18";
+/// String form of the well-known `BUILTIN\Administrators` group.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+/// String form of the well-known `NT SERVICE\TrustedInstaller` principal: the
+/// OS-installer identity that owns system locations such as the drive root
+/// (`C:\`) on factory Windows installs. It holds the same standing as
+/// SYSTEM/Administrators in the trusted-input gate.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID: &str =
+    "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+/// Whether an owner SID (string form) is trusted for the Windows trusted-input
+/// gate: the current user, SYSTEM, Administrators, or TrustedInstaller. Pure
+/// string logic with no platform calls, so the owner boundary is pinned by
+/// unit tests on every host. Comparison is ASCII case-insensitive because SID
+/// string form is canonically upper-case but never guaranteed by a producer.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_owner_sid_is_trusted(owner_sid: &str, current_user_sid: &str) -> bool {
+    (!current_user_sid.is_empty() && owner_sid.eq_ignore_ascii_case(current_user_sid))
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_SYSTEM_SID)
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_ADMINISTRATORS_SID)
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID)
+}
+
+/// Windows writability gate for trusted input leaves. The path must be owned by
+/// the current user, SYSTEM, Administrators or TrustedInstaller, and no other
+/// principal may hold an allow ACE granting write-level access under the
+/// strict leaf mask ([`TRUSTED_WINDOWS_WRITE_MASK`]). Read grants to others
+/// are allowed so shared installs keep working; only writes fail closed. A
+/// missing DACL (full access to everyone) or an unreadable ACL fails closed
+/// and names the path. Deny and audit ACEs grant nothing and are ignored.
+/// Every refusal names the trustee SID and the granted mask so a CI log alone
+/// diagnoses which principal and right tripped the gate.
 #[cfg(windows)]
 pub(crate) fn verify_trusted_windows_acl(path: &Path, label: &str) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
@@ -1777,13 +1866,18 @@ pub(crate) fn verify_trusted_windows_acl(path: &Path, label: &str) -> Result<()>
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(path)
         .with_context(|| format!("reading {label} Windows ACL {}", path.display()))?;
-    check_trusted_windows_handle(&handle, path, label)
+    check_trusted_windows_handle(&handle, path, label, false)
 }
 
 /// Ancestor half of the Windows gate: every ancestor directory of the
-/// canonical path must pass the same owner/no-foreign-write check as the
-/// leaf, since a writable ancestor lets an attacker rename or replace the
-/// verified leaf. Reparse-point ancestors are refused.
+/// canonical path must pass the same owner check as the leaf, but the
+/// no-foreign-write check uses the narrowed ancestor mask
+/// ([`TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK`]): create-only rights
+/// (`FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`/`FILE_APPEND_DATA`,
+/// `FILE_WRITE_EA`, `FILE_WRITE_ATTRIBUTES`) cannot rename or replace an
+/// existing verified entry, so they pass here while the leaf still refuses
+/// them. Only replacement/removal/takeover rights disqualify an ancestor.
+/// Reparse-point ancestors are refused.
 #[cfg(windows)]
 pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
@@ -1815,7 +1909,7 @@ pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Resu
             .with_context(|| {
                 format!("reading {label} ancestor Windows ACL {}", current.display())
             })?;
-        check_trusted_windows_handle(&handle, current, label)?;
+        check_trusted_windows_handle(&handle, current, label, true)?;
         if current.parent().is_none() {
             break;
         }
@@ -1823,11 +1917,24 @@ pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Resu
     Ok(())
 }
 
-/// Shared DACL inspection behind [`verify_trusted_windows_acl`]: owner must
-/// be the current user, SYSTEM or Administrators, and no allow ACE may grant
-/// write-level rights to anyone else.
+/// Shared DACL inspection behind [`verify_trusted_windows_acl`] (leaf,
+/// `ancestor = false`) and [`verify_trusted_windows_ancestors`] (`ancestor =
+/// true`): owner must be the current user, SYSTEM, Administrators or
+/// TrustedInstaller, and no allow ACE may grant disqualifying rights to
+/// anyone else. The leaf uses the strict [`TRUSTED_WINDOWS_WRITE_MASK`];
+/// ancestors use the narrowed [`TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK`], so
+/// create-only rights pass on ancestors while replacement/removal/takeover
+/// rights refuse on both. TrustedInstaller holds the same standing as
+/// SYSTEM/Administrators as an ACE trustee, so a write grant it holds on a
+/// system ancestor does not fail the gate. Refusals name the trustee SID and
+/// the granted mask.
 #[cfg(windows)]
-fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Result<()> {
+fn check_trusted_windows_handle(
+    handle: &File,
+    path: &Path,
+    label: &str,
+    ancestor: bool,
+) -> Result<()> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -1843,22 +1950,6 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
     const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
     const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
     const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
-    // Write-level rights that would let another principal replace content,
-    // delete the path itself, or rename entries: data writes, extended-attribute
-    // writes, child add/delete, delete, DACL/owner takeover, and the generic
-    // umbrellas covering them. `0x10` is FILE_WRITE_EA and `0x10000` is
-    // DELETE; both let a foreign principal replace or remove a trusted input.
-    const WRITE_MASK: u32 = 0x2
-        | 0x4
-        | 0x8
-        | 0x10
-        | 0x40
-        | 0x100
-        | 0x10000
-        | 0x40000
-        | 0x80000
-        | 0x40000000
-        | 0x10000000;
 
     let mut owner = std::ptr::null_mut();
     let mut dacl = std::ptr::null_mut();
@@ -1954,16 +2045,31 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
         };
         let system_sid = well_known(windows_sys::Win32::Security::WinLocalSystemSid)?;
         let admins_sid = well_known(windows_sys::Win32::Security::WinBuiltinAdministratorsSid)?;
+        // Stringify the owner and current-user SIDs so the acceptance decision
+        // runs through the pure [`windows_owner_sid_is_trusted`] predicate
+        // and the refusal names the actual owner. Conversion failures fail
+        // closed: the input is refused rather than trusted.
+        let owner_string =
+            trusted_windows_sid_to_string(owner).context("reading trusted Windows owner SID")?;
+        // SAFETY: user.User.Sid is non-null (checked above) and lives in the token buffer.
+        let user_string = trusted_windows_sid_to_string(user.User.Sid)
+            .context("reading trusted Windows user SID")?;
+        // Keep the pointer comparison as a second opinion alongside the string
+        // predicate: either route trusting the owner accepts the input.
         // SAFETY: owner is non-null in the live descriptor; the other SIDs are
         // live in the token and local buffers.
-        let owner_trusted = unsafe {
-            EqualSid(owner, user.User.Sid) != 0
-                || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
-                || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
+        let owner_trusted = windows_owner_sid_is_trusted(&owner_string, &user_string) || {
+            // SAFETY: owner is non-null in the live descriptor; the other
+            // SIDs are live in the token and local buffers.
+            unsafe {
+                EqualSid(owner, user.User.Sid) != 0
+                    || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
+                    || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
+            }
         };
         if !owner_trusted {
             bail!(
-                "{label} {} must be owned by the current user, SYSTEM or Administrators",
+                "{label} {} must be owned by the current user, SYSTEM, Administrators or TrustedInstaller (owner {owner_string})",
                 path.display()
             );
         }
@@ -2041,7 +2147,15 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
             } else {
                 continue;
             };
-            if mask & WRITE_MASK == 0 {
+            // Leaves refuse every write-level right; ancestors refuse only the
+            // replacement/removal/takeover subset: create-only rights cannot
+            // rename or replace the verified entry below them.
+            let disqualifying = if ancestor {
+                windows_ancestor_mask_is_disqualifying(mask)
+            } else {
+                windows_allow_ace_grants_write(mask)
+            };
+            if !disqualifying {
                 continue;
             }
             // SAFETY: the ACE SID lies inside the validated ACL; the compared
@@ -2052,9 +2166,22 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
                     || EqualSid(ace_sid, system_sid.as_ptr().cast_mut().cast()) != 0
                     || EqualSid(ace_sid, admins_sid.as_ptr().cast_mut().cast()) != 0
             };
+            // TrustedInstaller holds the same standing as SYSTEM/Administrators
+            // as an ACE trustee: a write grant it holds on a system ancestor
+            // (such as the drive root) does not fail the gate. The string
+            // conversion is a fallback checked only when the pointer
+            // comparison above refused; an unreadable SID stays refused. The
+            // string form is also what the refusal below names, so a CI log
+            // alone diagnoses which principal and mask tripped the gate.
+            let ace_string = trusted_windows_sid_to_string(ace_sid).ok();
+            let sid_trusted = sid_trusted
+                || ace_string.as_deref().is_some_and(|ace| {
+                    ace.eq_ignore_ascii_case(TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID)
+                });
             if !sid_trusted {
+                let trustee = ace_string.as_deref().unwrap_or("<unreadable SID>");
                 bail!(
-                    "{label} {} grants Windows write access to another principal; refusing",
+                    "{label} {} grants Windows write access to {trustee} (mask {mask:#x}); refusing",
                     path.display()
                 );
             }
@@ -2066,6 +2193,41 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
         unsafe { LocalFree(descriptor) };
     }
     result
+}
+
+/// Stringify a live SID pointer via `ConvertSidToStringSidW` so the gate can
+/// run its pure string predicate and name the SID in diagnostics. The caller
+/// keeps the SID alive; the returned string is owned. Any conversion failure
+/// is an error so callers fail closed.
+#[cfg(windows)]
+fn trusted_windows_sid_to_string(sid: *mut std::ffi::c_void) -> Result<String> {
+    use std::os::windows::ffi::OsStringExt;
+    if sid.is_null() {
+        bail!("Windows SID is null; refusing");
+    }
+    let mut text: *mut u16 = std::ptr::null_mut();
+    // SAFETY: sid is a live SID owned by the caller; text is a writable
+    // out-slot, and the API allocates the returned string for LocalFree.
+    let status = unsafe {
+        windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW(sid, &mut text)
+    };
+    if status == 0 || text.is_null() {
+        return Err(std::io::Error::last_os_error()).context("converting Windows SID to string");
+    }
+    let mut length = 0usize;
+    // SAFETY: ConvertSidToStringSidW returned a NUL-terminated LocalAlloc string.
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    // SAFETY: the counted UTF-16 units precede the validated terminator, and
+    // `text` stays live until LocalFree below.
+    let units = unsafe { std::slice::from_raw_parts(text, length) };
+    let value = std::ffi::OsString::from_wide(units)
+        .to_string_lossy()
+        .into_owned();
+    // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
+    unsafe { windows_sys::Win32::Foundation::LocalFree(text.cast()) };
+    Ok(value)
 }
 
 pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {
@@ -3143,5 +3305,202 @@ mod tests {
             "the bounded window must keep the newest decisions"
         );
         assert_consistent(&snapshot, total);
+    }
+
+    /// The Windows allow-ACE gate must refuse write-level grants while letting
+    /// read-level grants through, on every host: this is pure mask logic with
+    /// no platform calls. Regression cover for the `0x8` (`FILE_READ_EA`)
+    /// misclassification that refused `C:\Users` — standard read-and-execute
+    /// grants carry read-EA, so the ancestor walk failed every manifest load
+    /// under a Windows user profile and `check --json` degraded to
+    /// `check_failed`.
+    #[test]
+    fn windows_write_mask_keeps_read_grants_trusted() {
+        const FILE_READ_DATA: u32 = 0x1;
+        const FILE_READ_EA: u32 = 0x8;
+        const FILE_EXECUTE: u32 = 0x20;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const READ_CONTROL: u32 = 0x20000;
+        const SYNCHRONIZE: u32 = 0x100000;
+        const GENERIC_READ: u32 = 0x80000000;
+        const GENERIC_EXECUTE: u32 = 0x20000000;
+        // A standard read-and-execute grant, as `C:\Users` carries for
+        // `BUILTIN\Users`: read data/EA/attributes, execute, and the generic
+        // read-control/synchronize rights. None of it lets another principal
+        // replace or remove a trusted input.
+        const STANDARD_READ_EXECUTE: u32 = FILE_READ_DATA
+            | FILE_READ_EA
+            | FILE_EXECUTE
+            | FILE_READ_ATTRIBUTES
+            | READ_CONTROL
+            | SYNCHRONIZE;
+        assert!(!windows_allow_ace_grants_write(0));
+        assert!(!windows_allow_ace_grants_write(STANDARD_READ_EXECUTE));
+        for read in [
+            FILE_READ_DATA,
+            FILE_READ_EA,
+            FILE_EXECUTE,
+            FILE_READ_ATTRIBUTES,
+            READ_CONTROL,
+            SYNCHRONIZE,
+            GENERIC_READ,
+            GENERIC_EXECUTE,
+        ] {
+            assert!(
+                !windows_allow_ace_grants_write(read),
+                "read-level right {read:#x} must stay trusted"
+            );
+        }
+        // Every write-level right the gate documents still fails closed, both
+        // alone and combined with a read grant.
+        for write in [
+            0x2,        // FILE_WRITE_DATA
+            0x4,        // FILE_APPEND_DATA
+            0x10,       // FILE_WRITE_EA
+            0x40,       // FILE_DELETE_CHILD
+            0x100,      // FILE_WRITE_ATTRIBUTES
+            0x10000,    // DELETE
+            0x40000,    // WRITE_DAC
+            0x80000,    // WRITE_OWNER
+            0x40000000, // GENERIC_WRITE
+            0x10000000, // GENERIC_ALL
+        ] {
+            assert!(
+                windows_allow_ace_grants_write(write),
+                "write-level right {write:#x} must fail closed"
+            );
+            assert!(
+                windows_allow_ace_grants_write(STANDARD_READ_EXECUTE | write),
+                "write-level right {write:#x} must fail closed beside reads"
+            );
+        }
+    }
+
+    /// The ancestor half of the Windows gate must pass create-only grants
+    /// while refusing replacement/removal/takeover grants, on every host:
+    /// this is pure mask logic with no platform calls. Regression cover for
+    /// the factory-install drive root (`C:\`), which grants
+    /// `BUILTIN\Users` a create/append right (`0x4`): the full leaf mask
+    /// refused the root and `check --json` degraded to `check_failed` for
+    /// every manifest load. The leaf keeps the strict mask; only ancestors
+    /// narrow it.
+    #[test]
+    fn windows_ancestor_mask_passes_create_only_grants() {
+        const FILE_READ_DATA: u32 = 0x1;
+        const FILE_READ_EA: u32 = 0x8;
+        const FILE_EXECUTE: u32 = 0x20;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const READ_CONTROL: u32 = 0x20000;
+        const SYNCHRONIZE: u32 = 0x100000;
+        const STANDARD_READ_EXECUTE: u32 = FILE_READ_DATA
+            | FILE_READ_EA
+            | FILE_EXECUTE
+            | FILE_READ_ATTRIBUTES
+            | READ_CONTROL
+            | SYNCHRONIZE;
+        // The ancestor mask must stay a strict subset of the leaf mask: the
+        // leaf refuses everything the ancestor refuses, plus create-only
+        // rights.
+        assert_eq!(
+            TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK & !TRUSTED_WINDOWS_WRITE_MASK,
+            0,
+            "every ancestor-disqualifying right must also fail the leaf"
+        );
+        assert_eq!(
+            TRUSTED_WINDOWS_WRITE_MASK & !TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK,
+            0x2 | 0x4 | 0x10 | 0x100,
+            "only the create-only rights may pass on ancestors"
+        );
+        // Create-only rights pass on ancestors, alone and beside reads: they
+        // let a principal create new entries or alter attributes but cannot
+        // rename, delete or replace an existing verified entry.
+        for create_only in [
+            0x2,   // FILE_ADD_FILE
+            0x4,   // FILE_APPEND_DATA / FILE_ADD_SUBDIRECTORY
+            0x10,  // FILE_WRITE_EA
+            0x100, // FILE_WRITE_ATTRIBUTES
+        ] {
+            assert!(
+                !windows_ancestor_mask_is_disqualifying(create_only),
+                "create-only right {create_only:#x} must pass on ancestors"
+            );
+            assert!(
+                !windows_ancestor_mask_is_disqualifying(STANDARD_READ_EXECUTE | create_only),
+                "create-only right {create_only:#x} must pass on ancestors beside reads"
+            );
+            // The leaf keeps refusing them: narrowing applies to ancestors only.
+            assert!(
+                windows_allow_ace_grants_write(create_only),
+                "create-only right {create_only:#x} must still fail the leaf"
+            );
+        }
+        // The factory-`C:\` shape passes: a create/append grant beside reads.
+        assert!(!windows_ancestor_mask_is_disqualifying(
+            STANDARD_READ_EXECUTE | 0x4
+        ));
+        // Replacement/removal/takeover rights refuse on ancestors, both alone
+        // and combined with a read grant.
+        for disqualifying in [
+            0x40,       // FILE_DELETE_CHILD
+            0x10000,    // DELETE
+            0x40000,    // WRITE_DAC
+            0x80000,    // WRITE_OWNER
+            0x40000000, // GENERIC_WRITE
+            0x10000000, // GENERIC_ALL
+        ] {
+            assert!(
+                windows_ancestor_mask_is_disqualifying(disqualifying),
+                "replacement/removal right {disqualifying:#x} must fail ancestors"
+            );
+            assert!(
+                windows_ancestor_mask_is_disqualifying(STANDARD_READ_EXECUTE | disqualifying),
+                "replacement/removal right {disqualifying:#x} must fail ancestors beside reads"
+            );
+        }
+        assert!(!windows_ancestor_mask_is_disqualifying(0));
+        assert!(!windows_ancestor_mask_is_disqualifying(
+            STANDARD_READ_EXECUTE
+        ));
+    }
+
+    /// The Windows owner gate must accept the current user, SYSTEM,
+    /// Administrators and TrustedInstaller while refusing anyone else, on
+    /// every host: this is pure string logic with no platform calls.
+    /// Regression cover for the factory-install drive root (`C:\`), which is
+    /// owned by `NT SERVICE\TrustedInstaller` rather than the runner: the
+    /// ancestor walk refused the root and `check --json` degraded to
+    /// `check_failed` for every manifest load.
+    #[test]
+    fn windows_trusted_owner_sid_accepts_platform_principals() {
+        const CURRENT_USER: &str = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+        const OTHER_USER: &str = "S-1-5-21-9999999999-8888888888-7777777777-1002";
+        const BUILTIN_USERS: &str = "S-1-5-32-545";
+        assert!(windows_owner_sid_is_trusted(CURRENT_USER, CURRENT_USER));
+        for trusted in [
+            TRUSTED_WINDOWS_SYSTEM_SID,
+            TRUSTED_WINDOWS_ADMINISTRATORS_SID,
+            TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID,
+        ] {
+            assert!(
+                windows_owner_sid_is_trusted(trusted, CURRENT_USER),
+                "{trusted} must stay trusted"
+            );
+        }
+        assert!(
+            !windows_owner_sid_is_trusted(OTHER_USER, CURRENT_USER),
+            "a random user SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted(BUILTIN_USERS, CURRENT_USER),
+            "the Users-group SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted("", CURRENT_USER),
+            "an empty owner SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted(CURRENT_USER, ""),
+            "an empty current-user SID must not self-trust"
+        );
     }
 }

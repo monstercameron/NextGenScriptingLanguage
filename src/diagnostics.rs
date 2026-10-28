@@ -838,7 +838,10 @@ fn analyze_source_impl(
                         for (caller_path, call_line) in failed_file.call_chain.into_iter().rev() {
                             let caller_source = source_path
                                 .as_deref()
-                                .filter(|path| *path == caller_path.as_path())
+                                .filter(|path| {
+                                    crate::program_files::identity_key(path)
+                                        == crate::program_files::identity_key(&caller_path)
+                                })
                                 .map(|_| source.to_owned())
                                 .or_else(|| {
                                     captured_snapshot

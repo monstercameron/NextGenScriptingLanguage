@@ -24,6 +24,84 @@ use std::path::{Path, PathBuf};
 const MAX_FILE_CALL_DEPTH: usize = 16;
 const MAX_CALLED_FILES: usize = 256;
 /// The largest program file a `run program file` call may read.
+///
+/// A path that uses a Windows spelling: a verbatim (`\\?\`, `\\.\`) or NT
+/// (`\??\`) prefix, or a drive-letter prefix (`C:\`, `C:/`). Detection is pure
+/// byte logic so identity behaves the same on every host; genuine Unix paths
+/// never match (absolute Unix paths start with `/`).
+fn is_windows_spelling(bytes: &[u8]) -> bool {
+    bytes.starts_with(br"\\?\")
+        || bytes.starts_with(br"\\.\")
+        || bytes.starts_with(br"\??\")
+        || (bytes.len() > 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/'))
+}
+
+/// Fold a Windows-spelled path for filesystem use: turn `/` into `\` without
+/// touching anything else. Win32 converts separators only for non-verbatim
+/// paths; a `\\?\`-prefixed path reaches CreateFileW unchanged, and a `/`
+/// there fails with ERROR_INVALID_NAME. That is exactly what joining a called
+/// program-file literal such as `sub/child.program` onto an already-verbatim
+/// canonical parent produces, so the join must be folded before
+/// `std::fs::canonicalize`. Non-Windows spellings pass through untouched.
+pub(crate) fn filesystem_spelling(path: &Path) -> PathBuf {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    if !is_windows_spelling(bytes) {
+        return path.to_path_buf();
+    }
+    let folded: Vec<u8> = bytes
+        .iter()
+        .map(|&unit| if unit == b'/' { b'\\' } else { unit })
+        .collect();
+    // SAFETY: only ASCII `/` became ASCII `\`; byte validity under the
+    // platform encoding is unchanged, so the borrowed `OsStr` is valid.
+    PathBuf::from(unsafe { std::ffi::OsStr::from_encoded_bytes_unchecked(&folded) })
+}
+
+/// Spelling-insensitive identity key for called-file tracking. Strips the
+/// verbatim/NT prefix (mapping `\\?\UNC\` to plain UNC form), folds `/` to
+/// `\`, and uppercases a drive letter, so `\\?\C:\dir\file`, `C:\dir/file`,
+/// and `c:\dir\file` compare as one identity. Only Windows spellings fold;
+/// every other path keeps its exact bytes. Keys alone fold: stored canonical
+/// values and every emitted display path keep the exact canonical spelling,
+/// so diagnostic file, line, span, and message content never changes.
+pub(crate) fn identity_key(path: &Path) -> PathBuf {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    if !is_windows_spelling(bytes) {
+        return path.to_path_buf();
+    }
+    let mut body: &[u8] = bytes;
+    let mut unc = false;
+    if let Some(rest) = body.strip_prefix(br"\\?\UNC\") {
+        body = rest;
+        unc = true;
+    } else if let Some(rest) = body
+        .strip_prefix(br"\\?\")
+        .or_else(|| body.strip_prefix(br"\\.\"))
+        .or_else(|| body.strip_prefix(br"\??\"))
+    {
+        body = rest;
+    }
+    let mut folded: Vec<u8> = Vec::with_capacity(body.len() + 2);
+    if unc {
+        folded.extend_from_slice(br"\\");
+    }
+    folded.extend(
+        body.iter()
+            .map(|&unit| if unit == b'/' { b'\\' } else { unit }),
+    );
+    if folded.len() > 2 && folded[1] == b':' && folded[0].is_ascii_lowercase() {
+        folded[0] -= b'a' - b'A';
+    }
+    // SAFETY: only ASCII `/` became ASCII `\` and an ASCII lowercase drive
+    // letter became uppercase; byte validity under the platform encoding is
+    // unchanged, so the borrowed `OsStr` is valid.
+    PathBuf::from(unsafe { std::ffi::OsStr::from_encoded_bytes_unchecked(&folded) })
+}
+
+/// The largest program file a `run program file` call may read.
 pub const MAX_PROGRAM_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,22 +131,43 @@ impl SourceLoadSnapshot {
     }
 
     /// Return captured source by canonical path or an exact requested path.
+    /// Both spellings compare by [`identity_key`], so a verbatim canonical
+    /// path and a display-alias request resolve to the same captured source.
     pub(crate) fn loaded_source(&self, path: &Path) -> Option<String> {
-        self.sources.get(path).cloned().or_else(|| {
+        let key = identity_key(path);
+        self.sources.get(&key).cloned().or_else(|| {
             self.requests
-                .get(path)
-                .and_then(|canonical| self.sources.get(canonical))
+                .get(&key)
+                .and_then(|canonical| self.sources.get(&identity_key(canonical)))
                 .cloned()
         })
     }
 
+    /// Whether a captured source exists for `path` under any spelling.
+    fn has_source(&self, canonical: &Path) -> bool {
+        self.sources.contains_key(&identity_key(canonical))
+    }
+
+    /// Record a captured source under its spelling-insensitive identity. The
+    /// stored value keeps the exact canonical path; only the key folds.
+    fn note_source(&mut self, canonical: &Path, source: String) {
+        std::sync::Arc::make_mut(&mut self.sources).insert(identity_key(canonical), source);
+    }
+
     pub(crate) fn canonical_path_for_call(&self, parent: &Path, line: usize) -> Option<PathBuf> {
-        self.call_paths.get(&(parent.to_path_buf(), line)).cloned()
+        self.call_paths.get(&(identity_key(parent), line)).cloned()
     }
 
     pub(crate) fn canonical_root_path(&self, requested: &Path) -> Option<PathBuf> {
-        if self.root_request.as_deref() == Some(requested)
-            || self.root_path.as_deref() == Some(requested)
+        let requested = identity_key(requested);
+        if self
+            .root_request
+            .as_deref()
+            .is_some_and(|root| identity_key(root) == requested)
+            || self
+                .root_path
+                .as_deref()
+                .is_some_and(|root| identity_key(root) == requested)
         {
             self.root_path.clone()
         } else {
@@ -80,19 +179,19 @@ impl SourceLoadSnapshot {
         let path = self.failed_file.as_ref()?;
         Some(FailedProgramFile {
             path: path.clone(),
-            source: self.sources.get(path)?.clone(),
+            source: self.sources.get(&identity_key(path))?.clone(),
             call_chain: self.failed_call_chain.clone(),
         })
     }
 
     fn remember_request(&mut self, requested: &Path, canonical: &Path) {
         let requests = std::sync::Arc::make_mut(&mut self.requests);
-        requests.insert(requested.to_path_buf(), canonical.to_path_buf());
+        requests.insert(identity_key(requested), identity_key(canonical));
     }
 
     fn remember_call(&mut self, parent: &Path, line: usize, canonical: &Path) {
         std::sync::Arc::make_mut(&mut self.call_paths)
-            .insert((parent.to_path_buf(), line), canonical.to_path_buf());
+            .insert((identity_key(parent), line), canonical.to_path_buf());
     }
 }
 
@@ -105,8 +204,13 @@ fn remember_called_path(
     key: &str,
     canonical: &Path,
 ) -> bool {
+    // Compare by spelling-insensitive identity: the same file reached through
+    // a verbatim path and a display-alias request must not read as a
+    // collision, while two genuinely different files still collide loudly.
     match paths.entry(key.to_owned()) {
-        std::collections::btree_map::Entry::Occupied(entry) => entry.get().as_path() != canonical,
+        std::collections::btree_map::Entry::Occupied(entry) => {
+            identity_key(entry.get()) != identity_key(canonical)
+        }
         std::collections::btree_map::Entry::Vacant(entry) => {
             entry.insert(canonical.to_path_buf());
             false
@@ -119,7 +223,9 @@ fn canonicalize_called_path(
     path: &Path,
     scope: Option<&SourceScope<'_>>,
 ) -> std::io::Result<PathBuf> {
-    match fs::canonicalize(path) {
+    // Fold Windows separators before resolving: a verbatim parent joined with
+    // a forward-slash literal would otherwise fail with ERROR_INVALID_NAME.
+    match fs::canonicalize(filesystem_spelling(path)) {
         Ok(canonical) => Ok(canonical),
         Err(error) => {
             // A dirty editor buffer remains a valid source after its backing file is
@@ -133,7 +239,7 @@ fn canonicalize_called_path(
             };
             let Some(parent) = path
                 .parent()
-                .and_then(|parent| fs::canonicalize(parent).ok())
+                .and_then(|parent| fs::canonicalize(filesystem_spelling(parent)).ok())
             else {
                 return Err(error);
             };
@@ -441,13 +547,17 @@ impl Loader<'_> {
             .snapshot
             .map(|snapshot| {
                 let snapshot = snapshot.borrow();
-                let replayed = snapshot.requests.get(path).cloned().and_then(|canonical| {
-                    snapshot
-                        .sources
-                        .get(&canonical)
-                        .cloned()
-                        .map(|source| (canonical, source))
-                });
+                let replayed = snapshot
+                    .requests
+                    .get(&identity_key(path))
+                    .cloned()
+                    .and_then(|canonical| {
+                        snapshot
+                            .sources
+                            .get(&identity_key(&canonical))
+                            .cloned()
+                            .map(|source| (canonical, source))
+                    });
                 (snapshot.replay_only, replayed)
             })
             .unwrap_or((false, None));
@@ -462,10 +572,13 @@ impl Loader<'_> {
         let canonical = match &replayed {
             Some((canonical, _)) => canonical.clone(),
             None => {
+                // Fold Windows separators first: `path` joins a program-file
+                // literal onto an already-verbatim canonical parent, and a
+                // verbatim path with `/` fails canonicalization on Windows.
                 #[cfg(feature = "lsp")]
-                let resolved = canonicalize_called_path(path, self.scope);
+                let resolved = canonicalize_called_path(&filesystem_spelling(path), self.scope);
                 #[cfg(not(feature = "lsp"))]
-                let resolved = fs::canonicalize(path);
+                let resolved = fs::canonicalize(filesystem_spelling(path));
                 resolved.with_context(|| {
                     format!("line {line}: program file {} not found", path.display())
                 })?
@@ -503,13 +616,19 @@ impl Loader<'_> {
                 let replaying = replay_only;
                 #[cfg(not(feature = "lsp"))]
                 let replaying = snapshot.replay_only;
-                if !replaying && snapshot.sources.contains_key(&canonical) {
+                if !replaying && snapshot.has_source(&canonical) {
                     snapshot.remember_request(path, &canonical);
                 }
             }
             return Ok(key);
         }
-        if let Some(start) = self.stack.iter().position(|open| open == &canonical) {
+        // Compare open files by spelling-insensitive identity so a cycle
+        // through a display alias still reads as the same file.
+        if let Some(start) = self
+            .stack
+            .iter()
+            .position(|open| identity_key(open) == identity_key(&canonical))
+        {
             let chain: Vec<String> = self.stack[start..]
                 .iter()
                 .chain(std::iter::once(&canonical))
@@ -563,8 +682,7 @@ impl Loader<'_> {
             #[cfg(not(feature = "lsp"))]
             let replaying = snapshot.replay_only;
             if !replaying {
-                std::sync::Arc::make_mut(&mut snapshot.sources)
-                    .insert(canonical.clone(), source.to_owned());
+                snapshot.note_source(&canonical, source.to_owned());
                 snapshot.remember_request(path, &canonical);
             }
         }
@@ -786,20 +904,91 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_snapshot_keeps_verbatim_identity_separate_from_display_path() {
+    fn identity_key_unifies_windows_spellings() {
+        // The same file under every Windows spelling folds to one identity.
+        // Pure byte logic, so this runs identically on every host.
+        let spellings = [
+            PathBuf::from(r"\\?\C:\workspace\callee.program"),
+            PathBuf::from(r"C:\workspace\callee.program"),
+            PathBuf::from(r"C:\workspace/callee.program"),
+            PathBuf::from(r"c:\workspace\callee.program"),
+            PathBuf::from(r"c:\workspace/callee.program"),
+        ];
+        let first = identity_key(&spellings[0]);
+        for spelling in &spellings[1..] {
+            assert_eq!(identity_key(spelling), first, "{spelling:?}");
+        }
+        // A verbatim UNC path unifies with its plain UNC spelling.
+        assert_eq!(
+            identity_key(&PathBuf::from(r"\\?\UNC\server\share\callee.program")),
+            identity_key(&PathBuf::from(r"\\server\share\callee.program"))
+        );
+        // Different files keep different identities, including Windows
+        // spellings that differ only past the prefix.
+        assert_ne!(
+            identity_key(&PathBuf::from(r"\\?\C:\workspace\callee.program")),
+            identity_key(&PathBuf::from(r"C:\workspace\other.program"))
+        );
+        assert_ne!(
+            identity_key(&PathBuf::from(r"\\?\C:\workspace\callee.program.")),
+            identity_key(&PathBuf::from(r"\\?\C:\workspace\callee.program "))
+        );
+        // Non-Windows spellings keep their exact bytes: absolute Unix paths,
+        // plain relatives, and Unix names that merely contain a backslash.
+        for plain in [
+            PathBuf::from("/tmp/workspace/callee.program"),
+            PathBuf::from("sub/child.program"),
+            PathBuf::from("main.program"),
+        ] {
+            assert_eq!(identity_key(&plain), plain, "{plain:?}");
+        }
+        let backslash_name = PathBuf::from("dir\\file");
+        assert_eq!(identity_key(&backslash_name), backslash_name);
+    }
+
+    #[test]
+    fn filesystem_spelling_folds_only_windows_separators() {
+        // A verbatim parent joined with a forward-slash literal is exactly
+        // what the loader canonicalizes; the fold keeps the prefix so the
+        // path still resolves, including past MAX_PATH.
+        assert_eq!(
+            filesystem_spelling(&PathBuf::from(r"\\?\C:\workspace\sub/child.program")),
+            PathBuf::from(r"\\?\C:\workspace\sub\child.program")
+        );
+        assert_eq!(
+            filesystem_spelling(&PathBuf::from(r"C:\workspace\sub/child.program")),
+            PathBuf::from(r"C:\workspace\sub\child.program")
+        );
+        // Unix paths pass through untouched.
+        for plain in [
+            PathBuf::from("/tmp/workspace/sub/child.program"),
+            PathBuf::from("sub/child.program"),
+        ] {
+            assert_eq!(filesystem_spelling(&plain), plain, "{plain:?}");
+        }
+    }
+
+    #[test]
+    fn source_snapshot_unifies_verbatim_identity_with_display_alias() {
         let requested = PathBuf::from(r"\\?\C:\workspace\sub\..\callee.program");
         let canonical = PathBuf::from(r"\\?\C:\workspace\callee.program");
         let shown = display_path(&canonical);
         let key = format!("{PROGRAM_FILE_PREFIX}{shown}");
         let mut snapshot = SourceLoadSnapshot::default();
-        std::sync::Arc::make_mut(&mut snapshot.sources).insert(canonical.clone(), "run\n".into());
+        snapshot.note_source(&canonical, "run\n".into());
         snapshot.remember_request(&requested, &canonical);
         let caller = PathBuf::from(r"\\?\C:\workspace\main.program");
         snapshot.remember_call(&caller, 3, &canonical);
 
         assert_eq!(snapshot.loaded_source(&canonical).as_deref(), Some("run\n"));
         assert_eq!(snapshot.loaded_source(&requested).as_deref(), Some("run\n"));
-        assert_eq!(snapshot.loaded_source(&PathBuf::from(&shown)), None);
+        // A display-alias request (verbatim prefix stripped, as written in a
+        // `run program file` literal) resolves to the same captured source.
+        assert_eq!(
+            snapshot.loaded_source(&PathBuf::from(&shown)).as_deref(),
+            Some("run\n")
+        );
+        // The stored callsite keeps the exact canonical path for spans.
         assert_eq!(
             snapshot.canonical_path_for_call(&caller, 3),
             Some(canonical.clone())
@@ -821,8 +1010,9 @@ mod tests {
         assert_eq!(first_display_key, second_display_key);
 
         let mut snapshot = SourceLoadSnapshot::default();
-        std::sync::Arc::make_mut(&mut snapshot.sources).insert(first.clone(), "first\n".into());
-        std::sync::Arc::make_mut(&mut snapshot.sources).insert(second.clone(), "second\n".into());
+        // Store through the same spelling-insensitive keys the loader uses.
+        snapshot.note_source(&first, "first\n".into());
+        snapshot.note_source(&second, "second\n".into());
         snapshot.remember_call(&caller, 1, &first);
         snapshot.remember_call(&caller, 2, &second);
 

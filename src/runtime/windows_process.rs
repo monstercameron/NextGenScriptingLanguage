@@ -347,15 +347,29 @@ fn execute_group_with_sink(
                 bail!("line {line}: only the final pipeline applet can discard or inherit stdout");
             }
         }
-        let terminal_io = invocation_io::ResolvedStdio::resolve(
+        // Under Actions hardening terminal-bound streams are captured and
+        // re-emitted through the sanitizing writers, mirroring the Unix
+        // `resolved_call_stdio` force-capture: a manifest `inherit` disposition
+        // must sanitize on Windows exactly as it does on Unix instead of being
+        // refused here as uncapturable.
+        let hardening = crate::github_actions::enabled();
+        let mut terminal_io = invocation_io::ResolvedStdio::resolve(
             calls.last().expect("nonempty group").1.stdio(),
             invocation_io::StdioDisposition::Capture,
-            if signals.capture_diagnostics {
+            if signals.capture_diagnostics || hardening {
                 invocation_io::StdioDisposition::Capture
             } else {
                 invocation_io::StdioDisposition::Inherit
             },
         );
+        if hardening {
+            if terminal_io.stdout == invocation_io::StdioDisposition::Inherit {
+                terminal_io.stdout = invocation_io::StdioDisposition::Capture;
+            }
+            if terminal_io.stderr == invocation_io::StdioDisposition::Inherit {
+                terminal_io.stderr = invocation_io::StdioDisposition::Capture;
+            }
+        }
         if sink.is_some() && !terminal_io.captures_terminal_stdout() {
             bail!("streaming requires the final applet's stdout to be captured");
         }
@@ -590,7 +604,8 @@ fn execute_group_with_sink(
         // failure record shows what it printed, as `keep result` would.
         let attach_stdout = sink.is_none() && terminal_io.captures_terminal_stdout();
         loop {
-            check_native_abort(calls, &children, &observed_stages, signals)?;
+            check_native_abort(calls, &children, &observed_stages, signals)
+                .map_err(|error| attach_abort_stdout(error, &output))?;
             windows_statuses(
                 &mut children,
                 calls,

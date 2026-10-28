@@ -1280,12 +1280,18 @@ impl RemoteClient {
             .map(|auth| read_auth_token(auth, &self.credential_base))
             .transpose()?;
         if let (Some(token), Some(redactor)) = (&token, &self.secret_redactor) {
-            redactor.register(token.as_str().as_bytes()).map_err(|_| {
-                RemoteError::new(
-                    RemoteErrorKind::CredentialInvalid,
-                    EffectCertainty::NotStarted,
+            redactor
+                .register(
+                    token.as_str().as_bytes(),
+                    &std::sync::atomic::AtomicBool::new(false),
+                    None,
                 )
-            })?;
+                .map_err(|_| {
+                    RemoteError::new(
+                        RemoteErrorKind::CredentialInvalid,
+                        EffectCertainty::NotStarted,
+                    )
+                })?;
         }
         Ok(token)
     }

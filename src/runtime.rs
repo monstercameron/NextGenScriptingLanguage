@@ -51,7 +51,8 @@ use spawn::{
 // Used by the Windows process path (windows_process.rs) through this module.
 #[cfg(windows)]
 use spawn::{
-    check_native_abort, native_output_limit_failure, native_spawn_failure, resolved_call_stdio,
+    attach_abort_stdout, check_native_abort, native_output_limit_failure, native_spawn_failure,
+    resolved_call_stdio,
 };
 use step_loop::{
     run_finite, run_finite_inner, run_finite_inner_with_state_source, run_finite_state, FiniteRun,
@@ -104,7 +105,7 @@ pub use service::{
     run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
     MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
 };
-pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
+pub use stdio::{write_cancellable, write_diagnostic, write_exit_diagnostic, write_with_deadline};
 
 pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
 type PreparedJobCommands = Vec<(PathBuf, Vec<String>)>;
@@ -3386,9 +3387,25 @@ fn execute_call_group_unobserved(group: GroupRequest<'_>) -> Result<GroupOutput>
         launched,
         signals,
     });
+    // Sensitive-output registration emits mask lines, so it observes the
+    // run's cancel/deadline instead of hanging on a wedged terminal; a
+    // cancelled registration fails the group instead of echoing unmasked.
     match &output {
-        Ok(output) => register_sensitive_group_output(registry, calls, bindings, output)?,
-        Err(error) => register_sensitive_group_failure(registry, calls, error)?,
+        Ok(output) => register_sensitive_group_output(
+            registry,
+            calls,
+            bindings,
+            output,
+            &signals.cancelled,
+            signals.deadline,
+        )?,
+        Err(error) => register_sensitive_group_failure(
+            registry,
+            calls,
+            error,
+            &signals.cancelled,
+            signals.deadline,
+        )?,
     }
     output
 }
@@ -3532,6 +3549,8 @@ fn register_sensitive_group_output(
     calls: &[(&Invocation, &Manifest, usize)],
     bindings: &BTreeMap<String, Value>,
     output: &GroupOutput,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     // Only the terminal pipeline stage may bind output; in-process env.load
     // cannot join a native pipeline, so every valid sensitive binding is last.
@@ -3562,7 +3581,7 @@ fn register_sensitive_group_output(
         let redactor = crate::security::secret_redactor(registry);
         for value in values {
             redactor
-                .register(value.as_bytes())
+                .register(value.as_bytes(), cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register env.load secret values"))?;
         }
         return Ok(());
@@ -3578,11 +3597,11 @@ fn register_sensitive_group_output(
         )
     {
         redactor
-            .register(bytes)
+            .register(bytes, cancelled, deadline)
             .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         if bytes.ends_with(b"\n") {
             redactor
-                .register(&bytes[..bytes.len() - 1])
+                .register(&bytes[..bytes.len() - 1], cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         }
     }
@@ -3590,6 +3609,8 @@ fn register_sensitive_group_output(
         crate::security::register_sensitive_value(
             registry,
             &crate::structured::from_json(value.clone()),
+            cancelled,
+            deadline,
         )?;
     }
     Ok(())
@@ -3599,6 +3620,8 @@ fn register_sensitive_group_failure(
     registry: &Registry,
     calls: &[(&Invocation, &Manifest, usize)],
     error: &anyhow::Error,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let Some((_, _, line)) = calls.last().copied() else {
         return Ok(());
@@ -3628,16 +3651,16 @@ fn register_sensitive_group_failure(
         )
     {
         redactor
-            .register(output)
+            .register(output, cancelled, deadline)
             .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         if output.ends_with(b"\n") {
             redactor
-                .register(&output[..output.len() - 1])
+                .register(&output[..output.len() - 1], cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         }
     }
     if let Some(value) = &result.value {
-        crate::security::register_sensitive_value(registry, value)?;
+        crate::security::register_sensitive_value(registry, value, cancelled, deadline)?;
     }
     Ok(())
 }
@@ -4714,7 +4737,9 @@ fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
                 break;
             }
             Ok(count) => {
-                let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
+                let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get)
+                    || crate::github_actions::enabled()
+                {
                     FORCED_STDERR_CAPTURE_LIMIT
                 } else {
                     MAX_DIAGNOSTIC_BYTES_PER_STAGE
@@ -4752,6 +4777,83 @@ mod child_observer_tests {
         let flags = unsafe { libc::fcntl(observer.raw_fd(), libc::F_GETFD) };
         assert_ne!(flags, -1);
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_exited_child_wakes_observer_before_it_is_reaped() {
+        let observer = ChildObserver::new().expect("creating test kqueue");
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .expect("spawning child");
+        observer.observe(child.id()).expect("observing child");
+        // The child is a zombie until waited on, so the kqueue is already readable.
+        let mut descriptor = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the kqueue
+        // owned by `observer`, which lives until the end of this test.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
+        assert_eq!(ready, 1);
+        observer.drain().expect("draining exit notification");
+        let mut quiet = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(
+            // SAFETY: `quiet` is a live pollfd on the kqueue owned by `observer`, with a
+            // count of 1 and a zero timeout, so the call returns without blocking.
+            unsafe { libc::poll(&mut quiet, 1, 0) },
+            0,
+            "a drained observer must not stay readable"
+        );
+        // The observer did not reap the zombie. Killing its group is still safe;
+        // Child::wait, rather than readiness, remains the exit-status authority.
+        assert!(exited_unreaped(child.id()).expect("probing child without reaping"));
+        kill_group(child.id());
+        assert!(child.wait().expect("reaping child").success());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_repeated_short_lived_children_wake_observer() {
+        // Short-lived `sh` children are the hang report's shape: each must wake
+        // its own kqueue and reap promptly, with an outer deadline bounding the
+        // whole sequence. This covers the wake path, not any proven root cause.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        for iteration in 0..32 {
+            assert!(
+                Instant::now() < deadline,
+                "short-lived children stalled at iteration {iteration}"
+            );
+            let observer = ChildObserver::new().expect("creating test kqueue");
+            let mut child = Command::new("sh")
+                .args(["-c", "printf 'fast\n'"])
+                .process_group(0)
+                .spawn()
+                .expect("spawning child");
+            observer.observe(child.id()).expect("observing child");
+            let mut descriptor = libc::pollfd {
+                fd: observer.raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the
+            // kqueue owned by `observer`, which lives until the end of this iteration.
+            let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
+            assert_eq!(
+                ready, 1,
+                "observer missed short-lived child at iteration {iteration}"
+            );
+            observer.drain().expect("draining exit notification");
+            kill_group(child.id());
+            assert!(child.wait().expect("reaping child").success());
+        }
     }
 
     struct RestoreSigchld(libc::sigaction);

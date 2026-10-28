@@ -20,8 +20,9 @@ use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// Install once at a CLI host boundary, before starting its threads. Abort builds
 /// cannot recover a panicking worker: the supervisor must restart the process.
@@ -455,31 +456,74 @@ impl SecretRedactor {
     /// Register one exact secret value. Duplicate registrations are harmless.
     /// Overflow is an error so callers can fail closed instead of emitting a
     /// diagnostic that might expose an unregistered value.
-    pub fn register(&self, secret: &[u8]) -> Result<(), PolicyError> {
+    ///
+    /// The mask emission observes `cancelled`/`deadline`: a run cancelled
+    /// while the terminal is wedged reports here instead of hanging in the
+    /// merged-claim wait or in the write itself. Any emission failure —
+    /// cancellation, deadline, or a failed write — fails closed with
+    /// [`PolicyError::SecretRedactionUnavailable`] so the caller aborts
+    /// instead of echoing the value unmasked. The secret is already in the
+    /// redaction snapshot by then, so diagnostics stay redacted while the
+    /// run stops. Duplicate registrations need no emission and stay
+    /// infallible. Callers with no cancel context (process setup/teardown)
+    /// pass a fresh flag and no deadline.
+    pub fn register(
+        &self,
+        secret: &[u8],
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
+    ) -> Result<(), PolicyError> {
         if secret.is_empty() {
             return Ok(());
         }
         if secret.len() > MAX_REDACTION_SECRET_BYTES_EACH {
             return Err(PolicyError::RedactionLimitExceeded);
         }
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.values.iter().any(|registered| registered.0 == secret) {
-            return Ok(());
+        let fresh = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.values.iter().any(|registered| registered.0 == secret) {
+                None
+            } else {
+                if state.values.len() >= MAX_REDACTION_SECRETS
+                    || state.total_bytes.saturating_add(secret.len()) > MAX_REDACTION_SECRET_BYTES
+                {
+                    return Err(PolicyError::RedactionLimitExceeded);
+                }
+                state.values.push(SecretBytes(secret.to_vec()));
+                state
+                    .values
+                    .sort_by_key(|secret| std::cmp::Reverse(secret.0.len()));
+                state.total_bytes += secret.len();
+                Some(secret.to_vec())
+            }
+        };
+        // Mask after releasing the registry lock: under GitHub Actions
+        // hardening the runner must learn each secret before any later log
+        // line can echo it. The cancellable emission keeps a cancelled
+        // mid-run registration bounded; a failure aborts the run (fail
+        // closed) rather than letting later lines echo the value with no
+        // mask in place.
+        if let Some(secret) = fresh {
+            crate::github_actions::emit_mask_for_bytes_with_cancel(&secret, cancelled, deadline)
+                .map_err(|_| PolicyError::SecretRedactionUnavailable)?;
         }
-        if state.values.len() >= MAX_REDACTION_SECRETS
-            || state.total_bytes.saturating_add(secret.len()) > MAX_REDACTION_SECRET_BYTES
-        {
-            return Err(PolicyError::RedactionLimitExceeded);
-        }
-        state.values.push(SecretBytes(secret.to_vec()));
-        state
-            .values
-            .sort_by_key(|secret| std::cmp::Reverse(secret.0.len()));
-        state.total_bytes += secret.len();
         Ok(())
+    }
+
+    /// Snapshot the registered secret bytes, oldest registration last after the
+    /// length-ordered sort. Used to render `::add-mask::` lines and for tests;
+    /// never logged or formatted (see the `Debug` impl above).
+    pub fn snapshot_secrets(&self) -> Vec<Vec<u8>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values
+            .iter()
+            .map(|secret| secret.0.clone())
+            .collect()
     }
 
     /// Replace exact registered byte sequences in an emitted byte string.
@@ -528,6 +572,8 @@ pub fn register_sensitive_inputs(
     registry: &Registry,
     declarations: &[crate::ast::InputDeclaration],
     inputs: &BTreeMap<String, crate::ast::Value>,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let resolved = crate::inputs::resolve(declarations, inputs, false)?;
     for declaration in declarations
@@ -535,7 +581,7 @@ pub fn register_sensitive_inputs(
         .filter(|input| crate::ast::is_sensitive(input))
     {
         if let Some(value) = resolved.get(&declaration.name) {
-            register_sensitive_value(registry, value)?;
+            register_sensitive_value(registry, value, cancelled, deadline)?;
         }
     }
     Ok(())
@@ -543,11 +589,22 @@ pub fn register_sensitive_inputs(
 
 /// Register exact string and numeric leaves of an explicitly sensitive value.
 /// Booleans, nulls and references are metadata, not secret material.
+///
+/// The mask emission observes `cancelled`/`deadline` so a cancelled mid-run
+/// registration reports instead of hanging on a wedged terminal; see
+/// [`SecretRedactor::register`].
 pub(crate) fn register_sensitive_value(
     registry: &Registry,
     value: &crate::ast::Value,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
-    fn register(redactor: &SecretRedactor, value: &crate::ast::Value) -> Result<()> {
+    fn register(
+        redactor: &SecretRedactor,
+        value: &crate::ast::Value,
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
+    ) -> Result<()> {
         let text = match value {
             crate::ast::Value::String(value) => value.clone(),
             crate::ast::Value::Integer(value) => value.to_string(),
@@ -555,14 +612,14 @@ pub(crate) fn register_sensitive_value(
             crate::ast::Value::List(values) => {
                 return values
                     .iter()
-                    .try_for_each(|value| register(redactor, value));
+                    .try_for_each(|value| register(redactor, value, cancelled, deadline));
             }
             crate::ast::Value::Record(values) => {
                 for (key, value) in values {
                     redactor
-                        .register(key.as_bytes())
+                        .register(key.as_bytes(), cancelled, deadline)
                         .map_err(|error| anyhow!("registering sensitive value key: {error}"))?;
-                    register(redactor, value)?;
+                    register(redactor, value, cancelled, deadline)?;
                 }
                 return Ok(());
             }
@@ -571,31 +628,51 @@ pub(crate) fn register_sensitive_value(
             | crate::ast::Value::Reference(_) => return Ok(()),
         };
         redactor
-            .register(text.as_bytes())
+            .register(text.as_bytes(), cancelled, deadline)
             .map_err(|error| anyhow!("registering sensitive value: {error}"))
     }
-    register(&secret_redactor(registry), value)
+    register(&secret_redactor(registry), value, cancelled, deadline)
 }
 
 /// Register opaque bytes derived from a sensitive value before they reach a
 /// live binding, observer, or diagnostic surface.
-pub(crate) fn register_sensitive_bytes(registry: &Registry, bytes: &[u8]) -> Result<()> {
+///
+/// The mask emission observes `cancelled`/`deadline` so a cancelled mid-run
+/// registration reports instead of hanging on a wedged terminal; see
+/// [`SecretRedactor::register`].
+pub(crate) fn register_sensitive_bytes(
+    registry: &Registry,
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<()> {
     secret_redactor(registry)
-        .register(bytes)
+        .register(bytes, cancelled, deadline)
         .map_err(|error| anyhow!("registering sensitive bytes: {error}"))
 }
 
 /// Register literal leaves from `and keep secret` invocations before observers
 /// or other sinks can see their source copy. Runtime-acquired values are added
 /// when produced.
+///
+/// The mask emission observes `cancelled`/`deadline` so a cancelled mid-run
+/// registration reports instead of hanging on a wedged terminal; see
+/// [`SecretRedactor::register`].
 pub fn register_sensitive_program(
     registry: &Registry,
     program: &crate::ast::Program,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let redactor = secret_redactor(registry);
-    fn register_call(redactor: &SecretRedactor, call: &crate::ast::Invocation) -> Result<()> {
+    fn register_call(
+        redactor: &SecretRedactor,
+        call: &crate::ast::Invocation,
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
+    ) -> Result<()> {
         for value in call.parameters.values() {
-            register_sensitive_ast_value(redactor, value)?;
+            register_sensitive_ast_value(redactor, value, cancelled, deadline)?;
         }
         Ok(())
     }
@@ -603,6 +680,8 @@ pub fn register_sensitive_program(
         redactor: &SecretRedactor,
         step: &crate::ast::Step,
         only_marked: bool,
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
     ) -> Result<()> {
         use crate::ast::{LoopKind, StepKind};
         let calls: Vec<&crate::ast::Invocation> = match &step.kind {
@@ -617,7 +696,7 @@ pub fn register_sensitive_program(
         };
         for call in calls {
             if !only_marked || call.marks_sensitive_output() {
-                register_call(redactor, call)?;
+                register_call(redactor, call, cancelled, deadline)?;
             }
         }
         Ok(())
@@ -627,58 +706,83 @@ pub fn register_sensitive_program(
         steps: &[crate::ast::Step],
         start: usize,
         end: usize,
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
     ) -> Result<()> {
         use crate::ast::StepKind;
         let mut index = start;
         while index < end {
             let step = &steps[index];
             match &step.kind {
-                StepKind::Invoke { call, .. } => register_call(redactor, call)?,
+                StepKind::Invoke { call, .. } => {
+                    register_call(redactor, call, cancelled, deadline)?
+                }
                 StepKind::CallProgram {
                     call, end: span, ..
                 } => {
-                    register_call(redactor, call)?;
+                    register_call(redactor, call, cancelled, deadline)?;
                     let body_end = index.saturating_add((*span).max(1)).min(end);
                     if body_end > index + 1 {
-                        register_region(redactor, steps, index + 1, body_end - 1)?;
+                        register_region(
+                            redactor,
+                            steps,
+                            index + 1,
+                            body_end - 1,
+                            cancelled,
+                            deadline,
+                        )?;
                     }
                     index = body_end.saturating_sub(1);
                 }
                 StepKind::UseValue { source } | StepKind::BindValue { source, .. } => {
-                    register_sensitive_ast_value(redactor, source)?;
+                    register_sensitive_ast_value(redactor, source, cancelled, deadline)?;
                 }
-                StepKind::EncodeJson { source } => register_sensitive_ast_value(redactor, source)?,
+                StepKind::EncodeJson { source } => {
+                    register_sensitive_ast_value(redactor, source, cancelled, deadline)?
+                }
                 _ => {}
             }
-            register_embedded_calls(redactor, step, false)?;
+            register_embedded_calls(redactor, step, false, cancelled, deadline)?;
             index += 1;
         }
         Ok(())
     }
 
-    fn scan(redactor: &SecretRedactor, steps: &[crate::ast::Step]) -> Result<()> {
+    fn scan(
+        redactor: &SecretRedactor,
+        steps: &[crate::ast::Step],
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
+    ) -> Result<()> {
         use crate::ast::StepKind;
         for (index, step) in steps.iter().enumerate() {
             match &step.kind {
                 StepKind::Invoke { call, .. } if call.marks_sensitive_output() => {
-                    register_call(redactor, call)?;
+                    register_call(redactor, call, cancelled, deadline)?;
                 }
                 StepKind::CallProgram { call, end, .. } if call.marks_sensitive_output() => {
-                    register_call(redactor, call)?;
+                    register_call(redactor, call, cancelled, deadline)?;
                     let body_end = index.saturating_add(*end).min(steps.len());
                     if body_end > index + 1 {
-                        register_region(redactor, steps, index + 1, body_end - 1)?;
+                        register_region(
+                            redactor,
+                            steps,
+                            index + 1,
+                            body_end - 1,
+                            cancelled,
+                            deadline,
+                        )?;
                     }
                 }
-                _ => register_embedded_calls(redactor, step, true)?,
+                _ => register_embedded_calls(redactor, step, true, cancelled, deadline)?,
             }
         }
         Ok(())
     }
 
-    scan(&redactor, &program.steps)?;
+    scan(&redactor, &program.steps, cancelled, deadline)?;
     for definition in program.definitions.values() {
-        scan(&redactor, &definition.steps)?;
+        scan(&redactor, &definition.steps, cancelled, deadline)?;
     }
     Ok(())
 }
@@ -686,22 +790,24 @@ pub fn register_sensitive_program(
 fn register_sensitive_ast_value(
     redactor: &SecretRedactor,
     value: &crate::ast::Value,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let text = match value {
         crate::ast::Value::String(value) => value.clone(),
         crate::ast::Value::Integer(value) => value.to_string(),
         crate::ast::Value::Number(value) => value.to_string(),
         crate::ast::Value::List(values) => {
-            return values
-                .iter()
-                .try_for_each(|value| register_sensitive_ast_value(redactor, value));
+            return values.iter().try_for_each(|value| {
+                register_sensitive_ast_value(redactor, value, cancelled, deadline)
+            });
         }
         crate::ast::Value::Record(values) => {
             for (key, value) in values {
                 redactor
-                    .register(key.as_bytes())
+                    .register(key.as_bytes(), cancelled, deadline)
                     .map_err(|error| anyhow!("registering sensitive source key: {error}"))?;
-                register_sensitive_ast_value(redactor, value)?;
+                register_sensitive_ast_value(redactor, value, cancelled, deadline)?;
             }
             return Ok(());
         }
@@ -710,7 +816,7 @@ fn register_sensitive_ast_value(
         }
     };
     redactor
-        .register(text.as_bytes())
+        .register(text.as_bytes(), cancelled, deadline)
         .map_err(|error| anyhow!("registering sensitive program value: {error}"))
 }
 
@@ -811,7 +917,11 @@ fn register_environment_secret(
     value: &std::ffi::OsStr,
 ) -> Result<(), PolicyError> {
     use std::os::unix::ffi::OsStrExt;
-    redactor.register(value.as_bytes())
+    // Declared-environment capture runs at process/record setup, before any
+    // cancellable run exists to observe: the blocking emission keeps
+    // setup-time completeness (fail-closed) instead of skipping the mask.
+    let idle = AtomicBool::new(false);
+    redactor.register(value.as_bytes(), &idle, None)
 }
 
 #[cfg(windows)]
@@ -825,7 +935,9 @@ fn register_environment_secret(
     let value = value
         .to_str()
         .ok_or(PolicyError::SecretRedactionUnavailable)?;
-    redactor.register(value.as_bytes())
+    // Same setup-time rationale as the Unix variant above.
+    let idle = AtomicBool::new(false);
+    redactor.register(value.as_bytes(), &idle, None)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -836,7 +948,9 @@ fn register_environment_secret(
     let value = value
         .to_str()
         .ok_or(PolicyError::SecretRedactionUnavailable)?;
-    redactor.register(value.as_bytes())
+    // Same setup-time rationale as the Unix variant above.
+    let idle = AtomicBool::new(false);
+    redactor.register(value.as_bytes(), &idle, None)
 }
 
 /// Join declared labels without declassification. `Unknown` stays distinct
@@ -2718,8 +2832,12 @@ mod tests {
     #[test]
     fn explicit_redactor_uses_exact_values_longest_first_and_denies_overflow() {
         let redactor = SecretRedactor::default();
-        redactor.register(b"sword").unwrap();
-        redactor.register(b"swordfish").unwrap();
+        redactor
+            .register(b"sword", &AtomicBool::new(false), None)
+            .unwrap();
+        redactor
+            .register(b"swordfish", &AtomicBool::new(false), None)
+            .unwrap();
         assert_eq!(
             redactor.redact_bytes(b"swordfish sword"),
             b"[REDACTED] [REDACTED]"
@@ -2729,15 +2847,23 @@ mod tests {
         let bounded = SecretRedactor::default();
         for index in 0..MAX_REDACTION_SECRETS {
             bounded
-                .register(format!("known-secret-{index:04}").as_bytes())
+                .register(
+                    format!("known-secret-{index:04}").as_bytes(),
+                    &AtomicBool::new(false),
+                    None,
+                )
                 .unwrap();
         }
         assert_eq!(
-            bounded.register(b"one-more-secret"),
+            bounded.register(b"one-more-secret", &AtomicBool::new(false), None),
             Err(PolicyError::RedactionLimitExceeded)
         );
         assert_eq!(
-            SecretRedactor::default().register(&vec![b'x'; MAX_REDACTION_SECRET_BYTES_EACH + 1]),
+            SecretRedactor::default().register(
+                &vec![b'x'; MAX_REDACTION_SECRET_BYTES_EACH + 1],
+                &AtomicBool::new(false),
+                None
+            ),
             Err(PolicyError::RedactionLimitExceeded)
         );
 
@@ -2745,12 +2871,14 @@ mod tests {
         for marker in 0..4u8 {
             let mut value = vec![b'a'; MAX_REDACTION_SECRET_BYTES_EACH];
             value[0] = marker;
-            aggregate.register(&value).unwrap();
+            aggregate
+                .register(&value, &AtomicBool::new(false), None)
+                .unwrap();
         }
         let mut over_limit = vec![b'b'; MAX_REDACTION_SECRET_BYTES_EACH];
         over_limit[0] = 9;
         assert_eq!(
-            aggregate.register(&over_limit),
+            aggregate.register(&over_limit, &AtomicBool::new(false), None),
             Err(PolicyError::RedactionLimitExceeded)
         );
     }

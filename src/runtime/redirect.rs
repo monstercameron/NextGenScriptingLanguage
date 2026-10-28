@@ -212,6 +212,18 @@ pub(super) fn take_redirected_stdio(
     }) else {
         return Ok((None, None));
     };
+    // Under Actions hardening a `stdout to stderr` redirect must not attach
+    // the terminal descriptor directly: the child would bypass sanitization.
+    // Decline the direct wiring so the bytes flow through capture and the
+    // sanitizing stderr writer instead. File targets stay direct.
+    if crate::github_actions::enabled() && matches!(stream, RedirectedStream::StdoutToStderr) {
+        ACTIVE_STREAM.with(|cell| {
+            if let Some(active) = cell.borrow_mut().as_mut() {
+                active.used = false;
+            }
+        });
+        return Ok((None, None));
+    }
     match stream {
         RedirectedStream::StderrFile { file, truncate } => {
             if truncate {

@@ -15,6 +15,7 @@ fn checkpoint_refuses_an_explicitly_marked_runtime_output_before_creating_state(
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["run", "secret.program", "--checkpoint", "ck"])
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -37,6 +38,7 @@ fn checkpoint_refuses_a_runtime_secret_forwarded_to_workflow_environment() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["run", "secret.program", "--checkpoint", "checkpoint"])
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -62,6 +64,7 @@ fn checkpoint_refuses_a_secret_reusable_program_before_inner_effects() {
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["run", "secret.program", "--checkpoint", "checkpoint"])
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -175,6 +178,7 @@ fn cli_failure_diagnostic_redacts_a_secret_input() {
             "--input",
             &format!("token={canary}"),
         ])
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -200,6 +204,7 @@ fn cli_failure_diagnostic_redacts_transformed_secret_stderr() {
             "--input",
             &format!("token={canary}"),
         ])
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -228,6 +233,7 @@ fn cli_redacted_runtime_error_preserves_signal_exit_status() {
             "--input",
             "token=SIGNAL-STATUS-315",
         ])
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -327,6 +333,7 @@ fn secret_task_group_values_remain_available_to_explicit_stdin_flow() {
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["run", "secret.program"])
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(directory.path())
         .output()
         .unwrap();

@@ -191,6 +191,83 @@ mod lane_v2_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod poll_timeout_tests {
+    use super::poll_maximum_wait_ms;
+
+    #[test]
+    fn cancellation_arms_always_poll_with_a_bound() {
+        // Cancellation must never depend on output, observer or reap state:
+        // an unnotified cancellation or a missing cancel wake polls at 100 ms
+        // in every combination so a stuck child cannot delay the abort.
+        for eof in [false, true] {
+            for observer_present in [false, true] {
+                for unreaped_children in [false, true] {
+                    assert_eq!(
+                        poll_maximum_wait_ms(true, false, eof, observer_present, unreaped_children),
+                        100,
+                        "unnotified cancellation must stay bounded",
+                    );
+                    assert_eq!(
+                        poll_maximum_wait_ms(false, true, eof, observer_present, unreaped_children),
+                        100,
+                        "missing cancel wake must stay bounded",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn idle_children_sleep_in_kernel_before_stdout_eof() {
+        // The perf regression guard: a live child with stdout still open
+        // parks in `poll(-1)` on every platform, including Darwin with a
+        // live observer. A 60 s child therefore wakes ~0 times (kernel wake
+        // on output/exit/cancel only), not ~600 times at a 100 ms cadence.
+        // The stdout pipe itself still wakes the loop, so no bound is needed.
+        for observer_present in [false, true] {
+            for unreaped_children in [false, true] {
+                assert_eq!(
+                    poll_maximum_wait_ms(false, false, false, observer_present, unreaped_children),
+                    -1,
+                    "pre-EOF waits must sleep in the kernel",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_observer_after_eof_stays_bounded_everywhere() {
+        // The pre-existing fallback: without any child-exit observer the
+        // loop has no exit wakeup after stdout EOF, so it polls at 100 ms.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, false, true), 100);
+        assert_eq!(poll_maximum_wait_ms(false, false, true, false, false), 100);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_post_eof_missed_wake_is_bounded() {
+        // The observed Darwin stall shape: stdout EOF reached while children
+        // stay unreaped behind a live (possibly silent) kqueue observer. The
+        // 100 ms bound turns the unbounded hang into a ≤100 ms stall; exit
+        // authority stays with waitid/Child::wait.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, true), 100);
+        // Reaped children need no bound even post-EOF: the loop breaks next
+        // iteration without parking.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, false), -1);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_darwin_present_observer_after_eof_keeps_kernel_sleep() {
+        // Linux (epoll/pidfd) has no reported lost-wake, so a live observer
+        // after stdout EOF keeps sleeping in the kernel: no 100 ms tax on
+        // long-lived children outside Darwin.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, true), -1);
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, false), -1);
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct GroupOutput {
     pub(super) bytes: Vec<u8>,
@@ -207,7 +284,13 @@ pub(super) fn resolved_call_stdio(
     signals: &Signals,
 ) -> invocation_io::ResolvedStdio {
     let capture_inherited = observe::captures_inherited_stdio();
-    if terminal::requested() && !capture_inherited {
+    // Under Actions hardening every terminal-bound child stream is captured
+    // and re-emitted through the sanitizing writers, including manifest
+    // `inherit` dispositions and the interactive handoff. Raw fd inheritance
+    // would let a forged `::` line reach the runner untouched. File targets
+    // (redirects to files) stay raw; only the log is filtered.
+    let hardening = crate::github_actions::enabled();
+    if terminal::requested() && !capture_inherited && !hardening {
         // An interactive command keeps all three streams of the terminal.
         return invocation_io::ResolvedStdio::resolve(
             None,
@@ -217,6 +300,7 @@ pub(super) fn resolved_call_stdio(
         .discard_stderr(call.discard_stderr);
     }
     let inherit = !capture_inherited
+        && !hardening
         && INHERIT_TERMINAL_STDOUT.with(|flag| flag.get())
         && manifest.execution_backend() == AppletBackend::Command;
     let mut resolved = invocation_io::ResolvedStdio::resolve(
@@ -235,7 +319,7 @@ pub(super) fn resolved_call_stdio(
         },
     )
     .discard_stderr(call.discard_stderr);
-    if capture_inherited {
+    if capture_inherited || hardening {
         if resolved.stdout == invocation_io::StdioDisposition::Inherit {
             resolved.stdout = invocation_io::StdioDisposition::Capture;
         }
@@ -244,11 +328,19 @@ pub(super) fn resolved_call_stdio(
         }
     }
     // A stream redirected straight to its target is attached at spawn, not captured.
+    // Under hardening the stdout-to-stderr stream must not re-attach the raw
+    // terminal descriptor: it is declined in `take_redirected_stdio` and
+    // re-emitted through the sanitizing stderr writer (already gated at HEAD).
+    // `stream_stderr` is only true for a stderr file target, whose file attach
+    // in `take_redirected_stdio` happens regardless of this disposition and
+    // stays raw by design (files never reach the terminal); gating it here is
+    // defense-in-depth that keeps the resolved disposition converged with the
+    // Windows path, which has no streamed re-inherit.
     let (stream_stdout, stream_stderr) = super::redirect::streamed_redirect();
-    if stream_stdout {
+    if stream_stdout && !hardening {
         resolved.stdout = invocation_io::StdioDisposition::Inherit;
     }
-    if stream_stderr {
+    if stream_stderr && !hardening {
         resolved.stderr = invocation_io::StdioDisposition::Inherit;
     }
     resolved
@@ -377,6 +469,25 @@ pub(super) fn check_native_abort(
     Ok(())
 }
 
+/// Carry already-captured stdout on a timeout/cancel abort so a later
+/// `stdout to stderr` error-path re-emit can restore it. Without this the
+/// abort drops `output` and the failure loses `early-out` bytes. The wait
+/// itself stays untouched: this only preserves bytes already read, and the
+/// preexisting wait-path hang concern remains explicitly unproven.
+/// No secret or runner-command handling here: the caller re-emits through the
+/// sanitizing writer after registering sensitive bytes.
+pub(super) fn attach_abort_stdout(mut error: anyhow::Error, output: &[u8]) -> anyhow::Error {
+    if output.is_empty() {
+        return error;
+    }
+    if let Some(failure) = error.downcast_mut::<execution_result::ExecutionFailure>() {
+        if failure.result.stdout.is_none() {
+            failure.result.stdout = Some(output.to_vec());
+        }
+    }
+    error
+}
+
 pub(super) fn native_spawn_failure(
     message: String,
     index: usize,
@@ -480,6 +591,37 @@ pub(super) fn redact_command_failure<T>(registry: &Registry, mut result: Result<
         }
     }
     result
+}
+
+/// Maximum `poll` wait for one native group wait-loop iteration: 100 ms when
+/// the loop cannot otherwise sleep safely, `-1` to sleep in the kernel.
+///
+/// Cancellation always wins (unnotified cancellation or no cancel wake
+/// descriptor must poll periodically), as does a missing child-exit observer
+/// after stdout EOF. A present-but-silent observer only shortens the wait on
+/// Darwin after stdout EOF, where a missed `NOTE_EXIT` wake was observed to
+/// stall the loop with unreaped children still present: Linux keeps its
+/// epoll/pidfd wake (no reported lost-wake) and pre-EOF waits keep the stdout
+/// pipe descriptor armed, so both stay at `-1` and slow children sleep in
+/// the kernel. Exit authority stays with `waitid`/`Child::wait`; this only
+/// bounds how long a missed wake can park the loop.
+#[cfg(unix)]
+fn poll_maximum_wait_ms(
+    unnotified_cancellation: bool,
+    cancel_wakes_empty: bool,
+    eof: bool,
+    observer_present: bool,
+    unreaped_children: bool,
+) -> libc::c_int {
+    if unnotified_cancellation
+        || cancel_wakes_empty
+        || (eof && !observer_present)
+        || (eof && observer_present && cfg!(target_os = "macos") && unreaped_children)
+    {
+        100
+    } else {
+        -1
+    }
 }
 
 #[cfg(unix)]
@@ -849,7 +991,8 @@ pub(super) fn execute_group_with_sink(
     // failure record shows what it printed, as `keep result` would.
     let attach_stdout = sink.is_none() && terminal_io.captures_terminal_stdout();
     loop {
-        check_native_abort(calls, &children, &observed_stages, signals)?;
+        check_native_abort(calls, &children, &observed_stages, signals)
+            .map_err(|error| attach_abort_stdout(error, &output))?;
         scan_child_statuses(
             &mut children,
             StatusScan {
@@ -979,13 +1122,15 @@ pub(super) fn execute_group_with_sink(
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => return Err(error).context("reading terminal pipe"),
                 }
-                check_native_abort(calls, &children, &observed_stages, signals)?;
+                check_native_abort(calls, &children, &observed_stages, signals)
+                    .map_err(|error| attach_abort_stdout(error, &output))?;
             }
         }
         if reached_eof && children.0.iter().any(|child| !child.reaped) {
             // stdout EOF can precede child exit. Recheck once before falling
             // back to the short no-descriptor poll for cancellation/deadline.
-            check_native_abort(calls, &children, &observed_stages, signals)?;
+            check_native_abort(calls, &children, &observed_stages, signals)
+                .map_err(|error| attach_abort_stdout(error, &output))?;
             scan_child_statuses(
                 &mut children,
                 StatusScan {
@@ -1015,16 +1160,28 @@ pub(super) fn execute_group_with_sink(
             break;
         }
         // Output, child-exit and cancellation descriptors wake this poll.
-        // Use a timeout only when no child-exit observer is available after
-        // stdout EOF; otherwise slow native children sleep in the kernel.
-        let maximum_wait_ms = if signals.unnotified_cancellation
-            || signals.cancel_wakes.is_empty()
-            || (eof && child_observer.is_none())
-        {
-            100
-        } else {
-            -1
-        };
+        // Use a timeout when no child-exit observer is available after stdout
+        // EOF, and — Darwin only — while unreaped children remain behind a
+        // live observer after stdout EOF. The observer is only a wakeup
+        // optimization: every loop iteration still probes each child with
+        // waitid, so bounding a missed NOTE_EXIT wake to 100 ms only shortens
+        // the stall. No cause for a missed wake is established; this bounds
+        // the symptom. The extra arm is Darwin-only (kqueue path, where the
+        // stall was observed) and post-EOF only (before EOF the stdout pipe
+        // itself still wakes the loop): Linux keeps sleeping in the kernel on
+        // its epoll/pidfd wake, which has no reported lost-wake, and slow
+        // native children everywhere else keep sleeping in the kernel too.
+        // Near a command deadline `deadline_poll_timeout` takes the smaller
+        // remaining time, so the rate can briefly exceed 10/s; each
+        // concurrent group also runs its own loop, and the Windows wait path
+        // has no such bound (Unix-only).
+        let maximum_wait_ms = poll_maximum_wait_ms(
+            signals.unnotified_cancellation,
+            signals.cancel_wakes.is_empty(),
+            eof,
+            child_observer.is_some(),
+            children.0.iter().any(|child| !child.reaped),
+        );
         let timeout_ms = deadline_poll_timeout(signals.deadline, maximum_wait_ms);
         let observer_notified;
         let ready = if capture_diagnostics {

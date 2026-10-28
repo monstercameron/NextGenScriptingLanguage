@@ -127,7 +127,9 @@ pub fn render(error: &anyhow::Error, interrupted: bool, exit_code: i32) -> Strin
     line
 }
 
-/// Write the stderr object through the runtime's diagnostic writer.
+/// Write the stderr object through the runtime's exit-diagnostic writer: this
+/// object is rendered at process exit, so no more stderr follows and a
+/// trailing held prefix is flushed rather than truncated.
 pub fn write_stderr(error: &anyhow::Error, interrupted: bool, exit_code: i32) {
-    crate::runtime::write_diagnostic(render(error, interrupted, exit_code).as_bytes());
+    crate::runtime::write_exit_diagnostic(render(error, interrupted, exit_code).as_bytes());
 }

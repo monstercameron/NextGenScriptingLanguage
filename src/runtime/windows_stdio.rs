@@ -95,6 +95,27 @@ fn cooperative<T: Send + 'static>(
 pub fn write_cancellable(fd: i32, bytes: &[u8], cancelled: &AtomicBool) -> Result<()> {
     write_with_deadline(fd, bytes, cancelled, None)
 }
+/// Claim the hardened merged-terminal single flight before filtering,
+/// mirroring the Unix pooled path: later hardened filters (either
+/// descriptor, pooled or direct) wait for these bytes to land, and the wait
+/// keeps checking this call's own cancel flag and deadline so cancellation
+/// stays bounded.
+fn reserve_merged_terminal(
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<crate::github_actions::MergedTerminalReservation> {
+    loop {
+        check_deadline(deadline)?;
+        if cancelled.load(Ordering::Relaxed) {
+            bail!("workflow cancelled by signal");
+        }
+        if let Some(reservation) = crate::github_actions::try_claim_merged_terminal() {
+            return Ok(reservation);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 pub fn write_with_deadline(
     fd: i32,
     bytes: &[u8],
@@ -102,7 +123,34 @@ pub fn write_with_deadline(
     deadline: Option<Instant>,
 ) -> Result<()> {
     let target = handle(fd)? as usize;
-    let data = bytes.to_vec();
+    // Same merged-sink discipline as the Unix pooled path: hardened fd 1/2
+    // writes hold the sink lock across filter and write so the merged log
+    // order matches classification. The merged-terminal claim additionally
+    // orders direct writers (masks, finals) behind this write even if a
+    // cancel arrives mid-write. File targets and raw mode stay lock-free.
+    let hardened_terminal = crate::github_actions::enabled() && (fd == 1 || fd == 2);
+    let _sink = hardened_terminal.then(crate::github_actions::terminal_sink_lock);
+    let _merged = hardened_terminal
+        .then(|| reserve_merged_terminal(cancelled, deadline))
+        .transpose()?;
+    let data = if crate::github_actions::enabled() {
+        if fd == 1 {
+            crate::github_actions::filter_stdout(bytes)
+        } else if fd == 2 {
+            crate::github_actions::filter_stderr(bytes)
+        } else {
+            bytes.to_vec()
+        }
+    } else {
+        bytes.to_vec()
+    };
+    if data.is_empty() {
+        check_deadline(deadline)?;
+        if cancelled.load(Ordering::Relaxed) {
+            bail!("workflow cancelled by signal");
+        }
+        return Ok(());
+    }
     cooperative(cancelled, deadline, move |stop| {
         write_all(target as HANDLE, &data, &stop)
     })
@@ -218,15 +266,88 @@ fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-/// Final diagnostics, written as the process exits. This is a plain blocking write to
-/// stderr with no cancel or deadline, so a slow reader cannot cause the message to be
-/// dropped. The exit status is already non-zero, so a failed write has nothing else to
-/// report.
+/// Maximum time a streaming diagnostic waits for stderr, matching the
+/// Unix pooled bound in `super::stdio`: shutdown cannot wait forever for a
+/// full or abandoned pipe, and the exit status is already non-zero, so a
+/// failed or expired write leaves nothing else to report.
+const DIAGNOSTIC_MAX_WAIT: Duration = Duration::from_secs(2);
+
+/// Streaming diagnostics, bounded like the Unix equivalent: the write runs
+/// through [`cooperative`] with a 2s deadline, so a wedged console cancels
+/// the synchronous I/O on the worker and returns on a bound instead of
+/// wedging the caller — and the global merged claim behind it — forever.
+/// The stderr sanitizer keeps any held-back prefix for the next chunk.
+/// True end-of-stream diagnostics must use [`write_exit_diagnostic`]
+/// instead so a trailing held prefix is delivered rather than silently
+/// truncated.
 pub fn write_diagnostic(bytes: &[u8]) {
+    let deadline = Instant::now() + DIAGNOSTIC_MAX_WAIT;
+    write_diagnostic_with_cancel(bytes, &AtomicBool::new(false), Some(deadline));
+}
+
+/// Cancellable streaming diagnostic: the merged-terminal claim is taken
+/// with `cancelled`/`deadline` (never the blocking claim), and the write
+/// itself goes through the chunked stop-flag worker in [`cooperative`],
+/// which checks the stop flag between chunks and calls
+/// `CancelSynchronousIo` on cancel/deadline. A cancelled or expired
+/// diagnostic is dropped silently: it is best-effort output on a run that
+/// is already reporting its own cancellation.
+pub fn write_diagnostic_with_cancel(
+    bytes: &[u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) {
+    if bytes.is_empty() {
+        return;
+    }
     let Ok(target) = handle(2) else {
         return;
     };
-    let _ = write_all(target, bytes, &AtomicBool::new(false));
+    let target = target as usize;
+    // Diagnostics share the merged log: serialize filter+write like any
+    // other hardened stderr write, including the merged single-flight claim
+    // so a streaming diagnostic cannot filter before uncertain in-flight
+    // bytes land. The claim wait observes this call's cancel/deadline, so a
+    // stopped run does not hang behind a wedged in-flight write either.
+    let _sink = crate::github_actions::enabled().then(crate::github_actions::terminal_sink_lock);
+    let _merged = if crate::github_actions::enabled() {
+        match reserve_merged_terminal(cancelled, deadline) {
+            Ok(reservation) => Some(reservation),
+            Err(_) => return,
+        }
+    } else {
+        None
+    };
+    let data = if crate::github_actions::enabled() {
+        crate::github_actions::filter_stderr(bytes)
+    } else {
+        bytes.to_vec()
+    };
+    if data.is_empty() {
+        return;
+    }
+    let _ = cooperative(cancelled, deadline, move |stop| {
+        // The merged claim stays with this caller while the worker writes;
+        // `cooperative` only returns after the worker is cancelled or done,
+        // so no later hardened filter can classify before these bytes land.
+        write_all(target as HANDLE, &data, &stop)
+    });
+}
+
+/// Write a true end-of-stream stderr diagnostic: sink-atomic filter+flush when
+/// hardening is on (so a trailing held prefix is delivered, not truncated),
+/// otherwise the plain [`write_diagnostic`] path. Only for diagnostics after
+/// which this run or process writes no more stderr; see the Unix counterpart
+/// in `super::stdio` for why mid-stream writes must not flush.
+pub fn write_exit_diagnostic(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if crate::github_actions::enabled() {
+        let _ = crate::github_actions::write_stderr_final(bytes);
+    } else {
+        write_diagnostic(bytes);
+    }
 }
 pub(super) fn capture_stdin(
     limit: usize,

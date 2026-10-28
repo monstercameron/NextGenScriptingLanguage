@@ -265,14 +265,34 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         job_supervisor: external_job_supervisor,
         job_last_uses: source_job_last_uses,
     } = start;
-    // Literal components of explicitly secret-producing calls must be masked
-    // before their invocation trace or any dynamic binding can be observed.
-    crate::security::register_sensitive_program(registry, program)?;
-    let sensitive_bindings = crate::runtime::sensitive_binding_names(program, registry);
     // Nested finite module and task calls share one admission/output budget.
     // The last returning lexical run drops the slot, so repeated service
     // handlers begin with a fresh per-run budget while sharing their Signals.
     let (_finite_depth, depth) = FiniteDepth::enter();
+    // Process-wide outermost boundary: always sweep this run's pre-registered
+    // secrets, and reset the shared sanitizers only when no concurrent
+    // outermost run is active (the guard releases the slot on return).
+    // Thread-local depth alone would let two concurrent outermost runs both
+    // reset and drop each other's held split prefixes. Nested runs share the
+    // terminal stream with their parent and take no boundary.
+    let _terminal_boundary = if depth == 0 {
+        Some(crate::github_actions::enter_finite_run_with_cancel(
+            registry,
+            &signals.cancelled,
+            signals.deadline,
+        )?)
+    } else {
+        None
+    };
+    // Literal components of explicitly secret-producing calls must be masked
+    // before their invocation trace or any dynamic binding can be observed.
+    crate::security::register_sensitive_program(
+        registry,
+        program,
+        &signals.cancelled,
+        signals.deadline,
+    )?;
+    let sensitive_bindings = crate::runtime::sensitive_binding_names(program, registry);
     // Only the CLI's top-level run streams. Module, handler and library runs
     // keep capturing, because their callers consume the bytes.
     let stream_top = depth == 0 && STREAM_REQUEST.with(|request| request.get());
@@ -460,7 +480,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         .filter(|input| crate::ast::is_sensitive(input))
     {
         if let Some(value) = bindings.get(&input.name) {
-            crate::security::register_sensitive_value(registry, value)?;
+            crate::security::register_sensitive_value(
+                registry,
+                value,
+                &signals.cancelled,
+                signals.deadline,
+            )?;
         }
     }
     if preflight_context {
@@ -947,19 +972,27 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         )?;
                         if frame.sensitive_binding {
                             let redactor = crate::security::secret_redactor(registry);
-                            redactor.register(&bytes).map_err(|_| {
-                                anyhow!(
-                                    "line {}: could not register sensitive program output",
-                                    frame.line
-                                )
-                            })?;
-                            if bytes.ends_with(b"\n") {
-                                redactor.register(&bytes[..bytes.len() - 1]).map_err(|_| {
+                            redactor
+                                .register(&bytes, &signals.cancelled, signals.deadline)
+                                .map_err(|_| {
                                     anyhow!(
                                         "line {}: could not register sensitive program output",
                                         frame.line
                                     )
                                 })?;
+                            if bytes.ends_with(b"\n") {
+                                redactor
+                                    .register(
+                                        &bytes[..bytes.len() - 1],
+                                        &signals.cancelled,
+                                        signals.deadline,
+                                    )
+                                    .map_err(|_| {
+                                        anyhow!(
+                                            "line {}: could not register sensitive program output",
+                                            frame.line
+                                        )
+                                    })?;
                             }
                         }
                         bindings.insert(
@@ -1198,7 +1231,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     pipeline_sensitive = value_references_sensitive(source, &sensitive_bindings);
                     let bytes = text_value_bytes(source, &bindings, step.line)?;
                     if pipeline_sensitive {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(
+                            registry,
+                            &bytes,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     data = Input::Bytes(bytes);
                 }
@@ -1207,11 +1245,21 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_bindings.contains(binding) || sensitive_source;
                     if sensitive_bindings.contains(binding) || sensitive_source {
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(
+                            registry,
+                            &value,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     let bytes = bound_value_bytes(&value, options.max_output_bytes)?;
                     if sensitive_bindings.contains(binding) || sensitive_source {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(
+                            registry,
+                            &bytes,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     data = Input::Bytes(bytes);
                     bindings.insert(binding.clone(), value);
@@ -1223,7 +1271,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         options.command_timeout,
                     )?;
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(
+                            registry,
+                            &bytes,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     pipeline_sensitive |= sensitive_bindings.contains(binding);
                     byte_bindings.insert(binding.clone(), bytes.clone());
@@ -1297,6 +1350,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             crate::security::register_sensitive_value(
                                 registry,
                                 bindings.get(name).expect("just inserted sensitive binding"),
+                                &signals.cancelled,
+                                signals.deadline,
                             )?;
                         }
                         pipeline_sensitive |= sensitive_bindings.contains(name);
@@ -1312,8 +1367,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let value = crate::structured::parse(&bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_bytes(
+                            registry,
+                            &bytes,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
+                        crate::security::register_sensitive_value(
+                            registry,
+                            &value,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1334,7 +1399,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         .with_context(|| format!("line {}", step.line))?;
                     let value = value.clone();
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(
+                            registry,
+                            &value,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1358,7 +1428,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         .with_context(|| format!("line {}", step.line))?
                         .clone();
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_value(registry, &value)?;
+                        crate::security::register_sensitive_value(
+                            registry,
+                            &value,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1374,7 +1449,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_source {
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_bytes(
+                            registry,
+                            &bytes,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     lazy_event(
                         options.trace,
@@ -1529,8 +1609,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             .with_context(|| format!("line {}: task group output", step.line))?
                     };
                     if sensitive_bindings.contains(binding) {
-                        crate::security::register_sensitive_value(registry, &value)?;
-                        crate::security::register_sensitive_bytes(registry, &bytes)?;
+                        crate::security::register_sensitive_value(
+                            registry,
+                            &value,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
+                        crate::security::register_sensitive_bytes(
+                            registry,
+                            &bytes,
+                            &signals.cancelled,
+                            signals.deadline,
+                        )?;
                     }
                     bindings.insert(binding.clone(), value);
                     pipeline_sensitive = sensitive_bindings.contains(binding);
@@ -2013,9 +2103,25 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         signals,
                                         options.command_timeout,
                                     )?;
-                                std::io::stdout()
-                                    .write_all(&pending)
-                                    .with_context(|| format!("line {}: hand over", step.line))?;
+                                // Under Actions hardening this arm is
+                                // unreachable: `handoff::validate` refuses
+                                // `hand over to` before any step runs, because
+                                // the handed-over child would write raw after
+                                // `exec`. Without hardening the pending output
+                                // below shares the stdout sanitizer with
+                                // streamed writes; the flush releases a
+                                // trailing line-leading `:` at true end of
+                                // stream. The helper holds the sink lock
+                                // across filter and write when hardening is
+                                // on, so the handover write is atomic too.
+                                // The cancellable wait reports a cancelled run
+                                // instead of hanging behind a wedged worker.
+                                crate::github_actions::write_stdout_final_with_cancel(
+                                    &pending,
+                                    &signals.cancelled,
+                                    signals.deadline,
+                                )
+                                .with_context(|| format!("line {}: hand over", step.line))?;
                                 #[cfg(unix)]
                                 let code = handoff::hand_over(command)
                                     .with_context(|| format!("line {}: hand over", step.line))?;
@@ -2387,12 +2493,169 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             let completed = match completed {
                                 Ok(completed) => completed,
                                 Err(error) => {
+                                    // Collect every captured byte the error
+                                    // carries so a sensitive step can mask
+                                    // before anything reaches the log. Both
+                                    // failure shapes are covered: `CommandFailed`
+                                    // (non-zero exit, stdout attached) and
+                                    // `ExecutionFailure` (timeout/cancel, stdout
+                                    // attached in spawn). The preexisting
+                                    // wait-path hang is untouched and remains
+                                    // explicitly unproven.
+                                    let mut sensitive_outputs: Vec<&[u8]> = Vec::new();
+                                    let mut abort_stdout: Option<&[u8]> = None;
+                                    if let Some(failure) = error.downcast_ref::<CommandFailed>() {
+                                        if let Some(stdout) = failure.stdout.as_deref() {
+                                            sensitive_outputs.push(stdout);
+                                        }
+                                        if let Some(stderr) = failure.stderr.as_deref() {
+                                            sensitive_outputs.push(stderr);
+                                        }
+                                        for stage_stderr in failure
+                                            .stages
+                                            .iter()
+                                            .filter_map(|stage| stage.stderr.as_deref())
+                                        {
+                                            sensitive_outputs.push(stage_stderr);
+                                        }
+                                        abort_stdout = failure.stdout.as_deref();
+                                    } else if let Some(failure) =
+                                        error.downcast_ref::<execution_result::ExecutionFailure>()
+                                    {
+                                        if let Some(stdout) = failure.result.stdout.as_deref() {
+                                            sensitive_outputs.push(stdout);
+                                        }
+                                        if let Some(stderr) = failure.result.stderr.as_deref() {
+                                            sensitive_outputs.push(stderr);
+                                        }
+                                        for stage_stderr in failure
+                                            .result
+                                            .stages
+                                            .iter()
+                                            .filter_map(|stage| stage.stderr.as_deref())
+                                        {
+                                            sensitive_outputs.push(stage_stderr);
+                                        }
+                                        abort_stdout = failure.result.stdout.as_deref();
+                                    }
+                                    // A sensitive step's failure bytes must be
+                                    // masked before the diagnostic reaches the
+                                    // log: registration emits the mask lines,
+                                    // and the caller redacts the diagnostic
+                                    // from the same registry. Fail closed when
+                                    // the value cannot be secured.
+                                    if sensitive_terminal_output {
+                                        for output in sensitive_outputs {
+                                            if crate::security::register_sensitive_bytes(
+                                                registry,
+                                                output,
+                                                &signals.cancelled,
+                                                signals.deadline,
+                                            )
+                                            .is_err()
+                                            {
+                                                return Err(anyhow::anyhow!(
+                                                    "line {}: sensitive step failed and its output could not be secured; diagnostic withheld",
+                                                    step.line
+                                                ));
+                                            }
+                                        }
+                                    }
                                     // A failed command's stderr still goes to its
                                     // file target before the failure propagates; a
                                     // streamed file already holds it and is synced.
+                                    // Under hardening a `stdout to stderr` redirect
+                                    // was force-captured instead of streamed, so its
+                                    // stdout would otherwise be lost on failure and
+                                    // timeout alike. Re-emit captured stdout first
+                                    // (program order: `out` before `err`), then the
+                                    // command's own stderr, each once through the
+                                    // sanitizing writer so forged `::` lines and
+                                    // secrets stay masked. Direct-streamed output
+                                    // (`streamed`, non-hardening) already reached
+                                    // its target as written and is never replayed.
+                                    // Framed harnesses that capture diagnostics keep
+                                    // them captured.
                                     if let Some(redirect) = redirect.as_mut() {
                                         if redirect.streamed {
                                             redirect.finish_stream()?;
+                                        } else if matches!(
+                                            redirect.target,
+                                            crate::ast::RedirectTarget::StdoutToStderr
+                                        ) && crate::github_actions::enabled()
+                                            && !signals.capture_diagnostics
+                                        {
+                                            if let Some(stdout) = abort_stdout {
+                                                if !stdout.is_empty() {
+                                                    write_with_deadline(
+                                                        2,
+                                                        stdout,
+                                                        &signals.cancelled,
+                                                        signals.deadline,
+                                                    )
+                                                    .context(
+                                                        "could not write redirected stdout to stderr",
+                                                    )?;
+                                                }
+                                            }
+                                            // A `CommandFailed` diagnostic already carries
+                                            // the command's stderr (sanitized on its
+                                            // way out via `write_diagnostic`), so
+                                            // re-emitting it here would duplicate
+                                            // it in the log. Only the captured
+                                            // stdout (above, absent from the
+                                            // diagnostic) is replayed. Timeouts
+                                            // and cancellations (`ExecutionFailure`)
+                                            // carry no such diagnostic copy, so
+                                            // their stderr is replayed below.
+                                            let mut emitted_stderr = false;
+                                            if error
+                                                .downcast_ref::<CommandFailed>()
+                                                .is_some()
+                                            {
+                                            } else if let Some(failure) = error
+                                                .downcast_ref::<
+                                                    execution_result::ExecutionFailure,
+                                                >(
+                                                )
+                                            {
+                                                for stage_stderr in failure
+                                                    .result
+                                                    .stages
+                                                    .iter()
+                                                    .filter_map(|stage| stage.stderr.as_deref())
+                                                {
+                                                    if !stage_stderr.is_empty() {
+                                                        write_with_deadline(
+                                                            2,
+                                                            stage_stderr,
+                                                            &signals.cancelled,
+                                                            signals.deadline,
+                                                        )
+                                                        .context(
+                                                            "could not write workflow stderr",
+                                                        )?;
+                                                        emitted_stderr = true;
+                                                    }
+                                                }
+                                                if !emitted_stderr {
+                                                    if let Some(stderr) =
+                                                        failure.result.stderr.as_deref()
+                                                    {
+                                                        if !stderr.is_empty() {
+                                                            write_with_deadline(
+                                                                2,
+                                                                stderr,
+                                                                &signals.cancelled,
+                                                                signals.deadline,
+                                                            )
+                                                            .context(
+                                                                "could not write workflow stderr",
+                                                            )?;
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         } else if let Some(failure) =
                                             error.downcast_ref::<CommandFailed>()
                                         {
@@ -2439,19 +2702,6 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         if let Some(pending) = merged_redirect {
                             bytes = pending.route(bytes, &redirected_stderr, signals)?;
                         }
-                        if let Some(name) = &call.status_binding {
-                            let code = status.context("applet finished without an exit code")?;
-                            bindings.insert(name.clone(), Value::Integer(i64::from(code)));
-                        }
-                        if output_call.result_binding.is_some() && status.is_none() {
-                            let mut failure = execution_result::ExecutionResult::runtime_failure(
-                                execution_result::ExecutionKind::UnknownError,
-                                "applet completed without an exit status; cannot capture a successful execution result",
-                                execution_result::EffectCertainty::Uncertain,
-                            );
-                            failure.stages = stages;
-                            return Err(execution_result::ExecutionFailure::new(failure).into());
-                        }
                         // A streamed step's stdout went to the terminal rather than into the
                         // result, so its execution record reports no captured output.
                         let reported_stdout_captured = stdout_captured && !streamed;
@@ -2464,21 +2714,84 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 .as_ref()
                                 .is_some_and(|name| sensitive_bindings.contains(name));
                         if sensitive_output {
-                            crate::security::register_sensitive_bytes(registry, &bytes)?;
+                            // Register before any terminal copy below: the
+                            // registry hook emits each `::add-mask::` line, so
+                            // the mask precedes the value in the log. A value
+                            // that cannot yet be registered cannot be masked —
+                            // registration failure fails closed instead.
+                            crate::security::register_sensitive_bytes(
+                                registry,
+                                &bytes,
+                                &signals.cancelled,
+                                signals.deadline,
+                            )?;
                             if let Some(stderr) = stderr {
-                                crate::security::register_sensitive_bytes(registry, stderr)?;
+                                crate::security::register_sensitive_bytes(
+                                    registry,
+                                    stderr,
+                                    &signals.cancelled,
+                                    signals.deadline,
+                                )?;
                             }
                             for stage_stderr in
                                 stages.iter().filter_map(|stage| stage.stderr.as_deref())
                             {
-                                crate::security::register_sensitive_bytes(registry, stage_stderr)?;
+                                crate::security::register_sensitive_bytes(
+                                    registry,
+                                    stage_stderr,
+                                    &signals.cancelled,
+                                    signals.deadline,
+                                )?;
                             }
                             if let Some(value) = typed_json.as_ref() {
                                 crate::security::register_sensitive_value(
                                     registry,
                                     &crate::structured::from_json(value.clone()),
+                                    &signals.cancelled,
+                                    signals.deadline,
                                 )?;
                             }
+                        }
+                        // Under Actions hardening, terminal-bound child stderr was
+                        // force-captured instead of inherited, so it never reached
+                        // the log. Re-emit it sanitized on the success path to
+                        // preserve the visible behavior. Merged output already
+                        // flows through the stdout path and file targets stay raw
+                        // in their files. A `stdout to stderr` redirect emits its
+                        // stdout through `route()` below, so its stderr is deferred
+                        // until after the route to keep program order (`out`
+                        // before `err`) and to emit each stream once. Framed
+                        // harnesses that capture diagnostics keep them captured.
+                        if crate::github_actions::enabled() && !signals.capture_diagnostics {
+                            let terminal_stderr = redirect.is_none();
+                            if terminal_stderr {
+                                for stage_stderr in
+                                    stages.iter().filter_map(|stage| stage.stderr.as_deref())
+                                {
+                                    if !stage_stderr.is_empty() {
+                                        write_with_deadline(
+                                            2,
+                                            stage_stderr,
+                                            &signals.cancelled,
+                                            signals.deadline,
+                                        )
+                                        .context("could not write workflow stderr")?;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(name) = &call.status_binding {
+                            let code = status.context("applet finished without an exit code")?;
+                            bindings.insert(name.clone(), Value::Integer(i64::from(code)));
+                        }
+                        if output_call.result_binding.is_some() && status.is_none() {
+                            let mut failure = execution_result::ExecutionResult::runtime_failure(
+                                execution_result::ExecutionKind::UnknownError,
+                                "applet completed without an exit status; cannot capture a successful execution result",
+                                execution_result::EffectCertainty::Uncertain,
+                            );
+                            failure.stages = stages;
+                            return Err(execution_result::ExecutionFailure::new(failure).into());
                         }
                         let output_value = if let Some(name) = &output_call.binding {
                             bind_call_output(
@@ -2560,7 +2873,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     reported_stdout_captured.then(|| bytes.clone()),
                                     stderr.map(<[u8]>::to_vec),
                                     output_value,
-                                    stages,
+                                    stages.clone(),
                                 );
                                 let record = execution.to_source_value(line, applet);
                                 bindings.insert(name.clone(), record);
@@ -2576,10 +2889,41 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 bytes
                             }
                             Some(redirect) => {
+                                let is_stdout_to_stderr = matches!(
+                                    redirect.target,
+                                    crate::ast::RedirectTarget::StdoutToStderr
+                                );
+                                let was_streamed = redirect.streamed;
                                 let bytes = redirect.route(bytes, &redirected_stderr, signals)?;
                                 if journal.is_some() {
                                     if let Some(destination) = redirect.destination.as_ref() {
                                         sync_destination_parent(destination, &cwd)?;
+                                    }
+                                }
+                                // Deferred `stdout to stderr` stderr: `route()`
+                                // already wrote stdout, so writing each stage's
+                                // stderr now keeps program order (`out` before
+                                // `err`) and emits each stream once. The whole
+                                // stage list is replayed (not just the last
+                                // `redirected_stderr` blob) to match the failure
+                                // path and avoid dropping pipelined stderr.
+                                if is_stdout_to_stderr
+                                    && !was_streamed
+                                    && crate::github_actions::enabled()
+                                    && !signals.capture_diagnostics
+                                {
+                                    for stage_stderr in
+                                        stages.iter().filter_map(|stage| stage.stderr.as_deref())
+                                    {
+                                        if !stage_stderr.is_empty() {
+                                            write_with_deadline(
+                                                2,
+                                                stage_stderr,
+                                                &signals.cancelled,
+                                                signals.deadline,
+                                            )
+                                            .context("could not write workflow stderr")?;
+                                        }
                                     }
                                 }
                                 bytes

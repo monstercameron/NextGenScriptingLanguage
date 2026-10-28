@@ -243,12 +243,12 @@ fn report_error(error: &anyhow::Error) -> i32 {
             })
             .to_string();
             line.push('\n');
-            runtime::write_diagnostic(line.as_bytes());
+            runtime::write_exit_diagnostic(line.as_bytes());
         } else {
             flow::agent::errors::write_stderr(error, interrupted.is_some(), status);
         }
     } else {
-        runtime::write_diagnostic(
+        runtime::write_exit_diagnostic(
             format!(
                 "execute: {}\n",
                 flow::terminal_text::escape_controls(&format!("{error:#}"))
@@ -1086,6 +1086,13 @@ fn enforce_policy_header(
 }
 
 fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapshot>) -> Result<()> {
+    // Actions hardening for `run`/`resume`: neutralize forged workflow
+    // commands in terminal-bound output and mask registered secrets. `check
+    // --format github` intentionally emits workflow commands and never
+    // enables this; only execution paths opt in.
+    if matches!(args.command, "run" | "resume") {
+        flow::github_actions::enable_if_ci();
+    }
     let capability_policy = args
         .capability_policy
         .as_deref()
@@ -2023,8 +2030,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 body.trigger = None;
                 let result = runtime::run(&body, &registry, &options)
                     .map_err(|error| redact_runtime_error(&registry, error))?;
-                io::stdout()
-                    .write_all(&result.output)
+                // Under Actions hardening the final output shares the stdout
+                // sanitizer with streamed output, so a forged command split
+                // across the stream boundary is still neutralized. The flush
+                // releases a trailing line-leading `:` at true end of stream.
+                // The sink lock spans filter and write so a concurrent mask
+                // cannot interleave between classification and landing.
+                flow::github_actions::write_stdout_final(&result.output)
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // Same contract as the finite path: flush output, report the
@@ -2035,7 +2047,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     if let Some(message) = &exit.message {
                         let message =
                             flow::security::secret_redactor(&registry).redact_text(message);
-                        runtime::write_diagnostic(format!("{message}\n").as_bytes());
+                        runtime::write_exit_diagnostic(format!("{message}\n").as_bytes());
                     }
                     std::process::exit(i32::from(exit.status));
                 }
@@ -2083,8 +2095,15 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &registry,
                         &program.inputs,
                         &options.inputs,
+                        &std::sync::atomic::AtomicBool::new(false),
+                        None,
                     )?;
-                    flow::security::register_sensitive_program(&registry, &program)?;
+                    flow::security::register_sensitive_program(
+                        &registry,
+                        &program,
+                        &std::sync::atomic::AtomicBool::new(false),
+                        None,
+                    )?;
                     record_cli::run_recorded(directory, &args.file, &program, &registry, &options)
                         .map_err(|error| redact_runtime_error(&registry, error))?
                 } else {
@@ -2124,8 +2143,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     })
                     .map_err(|error| redact_runtime_error(&registry, error))?
                 };
-                io::stdout()
-                    .write_all(&result.output)
+                // Same end-of-stream sanitization as `--once`: the shared stdout
+                // sanitizer keeps line-start state across streamed writes.
+                // The sink lock spans filter and write (see above).
+                flow::github_actions::write_stdout_final(&result.output)
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // The pipeline output above is already delivered. Flush it
@@ -2136,7 +2157,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     if let Some(message) = &exit.message {
                         let message =
                             flow::security::secret_redactor(&registry).redact_text(message);
-                        runtime::write_diagnostic(format!("{message}\n").as_bytes());
+                        runtime::write_exit_diagnostic(format!("{message}\n").as_bytes());
                     }
                     std::process::exit(i32::from(exit.status));
                 }
@@ -3629,7 +3650,11 @@ mod startup_path_tests {
     fn redacted_runtime_errors_keep_broken_pipe_and_safe_message() {
         let registry = flow::manifest::Registry::default();
         flow::security::secret_redactor(&registry)
-            .register(b"PIPE-SECRET-CANARY")
+            .register(
+                b"PIPE-SECRET-CANARY",
+                &std::sync::atomic::AtomicBool::new(false),
+                None,
+            )
             .unwrap();
         let error = anyhow::Error::new(std::io::Error::new(
             std::io::ErrorKind::BrokenPipe,

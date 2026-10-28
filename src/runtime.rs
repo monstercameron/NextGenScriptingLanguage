@@ -2332,12 +2332,18 @@ fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
 }
 
 /// Write owned output from a streamed step without copying its captured bytes.
+/// The observer record keeps the exact bytes; only a TTY sink gets the
+/// terminal-escaped rendering, so pipes keep their bytes (H17).
 fn write_streamed_stdout_owned(bytes: Vec<u8>, signals: &Signals) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
     observe::note_terminal_output(&bytes);
     if observe::writes_streamed_stdout() {
+        let bytes = crate::terminal_text::encode_pipeline_for_stdout(
+            &bytes,
+            crate::terminal_text::stdout_is_terminal(),
+        );
         stdio::write_with_deadline_owned_reusing(
             &signals.output_writers,
             1,

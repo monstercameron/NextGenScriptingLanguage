@@ -564,6 +564,19 @@ pub(super) fn execute_group_with_sink(
     for (_, manifest, _) in calls {
         crate::security::authorize_declared_filesystem_write(registry, manifest, &sensitivities)?;
     }
+    // The `execute-model` child reads `fixture`/`env_file` with no registry
+    // access, so authorize the resolved values here, against the effective
+    // working directory, before any child spawns.
+    for (call, manifest, _) in calls {
+        crate::capabilities::authorize_model_file_params(
+            registry,
+            manifest,
+            &call.parameters,
+            bindings,
+            cwd.path(),
+            false,
+        )?;
+    }
     for (index, (_, manifest, line)) in calls.iter().enumerate() {
         if index + 1 != calls.len()
             && manifest.stdio().is_some_and(|stdio| {

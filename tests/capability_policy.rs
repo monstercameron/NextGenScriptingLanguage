@@ -1027,3 +1027,164 @@ fn environment_entry_inputs_are_denied_by_the_shared_policy_preflight() {
         .to_string()
         .contains("denies reading environment variable"));
 }
+
+#[test]
+fn model_file_params_require_the_applets_own_read_grant() {
+    use flow::ast::Value;
+    use flow::capabilities::authorize_model_file_params;
+
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().join("models");
+    fs::create_dir(&allowed).unwrap();
+    let registry = Registry::from_sources(&[
+        serde_json::json!({
+            "name": "llm.ask", "binary": "@execute-model",
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+        serde_json::json!({
+            "name": "plain.tool", "binary": "/bin/true",
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+    ])
+    .unwrap();
+    let mut model = grant(&["filesystem.read"]);
+    model.filesystem.read.push(allowed.clone());
+    registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("llm.ask".into(), model)]),
+    }));
+
+    let manifest = registry.resolve("llm.ask").unwrap();
+    let empty: BTreeMap<String, Value> = BTreeMap::new();
+    let param = |name: &str, value: &str| {
+        BTreeMap::from([(name.to_owned(), Value::String(value.to_owned()))])
+    };
+    let granted = |name: &str| {
+        allowed
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    };
+
+    // A granted credential file is authorized; anything outside fails closed.
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &param("env_file", &granted("keys.env")),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &param("env_file", directory.path().join("other.env").to_str().unwrap()),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .is_err());
+
+    // An empty path is the helper's own configuration error, not a grant.
+    authorize_model_file_params(&registry, manifest, &param("env_file", ""), &empty, directory.path(), false)
+        .unwrap();
+
+    // A named fixture means the helper never reads `env_file`: an ungranted
+    // credential path alongside a granted fixture is allowed, while an
+    // ungranted fixture is denied.
+    let mut both = param("fixture", &granted("fixture.json"));
+    both.insert(
+        "env_file".to_owned(),
+        Value::String(directory.path().join("other.env").to_string_lossy().into_owned()),
+    );
+    authorize_model_file_params(&registry, manifest, &both, &empty, directory.path(), false)
+        .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &param("fixture", directory.path().join("other.json").to_str().unwrap()),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .is_err());
+
+    // References resolve through bindings; unbound names are skipped for the
+    // later argument resolution to reject, and non-text values fail closed.
+    let reference = BTreeMap::from([("env_file".to_owned(), Value::Reference("keys".into()))]);
+    let bound = BTreeMap::from([(
+        "keys".to_owned(),
+        Value::String(granted("bound.env")),
+    )]);
+    authorize_model_file_params(&registry, manifest, &reference, &bound, directory.path(), false)
+        .unwrap();
+    authorize_model_file_params(&registry, manifest, &reference, &empty, directory.path(), false)
+        .unwrap();
+    let mistyped = BTreeMap::from([("keys".to_owned(), Value::Bool(true))]);
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &reference,
+        &mistyped,
+        directory.path(),
+        false
+    )
+    .is_err());
+
+    // Relative literals defer only when the working directory is not yet
+    // known; the spawn path re-checks them against the effective directory.
+    let relative = param("env_file", "models/relative.env");
+    authorize_model_file_params(&registry, manifest, &relative, &empty, directory.path(), true)
+        .unwrap();
+    authorize_model_file_params(&registry, manifest, &relative, &empty, directory.path(), false)
+        .unwrap();
+    let outside = param("env_file", "other.env");
+    authorize_model_file_params(&registry, manifest, &outside, &empty, directory.path(), true)
+        .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &outside,
+        &empty,
+        directory.path(),
+        false
+    )
+    .is_err());
+
+    // Applets that do not use the model helper are unaffected, even with no
+    // grant and no policy configured.
+    let plain = registry.resolve("plain.tool").unwrap();
+    authorize_model_file_params(
+        &registry,
+        plain,
+        &param("env_file", "/elsewhere.env"),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    let unconfigured = Registry::from_sources(&[
+        serde_json::json!({
+            "name": "llm.ask", "binary": "@execute-model",
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+    ])
+    .unwrap();
+    authorize_model_file_params(
+        &unconfigured,
+        unconfigured.resolve("llm.ask").unwrap(),
+        &param("env_file", "/elsewhere.env"),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+}

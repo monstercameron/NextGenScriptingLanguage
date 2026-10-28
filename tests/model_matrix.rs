@@ -1114,6 +1114,12 @@ fn default_provider_keys_are_never_sent_to_a_custom_loopback_server() {
         "OPENAI_API_KEY=file-default-key\nopenai=file-alias-key\nJEV_API_KEY=file-jev-key\n",
     )
     .unwrap();
+    // Credential files must be private: the helper refuses group-readable files.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let env_file_text = env_file.to_string_lossy().into_owned();
     let environment = [
         ("OPENAI_API_KEY", "process-default-key"),
@@ -1181,6 +1187,12 @@ fn api_key_env_names_the_only_key_a_custom_endpoint_receives() {
     let directory = tempfile::tempdir().unwrap();
     let env_file = directory.path().join("local-keys.env");
     std::fs::write(&env_file, "EXECUTE_MODEL_KEY_FILE=file-local-key\n").unwrap();
+    // Credential files must be private: the helper refuses group-readable files.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let env_file_text = env_file.to_string_lossy().into_owned();
 
     let (base, server) = serve(vec![reply(200, &chat_completion(json!("process")))]);

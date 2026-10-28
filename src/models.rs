@@ -960,8 +960,52 @@ fn provider_request(options: &Options, state: Option<&Value>) -> Result<Value> {
     }
 }
 
+/// Open a model file without following a link in its final component and
+/// without blocking on a FIFO. The parent authorizes the path against the
+/// applet grant before spawn; the child additionally refuses links and
+/// non-regular files here, so a path swapped after authorization fails closed.
+/// This mirrors the record no-follow reads: a FIFO opens but the regular-file
+/// check rejects it without waiting for a writer.
+#[cfg(unix)]
+fn open_regular_no_follow(path: &str) -> Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .context("opening model file")?;
+    if !file
+        .metadata()
+        .context("reading model file metadata")?
+        .is_file()
+    {
+        bail!("model file is not a regular file");
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_regular_no_follow(path: &str) -> Result<File> {
+    if std::fs::symlink_metadata(path)
+        .context("opening model file")?
+        .file_type()
+        .is_symlink()
+    {
+        bail!("model file is not a regular file");
+    }
+    let file = File::open(path).context("opening model file")?;
+    if !file
+        .metadata()
+        .context("reading model file metadata")?
+        .is_file()
+    {
+        bail!("model file is not a regular file");
+    }
+    Ok(file)
+}
+
 fn read_fixture(path: &str, expected: &Value, limit: usize) -> Result<Value> {
-    let mut file = File::open(path).context("opening fixture")?;
+    let mut file = open_regular_no_follow(path)?;
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
         .take((limit.saturating_mul(4).saturating_add(4096)) as u64)
@@ -1160,7 +1204,10 @@ fn select_credential(
 /// Read only the requested names from an explicit env file. Other entries are
 /// skipped without being parsed, so unrelated lines cannot affect a request.
 fn parse_env_file(path: &str, wanted: &[&str]) -> Result<BTreeMap<String, String>> {
-    let mut file = File::open(path).context("opening explicit environment file")?;
+    // Credentials demand the bearer-file checks (owner, private mode, no
+    // reparse point): a group-readable or linked file fails closed here.
+    let mut file = crate::security::open_private_file(std::path::Path::new(path))
+        .context("opening explicit environment file")?;
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
         .take((MAX_ENV_FILE_BYTES + 1) as u64)
@@ -2386,6 +2433,38 @@ mod unit_tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn fixture_symlink_is_rejected_instead_of_followed() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("real-fixture.json");
+        let expected = json!({"provider":"jev","kind":"judge","model":"jev-latest","state":"text","question":"Is it true?","minimum":0});
+        let raw = json!({"model":"jev-latest","answers":{"decision":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1,"output_tokens":2}});
+        std::fs::write(
+            &target,
+            json!({"expected_request":expected,"response":raw}).to_string(),
+        )
+        .unwrap();
+        let link = temp.path().join("link-fixture.json");
+        symlink(&target, &link).unwrap();
+        assert!(read_fixture(link.to_str().unwrap(), &expected, 1024).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fixture_fifo_is_rejected_without_waiting_for_a_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("fixture.json");
+        let raw =
+            std::ffi::CString::new(path.to_str().expect("fixture path is UTF-8")).unwrap();
+        // SAFETY: raw is a NUL-terminated path with no interior NUL; mkfifo
+        // takes a path and a mode.
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let expected = json!({"provider":"jev","kind":"judge","state":"text"});
+        assert!(read_fixture(path.to_str().unwrap(), &expected, 1024).is_err());
+    }
+
+    #[test]
     fn unique_json_rejects_duplicate_keys_at_every_depth() {
         assert!(parse_unique_json(br#"{"status":"incomplete","status":"completed"}"#).is_err());
         assert!(parse_unique_json(br#"{"outer":[{"n":0,"n":1}]}"#).is_err());
@@ -2438,6 +2517,13 @@ mod credential_policy_tests {
     fn env_file(directory: &tempfile::TempDir, text: &str) -> String {
         let path = directory.path().join("credentials.env");
         std::fs::write(&path, text).unwrap();
+        // Credential files must be private: the helper refuses group- or
+        // world-readable files fail-closed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         path.to_string_lossy().into_owned()
     }
 
@@ -2544,6 +2630,50 @@ mod credential_policy_tests {
                 .unwrap();
             assert_eq!(key, None, "file default key leaked to {endpoint}");
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn group_readable_env_file_is_rejected_before_parsing() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("group.env");
+        std::fs::write(&path, "OPENAI_API_KEY=group-key\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let error =
+            parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("opening explicit environment file"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn env_file_symlink_is_rejected_instead_of_followed() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("real.env");
+        std::fs::write(&target, "OPENAI_API_KEY=file-key\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.path().join("link.env");
+        symlink(&target, &link).unwrap();
+        assert!(
+            parse_env_file(link.to_str().unwrap(), &["OPENAI_API_KEY"]).is_err(),
+            "symlinked credential file was accepted"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn private_env_file_still_parses() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("private.env");
+        std::fs::write(&path, "OPENAI_API_KEY=file-key\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let values = parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap();
+        assert_eq!(values.get("OPENAI_API_KEY").map(String::as_str), Some("file-key"));
     }
 
     #[test]

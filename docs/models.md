@@ -211,7 +211,11 @@ environment. The environment file accepts `jev=...` for TypeSafe or
 `OPENAI_API_KEY` are also accepted. Process environment values take precedence
 over values in the file. Keep secrets out of `.program` source and manifests.
 The helper emits sanitized error classes without provider response bodies,
-request values, paths, or credentials.
+request values, paths, or credentials. The file must be a private regular
+file (owner-only permissions, no links): group-readable or symlinked files
+are rejected fail-closed. Under a capability policy the parent additionally
+authorizes the resolved `fixture`/`env_file` path against the applet's own
+filesystem grant before spawn.
 
 Fixtures allow deterministic offline operation and validation without
 contacting a provider. A fixture checks the complete semantic request, including
@@ -219,6 +223,7 @@ input state and operation settings, before supplying a provider-native response;
 this exercises the same response validation as a live request. If `fixture` is
 present, the helper must open and validate that file. An empty, missing, or
 mismatched fixture is an error and never falls back to a live provider request.
+Links and non-regular files (such as FIFOs) are rejected without blocking.
 Omit `fixture` for live calls. The presence of `EXECUTE_MODELS_OFFLINE` in the
 process environment, even with an empty value, rejects every fixtureless call
 before reading input, credentials, or opening a connection. Fixture calls still

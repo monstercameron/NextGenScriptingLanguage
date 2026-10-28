@@ -258,6 +258,22 @@ fn resolved_executables(plan: &Value, cwd: &Path) -> Result<Value> {
                     row["line"].as_u64().unwrap_or(0)
                 );
             }
+            // Without the explain plan's manifest-anchored `resolved_path`,
+            // this review cannot reproduce the manifest-directory anchor a
+            // launch uses for separator-bearing or absolute applet binaries;
+            // resolving them against the review cwd instead would bind (and
+            // fingerprint) a different file than execution runs. Refuse that
+            // rather than reviewing the wrong executable. Bare names keep the
+            // hardened PATH lookup, which matches launch.
+            if Path::new(binary).is_absolute()
+                || binary.contains('/')
+                || (cfg!(windows) && binary.contains('\\'))
+            {
+                bail!(
+                    "cannot bind the executable {binary:?} for line {} without its manifest-anchored resolved path",
+                    row["line"].as_u64().unwrap_or(0)
+                );
+            }
             crate::runtime::binary_path(binary, cwd)
                 .with_context(|| format!("resolving executable {binary:?} for review"))?
         };

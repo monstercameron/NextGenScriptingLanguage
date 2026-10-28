@@ -372,7 +372,7 @@ fn execute_group_with_sink(
                 let (resolved_binary, argv) = match prepared_first_call.take() {
                     Some((path, argv)) => (path, GroupArguments::Owned(argv)),
                     None => (
-                        binary_path_for_launch(manifest.binary_for(call), cwd, registry).map_err(
+                        binary_path_for_launch(manifest, call, cwd, registry).map_err(
                             |error| {
                                 native_spawn_failure(
                                     format!(

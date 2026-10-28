@@ -1951,7 +1951,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             .map(|(name, value)| Ok((name.clone(), resolve(value, &bindings)?)))
                             .collect::<Result<BTreeMap<_, _>>>()?;
                         let argv = manifest.build_arguments(&parameters)?;
-                        let binary = binary_path(manifest.binary_for(call), &cwd)?;
+                        let binary = binary_path_for_applet(manifest, call, &cwd)?;
                         let command = crate::capabilities::command_for(
                             &binary,
                             argv.iter().map(|argument| OsStr::new(argument.as_str())),
@@ -2140,7 +2140,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             let executable = if module_fingerprint.is_some() {
                                 PathBuf::new()
                             } else {
-                                binary_path(manifest.binary_for(call), &cwd)?
+                                binary_path_for_applet(manifest, call, &cwd)?
                             };
                             let directory = cache_override
                                 .clone()

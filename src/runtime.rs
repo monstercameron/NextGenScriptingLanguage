@@ -1329,6 +1329,157 @@ pub(crate) fn binary_path_with_path(
     }
 }
 
+/// Join a catalog-relative applet binary onto its manifest anchor without
+/// leaving the anchor. Lexical `..` handling keeps `sub/../../evil` from
+/// escaping the manifest directory. The joined path is then canonically
+/// confined (see `contain_within_anchor`), so a symlink inside the directory
+/// that points outside it is refused rather than executed.
+fn join_within(anchor: &Path, binary: &str) -> Result<PathBuf> {
+    use std::path::Component;
+    let mut joined = anchor.to_path_buf();
+    let mut extra = 0usize;
+    for component in Path::new(binary).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                bail!("executable {binary:?} must be relative to stay within its directory");
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if extra == 0 {
+                    bail!("executable {binary:?} escapes its manifest directory");
+                }
+                joined.pop();
+                extra -= 1;
+            }
+            Component::Normal(part) => {
+                joined.push(part);
+                extra += 1;
+            }
+        }
+    }
+    Ok(joined)
+}
+
+/// Confine a lexically joined catalog-relative executable to its manifest
+/// anchor after resolving symlinks. Both the anchor and the candidate are
+/// canonicalized (resolving every intermediate link as well as the final
+/// component), and the canonical candidate must sit inside the canonical
+/// anchor; anything else — an escape, a dangling link, or an unreadable
+/// path — fails closed. The canonical path is returned so the caller hashes
+/// and executes the resolved file rather than re-traversing the link. This
+/// uses only cross-platform `std::fs::canonicalize`, so the same check runs
+/// on Unix and Windows (resolving symlinks and Windows junctions/reparse
+/// points as far as the platform reports them). It does not eliminate the
+/// hash-to-exec replacement race documented in `SECURITY.md`.
+fn contain_within_anchor(anchor: &Path, binary: &str, candidate: &Path) -> Result<PathBuf> {
+    let anchor_canonical = fs::canonicalize(anchor).with_context(|| {
+        format!("cannot confine executable {binary:?} without its manifest directory")
+    })?;
+    let candidate_canonical = fs::canonicalize(candidate).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            anyhow!("executable {binary:?} not found in its manifest directory: {error}")
+        } else {
+            anyhow!("executable {binary:?} cannot be confined to its manifest directory: {error}")
+        }
+    })?;
+    if !candidate_canonical.starts_with(&anchor_canonical) {
+        bail!("executable {binary:?} escapes its manifest directory via symlink");
+    }
+    Ok(candidate_canonical)
+}
+
+/// Resolve an applet's declared binary. A `/`-bearing (or absolute) binary is
+/// anchored at the manifest's own directory, never the runtime working
+/// directory, so running from an untrusted folder cannot redirect it to a
+/// shadowing executable. Lexical `..` escapes fail closed, and symlinks —
+/// final or intermediate — that resolve outside the manifest directory fail
+/// closed canonically. Bare names use the hardened PATH search, which
+/// ignores relative and empty entries. Direct quoted commands have no manifest
+/// origin and keep the runtime working directory as their anchor.
+pub(crate) fn binary_path_for_applet(
+    manifest: &Manifest,
+    call: &Invocation,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    binary_path_for_applet_with_path(
+        manifest,
+        call,
+        cwd,
+        crate::capabilities::command_overlay_path().as_deref(),
+    )
+}
+
+/// [`binary_path_for_applet`] with a caller-supplied PATH override, for static
+/// checks and checkpoint identity that run under an explicit PATH.
+pub(crate) fn binary_path_for_applet_with_path(
+    manifest: &Manifest,
+    call: &Invocation,
+    cwd: &Path,
+    path_override: Option<&OsStr>,
+) -> Result<PathBuf> {
+    let binary = manifest.binary_for(call);
+    if binary == "@execute-model" {
+        return bundled_model_applet();
+    }
+    if binary == "@execute-applet" {
+        return bundled_applet_helper();
+    }
+    if binary.contains('/')
+        || (cfg!(windows) && binary.contains('\\'))
+        || Path::new(binary).is_absolute()
+    {
+        // Absolute executables name their file outright; no anchor applies.
+        // Otherwise a direct quoted command names its executable explicitly,
+        // so it keeps the runtime working directory anchor, while a catalog
+        // applet anchors at the manifest directory. A catalog binary never
+        // leaves its anchor: `..` escapes fail closed lexically, and
+        // symlinks (final or intermediate) that resolve outside the anchor
+        // fail closed canonically. Manifests without a
+        // recorded origin (embedded or synthetic registries) have no catalog
+        // directory, so a relative executable would resolve against whatever
+        // the runtime cwd happens to be — the shadowing the manifest anchor
+        // removes everywhere else. Refuse that instead of running a
+        // cwd-planted file; use an absolute executable path for synthetic
+        // registries.
+        // The manifest anchor, when this branch is catalog-anchored. Absolute
+        // and direct-command paths name their file outright and skip
+        // canonical confinement; only catalog-relative binaries are confined.
+        let mut anchor: Option<PathBuf> = None;
+        let joined = if Path::new(binary).is_absolute() {
+            PathBuf::from(binary)
+        } else if call.direct {
+            cwd.join(binary)
+        } else if let Some(parent) = manifest.origin().and_then(|origin| origin.parent()) {
+            let joined = join_within(parent, binary)?;
+            anchor = Some(parent.to_path_buf());
+            joined
+        } else {
+            bail!(
+                "applet {:?} declares a relative executable {:?} without a manifest origin; use an absolute executable path",
+                manifest.name, binary
+            );
+        };
+        let candidate = crate::platform::executable_path(joined)?;
+        // Canonical confinement runs on the final candidate (after any
+        // platform extension such as `.exe`), so the confined, hashed, and
+        // executed path are the same file without re-traversing a link.
+        let candidate = match anchor {
+            Some(anchor) => contain_within_anchor(&anchor, binary, &candidate)?,
+            None => candidate,
+        };
+        let metadata = fs::metadata(&candidate)?;
+        if !metadata.is_file() || !crate::platform::executable(&metadata) {
+            bail!("{} is not an executable file", candidate.display());
+        }
+        return Ok(candidate);
+    }
+    let path = path_override
+        .map(OsStr::to_os_string)
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    binary_path_from_path(binary, cwd, &path)
+}
+
 /// Locate the version-matched generic applet helper beside this executable.
 pub fn bundled_applet_helper() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
@@ -1363,21 +1514,23 @@ pub fn bundled_model_applet() -> Result<PathBuf> {
     Ok(helper)
 }
 
-fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Result<PathBuf> {
+fn binary_path_from_path(binary: &str, _cwd: &Path, path: &std::ffi::OsStr) -> Result<PathBuf> {
     if path.is_empty() {
         bail!("executable {binary:?} not found in PATH");
     }
     let mut candidate = PathBuf::new();
     for entry in std::env::split_paths(path) {
-        candidate.clear();
-        if entry.is_absolute() {
-            // Path::join replaces its left-hand side for an absolute entry.
-            // Pushing it directly avoids copying cwd and keeps the exact spelling.
-            candidate.push(entry);
-        } else {
-            candidate.push(cwd);
-            candidate.push(entry);
+        // Relative and empty PATH entries would resolve against the runtime
+        // working directory, so a binary shadowing the applet from the cwd
+        // (including an empty entry from a leading or trailing `:`) would win.
+        // Applet launches ignore those entries; only absolute entries run.
+        if entry.as_os_str().is_empty() || !entry.is_absolute() {
+            continue;
         }
+        candidate.clear();
+        // Path::join replaces its left-hand side for an absolute entry.
+        // Pushing it directly avoids copying cwd and keeps the exact spelling.
+        candidate.push(entry);
         candidate.push(binary);
         candidate = crate::platform::executable_path(candidate)?;
 
@@ -1407,8 +1560,12 @@ impl LaunchPathCache {
             self.entries = if path.is_empty() {
                 Vec::new().into()
             } else {
+                // Keep only absolute entries. Joining a relative entry onto
+                // the cwd would let a working-directory shadow win the lookup,
+                // so those entries are dropped here exactly as in the direct
+                // search above. Joining an absolute entry is the entry itself.
                 std::env::split_paths(path)
-                    .map(|entry| cwd.join(entry))
+                    .filter(|entry| entry.is_absolute())
                     .collect::<Vec<_>>()
                     .into()
             };
@@ -1459,13 +1616,19 @@ fn binary_path_from_cached_path(
     binary_path_in_components(binary, &entries)
 }
 
-fn binary_path_for_launch(binary: &str, cwd: &Path, registry: &Registry) -> Result<PathBuf> {
+fn binary_path_for_launch(
+    manifest: &Manifest,
+    call: &Invocation,
+    cwd: &Path,
+    registry: &Registry,
+) -> Result<PathBuf> {
+    let binary = manifest.binary_for(call);
     if matches!(binary, "@execute-model" | "@execute-applet")
         || binary.contains('/')
         || (cfg!(windows) && binary.contains('\\'))
         || Path::new(binary).is_absolute()
     {
-        return binary_path(binary, cwd);
+        return binary_path_for_applet(manifest, call, cwd);
     }
     let path = crate::capabilities::command_overlay_path()
         .or_else(|| std::env::var_os("PATH"))
@@ -3576,7 +3739,7 @@ fn worker_launch_for_call(
     worker_backend::WorkerLaunch::inherited(
         registry.clone(),
         manifest.name_for(call).to_owned(),
-        binary_path_for_launch(manifest.binary_for(call), cwd, registry)?,
+        binary_path_for_launch(manifest, call, cwd, registry)?,
         cwd.to_path_buf(),
         startup_arguments.iter().map(OsString::from).collect(),
         worker_backend::WorkerLimits {

@@ -1189,8 +1189,8 @@ fn preflight_invocations_with_policy<'a>(
     for call in &calls {
         let manifest = registry.resolve_call(call)?;
         let binary = manifest.binary_for(call);
-        let resolved =
-            crate::runtime::binary_path(binary, cwd).unwrap_or_else(|_| PathBuf::from(binary));
+        let resolved = crate::runtime::binary_path_for_applet(manifest, call, cwd)
+            .unwrap_or_else(|_| PathBuf::from(binary));
         check_privileged_launch(registry, &[binary], &resolved)?;
     }
     for call in calls {
@@ -1313,7 +1313,9 @@ fn preflight_invocations_with_policy<'a>(
             }
         }
         let binary = if backend != AppletBackend::InProcess
-            && (grant.binary_sha256.is_some() || native_sandbox)
+            && (grant.binary_sha256.is_some()
+                || manifest.binary_sha256().is_some()
+                || native_sandbox)
         {
             let requested = manifest.binary_for(call);
             if cwd_mode.is_dynamic()
@@ -1324,7 +1326,11 @@ fn preflight_invocations_with_policy<'a>(
                     "capability policy cannot resolve a relative or PATH executable after a dynamic working-directory change; use an absolute executable path"
                 );
             }
-            let resolved = crate::runtime::binary_path(requested, cwd)
+            // Resolve exactly what launch resolves: the manifest-anchored
+            // executable, never the cwd-anchored legacy path. The grant
+            // authorization, manifest-pin hash, and sandbox preflight below
+            // all bind this file, and launch executes it.
+            let resolved = crate::runtime::binary_path_for_applet(manifest, call, cwd)
                 .with_context(|| format!("resolving executable for applet {name:?}"))?;
             Some(resolved)
         } else {
@@ -1341,6 +1347,18 @@ fn preflight_invocations_with_policy<'a>(
             }),
             Some(registry),
         )?;
+        if let Some(expected) = manifest.binary_sha256() {
+            let pinned = binary.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "manifest binary_sha256 requires a resolvable executable for applet {name:?}"
+                )
+            })?;
+            let actual = sha256_file(pinned)
+                .with_context(|| format!("hashing executable for applet {name:?}"))?;
+            if !actual.eq_ignore_ascii_case(expected) {
+                bail!("manifest binary hash mismatch for applet {name:?}");
+            }
+        }
         if native_sandbox {
             if cwd_mode.is_dynamic() {
                 bail!(
@@ -1435,6 +1453,15 @@ where
         AppletBackend::Command | AppletBackend::JsonLinesWorker
     ) {
         bail!("command launch requested for non-process applet {applet_name:?}");
+    }
+    // A manifest-level pin is enforced on every launch, with or without a
+    // capability policy. It never replaces the policy grant checks below.
+    if let Some(expected) = manifest.binary_sha256() {
+        let actual = sha256_file(binary)
+            .with_context(|| format!("hashing executable for applet {applet_name:?}"))?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            bail!("manifest binary hash mismatch for applet {applet_name:?}");
+        }
     }
     validate_environment_backend(manifest)?;
     let Some(policy) = configured.as_ref() else {

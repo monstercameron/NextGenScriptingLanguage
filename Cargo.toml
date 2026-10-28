@@ -203,6 +203,10 @@ name = "worker_backend_windows"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "applet_executable_pinning_windows"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "named_background_jobs"
 required-features = ["test-fixtures"]
 

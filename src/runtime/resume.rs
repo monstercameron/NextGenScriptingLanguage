@@ -1177,8 +1177,9 @@ pub fn run_checkpointed(
 ) -> Result<RunResult> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
-    let signals =
+    let mut signals =
         Signals::register_with_deadline(deadline_after(options.total_timeout, "total timeout")?)?;
+    signals.fs_timeout = options.fs_timeout;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;

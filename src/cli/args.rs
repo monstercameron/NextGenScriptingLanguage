@@ -50,6 +50,7 @@ pub(crate) struct Args {
     pub(crate) max_catch_up: Option<usize>,
     pub(crate) calendar_dedup: Option<String>,
     pub(crate) command_timeout: Option<std::time::Duration>,
+    pub(crate) fs_timeout: Option<std::time::Duration>,
     pub(crate) drain_timeout: Option<std::time::Duration>,
     pub(crate) total_timeout: Option<std::time::Duration>,
     pub(crate) max_record_bytes: usize,

@@ -135,6 +135,11 @@ pub struct RunOptions {
     /// cooperative checkpoints in an in-process applet. It cannot interrupt a
     /// synchronous OS or library call.
     pub command_timeout: Option<Duration>,
+    /// Budget for one filesystem open/read operation on host paths and
+    /// in-process applets (threat model H7). `None` selects the shared
+    /// default, which is always finite: FIFO targets fail with a typed
+    /// timeout instead of hanging, and non-regular targets are refused.
+    pub fs_timeout: Option<Duration>,
     /// Maximum lifetime of the full runtime operation, including scheduler waits.
     pub total_timeout: Option<Duration>,
 }
@@ -152,6 +157,7 @@ impl RunOptions {
             max_loop_iterations: loops::MAX_LOOP_ITERATIONS,
             loop_budget_scope: LoopBudgetScope::PerLoop,
             command_timeout: None,
+            fs_timeout: None,
             total_timeout: None,
         }
     }
@@ -713,7 +719,43 @@ impl Input {
         match self {
             Self::Empty => Ok(Vec::new()),
             Self::Bytes(bytes) => Ok(bytes),
-            Self::File(file) => capture(file, limit),
+            Self::File(file) => {
+                // Bounded read (threat model H7): the handle was classified
+                // as a regular file at open time, and this poll/read loop
+                // bounds a stalled mount within the filesystem-operation
+                // deadline instead of hanging.
+                let deadline = crate::fs_io::fs_deadline(signals.fs_timeout, signals.deadline);
+                let checkpoint = || {
+                    if signals.cancelled.load(Ordering::Relaxed) {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "workflow cancelled by signal",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                };
+                crate::fs_io::read_input_file(&file, limit, deadline, &checkpoint).map_err(
+                    |error| {
+                        // Keep the long-standing over-limit rendering: a
+                        // plain message with no I/O error in the chain,
+                        // exactly as the unbounded reader reported it.
+                        if error.kind() == std::io::ErrorKind::QuotaExceeded {
+                            anyhow!("output exceeds maximum of {limit} bytes")
+                        } else {
+                            let failure = anyhow::Error::from(error);
+                            if failure
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|cause| cause.kind() == std::io::ErrorKind::TimedOut)
+                            {
+                                failure.context(CommandTimedOut)
+                            } else {
+                                failure
+                            }
+                        }
+                    },
+                )
+            }
             Self::Stdin => stdio::capture_stdin(limit, signals, timeout),
         }
     }
@@ -747,6 +789,10 @@ pub(crate) struct Signals {
     registrations: Vec<signal_hook::SigId>,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
+    /// Run-wide filesystem-operation budget for host opens/reads and
+    /// in-process applet file access (threat model H7). `None` selects the
+    /// shared default, which is always finite.
+    pub(crate) fs_timeout: Option<Duration>,
     graph_service_cancellation: bool,
     background_jobs_allowed: bool,
     program_modules: Arc<Mutex<Option<Arc<crate::modules::ProgramModuleSession>>>>,
@@ -893,6 +939,7 @@ impl Signals {
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
             deadline,
+            fs_timeout: None,
             graph_service_cancellation: false,
             background_jobs_allowed: true,
             program_modules: Arc::new(Mutex::new(None)),
@@ -984,6 +1031,7 @@ impl Signals {
             registrations: Vec::new(),
             capture_diagnostics,
             deadline,
+            fs_timeout: None,
             graph_service_cancellation: false,
             background_jobs_allowed: true,
             program_modules: Arc::new(Mutex::new(None)),
@@ -1027,6 +1075,7 @@ impl Signals {
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
             deadline,
+            fs_timeout: self.fs_timeout,
             graph_service_cancellation: self.graph_service_cancellation,
             background_jobs_allowed: self.background_jobs_allowed,
             program_modules: Arc::clone(&self.program_modules),
@@ -1070,6 +1119,7 @@ impl Signals {
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
             deadline: self.deadline,
+            fs_timeout: self.fs_timeout,
             graph_service_cancellation: self.graph_service_cancellation,
             background_jobs_allowed: self.background_jobs_allowed,
             program_modules: Arc::clone(&self.program_modules),
@@ -2614,11 +2664,12 @@ pub fn run_with_drain_timeout(
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
-    let signals = if has_interrupt_handler(program) {
+    let mut signals = if has_interrupt_handler(program) {
         Signals::register_with_drain(deadline, drain_timeout)?
     } else {
         Signals::register_with_deadline(deadline)?
     };
+    signals.fs_timeout = options.fs_timeout;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
@@ -2998,7 +3049,11 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
             Ok(())
         }
     };
-    let context = crate::applets::ExecutionContext::new(&checkpoint);
+    // The run's filesystem-operation budget travels with the applet
+    // context so `fs.*` opens and readiness waits honor `--fs-timeout-ms`
+    // (threat model H7); the checkpoint above still enforces the run budget.
+    let context =
+        crate::applets::ExecutionContext::new(&checkpoint).with_fs_timeout(signals.fs_timeout);
     let result = match typed_json {
         Some((_, typed)) => crate::applets::execute_with_typed_json(
             manifest.name_for(call),

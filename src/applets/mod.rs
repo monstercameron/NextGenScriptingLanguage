@@ -39,6 +39,7 @@ pub(crate) fn validate_json_pointer(pointer: &str) -> Result<(), String> {
 use serde_json::{Map, Value};
 use std::fmt;
 use std::path::Path;
+use std::time::Duration;
 
 /// The execution budget stopped an in-process applet at a cooperative
 /// checkpoint.
@@ -57,24 +58,62 @@ pub enum ExecutionBudgetExceeded {
 /// expose checkpoints.
 pub struct ExecutionContext<'a> {
     checkpoint: &'a dyn Fn() -> Result<(), ExecutionBudgetExceeded>,
+    fs_timeout: Option<Duration>,
 }
 
 impl<'a> ExecutionContext<'a> {
     /// Create a context whose callback checks the caller's deadline or
     /// cancellation state.
     pub fn new(checkpoint: &'a dyn Fn() -> Result<(), ExecutionBudgetExceeded>) -> Self {
-        Self { checkpoint }
+        Self {
+            checkpoint,
+            fs_timeout: None,
+        }
     }
 
     /// Create a context for trusted direct calls that have no runtime budget.
     pub fn unrestricted() -> ExecutionContext<'static> {
         ExecutionContext {
             checkpoint: &always_continue,
+            fs_timeout: None,
         }
+    }
+
+    /// Bound filesystem opens and readiness waits started under this context
+    /// to `timeout` (threat model H7). `None` keeps the shared default.
+    pub fn with_fs_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.fs_timeout = timeout;
+        self
     }
 
     fn checkpoint(&self) -> Result<(), AppletError> {
         (self.checkpoint)().map_err(AppletError::budget_exceeded)
+    }
+
+    /// The filesystem-operation deadline for this context: the configured
+    /// `--fs-timeout-ms` value, else the shared default (always finite).
+    pub(crate) fn fs_timeout(&self) -> Duration {
+        self.fs_timeout.unwrap_or(crate::fs_io::DEFAULT_FS_TIMEOUT)
+    }
+
+    /// The wait checkpoint for bounded filesystem helpers: budget overruns
+    /// surface as [`std::io::ErrorKind::TimedOut`] and cancellation as
+    /// [`std::io::ErrorKind::Interrupted`], so [`fs_io_error`] maps them onto
+    /// the typed timeout and cancellation errors.
+    pub(crate) fn fs_wait_checkpoint(&self) -> impl Fn() -> std::io::Result<()> + '_ {
+        let checkpoint = self.checkpoint;
+        move || {
+            checkpoint().map_err(|exceeded| match exceeded {
+                ExecutionBudgetExceeded::Timeout => std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "execution deadline exceeded; applet effects may be incomplete",
+                ),
+                ExecutionBudgetExceeded::Cancelled => std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "workflow cancelled; applet effects may be incomplete",
+                ),
+            })
+        }
     }
 }
 
@@ -152,6 +191,14 @@ impl AppletError {
         Self {
             code,
             kind: AppletErrorKind::Absence,
+            message: message.into(),
+        }
+    }
+
+    fn timeout(message: impl Into<String>) -> Self {
+        Self {
+            code: "timeout",
+            kind: AppletErrorKind::Timeout,
             message: message.into(),
         }
     }
@@ -438,6 +485,69 @@ pub(crate) fn io_error(error: std::io::Error, context: impl fmt::Display) -> App
         }
     } else {
         AppletError::failed("io_error", format!("{context}: {error}"))
+    }
+}
+
+/// Open `open_path` for reading without ever blocking in `open(2)`, refuse
+/// non-regular targets, wait for readiness within this context's
+/// filesystem-operation deadline, and return the handle in blocking mode.
+/// Errors name `display_path`, which may differ from `open_path` when the
+/// caller resolved a symlink first. A FIFO or socket fails with the typed
+/// `timeout` (threat model H7); any other non-regular target keeps the
+/// long-standing `path is not a regular file` refusal. Nothing is created,
+/// truncated, or written: the path is only ever opened read-only.
+pub(crate) fn open_regular_input(
+    open_path: &Path,
+    display_path: &Path,
+    no_follow_final: bool,
+    context: &ExecutionContext<'_>,
+) -> Result<std::fs::File, AppletError> {
+    let file = crate::fs_io::open_nonblocking(open_path, no_follow_final)
+        .map_err(|error| io_error(error, format!("opening {}", display_path.display())))?;
+    if let Err(error) = crate::fs_io::classify_regular_input(&file, display_path) {
+        return Err(match error.kind() {
+            std::io::ErrorKind::TimedOut => {
+                fs_io_error(error, format!("opening {}", display_path.display()))
+            }
+            std::io::ErrorKind::InvalidInput => AppletError::invalid(format!(
+                "path is not a regular file: {}",
+                display_path.display()
+            )),
+            _ => io_error(error, format!("checking {}", display_path.display())),
+        });
+    }
+    let wait_checkpoint = context.fs_wait_checkpoint();
+    let deadline = crate::fs_io::fs_deadline(Some(context.fs_timeout()), None);
+    if let Err(error) = crate::fs_io::wait_readable(&file, display_path, deadline, &wait_checkpoint)
+    {
+        return Err(fs_io_error(
+            error,
+            format!("opening {}", display_path.display()),
+        ));
+    }
+    crate::fs_io::restore_blocking(&file)
+        .map_err(|error| io_error(error, format!("opening {}", display_path.display())))?;
+    Ok(file)
+}
+
+/// Map a bounded-filesystem-helper failure onto a typed applet error: a
+/// [`std::io::ErrorKind::TimedOut`] wait becomes the typed `timeout` error
+/// (threat model H7) instead of the retryable `io_error` that [`io_error`]
+/// reports for that kind; everything else keeps the usual mapping,
+/// including absence for missing paths.
+pub(crate) fn fs_io_error(error: std::io::Error, context: impl fmt::Display) -> AppletError {
+    // Within the bounded filesystem helpers, `Interrupted` only escapes via
+    // the caller's wait checkpoint (raw EINTR from `open`/`poll` is retried
+    // inside), so it reports cancellation rather than a retryable I/O error.
+    // `TimedOut` covers both the filesystem-operation deadline and an
+    // overrun run budget (the checkpoint reports the latter as `TimedOut`
+    // too); the message names which one fired.
+    match error.kind() {
+        std::io::ErrorKind::TimedOut => AppletError::timeout(format!("{context}: {error}")),
+        std::io::ErrorKind::Interrupted => {
+            AppletError::budget_exceeded(ExecutionBudgetExceeded::Cancelled)
+        }
+        _ => io_error(error, context),
     }
 }
 

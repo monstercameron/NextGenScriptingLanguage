@@ -313,8 +313,10 @@ fn read_current(
             path.display()
         )));
     }
-    let mut file = fs::File::open(path)
-        .map_err(|error| io_error(error, format!("opening {}", path.display())))?;
+    // Re-open through the bounded helper: the metadata check above follows
+    // the path, so a FIFO swapped in before the open must not hang it. The
+    // handle check refuses anything that is not a regular file.
+    let mut file = super::open_regular_input(path, path, false, context)?;
     let mut bytes = Vec::new();
     read_chunked(&mut file, &mut bytes, path, context)?;
     if bytes.len() > MAX_FILE_BYTES {

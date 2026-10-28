@@ -68,6 +68,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut max_catch_up = None;
     let mut calendar_dedup = None;
     let mut command_timeout = None;
+    let mut fs_timeout = None;
     let mut drain_timeout = None;
     let mut total_timeout = None;
     let mut max_record_bytes = 65_536;
@@ -378,6 +379,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     .context("command timeout is too large")?;
                 command_timeout = Some(duration);
             }
+            "--fs-timeout-ms" if matches!(command, "run" | "resume") => {
+                if fs_timeout.is_some() {
+                    bail!("--fs-timeout-ms may be specified only once");
+                }
+                let value = parse_positive_usize(arguments, &mut index, "--fs-timeout-ms")?;
+                let duration = std::time::Duration::from_millis(u64::try_from(value)?);
+                std::time::Instant::now()
+                    .checked_add(duration)
+                    .context("filesystem timeout is too large")?;
+                fs_timeout = Some(duration);
+            }
             "--drain-timeout-ms" if command == "run" => {
                 if drain_timeout.is_some() {
                     bail!("--drain-timeout-ms may be specified only once");
@@ -541,6 +553,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         max_catch_up,
         calendar_dedup,
         command_timeout,
+        fs_timeout,
         drain_timeout,
         total_timeout,
         max_record_bytes,

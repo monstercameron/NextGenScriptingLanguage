@@ -67,7 +67,12 @@ fn symlinked_manifest_file_is_refused() {
     fs::write(dir.join("lane.real.json"), manifest("lane.real")).unwrap();
     std::os::unix::fs::symlink(store.join("target.json"), dir.join("link.json")).unwrap();
 
-    let error = format!("{:#}", Registry::load(&dir).unwrap_err());
+    let error = format!(
+        "{:#}",
+        Registry::load(&dir)
+            .err()
+            .expect("symlinked manifests must fail")
+    );
 
     assert!(
         error.contains("link.json") && error.contains("symbolic link"),

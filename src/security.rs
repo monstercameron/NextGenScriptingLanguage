@@ -1300,25 +1300,38 @@ pub(crate) enum TrustedInputKind {
 
 /// Ownership, writability and link gate for files that decide what runs:
 /// manifest directories and files, module roots and sources, and the bundled
-/// helper binaries. Unix inputs must be owned by the effective user (or root,
-/// which owns installed helpers and manifest trees) and must not be
+/// helper binaries. Unix leaf inputs must be owned by the effective user (or
+/// root, which owns installed helpers and manifest trees) and must not be
 /// group/world-writable, mirroring the cache rules in `src/runtime/cache.rs`.
-/// Symlinks are refused so a link cannot redirect a trusted name at an
-/// untrusted target; callers that accept an alias must canonicalize first and
-/// verify the canonical target with these functions. Windows inputs must not
-/// be reparse points. Windows ACLs are deliberately not enforced here:
-/// installed manifest trees and helpers must stay readable by every local user
-/// that may run the tool, so a private-DACL demand would break shared
-/// installs; see SECURITY.md for the extraction-location guidance that keeps
-/// those trees writable only by Administrators. Every check stats the path
-/// without following a trailing link, but a replacement between this check and
-/// a later open or read remains a race; callers narrow it with no-follow opens
-/// and same-load content verification, and the residual race is documented in
-/// SECURITY.md alongside the same-user limit.
+/// File leaves additionally refuse setuid/setgid bits and extra hardlinks.
+/// Every ancestor directory of the canonical path passes the same ownership
+/// and writability check (a writable parent lets an attacker rename or
+/// replace the verified leaf), except a sticky root-owned directory such as
+/// `/tmp`, where the sticky bit stops cross-user renames. Symlinks are
+/// refused so a link cannot redirect a trusted name at an untrusted target;
+/// callers that accept an alias must canonicalize first and verify the
+/// canonical target with these functions. On Linux a leaf or ancestor with a
+/// POSIX `system.posix_acl_access` ACL fails closed: mode bits cannot attest
+/// ACL-granted writes, so an ACL-bearing path is refused rather than trusted.
+/// NFSv4, RichACL and macOS ACLs are not probed here. Other Unix systems do
+/// not expose ACLs here and remain documented as best-effort (see
+/// SECURITY.md). Windows inputs must not be reparse points, must be owned by
+/// the current user, SYSTEM or Administrators, and must grant no write access
+/// to any other principal; an unreadable ACL fails closed. A private-DACL
+/// demand is deliberately not made: installed trees stay readable by every
+/// local runner, so read grants to others are allowed and only write grants
+/// are refused; see SECURITY.md for the extraction-location guidance. Every
+/// check stats the path without following a trailing link, but a replacement
+/// between this check and a later open, read or exec remains a race; callers
+/// narrow it with no-follow opens plus `verify_trusted_fd` on the opened
+/// descriptor, and the residual race is documented in SECURITY.md alongside
+/// the same-user limit. This gate therefore narrows check-then-use races but
+/// does not eliminate them.
 pub(crate) fn verify_trusted_input_dir(path: &Path, label: &str) -> Result<std::fs::Metadata> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| anyhow!("reading {label} {}: {error}", path.display()))?;
     verify_trusted_metadata(path, &metadata, TrustedInputKind::Directory, label)?;
+    verify_trusted_ancestors(path, label)?;
     Ok(metadata)
 }
 
@@ -1328,6 +1341,7 @@ pub(crate) fn verify_trusted_input_file(path: &Path, label: &str) -> Result<std:
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| anyhow!("reading {label} {}: {error}", path.display()))?;
     verify_trusted_metadata(path, &metadata, TrustedInputKind::File, label)?;
+    verify_trusted_ancestors(path, label)?;
     Ok(metadata)
 }
 
@@ -1369,16 +1383,592 @@ pub(crate) fn verify_trusted_metadata(
         use std::os::unix::fs::MetadataExt;
         // SAFETY: geteuid takes no arguments and cannot fail; the result is
         // compared with the owner uid in `metadata`.
-        let owned = metadata.uid() == crate::platform::unix_ffi::effective_uid()
-            || metadata.uid() == 0;
+        let owned =
+            metadata.uid() == crate::platform::unix_ffi::effective_uid() || metadata.uid() == 0;
         if !owned || metadata.mode() & 0o022 != 0 {
             return Err(anyhow!(
                 "{label} {} must be owned by the current user or root and not group/world-writable",
                 path.display()
             ));
         }
+        // A setuid/setgid helper or manifest would run or attest with elevated
+        // privilege; refuse the bits outright. An extra hardlink lets an
+        // attacker-controlled directory entry reach the same inode, so only a
+        // single link is trusted.
+        // Setuid/setgid and extra hardlinks are file-only gates: setgid
+        // directories are a benign sharing layout, and directories always
+        // carry extra links (`.` and each child directory's `..`). An extra
+        // file hardlink lets an attacker-controlled directory entry reach the
+        // same inode, and a setuid helper would run with elevated privilege.
+        if kind == TrustedInputKind::File && metadata.mode() & 0o6000 != 0 {
+            return Err(anyhow!(
+                "{label} {} must not carry setuid/setgid bits",
+                path.display()
+            ));
+        }
+        if kind == TrustedInputKind::File && metadata.nlink() > 1 {
+            return Err(anyhow!(
+                "{label} {} has extra hardlinks; only a single link is trusted",
+                path.display()
+            ));
+        }
+        if has_posix_extended_acl(path) {
+            return Err(anyhow!(
+                "{label} {} has an extended ACL that mode bits cannot attest; remove the ACL or move the input",
+                path.display()
+            ));
+        }
+    }
+    #[cfg(windows)]
+    {
+        verify_trusted_windows_acl(path, label)?;
     }
     Ok(())
+}
+
+/// Re-check the ownership, writability and link gate against an already-opened
+/// descriptor. Callers open with no-follow semantics first, then call this
+/// with the open `File` plus its `fstat` metadata, so a path swapped for a
+/// link, a differently owned inode, a widened mode, a newly attached ACL, or
+/// a changed owner/ACE between the path check and the open fails closed
+/// instead of being read or executed. The descriptor cannot be a trailing
+/// symlink after a no-follow open, but the check keeps the regular-file/dir,
+/// owner, mode, setuid/setgid, hardlink and ACL requirements identical to
+/// [`verify_trusted_metadata`]: on Linux the ACL probe runs against the open
+/// descriptor (`fgetxattr`), not the path, and on Windows the owner plus
+/// no-foreign-write-ACE gate runs against the open handle.
+pub(crate) fn verify_trusted_fd(
+    path: &Path,
+    file: &File,
+    metadata: &std::fs::Metadata,
+    kind: TrustedInputKind,
+    label: &str,
+) -> Result<()> {
+    if metadata.file_type().is_symlink() {
+        return Err(anyhow!(
+            "{label} {} changed to a symbolic link while opening",
+            path.display()
+        ));
+    }
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(metadata) {
+        return Err(anyhow!(
+            "{label} {} changed to a reparse point while opening",
+            path.display()
+        ));
+    }
+    let kind_ok = match kind {
+        TrustedInputKind::Directory => metadata.is_dir(),
+        TrustedInputKind::File => metadata.is_file(),
+    };
+    if !kind_ok {
+        let noun = match kind {
+            TrustedInputKind::Directory => "a directory",
+            TrustedInputKind::File => "a regular file",
+        };
+        return Err(anyhow!(
+            "{label} {} is not {noun} after opening",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let owned =
+            metadata.uid() == crate::platform::unix_ffi::effective_uid() || metadata.uid() == 0;
+        if !owned || metadata.mode() & 0o022 != 0 {
+            return Err(anyhow!(
+                "{label} {} failed the ownership check after opening: must be owned by the current user or root and not group/world-writable",
+                path.display()
+            ));
+        }
+        if kind == TrustedInputKind::File && metadata.mode() & 0o6000 != 0 {
+            return Err(anyhow!(
+                "{label} {} gained setuid/setgid bits while opening",
+                path.display()
+            ));
+        }
+        if kind == TrustedInputKind::File && metadata.nlink() > 1 {
+            return Err(anyhow!(
+                "{label} {} has extra hardlinks after opening",
+                path.display()
+            ));
+        }
+        // Descriptor-side ACL check: a POSIX ACL attached between the path
+        // check and the open must fail closed here. The probe runs on the
+        // open descriptor so a further path swap cannot hide it. Outside
+        // Linux the probe reports no ACL (documented gap).
+        if has_posix_extended_acl_fd(file) {
+            return Err(anyhow!(
+                "{label} {} has an extended ACL that mode bits cannot attest; remove the ACL or move the input",
+                path.display()
+            ));
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Handle-side owner/ACE re-check: an owner or DACL swap between the
+        // path check and the open must fail closed here.
+        check_trusted_windows_handle(file, path, label)?;
+    }
+    Ok(())
+}
+
+/// Check every ancestor directory of the canonical form of `path` for the
+/// same ownership and writability gate as the leaf: a writable ancestor lets
+/// an attacker rename or replace the verified leaf or helper binary. The leaf
+/// itself is not re-checked here. A sticky root- or self-owned directory
+/// (the `/tmp` shape: mode `1777`, owner root) is accepted because the sticky
+/// bit blocks cross-user renames inside it. Symlinked ancestors are refused;
+/// pass a canonical path (callers canonicalize before verifying the leaf).
+/// On Linux an ancestor carrying a POSIX `system.posix_acl_access` ACL fails
+/// closed for the same reason as a leaf ACL (NFSv4/RichACL/macOS ACLs are not
+/// probed). The filesystem root is checked as well.
+pub(crate) fn verify_trusted_ancestors(path: &Path, label: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        verify_trusted_windows_ancestors(path, label)
+    }
+    #[cfg(not(windows))]
+    {
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|error| anyhow!("canonicalizing {label} {}: {error}", path.display()))?;
+        let mut current = canonical.as_path();
+        // Walk from the leaf's parent up to and including the filesystem root.
+        while let Some(parent) = current.parent() {
+            current = parent;
+            let metadata = std::fs::symlink_metadata(current).map_err(|error| {
+                anyhow!("reading {label} ancestor {}: {error}", current.display())
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(anyhow!(
+                    "{label} ancestor {} is a symbolic link; pass the real path",
+                    current.display()
+                ));
+            }
+            if !metadata.is_dir() {
+                return Err(anyhow!(
+                    "{label} ancestor {} is not a directory",
+                    current.display()
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let owned = metadata.uid() == crate::platform::unix_ffi::effective_uid()
+                    || metadata.uid() == 0;
+                if !owned {
+                    return Err(anyhow!(
+                        "{label} ancestor {} must be owned by the current user or root",
+                        current.display()
+                    ));
+                }
+                let writable = metadata.mode() & 0o022 != 0;
+                // A sticky directory owned by root (or by us) still blocks an
+                // attacker from renaming our entries, so `/tmp`-style parents
+                // stay usable while plain group/world-writable parents fail.
+                let sticky_guard = metadata.mode() & 0o1000 != 0
+                    && (metadata.uid() == 0
+                        || metadata.uid() == crate::platform::unix_ffi::effective_uid());
+                if writable && !sticky_guard {
+                    return Err(anyhow!(
+                        "{label} ancestor {} is group/world-writable",
+                        current.display()
+                    ));
+                }
+                if has_posix_extended_acl(current) {
+                    return Err(anyhow!(
+                        "{label} ancestor {} has an extended ACL that mode bits cannot attest; remove the ACL or move the input",
+                        current.display()
+                    ));
+                }
+            }
+            // `Path::parent` of `/` is `None`, so the root itself is checked
+            // on the final iteration before this loop condition ends.
+            if current.parent().is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether `path` carries a POSIX extended ACL that mode bits cannot attest.
+/// Linux-only probe of the `system.posix_acl_access` extended attribute, read
+/// without following a trailing link. This covers POSIX ACLs only: NFSv4,
+/// RichACL and macOS ACLs use different attributes and are not detected here.
+/// Any present attribute (including an empty one) fails closed at the call
+/// site; missing-attribute, unsupported-filesystem and permission errors mean
+/// "no attested ACL" and return false so plain layouts keep working. Other
+/// Unix systems have no cheap link-safe probe here and return false; both
+/// gaps are documented in SECURITY.md rather than overstated.
+#[cfg(unix)]
+fn has_posix_extended_acl(path: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        let Ok(c_path) = std::ffi::CString::new(bytes) else {
+            return false;
+        };
+        let name = c"system.posix_acl_access";
+        // SAFETY: both pointers are live NUL-terminated strings; a null buffer
+        // with size zero only queries the attribute size and changes nothing.
+        let size = unsafe {
+            libc::lgetxattr(
+                c_path.as_ptr(),
+                name.as_ptr().cast(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        size > 0
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Whether the already-open `file` carries a POSIX extended ACL. Linux-only
+/// descriptor probe via `fgetxattr(system.posix_acl_access)`: unlike the
+/// path-side probe it cannot be redirected by a rename between the path check
+/// and the open. Same scope limit: POSIX ACLs only, not NFSv4/RichACL/macOS
+/// ACLs. Errors mean "no attested ACL" and return false.
+#[cfg(unix)]
+fn has_posix_extended_acl_fd(file: &File) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd;
+        let name = c"system.posix_acl_access";
+        // SAFETY: the fd is a live open descriptor; a null buffer with size
+        // zero only queries the attribute size and changes nothing.
+        let size = unsafe {
+            libc::fgetxattr(
+                file.as_raw_fd(),
+                name.as_ptr().cast(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        size > 0
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = file;
+        false
+    }
+}
+
+/// Windows writability gate for trusted inputs. The path must be owned by the
+/// current user, SYSTEM or Administrators, and no other principal may hold an
+/// allow ACE granting write-level access. Read grants to others are allowed
+/// so shared installs keep working; only writes fail closed. A missing DACL
+/// (full access to everyone) or an unreadable ACL fails closed and names the
+/// path. Deny and audit ACEs grant nothing and are ignored.
+#[cfg(windows)]
+pub(crate) fn verify_trusted_windows_acl(path: &Path, label: &str) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+        .with_context(|| format!("reading {label} Windows ACL {}", path.display()))?;
+    check_trusted_windows_handle(&handle, path, label)
+}
+
+/// Ancestor half of the Windows gate: every ancestor directory of the
+/// canonical path must pass the same owner/no-foreign-write check as the
+/// leaf, since a writable ancestor lets an attacker rename or replace the
+/// verified leaf. Reparse-point ancestors are refused.
+#[cfg(windows)]
+pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    let canonical = std::fs::canonicalize(path)
+        .with_context(|| format!("canonicalizing {label} {}", path.display()))?;
+    let mut current = canonical.as_path();
+    while let Some(parent) = current.parent() {
+        current = parent;
+        let metadata = std::fs::symlink_metadata(current)
+            .with_context(|| format!("reading {label} ancestor {}", current.display()))?;
+        if crate::platform::windows::is_reparse(&metadata) {
+            bail!(
+                "{label} ancestor {} is a reparse point; pass the real path",
+                current.display()
+            );
+        }
+        if !metadata.is_dir() {
+            bail!("{label} ancestor {} is not a directory", current.display());
+        }
+        let handle = std::fs::OpenOptions::new()
+            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(current)
+            .with_context(|| {
+                format!("reading {label} ancestor Windows ACL {}", current.display())
+            })?;
+        check_trusted_windows_handle(&handle, current, label)?;
+        if current.parent().is_none() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Shared DACL inspection behind [`verify_trusted_windows_acl`]: owner must
+/// be the current user, SYSTEM or Administrators, and no allow ACE may grant
+/// write-level rights to anyone else.
+#[cfg(windows)]
+fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Result<()> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{
+            AclSizeInformation,
+            Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+            EqualSid, GetAce, GetAclInformation, ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION,
+            DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, TOKEN_QUERY,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
+    const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
+    const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
+    // Write-level rights that would let another principal replace content,
+    // delete the path itself, or rename entries: data writes, extended-attribute
+    // writes, child add/delete, delete, DACL/owner takeover, and the generic
+    // umbrellas covering them. `0x10` is FILE_WRITE_EA and `0x10000` is
+    // DELETE; both let a foreign principal replace or remove a trusted input.
+    const WRITE_MASK: u32 = 0x2
+        | 0x4
+        | 0x8
+        | 0x10
+        | 0x40
+        | 0x100
+        | 0x10000
+        | 0x40000
+        | 0x80000
+        | 0x40000000
+        | 0x10000000;
+
+    let mut owner = std::ptr::null_mut();
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: handle owns a live handle, and all output pointers are live local slots.
+    let status = unsafe {
+        GetSecurityInfo(
+            handle.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        if !descriptor.is_null() {
+            // SAFETY: GetSecurityInfo allocated this descriptor with LocalAlloc.
+            unsafe { LocalFree(descriptor) };
+        }
+        return Err(std::io::Error::from_raw_os_error(status as i32))
+            .with_context(|| format!("reading {label} Windows ACL {}", path.display()));
+    }
+    let result = (|| {
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle needing no close.
+        let process = unsafe { GetCurrentProcess() };
+        let mut token = std::ptr::null_mut();
+        // SAFETY: process is the valid pseudo-handle above; token is an out-slot.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("reading current user SID");
+        }
+        // SAFETY: OpenProcessToken succeeded and returned an owned token handle.
+        let token = unsafe { OwnedHandle::from_raw_handle(token) };
+        let mut needed = 0;
+        // SAFETY: null buffer with length zero requests the TokenUser buffer size.
+        unsafe {
+            windows_sys::Win32::Security::GetTokenInformation(
+                token.as_raw_handle(),
+                windows_sys::Win32::Security::TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            );
+        }
+        if needed == 0 {
+            return Err(std::io::Error::last_os_error()).context("sizing current user SID");
+        }
+        let mut token_data = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
+        // SAFETY: token_data is aligned and at least `needed` bytes; token stays live.
+        if unsafe {
+            windows_sys::Win32::Security::GetTokenInformation(
+                token.as_raw_handle(),
+                windows_sys::Win32::Security::TokenUser,
+                token_data.as_mut_ptr().cast(),
+                needed,
+                &mut needed,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error()).context("reading current user SID");
+        }
+        // SAFETY: GetTokenInformation wrote a TOKEN_USER at the buffer start.
+        let user = unsafe {
+            &*(token_data
+                .as_ptr()
+                .cast::<windows_sys::Win32::Security::TOKEN_USER>())
+        };
+        if owner.is_null() || user.User.Sid.is_null() {
+            bail!("{label} {} has no Windows owner; refusing", path.display());
+        }
+        let well_known = |kind| {
+            let mut storage = [0usize;
+                (windows_sys::Win32::Security::SECURITY_MAX_SID_SIZE as usize)
+                    .div_ceil(std::mem::size_of::<usize>())];
+            let mut size = windows_sys::Win32::Security::SECURITY_MAX_SID_SIZE;
+            // SAFETY: storage is aligned with SECURITY_MAX_SID_SIZE bytes; these
+            // built-in SIDs take no domain SID.
+            if unsafe {
+                windows_sys::Win32::Security::CreateWellKnownSid(
+                    kind,
+                    std::ptr::null_mut(),
+                    storage.as_mut_ptr().cast(),
+                    &mut size,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("reading trusted Windows principals");
+            }
+            Ok(storage)
+        };
+        let system_sid = well_known(windows_sys::Win32::Security::WinLocalSystemSid)?;
+        let admins_sid = well_known(windows_sys::Win32::Security::WinBuiltinAdministratorsSid)?;
+        // SAFETY: owner is non-null in the live descriptor; the other SIDs are
+        // live in the token and local buffers.
+        let owner_trusted = unsafe {
+            EqualSid(owner, user.User.Sid) != 0
+                || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
+                || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
+        };
+        if !owner_trusted {
+            bail!(
+                "{label} {} must be owned by the current user, SYSTEM or Administrators",
+                path.display()
+            );
+        }
+        if dacl.is_null() {
+            bail!(
+                "{label} {} has no Windows DACL, granting full access; refusing",
+                path.display()
+            );
+        }
+        let mut size = ACL_SIZE_INFORMATION {
+            AceCount: 0,
+            AclBytesInUse: 0,
+            AclBytesFree: 0,
+        };
+        // SAFETY: dacl is the valid ACL inside the live security descriptor.
+        if unsafe {
+            GetAclInformation(
+                dacl,
+                (&mut size as *mut ACL_SIZE_INFORMATION).cast(),
+                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+        } == 0
+        {
+            bail!("{label} {} has an unreadable Windows DACL", path.display());
+        }
+        for index in 0..size.AceCount {
+            let mut raw_ace = std::ptr::null_mut();
+            // SAFETY: index is below the ACE count of this valid ACL.
+            if unsafe { GetAce(dacl, index, &mut raw_ace) } == 0 || raw_ace.is_null() {
+                bail!(
+                    "{label} {} has an unreadable Windows ACL entry",
+                    path.display()
+                );
+            }
+            // SAFETY: GetAce returned an ACE stored inside the live ACL.
+            let header = unsafe { &*(raw_ace.cast::<windows_sys::Win32::Security::ACE_HEADER>()) };
+            // Only allow ACEs can grant writes; deny/audit ACEs are ignored.
+            let (mask, ace_sid) = if header.AceType == ACCESS_ALLOWED_ACE_TYPE {
+                // SAFETY: this ACE type guarantees the ACCESS_ALLOWED_ACE layout.
+                let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
+                (ace.Mask, std::ptr::addr_of!(ace.SidStart).cast_mut().cast())
+            } else if header.AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE {
+                // Layout: header, Mask, Flags, optional 16-byte GUIDs, SidStart.
+                // SAFETY: the ACE lies inside the validated ACL; reads stay
+                // within its reported AceSize.
+                let base = raw_ace as *const u8;
+                let ace_size = header.AceSize as usize;
+                if ace_size < 12 {
+                    bail!(
+                        "{label} {} has a malformed Windows ACL entry",
+                        path.display()
+                    );
+                }
+                // SAFETY: the ACE lies inside the validated ACL and `ace_size >= 12`, so offsets 4 and 8 are within its reported bounds.
+                let mask = unsafe { *(base.add(4) as *const u32) };
+                // SAFETY: the ACE lies inside the validated ACL and `ace_size >= 12`, so offsets 4 and 8 are within its reported bounds.
+                let flags = unsafe { *(base.add(8) as *const u32) };
+                let mut offset = 12usize;
+                if flags & ACE_OBJECT_TYPE_PRESENT != 0 {
+                    offset += 16;
+                }
+                if flags & ACE_INHERITED_OBJECT_TYPE_PRESENT != 0 {
+                    offset += 16;
+                }
+                if offset + 8 > ace_size {
+                    bail!(
+                        "{label} {} has a malformed Windows ACL entry",
+                        path.display()
+                    );
+                }
+                // SAFETY: `offset + 8 <= ace_size` was checked above, so the SID start lies within the validated ACE.
+                let ace_sid = unsafe { base.add(offset) as *mut _ };
+                (mask, ace_sid)
+            } else {
+                continue;
+            };
+            if mask & WRITE_MASK == 0 {
+                continue;
+            }
+            // SAFETY: the ACE SID lies inside the validated ACL; the compared
+            // SIDs live in the token and local buffers.
+            let sid_trusted = unsafe {
+                EqualSid(ace_sid, user.User.Sid) != 0
+                    || EqualSid(ace_sid, owner) != 0
+                    || EqualSid(ace_sid, system_sid.as_ptr().cast_mut().cast()) != 0
+                    || EqualSid(ace_sid, admins_sid.as_ptr().cast_mut().cast()) != 0
+            };
+            if !sid_trusted {
+                bail!(
+                    "{label} {} grants Windows write access to another principal; refusing",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    })();
+    if !descriptor.is_null() {
+        // SAFETY: GetSecurityInfo allocated this descriptor with LocalAlloc.
+        unsafe { LocalFree(descriptor) };
+    }
+    result
 }
 
 pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {

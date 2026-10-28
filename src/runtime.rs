@@ -1297,6 +1297,15 @@ pub(crate) fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
 
 /// Resolve an executable using a caller-supplied PATH when present. This keeps
 /// static checks and runtime launch resolution on the same search path.
+///
+/// A manifest-selected executable decides what runs, so the selected
+/// candidate passes the same trusted-input ownership and writability gate as
+/// manifests (leaf plus ancestors, hardlink/setuid, ACLs): a trusted manifest
+/// naming a writable binary is refused instead of launched. The canonical
+/// target is verified but the selected spelling is returned, so multicall
+/// tools and symlink aliases keep dispatching on argv[0]. A replacement
+/// between this verification and the later spawn remains a race; see
+/// SECURITY.md.
 pub(crate) fn binary_path_with_path(
     binary: &str,
     cwd: &Path,
@@ -1319,6 +1328,7 @@ pub(crate) fn binary_path_with_path(
         if !metadata.is_file() || !crate::platform::executable(&metadata) {
             bail!("{} is not an executable file", candidate.display());
         }
+        verify_trusted_executable(&candidate)?;
         Ok(candidate)
     } else {
         let path = path_override
@@ -1329,9 +1339,27 @@ pub(crate) fn binary_path_with_path(
     }
 }
 
+/// Verify a manifest-selected executable against the trusted-input gate. The
+/// canonical target passes the leaf plus ancestor, hardlink/setuid and ACL
+/// checks; the caller's spelling is kept for launch. Failures name the
+/// selected path and fail closed instead of falling through to another PATH
+/// entry: the first executable hit is what would run.
+fn verify_trusted_executable(candidate: &Path) -> Result<()> {
+    let canonical = std::fs::canonicalize(candidate)
+        .with_context(|| format!("resolving executable {}", candidate.display()))?;
+    crate::security::verify_trusted_input_file(&canonical, "executable")
+        .with_context(|| format!("trusting executable {}", candidate.display()))?;
+    Ok(())
+}
+
 /// Locate the version-matched generic applet helper beside this executable.
 /// The helper decides what the `@execute-applet` applets run, so it passes
-/// the same trusted-input ownership and writability gate as manifests.
+/// the same trusted-input ownership and writability gate as manifests,
+/// including the writable-ancestor, hardlink and setuid checks: a writable
+/// helper parent would let an attacker replace the verified binary before it
+/// is executed. The path-side check cannot pin the inode through `exec`, so a
+/// replacement between this verification and the later spawn remains a race;
+/// see SECURITY.md.
 pub fn bundled_applet_helper() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
     let helper = executable.with_file_name(if cfg!(windows) {
@@ -1339,15 +1367,16 @@ pub fn bundled_applet_helper() -> Result<PathBuf> {
     } else {
         "execute-applet"
     });
-    let metadata = fs::symlink_metadata(&helper).with_context(|| {
-        "bundled execute-applet helper missing; build the interpreter and helper binaries with cargo build --release"
-    })?;
-    crate::security::verify_trusted_metadata(
+    if fs::symlink_metadata(&helper).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        bail!("bundled execute-applet helper is a symbolic link; pass the real path");
+    }
+    let metadata = crate::security::verify_trusted_input_file(
         &helper,
-        &metadata,
-        crate::security::TrustedInputKind::File,
         "bundled execute-applet helper",
-    )?;
+    )
+    .with_context(|| {
+        "bundled execute-applet helper missing or untrusted; build the interpreter and helper binaries with cargo build --release"
+    })?;
     if !metadata.is_file() || !crate::platform::executable(&metadata) {
         bail!("bundled execute-applet helper is not an executable file");
     }
@@ -1355,7 +1384,8 @@ pub fn bundled_applet_helper() -> Result<PathBuf> {
 }
 
 /// Locate the version-matched native model applet beside this executable.
-/// The helper passes the same trusted-input gate as the applet helper.
+/// The helper passes the same trusted-input gate as the applet helper,
+/// including the writable-parent check; the `exec` race note above applies.
 pub fn bundled_model_applet() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
     let helper = executable.with_file_name(if cfg!(windows) {
@@ -1363,15 +1393,13 @@ pub fn bundled_model_applet() -> Result<PathBuf> {
     } else {
         "execute-model"
     });
-    let metadata = fs::symlink_metadata(&helper).with_context(|| {
-        "bundled execute-model helper missing; build both binaries with cargo build --release"
+    if fs::symlink_metadata(&helper).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        bail!("bundled execute-model helper is a symbolic link; pass the real path");
+    }
+    let metadata = crate::security::verify_trusted_input_file(&helper, "bundled execute-model helper")
+        .with_context(|| {
+        "bundled execute-model helper missing or untrusted; build both binaries with cargo build --release"
     })?;
-    crate::security::verify_trusted_metadata(
-        &helper,
-        &metadata,
-        crate::security::TrustedInputKind::File,
-        "bundled execute-model helper",
-    )?;
     if !metadata.is_file() || !crate::platform::executable(&metadata) {
         bail!("bundled execute-model helper is not an executable file");
     }
@@ -1400,6 +1428,7 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
             continue;
         };
         if metadata.is_file() && crate::platform::executable(&metadata) {
+            verify_trusted_executable(&candidate)?;
             return Ok(candidate);
         }
     }
@@ -1452,6 +1481,7 @@ fn binary_path_in_components(binary: &str, entries: &[PathBuf]) -> Result<PathBu
             continue;
         };
         if metadata.is_file() && crate::platform::executable(&metadata) {
+            verify_trusted_executable(&candidate)?;
             return Ok(candidate);
         }
     }

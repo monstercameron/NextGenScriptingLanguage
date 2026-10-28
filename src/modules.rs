@@ -2177,7 +2177,10 @@ fn resolve_inside_root(path: &Path, root: &Path, what: &str) -> Result<PathBuf> 
     // A symlinked module file would resolve its content outside the trusted
     // root while keeping a trusted-looking name; refuse the link itself.
     if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        bail!("{what} {} is a symbolic link; pass the real path", path.display());
+        bail!(
+            "{what} {} is a symbolic link; pass the real path",
+            path.display()
+        );
     }
     let canonical =
         fs::canonicalize(path).with_context(|| format!("resolving {what} {}", path.display()))?;
@@ -2196,6 +2199,9 @@ fn resolve_inside_root(path: &Path, root: &Path, what: &str) -> Result<PathBuf> 
         crate::security::TrustedInputKind::File,
         what,
     )?;
+    // The file's ancestors must pass the gate too: a writable parent lets an
+    // attacker replace the verified file before it is read.
+    crate::security::verify_trusted_ancestors(&canonical, what)?;
     Ok(canonical)
 }
 
@@ -2248,7 +2254,10 @@ fn read_limited(path: &Path, maximum: usize, what: &str) -> Result<Vec<u8>> {
     }
     #[cfg(not(any(unix, windows)))]
     if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        bail!("{what} {} is a symbolic link; pass the real path", path.display());
+        bail!(
+            "{what} {} is a symbolic link; pass the real path",
+            path.display()
+        );
     }
     let file = options
         .open(path)
@@ -2259,9 +2268,21 @@ fn read_limited(path: &Path, maximum: usize, what: &str) -> Result<Vec<u8>> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         bail!("{what} {} is not a regular file", path.display());
     }
+    // Re-verify ownership, mode, links and ACLs on the opened descriptor so
+    // a file swapped between the path-side check and this open fails closed.
+    crate::security::verify_trusted_fd(
+        path,
+        &file,
+        &metadata,
+        crate::security::TrustedInputKind::File,
+        what,
+    )?;
     #[cfg(windows)]
     if crate::platform::windows::is_reparse(&metadata) {
-        bail!("{what} {} is a reparse point; pass the real path", path.display());
+        bail!(
+            "{what} {} is a reparse point; pass the real path",
+            path.display()
+        );
     }
     if metadata.len() > maximum as u64 {
         bail!("{what} {} exceeds {maximum} bytes", path.display());
@@ -2837,7 +2858,14 @@ mod tests {
         let path = root.join("example/program.modules.json");
         fs::write(&path, serde_json::to_vec(&package).unwrap()).unwrap();
         let error = load_program_module_package(&path, &root, None).unwrap_err();
-        assert!(format!("{error:#}").contains("outside allowed module root"));
+        let rendered = format!("{error:#}");
+        // The link itself is refused before its target is even resolved, so a
+        // symlinked escape reports the link rather than the outside root.
+        assert!(
+            rendered.contains("outside allowed module root")
+                || rendered.contains("symbolic link"),
+            "{rendered}"
+        );
     }
 
     #[test]

@@ -623,7 +623,8 @@ fn writable_manifest_named_binary_is_refused_before_launch() {
     let executable = tools.join("probe-bin");
     fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o777)).unwrap();
-    let manifest = r#"{"name":"probe.bin","binary":"tools/probe-bin","parameters":{},"arguments":[]}"#;
+    let manifest =
+        r#"{"name":"probe.bin","binary":"tools/probe-bin","parameters":{},"arguments":[]}"#;
     let manifests = write_manifests(directory.path(), &[("bin.json", manifest)]);
     let manifest_arg = manifests.to_string_lossy().into_owned();
 
@@ -635,11 +636,7 @@ fn writable_manifest_named_binary_is_refused_before_launch() {
 
     refuses(
         &output,
-        &[
-            "executable",
-            "probe-bin",
-            "group/world-writable",
-        ],
+        &["executable", "probe-bin", "group/world-writable"],
     );
 }
 
@@ -655,7 +652,8 @@ fn writable_parent_of_manifest_named_binary_is_refused() {
     fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(&tools, fs::Permissions::from_mode(0o777)).unwrap();
-    let manifest = r#"{"name":"probe.bin","binary":"tools/probe-bin","parameters":{},"arguments":[]}"#;
+    let manifest =
+        r#"{"name":"probe.bin","binary":"tools/probe-bin","parameters":{},"arguments":[]}"#;
     let manifests = write_manifests(directory.path(), &[("bin.json", manifest)]);
     let manifest_arg = manifests.to_string_lossy().into_owned();
 

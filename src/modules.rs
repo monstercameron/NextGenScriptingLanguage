@@ -2862,8 +2862,7 @@ mod tests {
         // The link itself is refused before its target is even resolved, so a
         // symlinked escape reports the link rather than the outside root.
         assert!(
-            rendered.contains("outside allowed module root")
-                || rendered.contains("symbolic link"),
+            rendered.contains("outside allowed module root") || rendered.contains("symbolic link"),
             "{rendered}"
         );
     }

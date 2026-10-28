@@ -2269,6 +2269,25 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
     Ok(())
 }
 
+/// Refuses manifest-dependent work before any registry load when no installed
+/// manifest directory is discoverable and no explicit selector was given. A
+/// detached release binary reaches this with only non-existent install-relative
+/// candidates, so it fails with a clear message instead of probing the build
+/// machine's source tree or silently listing an empty registry.
+fn check_installed_manifests(
+    manifest_dir: &Option<PathBuf>,
+    manifest_catalog: &Option<PathBuf>,
+    candidates: &[PathBuf],
+) -> Result<()> {
+    if manifest_dir.is_none()
+        && manifest_catalog.is_none()
+        && !candidates.iter().any(|path| path.is_dir())
+    {
+        bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
+    }
+    Ok(())
+}
+
 fn applets_cli(arguments: &[String]) -> Result<()> {
     const HELP: &str = "Usage: execute applets list [--names | --signatures] [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets search QUERY [--limit N] [--json] [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets inspect NAME_OR_PHRASE [--json=compact] [--verbose] [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets discover\n       execute applets match --json REQUEST [--manifest-dir PATH | --manifest-catalog FILE]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. List signatures and search provide compact contract-derived discovery. Inspect emits validated contract metadata without executing applets; --json=compact omits in-process argv templates unless --verbose is supplied. Discover reports installed commands using PATH metadata only. Match ranks declared typed ports without running applets. Versioned contracts expose typed I/O, outcomes, effects, backends, and lifecycle while retaining legacy fields for compatibility.\nUse -- before a name or phrase beginning with a hyphen.";
     if arguments == ["--help"] || arguments == ["-h"] {
@@ -2408,14 +2427,11 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             "commands": flow::discovery::inventory_commands()?
         }));
     }
-    if manifest_dir.is_none()
-        && manifest_catalog.is_none()
-        && !default_manifest_candidates()
-            .iter()
-            .any(|path| path.is_dir())
-    {
-        bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
-    }
+    check_installed_manifests(
+        &manifest_dir,
+        &manifest_catalog,
+        &default_manifest_candidates(),
+    )?;
     // Listing and matching read every manifest, so compare the whole directory first.
     let registry = load_registry(manifest_dir, manifest_catalog, ManifestCheck::Full)?;
     #[cfg(feature = "tooling")]
@@ -3613,6 +3629,44 @@ mod startup_path_tests {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
         let candidates = default_manifest_candidates();
         assert_eq!(candidates.contains(&source), cfg!(debug_assertions));
+    }
+
+    #[test]
+    fn detached_applets_without_manifests_must_refuse_before_any_load() {
+        let missing = Path::new("no-such-manifests-451").to_path_buf();
+        let error = super::check_installed_manifests(&None, &None, &[missing])
+            .expect_err("a detached binary must refuse instead of loading an empty registry");
+        assert!(
+            error
+                .to_string()
+                .contains("no installed manifest directory found"),
+            "unexpected refusal: {error:#}"
+        );
+    }
+
+    #[test]
+    fn installed_manifest_gate_keeps_explicit_and_installed_sources_working() {
+        let directory = tempfile::tempdir().unwrap();
+        let installed = directory.path().join("manifests");
+        std::fs::create_dir(&installed).unwrap();
+        let missing = directory.path().join("missing");
+        // An installed directory proceeds without explicit selectors.
+        super::check_installed_manifests(&None, &None, &[missing.clone(), installed.clone()])
+            .expect("installed manifests proceed");
+        // Explicit selectors proceed even when no installed directory exists.
+        super::check_installed_manifests(
+            &Some(directory.path().join("custom")),
+            &None,
+            std::slice::from_ref(&missing),
+        )
+        .expect("explicit --manifest-dir proceeds");
+        super::check_installed_manifests(
+            &None,
+            &Some(directory.path().join("catalog.json")),
+            &[missing],
+        )
+        .expect("explicit --manifest-catalog proceeds");
+        let _ = installed;
     }
 
     #[test]

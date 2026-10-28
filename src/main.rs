@@ -475,12 +475,36 @@ fn program_takes_terminal(arguments: &[String]) -> bool {
 }
 
 fn execute() -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    startup_latency_hook();
     let raw_arguments = env::args_os().skip(1).collect::<Vec<_>>();
     let arguments = apply_child_environment_options(parse_os_arguments(raw_arguments)?)?;
     if let Some(status) = daemon_forward(&arguments) {
         std::process::exit(status);
     }
     execute_arguments(arguments)
+}
+
+/// Test-only startup floor for the #518 latency canary. When the `failpoints`
+/// feature is enabled, `EXECUTE_LATENCY_TEST_DELAY_MS=N` sleeps N milliseconds
+/// before argument handling, delaying every entry point of this process
+/// including `--version`, so the latency gate can prove it rejects a startup
+/// regression in the real binary. The hook is compiled in only with
+/// `failpoints`, which no default, full, or release build enables, so release
+/// behavior is unchanged; like the other `EXECUTE_TEST_*` hooks it is ambient
+/// to children, so the canary sets it for one gate invocation only. An absent
+/// or unparsable value means no delay.
+#[cfg(feature = "failpoints")]
+fn startup_latency_hook() {
+    if let Some(millis) = startup_latency_delay_ms() {
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
+}
+
+/// Parse the test-only startup delay in milliseconds. `None` means no hook.
+#[cfg(feature = "failpoints")]
+fn startup_latency_delay_ms() -> Option<u64> {
+    env::var("EXECUTE_LATENCY_TEST_DELAY_MS").ok()?.parse().ok()
 }
 
 /// Consume host-level child-environment options before dispatch. Keeping this
@@ -3623,6 +3647,17 @@ mod startup_path_tests {
             error.to_string(),
             "argument 1 is not valid UTF-8; use a percent-encoded file:// URI for non-UTF-8 workflow paths"
         );
+    }
+
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn latency_hook_parses_millis_and_ignores_other_values() {
+        std::env::set_var("EXECUTE_LATENCY_TEST_DELAY_MS", "150");
+        assert_eq!(super::startup_latency_delay_ms(), Some(150));
+        std::env::set_var("EXECUTE_LATENCY_TEST_DELAY_MS", "not-a-number");
+        assert_eq!(super::startup_latency_delay_ms(), None);
+        std::env::remove_var("EXECUTE_LATENCY_TEST_DELAY_MS");
+        assert_eq!(super::startup_latency_delay_ms(), None);
     }
 
     #[test]

@@ -1758,6 +1758,23 @@ fn has_posix_extended_acl_fd(file: &File) -> bool {
     }
 }
 
+/// Allow-ACE rights that fail the trusted-input gate: data and extended-attribute
+/// writes, child add/delete, attribute writes, delete, DACL/owner takeover,
+/// and the generic umbrellas covering them. Read-level rights stay out,
+/// including `FILE_READ_EA` (`0x8`): standard read grants carry it, so keeping
+/// it here would refuse every ancestor that lets another principal read, such
+/// as `C:\Users` on a shared host. `GENERIC_READ` and `GENERIC_EXECUTE` are
+/// likewise absent because they map to read-only rights.
+pub(crate) const TRUSTED_WINDOWS_WRITE_MASK: u32 =
+    0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+
+/// Whether an allow-ACE access mask grants write-level rights under
+/// [`TRUSTED_WINDOWS_WRITE_MASK`]. Pure mask logic with no platform calls, so
+/// the gate's read/write boundary is pinned by unit tests on every host.
+pub(crate) fn windows_allow_ace_grants_write(mask: u32) -> bool {
+    mask & TRUSTED_WINDOWS_WRITE_MASK != 0
+}
+
 /// Windows writability gate for trusted inputs. The path must be owned by the
 /// current user, SYSTEM or Administrators, and no other principal may hold an
 /// allow ACE granting write-level access. Read grants to others are allowed
@@ -1843,22 +1860,6 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
     const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
     const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
     const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
-    // Write-level rights that would let another principal replace content,
-    // delete the path itself, or rename entries: data writes, extended-attribute
-    // writes, child add/delete, delete, DACL/owner takeover, and the generic
-    // umbrellas covering them. `0x10` is FILE_WRITE_EA and `0x10000` is
-    // DELETE; both let a foreign principal replace or remove a trusted input.
-    const WRITE_MASK: u32 = 0x2
-        | 0x4
-        | 0x8
-        | 0x10
-        | 0x40
-        | 0x100
-        | 0x10000
-        | 0x40000
-        | 0x80000
-        | 0x40000000
-        | 0x10000000;
 
     let mut owner = std::ptr::null_mut();
     let mut dacl = std::ptr::null_mut();
@@ -2041,7 +2042,7 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
             } else {
                 continue;
             };
-            if mask & WRITE_MASK == 0 {
+            if !windows_allow_ace_grants_write(mask) {
                 continue;
             }
             // SAFETY: the ACE SID lies inside the validated ACL; the compared
@@ -2974,5 +2975,74 @@ mod tests {
             "the bounded window must keep the newest decisions"
         );
         assert_consistent(&snapshot, total);
+    }
+
+    /// The Windows allow-ACE gate must refuse write-level grants while letting
+    /// read-level grants through, on every host: this is pure mask logic with
+    /// no platform calls. Regression cover for the `0x8` (`FILE_READ_EA`)
+    /// misclassification that refused `C:\Users` — standard read-and-execute
+    /// grants carry read-EA, so the ancestor walk failed every manifest load
+    /// under a Windows user profile and `check --json` degraded to
+    /// `check_failed`.
+    #[test]
+    fn windows_write_mask_keeps_read_grants_trusted() {
+        const FILE_READ_DATA: u32 = 0x1;
+        const FILE_READ_EA: u32 = 0x8;
+        const FILE_EXECUTE: u32 = 0x20;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const READ_CONTROL: u32 = 0x20000;
+        const SYNCHRONIZE: u32 = 0x100000;
+        const GENERIC_READ: u32 = 0x80000000;
+        const GENERIC_EXECUTE: u32 = 0x20000000;
+        // A standard read-and-execute grant, as `C:\Users` carries for
+        // `BUILTIN\Users`: read data/EA/attributes, execute, and the generic
+        // read-control/synchronize rights. None of it lets another principal
+        // replace or remove a trusted input.
+        const STANDARD_READ_EXECUTE: u32 = FILE_READ_DATA
+            | FILE_READ_EA
+            | FILE_EXECUTE
+            | FILE_READ_ATTRIBUTES
+            | READ_CONTROL
+            | SYNCHRONIZE;
+        assert!(!windows_allow_ace_grants_write(0));
+        assert!(!windows_allow_ace_grants_write(STANDARD_READ_EXECUTE));
+        for read in [
+            FILE_READ_DATA,
+            FILE_READ_EA,
+            FILE_EXECUTE,
+            FILE_READ_ATTRIBUTES,
+            READ_CONTROL,
+            SYNCHRONIZE,
+            GENERIC_READ,
+            GENERIC_EXECUTE,
+        ] {
+            assert!(
+                !windows_allow_ace_grants_write(read),
+                "read-level right {read:#x} must stay trusted"
+            );
+        }
+        // Every write-level right the gate documents still fails closed, both
+        // alone and combined with a read grant.
+        for write in [
+            0x2,        // FILE_WRITE_DATA
+            0x4,        // FILE_APPEND_DATA
+            0x10,       // FILE_WRITE_EA
+            0x40,       // FILE_DELETE_CHILD
+            0x100,      // FILE_WRITE_ATTRIBUTES
+            0x10000,    // DELETE
+            0x40000,    // WRITE_DAC
+            0x80000,    // WRITE_OWNER
+            0x40000000, // GENERIC_WRITE
+            0x10000000, // GENERIC_ALL
+        ] {
+            assert!(
+                windows_allow_ace_grants_write(write),
+                "write-level right {write:#x} must fail closed"
+            );
+            assert!(
+                windows_allow_ace_grants_write(STANDARD_READ_EXECUTE | write),
+                "write-level right {write:#x} must fail closed beside reads"
+            );
+        }
     }
 }

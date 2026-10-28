@@ -6,6 +6,9 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 const SECRET: &str = "SECRET-TOKEN-123";
 
 fn write(root: &Path, relative: &str, text: &str) {
@@ -43,6 +46,10 @@ fn policy(root: &Path, read: Option<&str>) -> String {
     }
     #[cfg(not(unix))]
     fs::write(&path, body).unwrap();
+    // The binary refuses to load a policy without a private ACL: on Windows an
+    // inherited tempdir DACL is rejected before any policy check runs, masking
+    // every assertion below behind the privacy error.
+    private_answers::make_private(&path);
     "policy.json".to_owned()
 }
 
@@ -270,4 +277,24 @@ fn a_nested_file_call_is_shown_relative_to_the_file_that_makes_it() {
         .map(|step| step["applet"].as_str().unwrap())
         .collect();
     assert_eq!(applets, vec!["file:lib/a.program", "file:sub/b.program"]);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_policy_without_a_protected_dacl_is_refused_before_policy_checks() {
+    // Control for the fixtures above: a tempdir policy with its inherited DACL
+    // must be refused with the privacy error, proving the passing tests really
+    // loaded a protected policy instead of skipping validation.
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "main.program",
+        "run program file \"secret.txt\"\n",
+    );
+    fs::write(root.path().join("exposed.json"), r#"{"version":1}"#).unwrap();
+
+    let output = run(root.path(), "exposed.json");
+    assert!(!output.status.success());
+    let shown = text(&output);
+    assert!(shown.contains("protected Windows DACL"), "{shown}");
 }

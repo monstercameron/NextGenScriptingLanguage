@@ -1208,27 +1208,12 @@ pub fn run_checkpointed(
     // the pre-registered secrets (fail-closed, uncertain marker, journal stays
     // clean). Secret floors still fail here before any effect; non-loop
     // programs keep the upfront denial so no effect precedes the refusal.
-    {
-        use crate::contracts::Sensitivity;
-        let has_secret = sensitivity_floor.contains(&Sensitivity::Secret);
-        let has_unknown = sensitivity_floor.contains(&Sensitivity::Unknown);
-        let has_loop = program.steps.iter().any(|step| {
-            matches!(
-                &step.kind,
-                crate::ast::StepKind::TaskGroup { each: Some(_), .. }
-                    | crate::ast::StepKind::Loop {
-                        kind: crate::ast::LoopKind::ForEach { .. },
-                        ..
-                    }
-            )
-        });
-        let has_declared_secrets =
-            !crate::security::declared_secret_applets(registry).is_empty();
-        let defer_unknown_to_elements =
-            !has_secret && has_unknown && has_loop && has_declared_secrets;
-        if !defer_unknown_to_elements {
-            authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
-        }
+    if !super::defer_unknown_checkpoint_denial(
+        registry,
+        &sensitivity_floor,
+        super::program_has_for_each(program),
+    ) {
+        authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
     }
     let mut checkpoint = checkpoint.clone();
     checkpoint.directory = cwd.join(&checkpoint.directory);
@@ -1259,7 +1244,16 @@ pub fn run_checkpointed(
         Some(&mut journal),
     )?;
     if !already_finished {
-        authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+        // Under the Unknown-only deferral every node commit was already
+        // gated on its actual persisted bytes and bindings, so the static
+        // floor must not re-impose the deferred denial after a clean run.
+        if !super::defer_unknown_checkpoint_denial(
+            registry,
+            &sensitivity_floor,
+            super::program_has_for_each(program),
+        ) {
+            authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+        }
         journal.finish()?;
     }
     Ok(result)

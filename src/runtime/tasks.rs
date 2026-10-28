@@ -1232,14 +1232,22 @@ pub(super) fn run_each(
                     }
                     // The secret check wins so its uncertain marker and retry
                     // flag survive; the generic floor still applies to non-secret
-                    // Unknown/Secret output before any line is written. This runs
-                    // after the element too, so it also marks uncertain.
-                    if let Err(error) = super::authorize_checkpoint_persistence(
+                    // Unknown/Secret output before any line is written, except
+                    // under the Unknown-only deferral, where the two secret
+                    // checks above are the gate. This runs after the element
+                    // too, so it also marks uncertain.
+                    if !super::defer_unknown_checkpoint_denial(
                         registry,
                         &context.sensitivity_floor,
+                        true,
                     ) {
-                        sink.mark_uncertain(index)?;
-                        bail!("checkpoint refused for parallel for each element {index}: {error:#}; it may contain an uncertain side effect, pass --retry-uncertain to retry");
+                        if let Err(error) = super::authorize_checkpoint_persistence(
+                            registry,
+                            &context.sensitivity_floor,
+                        ) {
+                            sink.mark_uncertain(index)?;
+                            bail!("checkpoint refused for parallel for each element {index}: {error:#}; it may contain an uncertain side effect, pass --retry-uncertain to retry");
+                        }
                     }
                     sink.commit(index, &outcome)?;
                 }

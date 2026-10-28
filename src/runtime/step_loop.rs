@@ -803,21 +803,29 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             // The secret check wins so its uncertain marker and retry
                             // flag survive; the generic floor still applies to
                             // non-secret Unknown/Secret state before any binding
-                            // blob is stored. This also runs after the element, so
-                            // it marks uncertain too.
-                            if let Err(error) = authorize_checkpoint_persistence(
+                            // blob is stored, except under the Unknown-only
+                            // deferral, where the secret check above is the
+                            // gate. This also runs after the element, so it
+                            // marks uncertain too.
+                            if !defer_unknown_checkpoint_denial(
                                 registry,
                                 &signals.sensitivity_floor(),
+                                true,
                             ) {
-                                checkpoint::elements::for_each_element_mark_uncertain(
-                                    journal,
-                                    &loop_frames,
-                                    header,
-                                )?;
-                                bail!(
-                                    "line {}: checkpoint persistence is denied by policy ({error:#}); it may contain an uncertain side effect, pass --retry-uncertain to retry",
-                                    step.line
-                                );
+                                if let Err(error) = authorize_checkpoint_persistence(
+                                    registry,
+                                    &signals.sensitivity_floor(),
+                                ) {
+                                    checkpoint::elements::for_each_element_mark_uncertain(
+                                        journal,
+                                        &loop_frames,
+                                        header,
+                                    )?;
+                                    bail!(
+                                        "line {}: checkpoint persistence is denied by policy ({error:#}); it may contain an uncertain side effect, pass --retry-uncertain to retry",
+                                        step.line
+                                    );
+                                }
                             }
                             checkpoint::elements::for_each_element_commit(
                                 journal,
@@ -2850,12 +2858,42 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         }) {
             journal_end = None;
             journal_uncertain = false;
-            authorize_checkpoint_persistence(registry, &signals.sensitivity_floor())?;
+            // The static floor is workflow-wide, so under the Unknown-only
+            // deferral it would refuse a node (for example the Public step
+            // before the loop) for a loop reference that has not persisted
+            // anything yet. Gate the commit on the bytes and bindings this
+            // node actually persists instead: refuse, before any blob is
+            // stored, when they carry a registered secret or a sensitive
+            // provenance name. Outside the deferral the floor still refuses
+            // before the node's output is even materialized.
+            let floor = signals.sensitivity_floor();
+            let defer_unknown =
+                defer_unknown_checkpoint_denial(registry, &floor, program_has_for_each(program));
+            if !defer_unknown {
+                authorize_checkpoint_persistence(registry, &floor)?;
+            }
             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                 options.max_output_bytes,
                 signals,
                 options.command_timeout,
             )?;
+            if defer_unknown {
+                let mut seen = std::collections::BTreeSet::new();
+                tasks::pre_register_declared_manifest_secrets(registry, &mut seen)?;
+                let redactor = crate::security::secret_redactor(registry);
+                let secret_output = redactor.redact_bytes(&bytes) != bytes.as_slice();
+                let secret_bindings = bindings
+                    .values()
+                    .any(|value| tasks::value_contains_registered_secret(&redactor, value));
+                let sensitive_provenance = bindings
+                    .keys()
+                    .any(|name| sensitive_bindings.contains(name));
+                if secret_output || secret_bindings || sensitive_provenance {
+                    bail!(
+                        "checkpoint persistence is denied by policy: node output contains a registered secret"
+                    );
+                }
+            }
             journal.complete_node_parts(
                 &cwd,
                 &bytes,

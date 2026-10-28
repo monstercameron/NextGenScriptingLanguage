@@ -2213,6 +2213,73 @@ fn sequential_secret_refusal_records_uncertain_marker_for_resume() -> Result<()>
 
 #[cfg(unix)]
 #[test]
+fn unknown_only_loop_without_declared_secrets_keeps_upfront_checkpoint_denial() -> Result<()> {
+    // Fail-closed boundary for the Unknown-only deferral: deferral is sound
+    // only when declared secrets are registered up front, because the
+    // per-element gates compare actual bytes/inputs against those registered
+    // values. With no declared secrets there is nothing for the element gates
+    // to match, so the static Unknown floor must still refuse before any
+    // element runs: no marker, no journal line, generic certain denial.
+    let temp = tempfile::tempdir()?;
+    let item = "deferral-guard-item-411";
+    let marker = temp.path().join("element-ran.marker");
+    let registry = flow::manifest::Registry::from_sources(&[
+        public_noop_manifest().to_string(),
+        public_echoer_manifest(false).to_string(),
+    ])?;
+    // Active policy with no declared secrets: Unknown persistence stays
+    // denied, but the deferral has no registered values to arm its gates.
+    registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+        br#"{"version":1,"secrets":{}}"#,
+    )?);
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+    let program_text = format!(
+        "run public.noop\nparallel for each item in [\"{item}\"] at most 1 as results\n  run public.echoer with text item and marker \"{}\"\n",
+        marker.to_string_lossy()
+    );
+    let program = flow::parser::parse(&program_text)?;
+    let program_path = temp.path().join("group.program");
+    std::fs::write(&program_path, &program_text)?;
+    let checkpoint = flow::runtime::CheckpointOptions {
+        directory: temp.path().join("ck"),
+        program_path,
+        resume: false,
+        retry_uncertain: false,
+    };
+    let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &checkpoint) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(anyhow!(
+                "Unknown-only loop with no declared secrets must keep the upfront denial"
+            ))
+        }
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("data persistence is denied by policy"),
+        "unexpected refusal message: {message}"
+    );
+    assert!(
+        !message.contains("--retry-uncertain"),
+        "upfront refusal happens before any effect, so it must stay certain: {message}"
+    );
+    assert!(
+        !marker.exists(),
+        "upfront Unknown denial must fail before any element runs"
+    );
+    let dir = temp.path().join("ck");
+    if dir.exists() {
+        assert_journal_has_no_secret(&dir, item.as_bytes())?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn task_group_env_load_validates_and_runs_on_worker_empty_stdin() -> Result<()> {
     // `env.load` takes its file text through stdin and declares no path
     // parameter, so task workers pass validation and run with their empty

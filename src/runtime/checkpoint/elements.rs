@@ -731,20 +731,8 @@ pub(in crate::runtime) fn group_journal<'a>(
     // to the per-element gates, which compare actual bytes/inputs against the
     // pre-registered secrets (fail-closed, uncertain marker, no line written).
     // Secret floors still fail here before any worker launches.
-    {
-        use crate::contracts::Sensitivity;
-        let has_secret = sensitivities.contains(&Sensitivity::Secret);
-        if has_secret {
-            crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
-        } else if sensitivities.contains(&Sensitivity::Unknown) {
-            let has_declared_secrets =
-                !crate::security::declared_secret_applets(registry).is_empty();
-            if !has_declared_secrets {
-                crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
-            }
-        } else {
-            crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
-        }
+    if !crate::runtime::defer_unknown_checkpoint_denial(registry, sensitivities, true) {
+        crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
     }
     let items = list_items(&each.values, bindings)?;
     let node_fingerprint = journal.element_node_fingerprint()?;

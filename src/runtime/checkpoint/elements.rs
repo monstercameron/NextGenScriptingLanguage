@@ -676,10 +676,7 @@ pub(in crate::runtime) fn for_each_resume(
     let mut pending = replay.pending;
     let mut next = commits.len();
     if let Some(id) = step_id.as_deref() {
-        loop {
-            let Some(position) = pending.iter().position(|element| element.index == next) else {
-                break;
-            };
+        while let Some(position) = pending.iter().position(|element| element.index == next) {
             let element = pending.remove(position);
             let Some(record) = super::resolutions::element_resolution(&resolutions, id, next)
             else {

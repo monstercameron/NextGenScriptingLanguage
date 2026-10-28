@@ -528,6 +528,7 @@ fn locked_checkpoint_refuses_resolve_and_reports_locked() {
         .write(true)
         .open(&lock_path)
         .expect("lock file exists after a checkpointed run");
+    // SAFETY: lock_file owns a live descriptor for the duration of this call.
     let held = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     assert_eq!(held, 0, "test must hold the checkpoint lock");
     let summary = status_json(directory.path(), &checkpoint);

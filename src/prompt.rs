@@ -275,7 +275,7 @@ impl Drop for EchoOff<'_> {
 
 #[cfg(test)]
 #[path = "../tests/support/private_answers.rs"]
-mod private_answers;
+pub(crate) mod private_answers;
 
 #[cfg(test)]
 mod tests {

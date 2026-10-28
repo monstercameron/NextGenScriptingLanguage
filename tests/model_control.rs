@@ -334,6 +334,12 @@ fn explicit_dotenv_secret_is_not_echoed_when_owned_server_rejects_request() {
     );
     let env_file = directory.path().join("synthetic-provider-credentials");
     std::fs::write(&env_file, format!("EXECUTE_MODEL_KEY_DOTENV={secret}\n")).unwrap();
+    // Credential files must be private: the helper refuses group-readable files.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let mut args = openai_args(&endpoint(&listener, "/v1/responses"));
     args.extend([
         "--env-file".into(),
@@ -387,6 +393,12 @@ fn custom_key_env_is_read_from_the_file_and_default_keys_are_not_sent() {
         "EXECUTE_MODEL_KEY_FILE=synthetic-file-key\nUNRELATED_SETTING=ignored\n",
     )
     .unwrap();
+    // Credential files must be private: the helper refuses group-readable files.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let mut args = openai_args(&endpoint);
     args.extend([
         "--env-file".into(),

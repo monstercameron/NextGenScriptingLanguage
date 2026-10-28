@@ -63,5 +63,6 @@ pub(crate) struct Args {
     /// keeps the closing `execute.graph-run/1` document; `jsonl` prints one
     /// `execute.graph-event/1` line per event as it arrives. Unset means
     /// `jsonl` for graphs with persistent nodes, `document` otherwise.
+    #[cfg_attr(not(feature = "graph"), allow(dead_code))]
     pub(crate) events: Option<String>,
 }

@@ -2469,6 +2469,7 @@ pub(crate) fn network_origin_is_granted(grant: &AppletGrant, origin: &str) -> bo
 /// origin in `network_origins`. A broad empty-list grant and an absent policy
 /// do not preserve non-public destinations; only a listed origin reaches the
 /// transport as an explicit SSRF grant.
+#[cfg(feature = "remote")]
 pub(crate) fn remote_origin_is_explicitly_granted(
     registry: &Registry,
     applet_name: &str,

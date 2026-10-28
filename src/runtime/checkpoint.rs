@@ -3514,6 +3514,8 @@ fn atomic_write_with_inner(
     crate::failpoint::hit("checkpoint.atomic.renamed")?;
     #[cfg(unix)]
     {
+        #[cfg(feature = "failpoints")]
+        crate::failpoint::hit("checkpoint.atomic.directory_sync")?;
         pinned_directory
             .expect("pinned checkpoint directory")
             .sync_all()

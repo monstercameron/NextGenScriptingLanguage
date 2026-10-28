@@ -481,11 +481,22 @@ const EXPLICIT_EFFECTS: &[(&str, &str)] = &[
     ("systemd.control", "system"),
 ];
 
-/// The category one declared effect string belongs to.
+/// The category one declared effect string belongs to. Both the legacy `fs.read*`
+/// prefix and the shipped `filesystem.read*` vocabulary map to `reads`, so honest
+/// file readers stay cacheable and pass the gate without an `undeclared` approval.
+/// A `process.exec` *effect* (child command execution beyond the spawn itself, such
+/// as `awk` `system()`, GNU `sed` `e`, or `git.commit` hooks/GPG/editors) stays
+/// `undeclared` on purpose. The advisory gate reports it as a violation unless
+/// explicitly approved with `--allow undeclared`, and the capability policy
+/// refuses any grant that withholds `process.exec`; the native sandbox path
+/// additionally narrows the surrounding filesystem/network grants to the
+/// declared effects, but it does not individually confine the child command.
+/// The marking is conservative: platforms lacking a vector (e.g. BSD `sed`
+/// without `e`) still declare it and still require the same approval.
 pub fn effect_category(effect: &str) -> &'static str {
     if let Some((_, category)) = EXPLICIT_EFFECTS.iter().find(|(name, _)| *name == effect) {
         category
-    } else if effect.starts_with("fs.read") {
+    } else if effect.starts_with("fs.read") || effect.starts_with("filesystem.read") {
         "reads"
     } else if effect.starts_with("fs.write")
         || effect.starts_with("file.write")

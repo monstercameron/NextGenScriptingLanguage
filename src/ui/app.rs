@@ -35,7 +35,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
         mpsc::{self, Receiver, Sender, SyncSender},
         Arc,
     },
@@ -1592,16 +1592,32 @@ fn render_chart(
 }
 struct Signals {
     cancel: Arc<AtomicBool>,
+    // Retained so the registered handlers keep working for the guard's whole
+    // lifetime: the Windows backend only holds weak references. Each guard
+    // owns a fresh slot, so one run can neither inherit nor erase another's
+    // recorded interrupt.
+    _cleanup: Arc<AtomicBool>,
+    _signal_code: Arc<AtomicI32>,
     ids: Vec<signal_hook::SigId>,
 }
 impl Signals {
     fn new() -> Result<Self> {
-        let mut guard = Self {
-            cancel: Arc::new(AtomicBool::new(false)),
-            ids: Vec::new(),
-        };
-        guard.ids = crate::platform::signals(guard.cancel.clone(), None, None)?;
-        Ok(guard)
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cleanup = Arc::new(AtomicBool::new(false));
+        let signal_code = Arc::new(AtomicI32::new(0));
+        let ids = crate::platform::signals(
+            cancel.clone(),
+            None,
+            None,
+            cleanup.clone(),
+            signal_code.clone(),
+        )?;
+        Ok(Self {
+            cancel,
+            _cleanup: cleanup,
+            _signal_code: signal_code,
+            ids,
+        })
     }
 }
 impl Drop for Signals {

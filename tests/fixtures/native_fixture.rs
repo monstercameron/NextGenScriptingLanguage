@@ -9,6 +9,488 @@ fn spawn_detached_child(command: &mut std::process::Command) -> std::io::Result<
     Ok(())
 }
 
+/// Report ConPTY child stdio routing from inside the pseudo-console session:
+/// the inherited standard-handle values, their file types, console-mode
+/// status, and which write path reaches the screen. Every line is short ASCII
+/// so the captured VT stream keeps each line (and marker) contiguous for the
+/// harness byte-window assertions.
+#[cfg(windows)]
+fn conpty_probe_report() {
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        Storage::FileSystem::{GetFileType, FILE_TYPE_CHAR, FILE_TYPE_DISK, FILE_TYPE_PIPE},
+        System::Console::{
+            GetConsoleMode, GetStdHandle, WriteConsoleW, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE,
+        },
+    };
+    for (name, kind) in [
+        ("stdin", STD_INPUT_HANDLE),
+        ("stdout", STD_OUTPUT_HANDLE),
+        ("stderr", STD_ERROR_HANDLE),
+    ] {
+        // SAFETY: kind is one of the three standard-handle constants.
+        // GetStdHandle takes no pointers, and its borrowed result is never
+        // closed here.
+        let handle = unsafe { GetStdHandle(kind) };
+        let null = handle.is_null();
+        let invalid = handle == INVALID_HANDLE_VALUE;
+        let file_type = if null || invalid {
+            "NONE"
+        } else {
+            // SAFETY: the handle is live here (neither null nor invalid),
+            // and GetFileType takes no out-pointers.
+            let kind = unsafe { GetFileType(handle) };
+            if kind == FILE_TYPE_CHAR {
+                "CHAR"
+            } else if kind == FILE_TYPE_DISK {
+                "DISK"
+            } else if kind == FILE_TYPE_PIPE {
+                "PIPE"
+            } else {
+                "OTHER"
+            }
+        };
+        let mut mode = 0u32;
+        let console = if null || invalid {
+            false
+        } else {
+            // SAFETY: mode is a live local u32 for the out-parameter, and
+            // the handle is neither null nor invalid here.
+            unsafe { GetConsoleMode(handle, &mut mode) != 0 }
+        };
+        println!(
+            "PROBE-REPORT {name} null={null} invalid={invalid} type={file_type} console={console} mode={mode:#X}"
+        );
+    }
+    // SAFETY: STD_OUTPUT_HANDLE is re-queried as a borrowed handle that is
+    // never closed. WriteConsoleW runs only when GetConsoleMode succeeds
+    // above, so the handle is a console; the marker buffer is in bounds for
+    // its length, written is a live local out-parameter, and the reserved
+    // argument is null.
+    let (console_ok, console_written) = unsafe {
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        let mut mode = 0u32;
+        if out.is_null() || out == INVALID_HANDLE_VALUE || GetConsoleMode(out, &mut mode) == 0 {
+            (false, 0)
+        } else {
+            let marker: Vec<u16> = "\r\nCONPTY-PROBE-CONSOLE-OK\r\n".encode_utf16().collect();
+            let mut written = 0u32;
+            let ok = WriteConsoleW(
+                out,
+                marker.as_ptr().cast(),
+                marker.len() as u32,
+                &mut written,
+                std::ptr::null(),
+            ) != 0;
+            (ok, written)
+        }
+    };
+    println!("PROBE-REPORT write_console ok={console_ok} written={console_written}");
+    let file_ok = std::io::stdout()
+        .write_all(b"CONPTY-PROBE-FILE-OK\n")
+        .is_ok()
+        && std::io::stdout().flush().is_ok();
+    println!("PROBE-REPORT write_file ok={file_ok}");
+}
+
+/// Second-stage ConPTY launcher: this process is already attached to the
+/// pseudo-console, but its own stdio are still the parent's pipes (without
+/// STARTF_USESTDHANDLES the parent std handles propagate into the ConPTY
+/// child instead of defaulting to the console buffer). Re-spawn the real
+/// target with genuine console standard handles: open CONIN$/CONOUT$ on the
+/// attached console, spawn suspended with STARTF_USESTDHANDLES plus a
+/// HANDLE_LIST containing exactly those three console handles so no other
+/// handle leaks into the target, hold it in a KILL_ON_JOB_CLOSE-only job so
+/// a harness timeout can never orphan it, then wait and exit with the
+/// target's code. Silent on success; every failure prints to the inherited
+/// cargo stderr and exits nonzero.
+#[cfg(windows)]
+fn conpty_bootstrap(args: &[String]) -> ! {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::*,
+        Storage::FileSystem::*,
+        System::{
+            JobObjects::*,
+            Threading::{
+                CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+                GetExitCodeProcess, InitializeProcThreadAttributeList, ResumeThread,
+                TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
+                CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+                LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+                STARTUPINFOW,
+            },
+        },
+    };
+    // Every failure reports the thread's Win32 last-error code with its
+    // message, so the next CI log names the failing call instead of only
+    // the bootstrap stage. Callers must capture the error before any later
+    // Win32 call (cleanup included) overwrites it.
+    let fail_with = |message: &str, error: std::io::Error, code: i32| -> ! {
+        match error.raw_os_error() {
+            Some(raw) => eprintln!("conpty-bootstrap: {message} (win32 error {raw}: {error})"),
+            None => eprintln!("conpty-bootstrap: {message} ({error})"),
+        }
+        std::process::exit(code);
+    };
+    // Captured at call time: no Win32 call runs between the failure above
+    // and this read, so the last error still belongs to that call.
+    let fail = |message: &str, code: i32| -> ! {
+        fail_with(message, std::io::Error::last_os_error(), code);
+    };
+    let Some(target) = args.first() else {
+        fail("usage: conpty-bootstrap <exe> [args...]", 64);
+    };
+    // CONIN$/CONOUT$ resolve to this process's attached console, which is the
+    // pseudo-console session. Opening them is also the attach proof: failure
+    // here means the session never attached, and failing loudly beats running
+    // the target on cargo pipes while the harness waits for screen bytes.
+    let wide = |name: &str| {
+        name.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let conout_name = wide("CONOUT$");
+    let conin_name = wide("CONIN$");
+    // SAFETY: the names are live NUL-terminated UTF-16 locals; no security
+    // attributes, no template. The returned handles are checked before use.
+    let conout = unsafe {
+        CreateFileW(
+            conout_name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    // SAFETY: same contract as the CONOUT$ open above.
+    let conin = unsafe {
+        CreateFileW(
+            conin_name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if conout.is_null()
+        || conout == INVALID_HANDLE_VALUE
+        || conin.is_null()
+        || conin == INVALID_HANDLE_VALUE
+    {
+        fail(
+            "attached console unavailable (CONIN$/CONOUT$ did not open)",
+            3,
+        );
+    }
+    // The CreateFileW handles are non-inheritable; duplicate them inheritable
+    // for the target. OwnedHandle takes each duplicate exactly once below.
+    let mut conout_dup: HANDLE = std::ptr::null_mut();
+    let mut conin_dup: HANDLE = std::ptr::null_mut();
+    // SAFETY: the current-process pseudo-handle is valid for duplication, the
+    // source handles are live console handles from above, and each out-pointer
+    // is a live local. DUPLICATE_SAME_ACCESS keeps the console access rights.
+    let duplicated = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            conout,
+            GetCurrentProcess(),
+            &mut conout_dup,
+            0,
+            TRUE,
+            DUPLICATE_SAME_ACCESS,
+        ) != FALSE
+            && DuplicateHandle(
+                GetCurrentProcess(),
+                conin,
+                GetCurrentProcess(),
+                &mut conin_dup,
+                0,
+                TRUE,
+                DUPLICATE_SAME_ACCESS,
+            ) != FALSE
+    };
+    if !duplicated {
+        fail("console handle duplication failed", 4);
+    }
+    // SAFETY: the duplicates are valid and uniquely owned from here on.
+    let (conout_dup, conin_dup) = unsafe {
+        (
+            OwnedHandle::from_raw_handle(conout_dup),
+            OwnedHandle::from_raw_handle(conin_dup),
+        )
+    };
+    // A KILL_ON_JOB_CLOSE-only job: no other limits, so the runtime's own
+    // inner jobs (every native spawn nests the same way the handoff path
+    // already does) keep working, while a harness timeout that terminates
+    // this bootstrap still ends the target instead of orphaning it.
+    // SAFETY: both arguments null ask for default security and an unnamed
+    // job; the handle is checked before use.
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job.is_null() {
+        fail("bootstrap job creation failed", 4);
+    }
+    // SAFETY: the job handle is live and uniquely owned here.
+    let job = unsafe { OwnedHandle::from_raw_handle(job) };
+    // SAFETY: JOBOBJECT_EXTENDED_LIMIT_INFORMATION is plain integers, so the
+    // zeroed value is valid; only LimitFlags is set, which means no other
+    // limit. The info class matches the struct, and address plus size_of_val
+    // delimit exactly one struct for the kernel.
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: the job handle is live; the struct layout matches the class.
+    if unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle() as HANDLE,
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32,
+        )
+    } == FALSE
+    {
+        fail("bootstrap job configuration failed", 4);
+    }
+    // Exactly the three console handles: the target inherits nothing else, so
+    // the host pipe ends and the cargo pipes stay out of its handle table.
+    let inherit = [
+        conout_dup.as_raw_handle() as HANDLE,
+        conout_dup.as_raw_handle() as HANDLE,
+        conin_dup.as_raw_handle() as HANDLE,
+    ];
+    let mut attr_size: usize = 0;
+    // SAFETY: a null list with a live size out-pointer is the documented size
+    // query; failure with ERROR_INSUFFICIENT_BUFFER is expected here.
+    unsafe {
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    if attr_size == 0 {
+        fail("bootstrap attribute list size query failed", 4);
+    }
+    // 8-byte storage: the attribute list holds pointers, so a byte Vec
+    // does not guarantee its alignment (ARM64 validates it strictly); the
+    // buffer still covers at least the queried byte size.
+    let mut attr_storage = vec![0u64; attr_size.div_ceil(std::mem::size_of::<u64>())];
+    let attr_list = attr_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+    // SAFETY: the storage covers at least the queried size and outlives
+    // process creation; one attribute slot is requested.
+    if unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == FALSE {
+        fail("bootstrap attribute list init failed", 4);
+    }
+    // SAFETY: the list is initialized; the array holds three live inheritable
+    // console handles that outlive the spawn (OwnedHandles above).
+    if unsafe {
+        UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            inherit.as_ptr().cast(),
+            (inherit.len() * std::mem::size_of::<HANDLE>()) as usize,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    } == FALSE
+    {
+        // Capture before the delete below overwrites the thread's last error.
+        let error = std::io::Error::last_os_error();
+        // SAFETY: the list was initialized above and is deleted exactly once.
+        unsafe {
+            DeleteProcThreadAttributeList(attr_list);
+        }
+        fail_with("bootstrap handle-list attribute failed", error, 4);
+    }
+    let startup = STARTUPINFOEXW {
+        StartupInfo: STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdInput: conin_dup.as_raw_handle() as HANDLE,
+            hStdOutput: conout_dup.as_raw_handle() as HANDLE,
+            hStdError: conout_dup.as_raw_handle() as HANDLE,
+            ..Default::default()
+        },
+        lpAttributeList: attr_list,
+    };
+    let text = std::iter::once(target)
+        .chain(args[1..].iter())
+        .map(|arg| quote_bootstrap_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut command: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut info = PROCESS_INFORMATION::default();
+    // SAFETY: the command buffer is a live NUL-terminated mutable UTF-16
+    // buffer; startup carries explicit console stdio plus the exact handle
+    // list; environment and directory are inherited. The grandchild shares
+    // this process's console by ordinary inheritance, so no pseudo-console
+    // attribute is needed on this hop.
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            TRUE,
+            CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup.StartupInfo as *const STARTUPINFOW,
+            &mut info,
+        )
+    };
+    // Read the thread's last error before any other Win32 call (including
+    // the list delete below) can overwrite it; it is only reported when
+    // the launch actually failed.
+    let first_error = std::io::Error::last_os_error();
+    // SAFETY: the attribute list was initialized above and is deleted exactly
+    // once here on every path past initialization.
+    unsafe {
+        DeleteProcThreadAttributeList(attr_list);
+    }
+    drop(attr_storage);
+    if created == FALSE {
+        // The HANDLE_LIST hop is the newest part of this path; when its
+        // validation rejects the launch (native ARM CI reached this stage
+        // with "target launch failed" before the target ran), retry once
+        // with a plain STARTUPINFOW carrying the same explicit console
+        // stdio but no attribute list. Routing is unchanged
+        // (STARTF_USESTDHANDLES still points at CONIN$/CONOUT$), so the
+        // screen assertions stay exact; only the no-other-handle-leaks
+        // hardening is relaxed on this fallback path.
+        let retry_startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdInput: conin_dup.as_raw_handle() as HANDLE,
+            hStdOutput: conout_dup.as_raw_handle() as HANDLE,
+            hStdError: conout_dup.as_raw_handle() as HANDLE,
+            ..Default::default()
+        };
+        // CreateProcessW may modify the command buffer even on failure, so
+        // the retry gets a fresh copy of the same command line.
+        command = text.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: same live-buffer contract as the first attempt; the retry
+        // startup carries explicit console stdio with no attribute list.
+        let retried = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                command.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                TRUE,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                std::ptr::null(),
+                std::ptr::null(),
+                &retry_startup as *const STARTUPINFOW,
+                &mut info,
+            )
+        };
+        let retry_error = std::io::Error::last_os_error();
+        if retried == FALSE {
+            match (retry_error.raw_os_error(), first_error.raw_os_error()) {
+                (Some(second), Some(first)) => eprintln!(
+                    "conpty-bootstrap: bootstrap target launch failed for {target} (handle-list attempt win32 error {first}: {first_error}; plain-startup retry win32 error {second}: {retry_error})"
+                ),
+                _ => eprintln!(
+                    "conpty-bootstrap: bootstrap target launch failed for {target} ({first_error}; retry: {retry_error})"
+                ),
+            }
+            std::process::exit(4);
+        }
+        match first_error.raw_os_error() {
+            Some(raw) => eprintln!(
+                "conpty-bootstrap: handle-list launch of {target} failed (win32 error {raw}: {first_error}); retried with plain console startup"
+            ),
+            None => eprintln!(
+                "conpty-bootstrap: handle-list launch of {target} failed ({first_error}); retried with plain console startup"
+            ),
+        }
+    }
+    // SAFETY: CreateProcessW succeeded, so both handles are valid and uniquely
+    // owned here.
+    let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess) };
+    // SAFETY: same successful launch owns the suspended primary thread; it is
+    // resumed into the job below, then the handle closes at once.
+    let thread = unsafe { OwnedHandle::from_raw_handle(info.hThread) };
+    // No target instruction runs until it belongs to the bootstrap job.
+    // SAFETY: the job and process handles are live for this call, and the
+    // target is still suspended, so none of its code has run yet.
+    if unsafe {
+        AssignProcessToJobObject(
+            job.as_raw_handle() as HANDLE,
+            process.as_raw_handle() as HANDLE,
+        )
+    } == FALSE
+    {
+        // Capture before TerminateProcess below overwrites the last error;
+        // nesting inside an outer CI job reports here (e.g. access denied).
+        let error = std::io::Error::last_os_error();
+        // SAFETY: the process handle is live; terminating a suspended target
+        // whose job assignment failed keeps the session bounded.
+        unsafe {
+            TerminateProcess(process.as_raw_handle() as HANDLE, 1);
+        }
+        fail_with("bootstrap job assignment failed", error, 4);
+    }
+    // SAFETY: the thread handle is the suspended primary thread from the
+    // launch above and stays open for this call.
+    if unsafe { ResumeThread(thread.as_raw_handle() as HANDLE) } == u32::MAX {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: the process handle is live; see the assignment-failure path.
+        unsafe {
+            TerminateProcess(process.as_raw_handle() as HANDLE, 1);
+        }
+        fail_with("bootstrap thread resume failed", error, 4);
+    }
+    drop(thread);
+    // The harness bounds this wait from the outside and terminates this
+    // process on timeout, which closes the job and ends the target; INFINITE
+    // here therefore cannot deadlock teardown.
+    // SAFETY: the process handle is live and owned; the wait ends when the
+    // target exits or this process is terminated.
+    let wait = unsafe { WaitForSingleObject(process.as_raw_handle() as HANDLE, INFINITE) };
+    let mut status = 1u32;
+    let queried =
+        // SAFETY: the owned process handle and status pointer are live.
+        unsafe { GetExitCodeProcess(process.as_raw_handle() as HANDLE, &mut status) } != FALSE;
+    drop(process);
+    if wait != WAIT_OBJECT_0 || !queried {
+        fail_with(
+            &format!("bootstrap target wait failed (wait={wait:#X} queried={queried})"),
+            std::io::Error::last_os_error(),
+            4,
+        );
+    }
+    std::process::exit(status as i32);
+}
+
+/// Command-line quoting with the MSVCRT rules, so the bootstrap target sees
+/// the exact argv the harness intended.
+#[cfg(windows)]
+fn quote_bootstrap_arg(arg: &str) -> String {
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut slashes = 0usize;
+    for ch in arg.chars() {
+        if ch == '\\' {
+            slashes += 1;
+        } else {
+            if ch == '"' {
+                quoted.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
+            } else {
+                quoted.extend(std::iter::repeat_n('\\', slashes));
+            }
+            slashes = 0;
+            quoted.push(ch);
+        }
+    }
+    quoted.extend(std::iter::repeat_n('\\', slashes * 2));
+    quoted.push('"');
+    quoted
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str).unwrap_or("") {
@@ -16,6 +498,37 @@ fn main() {
         "json-lines" => json_lines_worker(&args[1..]),
         "write" => {
             std::io::stdout().write_all(args[1].as_bytes()).unwrap();
+        }
+        "invalid-utf8" => {
+            // Raw bytes for the Windows console replacement contract: 0xFF is
+            // not valid UTF-8, so a console must show U+FFFD while a pipe keeps
+            // the exact bytes. Flush while still attached so the bytes reach
+            // the ConPTY screen before teardown instead of being lost or
+            // landing on the test runner.
+            let mut stdout = std::io::stdout();
+            stdout.write_all(&[0xFF, 0x41]).unwrap();
+            stdout.flush().unwrap();
+        }
+        "conpty-probe" => {
+            // Bounded ConPTY routing probe: report the inherited standard
+            // handles, console status and write-path delivery from inside the
+            // pseudo-console child, so the next native run measures routing
+            // instead of guessing it.
+            #[cfg(windows)]
+            conpty_probe_report();
+            #[cfg(not(windows))]
+            println!("PROBE-REPORT windows-only");
+        }
+        "conpty-bootstrap" => {
+            // Second-stage ConPTY launcher: re-spawns the real target with
+            // genuine console stdio; see conpty_bootstrap.
+            #[cfg(windows)]
+            conpty_bootstrap(&args[1..]);
+            #[cfg(not(windows))]
+            {
+                eprintln!("conpty-bootstrap is Windows-only");
+                std::process::exit(64);
+            }
         }
         "repeat-byte" => {
             let mut remaining: usize = args[1].parse().unwrap();

@@ -1,0 +1,745 @@
+//! Per-node uncertain-effect resolutions for issue #536.
+//!
+//! `execute checkpoint resolve DIR --node STEP_ID [--element N]
+//! --as committed|retry [--output FILE] [--reason TEXT]` appends one record to
+//! `resolutions.jsonl`. A `committed` record carries the operator-verified output
+//! and bindings that later nodes read; a `retry` record explicitly allows one
+//! uncertain node or element to run again without the bulk `--retry-uncertain`
+//! flag. Element indices (`--element N`) are the 0-based indices used by the
+//! element log and by existing diagnostics (`for each element 2` is the third
+//! entry). Resume consults these records; `checkpoint status --json` lists them
+//! together with the still-unresolved uncertain items.
+
+use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+use std::io::Write;
+use std::path::Path;
+
+use crate::ast::Value;
+
+/// Append-only log holding operator resolutions.
+pub(super) const RESOLUTIONS_LOG: &str = "resolutions.jsonl";
+/// Version of every resolution record.
+pub(crate) const RESOLUTION_VERSION: u32 = 1;
+/// Most resolutions one checkpoint keeps. A checkpoint holds few uncertain
+/// nodes; the bound keeps status and resume reads finite.
+const MAX_RESOLUTIONS: usize = 1024;
+/// Longest reason text, in bytes.
+const MAX_REASON_BYTES: usize = 4096;
+/// Longest step id or actor name, in bytes.
+const MAX_ID_BYTES: usize = 512;
+/// Most bindings one committed resolution carries.
+const MAX_RESOLUTION_BINDINGS: usize = 256;
+/// Longest single binding name, in bytes.
+const MAX_BINDING_NAME_BYTES: usize = 256;
+/// Largest element index a resolution may name. Top-level loops are bounded by
+/// `max_loop_iterations` (default one million); resolutions stay within an
+/// order of magnitude above that so a corrupt log cannot name Absurd indices.
+const MAX_ELEMENT_INDEX: usize = 10_000_000;
+/// Longest resolution line read back. Writers stay below it: output is hex and
+/// bounded by the run's output limit, and bindings are bounded per value.
+const MAX_RESOLUTION_LINE: usize = 16 * 1024 * 1024;
+
+/// Operator decision for one uncertain node or element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ResolutionDecision {
+    Committed,
+    Retry,
+}
+
+impl ResolutionDecision {
+    #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+            Self::Retry => "retry",
+        }
+    }
+}
+
+/// One operator resolution, as stored in `resolutions.jsonl`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolutionRecord {
+    pub(crate) version: u32,
+    pub(crate) node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) element: Option<usize>,
+    pub(crate) decision: ResolutionDecision,
+    #[serde(default)]
+    pub(crate) reason: String,
+    #[serde(default)]
+    pub(crate) actor: String,
+    pub(crate) at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bindings: Option<BTreeMap<String, Value>>,
+    /// Element fingerprint captured from the element log's begin record for a
+    /// committed element. Resume recomputes it from the current list entry and
+    /// refuses when the list changed. Absent for node-level records and retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) fingerprint: Option<String>,
+}
+
+impl ResolutionRecord {
+    /// Key used for duplicate detection: node plus optional element.
+    pub(crate) fn key(&self) -> (String, Option<usize>) {
+        (self.node.clone(), self.element)
+    }
+
+    /// Decoded output bytes. Committed records always carry output (possibly
+    /// empty); retry records carry none.
+    pub(crate) fn output_bytes(&self, max_output_bytes: usize) -> Result<Vec<u8>> {
+        let hex = self.output.as_deref().unwrap_or("");
+        let bytes = hex_decode(hex).context("checkpoint resolution output is malformed")?;
+        if bytes.len() > max_output_bytes {
+            bail!("checkpoint resolution output exceeds maximum of {max_output_bytes} bytes");
+        }
+        Ok(bytes)
+    }
+
+    /// Bindings carried by a committed record (possibly empty).
+    pub(crate) fn bindings_map(&self, max_output_bytes: usize) -> Result<BTreeMap<String, Value>> {
+        let bindings = self.bindings.clone().unwrap_or_default();
+        if bindings.len() > MAX_RESOLUTION_BINDINGS {
+            bail!("checkpoint resolution carries too many bindings");
+        }
+        let encoded_limit = max_output_bytes.saturating_mul(6).saturating_add(16);
+        for (name, value) in &bindings {
+            if name.len() > MAX_BINDING_NAME_BYTES {
+                bail!("checkpoint resolution binding name is too long");
+            }
+            let encoded =
+                serde_json::to_vec(value).context("encoding checkpoint resolution binding")?;
+            if encoded.len() > encoded_limit {
+                bail!(
+                    "checkpoint resolution binding {name:?} exceeds maximum of {max_output_bytes} bytes"
+                );
+            }
+        }
+        Ok(bindings)
+    }
+
+    /// The `checkpoint status --json` view of this record: who decided what,
+    /// when and why. Output, bindings and fingerprints stay in the checkpoint;
+    /// they are evidence for resume, not status display.
+    #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+    pub(crate) fn status_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "node": self.node,
+            "element": self.element,
+            "decision": self.decision.as_str(),
+            "reason": self.reason,
+            "actor": self.actor,
+            "at": self.at,
+        })
+    }
+}
+
+/// Read and validate every resolution in a checkpoint directory. A missing log
+/// means no resolutions. Each line is bounded; a torn final line from an
+/// interrupted append is refused rather than silently dropped. Recovery is
+/// manual on purpose (there is no revoke tool): remove only the damaged
+/// trailing bytes or the duplicate line with an owner-controlled editor, keep
+/// the file 0600, and re-run resolve one item at a time. The error names how
+/// many valid records precede the damage so the operator is not blind.
+pub(crate) fn read_resolutions(
+    directory: &Path,
+    max_output_bytes: usize,
+) -> Result<Vec<ResolutionRecord>> {
+    let path = directory.join(RESOLUTIONS_LOG);
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).context("reading checkpoint resolutions"),
+    };
+    if !file.metadata()?.is_file() {
+        bail!("checkpoint resolutions must be a regular file");
+    }
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = Vec::new();
+    let mut records = Vec::new();
+    let mut line_number = 0usize;
+    loop {
+        line.clear();
+        let read = crate::runtime::checkpoint::read_bounded_line(
+            &mut reader,
+            &mut line,
+            MAX_RESOLUTION_LINE,
+        )
+        .with_context(|| {
+            format!(
+                "reading checkpoint resolutions after {} valid record(s)",
+                records.len()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        line_number += 1;
+        if line.last() != Some(&b'\n') {
+            bail!(
+                "checkpoint resolutions has an incomplete line {} after {} valid record(s); remove only the torn trailing bytes and re-run resolve",
+                line_number,
+                records.len()
+            );
+        }
+        line.pop();
+        if line.is_empty() {
+            continue;
+        }
+        let record: ResolutionRecord = serde_json::from_slice(&line).with_context(|| {
+            format!(
+                "checkpoint resolutions line {line_number} is malformed or corrupt after {} valid record(s); remove only that line and re-run resolve",
+                records.len()
+            )
+        })?;
+        validate_record(&record, max_output_bytes)
+            .with_context(|| format!("checkpoint resolutions line {line_number} is invalid"))?;
+        records.push(record);
+        if records.len() > MAX_RESOLUTIONS {
+            bail!("checkpoint has too many resolutions");
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for record in &records {
+        if !seen.insert(record.key()) {
+            let (node, element) = record.key();
+            bail!(
+                "checkpoint has a duplicate resolution for node {node:?} element {element:?}; remove only the duplicate line and re-run resolve"
+            );
+        }
+    }
+    Ok(records)
+}
+
+fn validate_record(record: &ResolutionRecord, max_output_bytes: usize) -> Result<()> {
+    if record.version != RESOLUTION_VERSION {
+        bail!("unsupported checkpoint resolution version");
+    }
+    if record.node.is_empty() || record.node.len() > MAX_ID_BYTES {
+        bail!("checkpoint resolution node id is invalid");
+    }
+    if let Some(index) = record.element {
+        if index > MAX_ELEMENT_INDEX {
+            bail!("checkpoint resolution element index is too large");
+        }
+    }
+    if record.reason.len() > MAX_REASON_BYTES {
+        bail!("checkpoint resolution reason is too long");
+    }
+    if record.actor.len() > MAX_ID_BYTES {
+        bail!("checkpoint resolution actor is too long");
+    }
+    if let Some(fingerprint) = &record.fingerprint {
+        if fingerprint.is_empty() || fingerprint.len() > 128 {
+            bail!("checkpoint resolution fingerprint is invalid");
+        }
+        if record.element.is_none() {
+            bail!("only element resolutions carry a fingerprint");
+        }
+    }
+    match record.decision {
+        ResolutionDecision::Retry => {
+            if record.output.is_some() || record.bindings.is_some() || record.fingerprint.is_some()
+            {
+                bail!("a retry resolution carries no output, bindings, or fingerprint");
+            }
+        }
+        ResolutionDecision::Committed => {
+            if record.element.is_some() && record.fingerprint.is_none() {
+                bail!("a committed element resolution requires the element fingerprint");
+            }
+            let hex = record.output.as_deref().ok_or_else(|| {
+                anyhow!("a committed resolution requires output (or explicitly empty output)")
+            })?;
+            if hex.len() > max_output_bytes.saturating_mul(2) {
+                bail!("checkpoint resolution output exceeds the output limit");
+            }
+            // Hex validity and binding bounds are enforced by the accessors.
+            let _ = record.output_bytes(max_output_bytes)?;
+            let _ = record.bindings_map(max_output_bytes)?;
+        }
+    }
+    Ok(())
+}
+
+/// Append one validated resolution while holding the checkpoint's exclusive
+/// lock. The `lock` guard proves the caller holds it across validation and
+/// append, so two concurrent resolves cannot both pass validation and append:
+/// the second either fails fast with `locked` while the first holds the lock
+/// or sees the first's record and is refused as a duplicate. A torn or
+/// duplicate log refuses every resume and status until the operator removes
+/// the damaged line; there is no revoke tool, so resolve one item at a time.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn append_resolution_locked(
+    directory: &Path,
+    record: &ResolutionRecord,
+    _lock: &crate::runtime::checkpoint::ResolveLock,
+) -> Result<()> {
+    let existing = read_resolutions(directory, usize::MAX)?;
+    if existing.len() >= MAX_RESOLUTIONS {
+        bail!("checkpoint has too many resolutions");
+    }
+    if existing.iter().any(|known| known.key() == record.key()) {
+        bail!("a resolution is already recorded for this node; it is not overwritten");
+    }
+    // Validate against a finite bound even when the resuming run uses a larger
+    // output limit; resume re-validates against its own limit.
+    validate_record(record, 1024 * 1024)?;
+    let mut line = serde_json::to_vec(record).context("encoding checkpoint resolution")?;
+    if line.len() + 1 > MAX_RESOLUTION_LINE {
+        bail!("checkpoint resolution is too large");
+    }
+    line.push(b'\n');
+    let path = directory.join(RESOLUTIONS_LOG);
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true);
+    #[cfg(not(windows))]
+    options.append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{
+            Foundation::GENERIC_WRITE,
+            Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, READ_CONTROL, WRITE_DAC},
+        };
+        // `restrict_file` calls SetSecurityInfo, which needs WRITE_DAC on the
+        // handle; a plain append/write open fails with Access denied on
+        // Windows. This handle starts at offset zero, so it is positioned at
+        // the end below (under the resolve lock) instead of using append mode.
+        options
+            .access_mode(GENERIC_WRITE | WRITE_DAC | READ_CONTROL)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options
+        .open(&path)
+        .with_context(|| format!("appending {}", path.display()))?;
+    crate::runtime::checkpoint::restrict_file(&file)?;
+    #[cfg(windows)]
+    {
+        use std::io::Seek;
+        file.seek(std::io::SeekFrom::End(0))
+            .context("appending checkpoint resolution")?;
+    }
+    file.write_all(&line)
+        .context("appending checkpoint resolution")?;
+    file.sync_all().context("syncing checkpoint resolution")?;
+    Ok(())
+}
+
+/// Append one validated resolution, acquiring the checkpoint's exclusive lock
+/// for the read-check-append. Fails closed when a run or another resolve
+/// holds the lock. Callers that already hold the lock across wider validation
+/// (the `resolve` command) use `append_resolution_locked` instead.
+#[cfg(test)]
+pub(crate) fn append_resolution(directory: &Path, record: &ResolutionRecord) -> Result<()> {
+    let lock = crate::runtime::checkpoint::acquire_resolve_lock(directory)?;
+    append_resolution_locked(directory, record, &lock)
+}
+
+/// Find the resolution for one node-level uncertain item.
+pub(crate) fn node_resolution<'a>(
+    resolutions: &'a [ResolutionRecord],
+    step_id: &str,
+) -> Option<&'a ResolutionRecord> {
+    resolutions
+        .iter()
+        .find(|record| record.element.is_none() && record.node == step_id)
+}
+
+/// Find the resolution for one element of a node.
+pub(crate) fn element_resolution<'a>(
+    resolutions: &'a [ResolutionRecord],
+    step_id: &str,
+    index: usize,
+) -> Option<&'a ResolutionRecord> {
+    resolutions.iter().find(|record| {
+        record.node == step_id && record.element.is_some_and(|element| element == index)
+    })
+}
+
+/// Current operator identity for a new resolution record. The id is never
+/// taken from the environment alone: on Unix it is the effective uid, which
+/// the process cannot spoof, with the claimed login name (if any) kept as
+/// display-only text in parentheses; on Windows it is the process token SID
+/// (`sid:S-...`), with the claimed name kept the same way. Any other platform
+/// prefixes the environment name with `unverified:`, and older bare-name
+/// records still read but are not re-trusted. Readers must treat the `uid:`
+/// and `sid:` prefixes as authoritative, the parenthesized name as a hint,
+/// and anything else as unverified. The reason text is operator-supplied
+/// plaintext shown by status: never paste secrets into it. Committed output
+/// and bindings may hold secrets; they stay in the 0600 checkpoint and are
+/// never printed by status or resolve.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn current_actor() -> String {
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid takes no arguments, reads no memory, and cannot fail.
+        let uid = unsafe { libc::geteuid() };
+        let mut claimed = String::new();
+        for key in ["USER", "LOGNAME", "USERNAME"] {
+            if let Ok(name) = std::env::var(key) {
+                let name = name.trim().to_owned();
+                if !name.is_empty() {
+                    claimed = name.chars().take(64).collect();
+                    break;
+                }
+            }
+        }
+        if claimed.is_empty() {
+            format!("uid:{uid}")
+        } else {
+            format!("uid:{uid}({claimed})")
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut claimed = String::new();
+        for key in ["USERNAME", "USER", "LOGNAME"] {
+            if let Ok(name) = std::env::var(key) {
+                let name = name.trim().to_owned();
+                if !name.is_empty() {
+                    claimed = name.chars().take(64).collect();
+                    break;
+                }
+            }
+        }
+        match crate::platform::windows::current_user_sid_text() {
+            Ok(sid) => {
+                let sid: String = sid.chars().take(184).collect();
+                if claimed.is_empty() {
+                    format!("sid:{sid}")
+                } else {
+                    format!("sid:{sid}({claimed})")
+                }
+            }
+            Err(_) => {
+                if claimed.is_empty() {
+                    "unverified:operator".to_owned()
+                } else {
+                    let claimed: String = claimed.chars().take(64).collect();
+                    format!("unverified:{claimed}")
+                }
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        for key in ["USER", "USERNAME", "LOGNAME"] {
+            if let Ok(name) = std::env::var(key) {
+                let name = name.trim().to_owned();
+                if !name.is_empty() {
+                    let name: String = name.chars().take(64).collect();
+                    return format!("unverified:{name}");
+                }
+            }
+        }
+        "unverified:operator".to_owned()
+    }
+}
+
+/// Current Unix time in seconds for a new resolution record.
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+pub(crate) fn current_time_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+/// Hex-encode bytes for a committed resolution's output.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        })
+}
+
+/// Decode a resolution's hex output.
+fn hex_decode(text: &str) -> Result<Vec<u8>> {
+    if !text.is_ascii() || !text.len().is_multiple_of(2) {
+        bail!("checkpoint resolution output is malformed");
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&text[index..index + 2], 16)
+                .context("checkpoint resolution output is malformed")
+        })
+        .collect()
+}
+
+/// Parse one `--binding NAME=VALUE` argument. VALUE is JSON when it parses as
+/// JSON, otherwise plain text.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn parse_binding(argument: &str) -> Result<(String, Value)> {
+    let (name, value) = argument
+        .split_once('=')
+        .context("--binding requires NAME=VALUE")?;
+    if name.is_empty() || name.len() > MAX_BINDING_NAME_BYTES {
+        bail!("--binding name is invalid");
+    }
+    let value = serde_json::from_str::<serde_json::Value>(value)
+        .map(|json| json_to_value(&json))
+        .unwrap_or_else(|_| Value::String(value.to_owned()));
+    Ok((name.to_owned(), value))
+}
+
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+fn json_to_value(json: &serde_json::Value) -> Value {
+    match json {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(value) => Value::Bool(*value),
+        serde_json::Value::Number(value) => {
+            if let Some(int) = value.as_i64() {
+                Value::Integer(int)
+            } else {
+                Value::Number(value.clone())
+            }
+        }
+        serde_json::Value::String(value) => Value::String(value.clone()),
+        serde_json::Value::Array(items) => Value::List(items.iter().map(json_to_value).collect()),
+        serde_json::Value::Object(fields) => Value::Record(
+            fields
+                .iter()
+                .map(|(key, item)| (key.clone(), json_to_value(item)))
+                .collect(),
+        ),
+    }
+}
+
+/// Read output bytes for `--output FILE`, bounded by the output limit.
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+pub(crate) fn read_output_file(path: &Path, max_output_bytes: usize) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading --output {}", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("--output must be a regular file");
+    }
+    if metadata.len() > max_output_bytes as u64 {
+        bail!("--output exceeds maximum of {max_output_bytes} bytes");
+    }
+    let bytes = fs::read(path).with_context(|| format!("reading --output {}", path.display()))?;
+    if bytes.len() > max_output_bytes {
+        bail!("--output exceeds maximum of {max_output_bytes} bytes");
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(
+        node: &str,
+        element: Option<usize>,
+        decision: ResolutionDecision,
+    ) -> ResolutionRecord {
+        ResolutionRecord {
+            version: RESOLUTION_VERSION,
+            node: node.to_owned(),
+            element,
+            decision,
+            reason: "checked".to_owned(),
+            actor: "tester".to_owned(),
+            at: 1,
+            output: match decision {
+                ResolutionDecision::Committed => Some(String::new()),
+                ResolutionDecision::Retry => None,
+            },
+            bindings: match decision {
+                ResolutionDecision::Committed => Some(BTreeMap::new()),
+                ResolutionDecision::Retry => None,
+            },
+            fingerprint: None,
+        }
+    }
+
+    #[test]
+    fn retry_record_carries_no_output_bindings_or_fingerprint() {
+        let mut bad = record("node:1", None, ResolutionDecision::Retry);
+        bad.output = Some(String::new());
+        assert!(validate_record(&bad, 1024).is_err());
+        let mut bad = record("node:1", Some(0), ResolutionDecision::Retry);
+        bad.fingerprint = Some("fp".to_owned());
+        assert!(validate_record(&bad, 1024).is_err());
+        // A begun-element retry persists with no fingerprint: the element
+        // log's begin record stays the source of truth, and resume still
+        // gates every uncovered uncertain element by name.
+        let good = record("node:1", Some(0), ResolutionDecision::Retry);
+        assert!(validate_record(&good, 1024).is_ok());
+    }
+
+    #[test]
+    fn committed_record_requires_output() {
+        let mut bad = record("node:1", None, ResolutionDecision::Committed);
+        bad.output = None;
+        assert!(validate_record(&bad, 1024).is_err());
+    }
+
+    #[test]
+    fn duplicate_resolutions_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = record("step:abc#1", Some(0), ResolutionDecision::Retry);
+        append_resolution(directory.path(), &first).unwrap();
+        let error = append_resolution(directory.path(), &first).unwrap_err();
+        assert!(error.to_string().contains("already recorded"));
+        let kept = read_resolutions(directory.path(), 1024 * 1024).unwrap();
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn oversized_reason_is_rejected() {
+        let mut bad = record("node:1", None, ResolutionDecision::Retry);
+        bad.reason = "x".repeat(MAX_REASON_BYTES + 1);
+        assert!(validate_record(&bad, 1024).is_err());
+    }
+
+    #[test]
+    fn binding_text_falls_back_to_plain_string() {
+        let (name, value) = parse_binding("greeting=hello").unwrap();
+        assert_eq!(name, "greeting");
+        assert_eq!(value, Value::String("hello".to_owned()));
+        let (_, value) = parse_binding("count=3").unwrap();
+        assert_eq!(value, Value::Integer(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn actor_identity_is_uid_based() {
+        let actor = current_actor();
+        assert!(
+            actor.starts_with("uid:"),
+            "actor must carry the effective uid, got {actor:?}"
+        );
+        assert!(actor.len() <= MAX_ID_BYTES);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn actor_identity_is_sid_based() {
+        let actor = current_actor();
+        assert!(
+            actor.starts_with("sid:") || actor.starts_with("unverified:"),
+            "actor must carry the token SID or be marked unverified, got {actor:?}"
+        );
+        assert!(actor.len() <= MAX_ID_BYTES);
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    #[test]
+    fn actor_identity_is_marked_unverified() {
+        let actor = current_actor();
+        assert!(
+            actor.starts_with("unverified:"),
+            "actor must be marked unverified off Unix/Windows, got {actor:?}"
+        );
+        assert!(actor.len() <= MAX_ID_BYTES);
+    }
+
+    #[test]
+    fn torn_final_line_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join(RESOLUTIONS_LOG),
+            b"{\"version\":1}\nnot-json-without-newline",
+        )
+        .unwrap();
+        let error = read_resolutions(directory.path(), 1024 * 1024).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("incomplete") || message.contains("malformed"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn committed_output_and_bindings_round_trip() {
+        let mut committed = record("node:1", None, ResolutionDecision::Committed);
+        committed.output = Some(hex_encode(b"AB"));
+        committed.bindings = Some(BTreeMap::from([("count".to_owned(), Value::Integer(3))]));
+        validate_record(&committed, 1024).unwrap();
+        assert_eq!(committed.output_bytes(1024).unwrap(), b"AB");
+        let bindings = committed.bindings_map(1024).unwrap();
+        assert_eq!(bindings.get("count"), Some(&Value::Integer(3)));
+    }
+
+    #[test]
+    fn concurrent_duplicate_appends_fail_closed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let first = record("step:abc#1", Some(0), ResolutionDecision::Retry);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let path = path.clone();
+            let record = first.clone();
+            handles.push(std::thread::spawn(move || {
+                append_resolution(&path, &record)
+            }));
+        }
+        let mut ok = 0;
+        for handle in handles {
+            let result = handle.join().expect("resolve thread joins");
+            match result {
+                Ok(()) => ok += 1,
+                Err(error) => {
+                    let message = error.to_string();
+                    assert!(
+                        message.contains("already recorded") || message.contains("locked"),
+                        "unexpected concurrent error: {message}"
+                    );
+                }
+            }
+        }
+        assert_eq!(ok, 1, "exactly one concurrent resolve records");
+        let kept = read_resolutions(&path, 1024 * 1024).unwrap();
+        assert_eq!(kept.len(), 1);
+    }
+
+    /// Holding the checkpoint lock makes a second acquire fail closed with
+    /// `locked`. Same-process separate handles conflict on both `flock`
+    /// (Unix) and `LockFileEx` (Windows), so this is the deterministic
+    /// in-process half of the resolve-vs-resume mutual exclusion the CLI
+    /// relies on; the live-process half lives in the integration suite. It
+    /// runs in CI on every platform, and no Windows runtime behavior beyond
+    /// CI is claimed here.
+    #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+    #[test]
+    fn resolve_lock_is_exclusive_across_handles() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        let held = crate::runtime::checkpoint::acquire_resolve_lock(path).unwrap();
+        assert!(
+            crate::runtime::checkpoint::directory_lock_held(path).unwrap(),
+            "a held checkpoint must probe as locked"
+        );
+        let error = crate::runtime::checkpoint::acquire_resolve_lock(path)
+            .err()
+            .expect("a second lock must be rejected");
+        assert!(
+            error.to_string().contains("locked"),
+            "unexpected concurrent error: {error:#}"
+        );
+        drop(held);
+        assert!(
+            !crate::runtime::checkpoint::directory_lock_held(path).unwrap(),
+            "a released checkpoint must probe as unlocked"
+        );
+        let _reacquired = crate::runtime::checkpoint::acquire_resolve_lock(path).unwrap();
+    }
+}

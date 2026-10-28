@@ -1,6 +1,6 @@
 {
   "name": "jq",
-  "description": "Transforms standard input JSON with the supplied jq filter and optional jq flags.",
+  "description": "Transforms standard input JSON with the supplied jq filter and optional jq flags. Flags such as -f, --slurpfile, --rawfile, and -L load files, and the filter can read the process environment through $ENV.",
   "binary": "jq",
   "accepts_stdin": true,
   "cacheable": false,
@@ -29,5 +29,23 @@
     {
       "parameter": "filter"
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ]
+  }
 }

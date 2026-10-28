@@ -58,7 +58,9 @@
     "capabilities": [
       "filesystem.read"
     ],
-    "effects": [],
+    "effects": [
+      "filesystem.read"
+    ],
     "result_envelope": true
   }
 }

@@ -32,7 +32,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check test feature requirements
         run: python3 tools/test_ci_feature_matrix.py
       - name: Clippy every feature combination
@@ -78,7 +78,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           EXECUTE_REQUIRE_NAMESPACE_TESTS: "1"
-        run: cargo test --locked --test daemon_cli linux_namespace_clients_run_locally -- --nocapture
+        run: cargo test --locked --test daemon_cli linux_ -- --nocapture
   workflows:
     name: Release contracts and workflow lint
     runs-on: ubuntu-24.04
@@ -107,7 +107,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: jq --version
       - name: Prove latency gate rejects a 20% startup regression
         run: python3 tests/test_latency_budget_regression.py
@@ -356,7 +356,7 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: jq --version
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -402,9 +402,14 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --check
       - run: rustfmt --edition 2021 --check src/runtime/shared.rs
+      - name: Audit native-tool contracts and bundled index freshness
+        # Pure-Python static audit: needs no build, so it runs even when the
+        # bundled manifest index is stale (coordinator regenerates it).
+        shell: bash
+        run: python tests/native_tool_contracts.py
       - run: cargo clippy --locked --features full,test-fixtures --target ${{ matrix.target }} --all-targets -- -D warnings
       - run: cargo build --locked --target ${{ matrix.target }} --release --features full,test-fixtures --bins
       - name: Verify Git for Windows MSYS printf fixture
@@ -429,5 +434,5 @@ jobs:
           if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
           Copy-Item -Path manifests -Destination $fixture -Recurse
 
-      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test applet_executable_pinning_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff -- --test-threads=1
+      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test applet_executable_pinning_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff --test checkpoint_resolve_elements -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --lib -- --test-threads=1

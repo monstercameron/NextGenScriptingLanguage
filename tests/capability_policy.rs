@@ -1,8 +1,9 @@
 use flow::{
     capabilities::{
         authorize_environment_variable, authorize_host_path, effective_environment,
-        filter_environment, policy_fingerprint, preflight_with_cache_directory, AppletGrant,
-        CapabilityPolicy, ContractView, FilesystemGrant, HostAccess, HostGrant,
+        filter_environment, parse_child_environment_allowlist, policy_fingerprint,
+        preflight_with_cache_directory, AppletGrant, CapabilityPolicy, ContractView,
+        FilesystemGrant, HostAccess, HostGrant,
     },
     manifest::Registry,
 };
@@ -1026,4 +1027,622 @@ fn environment_entry_inputs_are_denied_by_the_shared_policy_preflight() {
     assert!(error
         .to_string()
         .contains("denies reading environment variable"));
+}
+
+// ---------------------------------------------------------------------------
+// Model loopback opt-in (#448): a program cannot grant
+// `EXECUTE_MODEL_ALLOW_LOOPBACK` to itself under a capability policy unless
+// the applet's `environment` grant lists it, and a filtered helper
+// environment drops the opt-in otherwise. These tests never mutate the
+// process environment: the self-grant uses a manifest overlay literal and
+// the propagation case filters an explicit snapshot, so parallel tests in
+// this binary cannot race on shared process state. `use environment`
+// (manifest overlay) and `and environment` (command overlay) share
+// `authorize_environment_override`, so the manifest path covers both.
+// ---------------------------------------------------------------------------
+
+/// A policy-mode program self-grant is denied without an `environment` grant
+/// and allowed with one; the host process environment is never modified.
+#[test]
+fn model_loopback_self_grant_requires_policy_environment_grant() {
+    const OPT_IN: &str = "EXECUTE_MODEL_ALLOW_LOOPBACK";
+    const CANARY: &str = "self-grant-canary-448";
+
+    let source = serde_json::json!({
+        "name": "fixture.model",
+        "binary": "/usr/bin/env",
+        "arguments": [],
+        "contract": {
+            "version": 1,
+            "environment": {
+                "set": {OPT_IN: CANARY},
+                "unset": []
+            }
+        }
+    })
+    .to_string();
+    let before = std::env::var_os(OPT_IN);
+
+    // Without the `environment` grant, the overlay self-grant is denied and
+    // the value is redacted from the diagnostic.
+    let denied_registry = Registry::from_sources(std::slice::from_ref(&source)).unwrap();
+    denied_registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("fixture.model".into(), grant(&["process.exec"]))]),
+    }));
+    let error = effective_environment(&denied_registry, "fixture.model").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("denies setting an environment variable"),
+        "{error:?}"
+    );
+    assert!(
+        !format!("{error:#}").contains(CANARY),
+        "denial must not log the value"
+    );
+
+    // With the grant, the same overlay literal is delivered to the child
+    // only; the host process environment is unchanged (read-only check).
+    let mut allowed_grant = grant(&["process.exec"]);
+    allowed_grant.environment.insert(OPT_IN.into());
+    let allowed_registry = Registry::from_sources(&[source]).unwrap();
+    allowed_registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("fixture.model".into(), allowed_grant)]),
+    }));
+    let environment = effective_environment(&allowed_registry, "fixture.model").unwrap();
+    assert_eq!(
+        environment
+            .iter()
+            .find(|(name, _)| name == std::ffi::OsStr::new(OPT_IN))
+            .map(|(_, value)| value.as_os_str()),
+        Some(std::ffi::OsStr::new(CANARY))
+    );
+    assert_eq!(std::env::var_os(OPT_IN), before, "host env must not change");
+}
+
+/// A filtered helper environment only forwards the loopback opt-in when it
+/// is explicitly granted, by policy or by host allowlist selection.
+#[test]
+fn model_loopback_grant_is_stripped_by_filtered_helper_environments() {
+    const OPT_IN: &str = "EXECUTE_MODEL_ALLOW_LOOPBACK";
+
+    fn snapshot() -> Vec<(OsString, OsString)> {
+        vec![
+            (OsString::from(OPT_IN), OsString::from("1")),
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+        ]
+    }
+
+    fn registry_with(environment: BTreeSet<String>) -> Registry {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("fixture");
+        std::fs::write(&binary, b"fixture").unwrap();
+        // Only the grant contents matter to `filter_environment`; the
+        // manifest binary path is never stat-ed on this path.
+        let registry = registry_with_applet("fixture.model", &binary);
+        let mut configured = grant(&[]);
+        configured.environment = environment;
+        registry.set_host_state(Some(CapabilityPolicy {
+            host: None,
+            version: 1,
+            deny_privileged: false,
+            allow_wrappers: Default::default(),
+            host_environment: Default::default(),
+            applets: BTreeMap::from([("fixture.model".into(), configured)]),
+        }));
+        registry
+    }
+
+    // Policy layer: without the grant the ambient opt-in is stripped even
+    // though it is present in the captured snapshot (fail-closed).
+    let stripped = registry_with(BTreeSet::from(["PATH".to_owned()]));
+    let filtered = filter_environment(&stripped, "fixture.model", snapshot())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        filtered,
+        vec![(OsString::from("PATH"), OsString::from("/usr/bin"))]
+    );
+    assert!(
+        authorize_environment_variable(&stripped, "fixture.model", OPT_IN).is_err(),
+        "policy must deny reading the ungranted opt-in"
+    );
+
+    // With the grant the same snapshot forwards the opt-in.
+    let forwarded = registry_with(BTreeSet::from(["PATH".to_owned(), OPT_IN.to_owned()]));
+    let filtered = filter_environment(&forwarded, "fixture.model", snapshot())
+        .unwrap()
+        .unwrap();
+    assert!(filtered.contains(&(OsString::from(OPT_IN), OsString::from("1"))));
+    authorize_environment_variable(&forwarded, "fixture.model", OPT_IN).unwrap();
+
+    // Host layer: `--clear-env` selects the empty allowlist (grant stripped),
+    // while `--env-allow` must name the variable explicitly to forward it.
+    assert!(parse_child_environment_allowlist("").unwrap().is_empty());
+    assert!(!parse_child_environment_allowlist("PATH")
+        .unwrap()
+        .contains(&OPT_IN.to_owned()));
+    assert!(
+        parse_child_environment_allowlist("PATH,EXECUTE_MODEL_ALLOW_LOOPBACK")
+            .unwrap()
+            .contains(&OPT_IN.to_owned())
+    );
+}
+
+#[test]
+fn model_file_params_require_the_applets_own_read_grant() {
+    use flow::ast::Value;
+    use flow::capabilities::authorize_model_file_params;
+
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().join("models");
+    fs::create_dir(&allowed).unwrap();
+    let registry = Registry::from_sources(&[
+        serde_json::json!({
+            "name": "llm.ask", "binary": "@execute-model",
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+        serde_json::json!({
+            "name": "plain.tool", "binary": "/bin/true",
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+    ])
+    .unwrap();
+    let mut model = grant(&["filesystem.read"]);
+    model.filesystem.read.push(allowed.clone());
+    registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("llm.ask".into(), model)]),
+    }));
+
+    let manifest = registry.resolve("llm.ask").unwrap();
+    let empty: BTreeMap<String, Value> = BTreeMap::new();
+    let param = |name: &str, value: &str| {
+        BTreeMap::from([(name.to_owned(), Value::String(value.to_owned()))])
+    };
+    let granted = |name: &str| allowed.join(name).to_string_lossy().into_owned();
+
+    // A granted credential file is authorized; anything outside fails closed.
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &param("env_file", &granted("keys.env")),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &param(
+            "env_file",
+            directory.path().join("other.env").to_str().unwrap()
+        ),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .is_err());
+
+    // An empty path is the helper's own configuration error, not a grant.
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &param("env_file", ""),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+
+    // A named fixture means the helper never reads `env_file`: an ungranted
+    // credential path alongside a granted fixture is allowed, while an
+    // ungranted fixture is denied.
+    let mut both = param("fixture", &granted("fixture.json"));
+    both.insert(
+        "env_file".to_owned(),
+        Value::String(
+            directory
+                .path()
+                .join("other.env")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    authorize_model_file_params(&registry, manifest, &both, &empty, directory.path(), false)
+        .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &param(
+            "fixture",
+            directory.path().join("other.json").to_str().unwrap()
+        ),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .is_err());
+
+    // References resolve through bindings; unbound names are skipped for the
+    // later argument resolution to reject, and non-text values fail closed.
+    let reference = BTreeMap::from([("env_file".to_owned(), Value::Reference("keys".into()))]);
+    let bound = BTreeMap::from([("keys".to_owned(), Value::String(granted("bound.env")))]);
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &reference,
+        &bound,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &reference,
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    let mistyped = BTreeMap::from([("keys".to_owned(), Value::Bool(true))]);
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &reference,
+        &mistyped,
+        directory.path(),
+        false
+    )
+    .is_err());
+
+    // Relative literals defer only when the working directory is not yet
+    // known; the spawn path re-checks them against the effective directory.
+    let relative = param("env_file", "models/relative.env");
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &relative,
+        &empty,
+        directory.path(),
+        true,
+    )
+    .unwrap();
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &relative,
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    let outside = param("env_file", "other.env");
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &outside,
+        &empty,
+        directory.path(),
+        true,
+    )
+    .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &outside,
+        &empty,
+        directory.path(),
+        false
+    )
+    .is_err());
+
+    // Applets that do not use the model helper are unaffected, even with no
+    // grant and no policy configured.
+    let plain = registry.resolve("plain.tool").unwrap();
+    authorize_model_file_params(
+        &registry,
+        plain,
+        &param("env_file", "/elsewhere.env"),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    let unconfigured = Registry::from_sources(&[serde_json::json!({
+        "name": "llm.ask", "binary": "@execute-model",
+        "arguments": [], "contract": {"version": 1}
+    })
+    .to_string()])
+    .unwrap();
+    authorize_model_file_params(
+        &unconfigured,
+        unconfigured.resolve("llm.ask").unwrap(),
+        &param("env_file", "/elsewhere.env"),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn model_path_params_are_generic_not_name_locked() {
+    use flow::ast::Value;
+    use flow::capabilities::authorize_model_file_params;
+
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().join("models");
+    fs::create_dir(&allowed).unwrap();
+    let registry = Registry::from_sources(&[
+        serde_json::json!({
+            "name": "llm.ask", "binary": "@execute-model",
+            "parameters": {
+                "fixture": {"type": "path"},
+                "env_file": {"type": "path"}
+            },
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+        serde_json::json!({
+            "name": "renamed.helper", "binary": "@execute-model-v2",
+            "parameters": {"data_file": {"type": "path"}},
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+        serde_json::json!({
+            "name": "legacy.stringy", "binary": "@execute-model",
+            "parameters": {"fixture": {"type": "string"}},
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+        serde_json::json!({
+            "name": "plain.stringy", "binary": "/bin/true",
+            "parameters": {"data": {"type": "string"}},
+            "arguments": [], "contract": {"version": 1}
+        })
+        .to_string(),
+    ])
+    .unwrap();
+    let mut model = grant(&["filesystem.read"]);
+    model.filesystem.read.push(allowed.clone());
+    let mut renamed = grant(&["filesystem.read"]);
+    renamed.filesystem.read.push(allowed.clone());
+    let mut legacy = grant(&["filesystem.read"]);
+    legacy.filesystem.read.push(allowed.clone());
+    registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([
+            ("llm.ask".into(), model),
+            ("renamed.helper".into(), renamed),
+            ("legacy.stringy".into(), legacy),
+        ]),
+    }));
+
+    let empty: BTreeMap<String, Value> = BTreeMap::new();
+    let granted = allowed.join("ok.json").to_string_lossy().into_owned();
+    let outside = directory
+        .path()
+        .join("evil.json")
+        .to_string_lossy()
+        .into_owned();
+
+    // Bundled path-typed params are covered without relying on the binary name.
+    let manifest = registry.resolve("llm.ask").unwrap();
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &BTreeMap::from([("fixture".to_owned(), Value::String(granted.clone()))]),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &BTreeMap::from([("fixture".to_owned(), Value::String(outside.clone()))]),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .is_err());
+
+    // A renamed helper binary with a path-typed file param stays covered.
+    let renamed_manifest = registry.resolve("renamed.helper").unwrap();
+    authorize_model_file_params(
+        &registry,
+        renamed_manifest,
+        &BTreeMap::from([("data_file".to_owned(), Value::String(granted.clone()))]),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        renamed_manifest,
+        &BTreeMap::from([("data_file".to_owned(), Value::String(outside.clone()))]),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .is_err());
+
+    // Legacy string-typed fixture on `@execute-model` is still denied outside
+    // the grant via the name fallback.
+    let legacy_manifest = registry.resolve("legacy.stringy").unwrap();
+    assert!(authorize_model_file_params(
+        &registry,
+        legacy_manifest,
+        &BTreeMap::from([("fixture".to_owned(), Value::String(outside.clone()))]),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .is_err());
+
+    // A string-typed file param on another binary escapes: it is not a path
+    // param and has no legacy name. File inputs must be declared as `path`.
+    let plain = registry.resolve("plain.stringy").unwrap();
+    authorize_model_file_params(
+        &registry,
+        plain,
+        &BTreeMap::from([("data".to_owned(), Value::String(outside))]),
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn model_preflight_refuses_fixture_outside_grant_and_final_link_fails_closed() {
+    use flow::ast::Value;
+    use flow::capabilities::{authorize_model_file_params, preflight};
+    use flow::parser;
+
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().join("models");
+    fs::create_dir(&allowed).unwrap();
+    let fixture = allowed.join("good.json");
+    fs::write(&fixture, "{}").unwrap();
+
+    let registry = Registry::from_sources(&[serde_json::json!({
+        "name": "llm.ask", "binary": "@execute-model",
+        "parameters": {
+            "model": {"type": "string"},
+            "instruction": {"type": "string"},
+            "fixture": {"type": "path"},
+            "env_file": {"type": "path"}
+        },
+        "arguments": [], "contract": {"version": 1}
+    })
+    .to_string()])
+    .unwrap();
+    let mut model = grant(&["filesystem.read", "process.exec"]);
+    model.filesystem.read.push(allowed.clone());
+    registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("llm.ask".into(), model)]),
+    }));
+
+    // End-to-end preflight refusal for a fixture outside the grant.
+    let outside = directory
+        .path()
+        .join("outside.json")
+        .to_string_lossy()
+        .into_owned();
+    let program = parser::parse(&format!(
+        "run llm.ask with model \"m\" and instruction \"i\" and fixture \"{outside}\"\n"
+    ))
+    .unwrap();
+    let error = preflight(&program, &registry, directory.path())
+        .expect_err("preflight should refuse the outside fixture");
+    assert!(
+        error
+            .to_string()
+            .contains("denies applet filesystem access"),
+        "unexpected error: {error:#}"
+    );
+
+    // A granted fixture passes preflight.
+    let inside = fixture.to_string_lossy().into_owned();
+    let program = parser::parse(&format!(
+        "run llm.ask with model \"m\" and instruction \"i\" and fixture \"{inside}\"\n"
+    ))
+    .unwrap();
+    preflight(&program, &registry, directory.path()).unwrap();
+
+    // Dynamic binding: a Reference resolves against bindings at spawn time.
+    // The spawn path re-checks with defer_relative=false, so an outside
+    // target is denied even when preflight deferred the relative literal.
+    let manifest = registry.resolve("llm.ask").unwrap();
+    let empty: BTreeMap<String, Value> = BTreeMap::new();
+    let reference = BTreeMap::from([("fixture".to_owned(), Value::Reference("next".into()))]);
+    let bound_outside = BTreeMap::from([(
+        "next".to_owned(),
+        Value::String(
+            directory
+                .path()
+                .join("late.json")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    )]);
+    assert!(authorize_model_file_params(
+        &registry,
+        manifest,
+        &reference,
+        &bound_outside,
+        directory.path(),
+        false,
+    )
+    .is_err());
+    // Unbound is skipped here and rejected later by argument resolution.
+    authorize_model_file_params(
+        &registry,
+        manifest,
+        &reference,
+        &empty,
+        directory.path(),
+        false,
+    )
+    .unwrap();
+
+    // Final-component symlink: the parent canonicalizes to the granted
+    // target and allows it, while the child open pins the final component
+    // and refuses the link. Ancestor swaps after the check are the
+    // documented unfixable window: this test pins only the final link.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let link = directory.path().join("link.json");
+        symlink(&fixture, &link).unwrap();
+        authorize_model_file_params(
+            &registry,
+            manifest,
+            &BTreeMap::from([(
+                "fixture".to_owned(),
+                Value::String(link.to_string_lossy().into_owned()),
+            )]),
+            &empty,
+            directory.path(),
+            false,
+        )
+        .unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "test setup did not create a final-component link"
+        );
+    }
 }

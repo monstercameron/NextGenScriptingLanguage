@@ -893,6 +893,10 @@ pub(crate) struct Shared {
     /// `execute run --control`: stream uncaptured stdout to this terminal and allow
     /// the program to exit.
     pub run_mode: bool,
+    /// The `--agent-policy` file the server started with, if any. `control
+    /// reload-agents` re-reads this path so revocations and new grants take
+    /// effect without restarting the server.
+    pub agent_policy_path: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -1207,6 +1211,24 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 "restart-source" => {
                     state.producer_epoch += 1;
                     state.producer_cancel.store(true, Ordering::Relaxed);
+                }
+                "reload-agents" => {
+                    // Re-read the startup agent policy so revocations and new
+                    // grants apply to this running server. The swap is one
+                    // atomic handle replacement: in-flight handlers keep the
+                    // old policy, new requests see the new one. Fail closed:
+                    // an unreadable or invalid file keeps the old policy and
+                    // reports the error instead.
+                    let path = shared
+                        .agent_policy_path
+                        .as_ref()
+                        .context("reload-agents requires the server to run with --agent-policy")?;
+                    let policy = super::auth::AgentAuthPolicy::load(path)
+                        .with_context(|| format!("reloading agent policy {}", path.display()))?;
+                    shared.registry.set_host_state(Some(policy));
+                    // A policy reload is not a document change, so it answers
+                    // without bumping the revision or waking `wait` pollers.
+                    return Ok(state.ack());
                 }
                 _ => bail!("unknown control action"),
             }

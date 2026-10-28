@@ -209,6 +209,11 @@ pub enum AgentPermission {
 struct AgentGrant {
     token_sha256: String,
     permissions: BTreeSet<AgentPermission>,
+    /// Unix epoch seconds (UTC) after which this grant no longer authorizes.
+    /// Absent means the grant never expires, so policy files written before
+    /// expiry existed keep working unchanged.
+    #[serde(default)]
+    expires_at: Option<u64>,
 }
 
 impl fmt::Debug for AgentGrant {
@@ -217,6 +222,7 @@ impl fmt::Debug for AgentGrant {
             .debug_struct("AgentGrant")
             .field("token_sha256", &"<redacted>")
             .field("permissions", &self.permissions)
+            .field("expires_at", &self.expires_at)
             .finish()
     }
 }
@@ -285,7 +291,10 @@ impl AgentAuthPolicy {
     }
 
     /// Authorize the exact operation before live-state dispatch. Unknown
-    /// operations and unsupported control actions fail closed.
+    /// operations and unsupported control actions fail closed. The token hash
+    /// comparison always runs for a known agent — including expired grants —
+    /// so expiry reveals nothing through timing, and every denial reports the
+    /// same [`AuthError::Unauthorized`].
     pub fn authorize(
         &self,
         auth: Option<&RequestAuth>,
@@ -301,11 +310,12 @@ impl AgentAuthPolicy {
             .get(&auth.agent)
             .ok_or(AuthError::Unauthorized)?;
         let supplied = sha256_hex(auth.token.as_bytes());
-        if !constant_time_eq(supplied.as_bytes(), grant.token_sha256.as_bytes()) {
-            return Err(AuthError::Unauthorized);
-        }
+        let matched = constant_time_eq(supplied.as_bytes(), grant.token_sha256.as_bytes());
+        let live = grant
+            .expires_at
+            .is_none_or(|expires_at| now_unix_secs() < expires_at);
         let required = required_permission(operation, action)?;
-        if grant.permissions.contains(&required) {
+        if matched && live && grant.permissions.contains(&required) {
             Ok(())
         } else {
             Err(AuthError::Unauthorized)
@@ -327,7 +337,7 @@ pub fn required_permission(
             Some("stop") => Ok(AgentPermission::Stop),
             Some(
                 "pause" | "resume" | "step" | "continue" | "breakpoint" | "cancel" | "retry"
-                | "reset" | "restart" | "restart-source",
+                | "reset" | "restart" | "restart-source" | "reload-agents",
             ) => Ok(AgentPermission::Control),
             _ => Err(AuthError::InvalidRequest),
         },
@@ -455,6 +465,16 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Wall-clock seconds since the Unix epoch, matching the `expires_at` grant
+/// field. A clock failure yields 0 so every grant carrying an expiry denies
+/// (fail closed); grants without expiry are unaffected.
+pub(crate) fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(64);
@@ -538,6 +558,70 @@ mod tests {
     }
 
     #[test]
+    fn expiry_is_backward_compatible_and_fail_closed() {
+        // Grants written before expiry existed (no `expires_at`) keep working.
+        let policy = policy(&["read"]);
+        assert!(policy.authorize(Some(&auth()), "read", None).is_ok());
+
+        let token_hash = sha256_hex(b"0123456789abcdef0123456789abcdef");
+        let granting = |expires_at: Option<u64>| {
+            let grant = match expires_at {
+                Some(at) => format!(
+                    "{{\"token_sha256\":\"{token_hash}\",\"permissions\":[\"read\"],\"expires_at\":{at}}}"
+                ),
+                None => format!("{{\"token_sha256\":\"{token_hash}\",\"permissions\":[\"read\"]}}"),
+            };
+            AgentAuthPolicy::from_json(
+                format!("{{\"version\":1,\"agents\":{{\"writer\":{grant}}}}}").as_bytes(),
+            )
+            .unwrap()
+        };
+        // A grant expiring in the future authorizes; an expired grant denies
+        // even with the correct token and permission.
+        assert!(granting(Some(now_unix_secs() + 3600))
+            .authorize(Some(&auth()), "read", None)
+            .is_ok());
+        for expires_at in [0, 1, now_unix_secs().saturating_sub(1)] {
+            let expired = granting(Some(expires_at));
+            assert_eq!(
+                expired.authorize(Some(&auth()), "read", None),
+                Err(AuthError::Unauthorized)
+            );
+            // A wrong token on an expired grant denies identically: expiry
+            // reveals nothing beyond what a plain mismatch already reports.
+            let mut wrong = auth();
+            wrong.token = "abcdefghijklmnopqrstuvwxyz012345".into();
+            assert_eq!(
+                expired.authorize(Some(&wrong), "read", None),
+                Err(AuthError::Unauthorized)
+            );
+        }
+        // Malformed `expires_at` shapes fail closed at parse time.
+        for expires_at in [
+            json!("tomorrow"),
+            json!(-1),
+            json!(1.5),
+            json!(true),
+            json!([]),
+        ] {
+            let document = json!({
+                "version": 1,
+                "agents": {
+                    "writer": {
+                        "token_sha256": token_hash,
+                        "permissions": ["read"],
+                        "expires_at": expires_at,
+                    }
+                }
+            });
+            assert!(
+                AgentAuthPolicy::from_json(document.to_string().as_bytes()).is_err(),
+                "malformed expires_at must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn policy_parse_fails_closed_for_ambiguous_or_unknown_fields() {
         let hash = sha256_hex(b"0123456789abcdef0123456789abcdef");
         let valid_grant = format!("{{\"token_sha256\":\"{hash}\",\"permissions\":[\"read\"]}}");
@@ -572,6 +656,10 @@ mod tests {
         );
         assert_eq!(
             required_permission("control", Some("resume")),
+            Ok(AgentPermission::Control)
+        );
+        assert_eq!(
+            required_permission("control", Some("reload-agents")),
             Ok(AgentPermission::Control)
         );
         assert!(required_permission("control", Some("unknown")).is_err());

@@ -1331,36 +1331,73 @@ pub(crate) fn binary_path_with_path(
 
 /// Locate the version-matched generic applet helper beside this executable.
 pub fn bundled_applet_helper() -> Result<PathBuf> {
-    let executable = std::env::current_exe().context("locating the running interpreter")?;
-    let helper = executable.with_file_name(if cfg!(windows) {
-        "execute-applet.exe"
-    } else {
-        "execute-applet"
-    });
-    let metadata = fs::metadata(&helper).with_context(|| {
-        "bundled execute-applet helper missing; build the interpreter and helper binaries with cargo build --release"
-    })?;
-    if !metadata.is_file() || !crate::platform::executable(&metadata) {
-        bail!("bundled execute-applet helper is not an executable file");
-    }
-    Ok(helper)
+    bundled_helper(
+        "execute-applet",
+        "bundled execute-applet helper missing; build the interpreter and helper binaries with cargo build --release",
+    )
 }
 
 /// Locate the version-matched native model applet beside this executable.
 pub fn bundled_model_applet() -> Result<PathBuf> {
+    bundled_helper(
+        "execute-model",
+        "bundled execute-model helper missing; build both binaries with cargo build --release",
+    )
+}
+
+/// Locate a bundled helper beside this executable and prove it is the helper
+/// this build shipped before anything runs it. Sibling location alone is not
+/// trust (issue #515): the helper passes the permission/hash gate in
+/// `crate::security::verify_bundled_helper` (group/world-writable helper or
+/// directory refused on Unix, recorded build-time hash enforced when a
+/// `.sha256` sidecar is present), then a version/identity handshake runs the
+/// helper's existing `--version` contract and requires an exact match with
+/// this build's version, so a replaced helper is refused even in a plain
+/// `cargo build` tree that carries no recorded hash.
+fn bundled_helper(name: &str, missing: &'static str) -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
     let helper = executable.with_file_name(if cfg!(windows) {
-        "execute-model.exe"
+        format!("{name}.exe")
     } else {
-        "execute-model"
+        name.to_owned()
     });
-    let metadata = fs::metadata(&helper).with_context(|| {
-        "bundled execute-model helper missing; build both binaries with cargo build --release"
-    })?;
+    let metadata = fs::metadata(&helper).with_context(|| missing.to_owned())?;
     if !metadata.is_file() || !crate::platform::executable(&metadata) {
-        bail!("bundled execute-model helper is not an executable file");
+        bail!("bundled {name} helper is not an executable file");
     }
+    let recorded = crate::security::recorded_bundled_helper_sha256(&helper)?;
+    crate::security::verify_bundled_helper(&helper, recorded.as_deref())
+        .with_context(|| format!("trusting bundled {name} helper {}", helper.display()))?;
+    verify_helper_version_handshake(&helper, name)?;
     Ok(helper)
+}
+
+/// Run `helper --version` and require the exact identity line this build
+/// expects. Both bundled helpers already answer `--version` with
+/// `<name> <CARGO_PKG_VERSION>`; a replacement binary (different content,
+/// hence a different hash) does not answer with this build's line and is
+/// refused before it can run any privileged operation.
+fn verify_helper_version_handshake(helper: &Path, name: &str) -> Result<()> {
+    let output = std::process::Command::new(helper)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| {
+            format!(
+                "running bundled {name} helper identity handshake {}",
+                helper.display()
+            )
+        })?;
+    let expected = format!("{name} {}", env!("CARGO_PKG_VERSION"));
+    let reported = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() || reported.trim() != expected {
+        bail!(
+            "bundled {name} helper {} failed its identity handshake: expected `{expected}`, got `{}`; refusing to run an untrusted helper",
+            helper.display(),
+            reported.trim()
+        );
+    }
+    Ok(())
 }
 
 fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Result<PathBuf> {
@@ -5307,6 +5344,42 @@ mod input_writer_drop_tests {
                 assert!(error.is::<super::CommandTimedOut>());
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod helper_trust_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake_helper(temp: &tempfile::TempDir, version_line: &str) -> PathBuf {
+        let helper = temp.path().join("execute-applet");
+        fs::write(
+            &helper,
+            format!("#!/bin/sh\nprintf '%s\\n' '{version_line}'\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        helper
+    }
+
+    #[test]
+    fn handshake_accepts_the_matching_helper_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = fake_helper(
+            &temp,
+            &format!("execute-applet {}", env!("CARGO_PKG_VERSION")),
+        );
+        assert!(verify_helper_version_handshake(&helper, "execute-applet").is_ok());
+    }
+
+    #[test]
+    fn handshake_refuses_a_replaced_helper() {
+        let temp = tempfile::tempdir().unwrap();
+        // A replacement binary reports a different identity and is refused.
+        let helper = fake_helper(&temp, "execute-applet 0.0.0-attacker");
+        let error = verify_helper_version_handshake(&helper, "execute-applet").unwrap_err();
+        assert!(error.to_string().contains("identity handshake"), "{error}");
     }
 }
 

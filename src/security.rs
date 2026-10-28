@@ -14,6 +14,7 @@ use anyhow::{anyhow, Result};
 use anyhow::{bail, Context};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs::File;
@@ -1563,6 +1564,114 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
     result
 }
 
+/// Streaming SHA-256 of a bundled helper binary, as lowercase hex. The file
+/// is read in bounded chunks so a large helper is never loaded whole.
+pub(crate) fn bundled_helper_sha256(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .map_err(|error| anyhow!("reading bundled helper {}: {error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| anyhow!("reading bundled helper {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// The helper hash recorded beside the helper at build/packaging time, in
+/// `<helper>.sha256` (for `execute-applet.exe` that is `execute-applet.sha256`).
+/// The sidecar holds one whitespace-separated lowercase hex digest, as
+/// `sha256sum` writes it. No sidecar means no recorded hash; a present but
+/// malformed sidecar fails closed instead of silently dropping the check.
+pub(crate) fn recorded_bundled_helper_sha256(path: &Path) -> Result<Option<String>> {
+    let sidecar = path.with_extension("sha256");
+    let text = match std::fs::read_to_string(&sidecar) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow!(
+                "reading bundled helper hash {}: {error}",
+                sidecar.display()
+            ))
+        }
+    };
+    let digest = text.split_whitespace().next().unwrap_or_default();
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "bundled helper hash {} is malformed; refusing to trust {}",
+            sidecar.display(),
+            path.display()
+        ));
+    }
+    Ok(Some(digest.to_ascii_lowercase()))
+}
+
+/// Trust gate for a bundled helper binary (`execute-applet`/`execute-model`)
+/// resolved beside the running interpreter. Location alone is not trust: on
+/// Unix the helper file and its parent directory must not be group- or
+/// world-writable (a writable directory lets another local user replace the
+/// verified binary), a symlinked helper is refused, and when a hash was
+/// recorded at build time the helper's content must match it exactly. The
+/// caller separately runs the version/identity handshake, so a replaced
+/// helper is refused even in a plain `cargo build` tree with no sidecar.
+pub(crate) fn verify_bundled_helper(path: &Path, expected_sha256: Option<&str>) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| anyhow!("reading bundled helper {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(anyhow!(
+            "bundled helper {} is a symbolic link; refusing to trust it",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(anyhow!(
+            "bundled helper {} is not a regular file",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(anyhow!(
+                "bundled helper {} is group/world-writable; refusing to trust it",
+                path.display()
+            ));
+        }
+        if let Some(parent) = path.parent() {
+            let parent_metadata = std::fs::metadata(parent).map_err(|error| {
+                anyhow!(
+                    "reading bundled helper directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+            if parent_metadata.permissions().mode() & 0o022 != 0 {
+                return Err(anyhow!(
+                    "bundled helper directory {} is group/world-writable; refusing to trust {}",
+                    parent.display(),
+                    path.display()
+                ));
+            }
+        }
+    }
+    if let Some(expected) = expected_sha256 {
+        let actual = bundled_helper_sha256(path)?;
+        if !actual.eq_ignore_ascii_case(expected.trim()) {
+            return Err(anyhow!(
+                "bundled helper {} hash mismatch: expected {}, got {actual}; refusing to run an untrusted helper",
+                path.display(),
+                expected.trim().to_ascii_lowercase()
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2083,6 +2192,60 @@ mod tests {
             policy_decisions(&registry).last().unwrap().reason,
             PolicyDecisionReason::CachePurityDenied
         );
+    }
+
+    #[test]
+    fn replaced_helper_with_a_different_hash_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("execute-applet");
+        std::fs::write(&helper, b"genuine helper bytes").unwrap();
+        let expected = bundled_helper_sha256(&helper).unwrap();
+        assert!(verify_bundled_helper(&helper, Some(&expected)).is_ok());
+        // Replacing the helper changes its hash and must fail closed.
+        std::fs::write(&helper, b"attacker-controlled replacement").unwrap();
+        let error = verify_bundled_helper(&helper, Some(&expected)).unwrap_err();
+        assert!(error.to_string().contains("hash mismatch"), "{error}");
+    }
+
+    #[test]
+    fn recorded_helper_hash_sidecar_is_read_and_malformed_sidecar_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("execute-applet");
+        std::fs::write(&helper, b"genuine helper bytes").unwrap();
+        assert_eq!(recorded_bundled_helper_sha256(&helper).unwrap(), None);
+        let expected = bundled_helper_sha256(&helper).unwrap();
+        std::fs::write(
+            temp.path().join("execute-applet.sha256"),
+            format!("{expected}  execute-applet\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            recorded_bundled_helper_sha256(&helper).unwrap(),
+            Some(expected)
+        );
+        std::fs::write(temp.path().join("execute-applet.sha256"), "not-a-hash\n").unwrap();
+        assert!(recorded_bundled_helper_sha256(&helper).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_helper_directory_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("execute-applet");
+        std::fs::write(&helper, b"genuine helper bytes").unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(verify_bundled_helper(&helper, None).is_ok());
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let error = verify_bundled_helper(&helper, None).unwrap_err();
+        assert!(
+            error.to_string().contains("group/world-writable"),
+            "{error}"
+        );
+        // A group/world-writable helper file is refused for the same reason.
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(verify_bundled_helper(&helper, None).is_err());
     }
 
     #[cfg(unix)]

@@ -55,9 +55,11 @@ then flushes the published parent directory and syncs the checkpoint directory;
 the transaction-journal, `then save to`, and applet file/directory syncs that
 were previously no-ops on Windows now run the same directory flush. The
 publish backend opens the parent directory before the rename and flushes that
-pinned handle rather than a re-resolved path; the residual window is a parent
-swap between the pin and the rename (and the `MoveFileEx` fallback takes paths
-only), which the checkpoint lock excludes for journal publishes. Flush handles
+pinned handle rather than a re-resolved path; when the parent cannot be opened
+as a real directory the publish fails before any rename, so no path-based flush
+fallback ever runs. The residual window is a parent swap between the pin and
+the rename (and the `MoveFileEx` fallback takes paths only), which the
+checkpoint lock excludes for journal publishes. Flush handles
 require `GENERIC_WRITE`, so the writer needs write access to the parent
 directory. These flushes only ask the OS to persist the rename. A successful
 flush means the flush call succeeded; it does not by itself prove the entry

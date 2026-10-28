@@ -728,10 +728,13 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
     }
     assert!(attr_size > 0, "ConPTY attribute list size query failed");
-    let mut attr_storage = vec![0u8; attr_size];
+    // 8-byte storage: the attribute list holds pointers, so a byte Vec
+    // does not guarantee its alignment (ARM64 validates it strictly); the
+    // buffer still covers at least the queried byte size.
+    let mut attr_storage = vec![0u64; attr_size.div_ceil(std::mem::size_of::<u64>())];
     let attr_list = attr_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
-    // SAFETY: the storage is exactly the queried size and outlives process
-    // creation; one attribute slot is requested.
+    // SAFETY: the storage covers at least the queried size and outlives
+    // process creation; one attribute slot is requested.
     let attr_init = unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
     assert!(
         attr_init != FALSE,
@@ -824,6 +827,9 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     // console, and closing it at startup tears the input channel down while
     // the child is still attaching, which surfaces as a control-event exit
     // (STATUS_CONTROL_C_EXIT) with only conhost VT sequences on screen.
+    // Capture the launch error before any cleanup Win32 call (list delete,
+    // handle closes, console close) overwrites the thread's last error.
+    let create_error = std::io::Error::last_os_error();
     // SAFETY: the attribute list was initialized above and is deleted exactly
     // once here on every path past initialization.
     unsafe {
@@ -834,13 +840,13 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     drop(out_write);
     // in_write intentionally stays alive until teardown below.
     if created == FALSE {
-        let error = std::io::Error::last_os_error();
+        let error = create_error;
         // SAFETY: the console is live and has no owner yet on this path, so it
         // is closed exactly once here.
         unsafe {
             ClosePseudoConsole(hpc);
         }
-        panic!("ConPTY process launch failed: {error}");
+        panic!("ConPTY process launch failed for {exe}: {error}");
     }
     // SAFETY: CreateProcessW succeeded, so the process handle is valid and
     // uniquely owned here.

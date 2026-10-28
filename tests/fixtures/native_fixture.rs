@@ -124,9 +124,21 @@ fn conpty_bootstrap(args: &[String]) -> ! {
             },
         },
     };
-    let fail = |message: &str, code: i32| -> ! {
-        eprintln!("conpty-bootstrap: {message}");
+    // Every failure reports the thread's Win32 last-error code with its
+    // message, so the next CI log names the failing call instead of only
+    // the bootstrap stage. Callers must capture the error before any later
+    // Win32 call (cleanup included) overwrites it.
+    let fail_with = |message: &str, error: std::io::Error, code: i32| -> ! {
+        match error.raw_os_error() {
+            Some(raw) => eprintln!("conpty-bootstrap: {message} (win32 error {raw}: {error})"),
+            None => eprintln!("conpty-bootstrap: {message} ({error})"),
+        }
         std::process::exit(code);
+    };
+    // Captured at call time: no Win32 call runs between the failure above
+    // and this read, so the last error still belongs to that call.
+    let fail = |message: &str, code: i32| -> ! {
+        fail_with(message, std::io::Error::last_os_error(), code);
     };
     let Some(target) = args.first() else {
         fail("usage: conpty-bootstrap <exe> [args...]", 64);
@@ -260,10 +272,13 @@ fn conpty_bootstrap(args: &[String]) -> ! {
     if attr_size == 0 {
         fail("bootstrap attribute list size query failed", 4);
     }
-    let mut attr_storage = vec![0u8; attr_size];
+    // 8-byte storage: the attribute list holds pointers, so a byte Vec
+    // does not guarantee its alignment (ARM64 validates it strictly); the
+    // buffer still covers at least the queried byte size.
+    let mut attr_storage = vec![0u64; attr_size.div_ceil(std::mem::size_of::<u64>())];
     let attr_list = attr_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
-    // SAFETY: the storage is exactly the queried size and outlives process
-    // creation; one attribute slot is requested.
+    // SAFETY: the storage covers at least the queried size and outlives
+    // process creation; one attribute slot is requested.
     if unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == FALSE {
         fail("bootstrap attribute list init failed", 4);
     }
@@ -281,11 +296,13 @@ fn conpty_bootstrap(args: &[String]) -> ! {
         )
     } == FALSE
     {
+        // Capture before the delete below overwrites the thread's last error.
+        let error = std::io::Error::last_os_error();
         // SAFETY: the list was initialized above and is deleted exactly once.
         unsafe {
             DeleteProcThreadAttributeList(attr_list);
         }
-        fail("bootstrap handle-list attribute failed", 4);
+        fail_with("bootstrap handle-list attribute failed", error, 4);
     }
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
@@ -324,6 +341,10 @@ fn conpty_bootstrap(args: &[String]) -> ! {
             &mut info,
         )
     };
+    // Read the thread's last error before any other Win32 call (including
+    // the list delete below) can overwrite it; it is only reported when
+    // the launch actually failed.
+    let first_error = std::io::Error::last_os_error();
     // SAFETY: the attribute list was initialized above and is deleted exactly
     // once here on every path past initialization.
     unsafe {
@@ -331,7 +352,61 @@ fn conpty_bootstrap(args: &[String]) -> ! {
     }
     drop(attr_storage);
     if created == FALSE {
-        fail("bootstrap target launch failed", 4);
+        // The HANDLE_LIST hop is the newest part of this path; when its
+        // validation rejects the launch (native ARM CI reached this stage
+        // with "target launch failed" before the target ran), retry once
+        // with a plain STARTUPINFOW carrying the same explicit console
+        // stdio but no attribute list. Routing is unchanged
+        // (STARTF_USESTDHANDLES still points at CONIN$/CONOUT$), so the
+        // screen assertions stay exact; only the no-other-handle-leaks
+        // hardening is relaxed on this fallback path.
+        let retry_startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdInput: conin_dup.as_raw_handle() as HANDLE,
+            hStdOutput: conout_dup.as_raw_handle() as HANDLE,
+            hStdError: conout_dup.as_raw_handle() as HANDLE,
+            ..Default::default()
+        };
+        // CreateProcessW may modify the command buffer even on failure, so
+        // the retry gets a fresh copy of the same command line.
+        command = text.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: same live-buffer contract as the first attempt; the retry
+        // startup carries explicit console stdio with no attribute list.
+        let retried = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                command.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                TRUE,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                std::ptr::null(),
+                std::ptr::null(),
+                &retry_startup as *const STARTUPINFOW,
+                &mut info,
+            )
+        };
+        let retry_error = std::io::Error::last_os_error();
+        if retried == FALSE {
+            match (retry_error.raw_os_error(), first_error.raw_os_error()) {
+                (Some(second), Some(first)) => eprintln!(
+                    "conpty-bootstrap: bootstrap target launch failed for {target} (handle-list attempt win32 error {first}: {first_error}; plain-startup retry win32 error {second}: {retry_error})"
+                ),
+                _ => eprintln!(
+                    "conpty-bootstrap: bootstrap target launch failed for {target} ({first_error}; retry: {retry_error})"
+                ),
+            }
+            std::process::exit(4);
+        }
+        match first_error.raw_os_error() {
+            Some(raw) => eprintln!(
+                "conpty-bootstrap: handle-list launch of {target} failed (win32 error {raw}: {first_error}); retried with plain console startup"
+            ),
+            None => eprintln!(
+                "conpty-bootstrap: handle-list launch of {target} failed ({first_error}); retried with plain console startup"
+            ),
+        }
     }
     // SAFETY: CreateProcessW succeeded, so both handles are valid and uniquely
     // owned here.
@@ -349,21 +424,25 @@ fn conpty_bootstrap(args: &[String]) -> ! {
         )
     } == FALSE
     {
+        // Capture before TerminateProcess below overwrites the last error;
+        // nesting inside an outer CI job reports here (e.g. access denied).
+        let error = std::io::Error::last_os_error();
         // SAFETY: the process handle is live; terminating a suspended target
         // whose job assignment failed keeps the session bounded.
         unsafe {
             TerminateProcess(process.as_raw_handle() as HANDLE, 1);
         }
-        fail("bootstrap job assignment failed", 4);
+        fail_with("bootstrap job assignment failed", error, 4);
     }
     // SAFETY: the thread handle is the suspended primary thread from the
     // launch above and stays open for this call.
     if unsafe { ResumeThread(thread.as_raw_handle() as HANDLE) } == u32::MAX {
+        let error = std::io::Error::last_os_error();
         // SAFETY: the process handle is live; see the assignment-failure path.
         unsafe {
             TerminateProcess(process.as_raw_handle() as HANDLE, 1);
         }
-        fail("bootstrap thread resume failed", 4);
+        fail_with("bootstrap thread resume failed", error, 4);
     }
     drop(thread);
     // The harness bounds this wait from the outside and terminates this
@@ -373,13 +452,16 @@ fn conpty_bootstrap(args: &[String]) -> ! {
     // target exits or this process is terminated.
     let wait = unsafe { WaitForSingleObject(process.as_raw_handle() as HANDLE, INFINITE) };
     let mut status = 1u32;
-    // SAFETY: the process handle and the exit-code pointer are live; both
-    // results are checked before the code propagates below.
     let queried =
+        // SAFETY: the owned process handle and status pointer are live.
         unsafe { GetExitCodeProcess(process.as_raw_handle() as HANDLE, &mut status) } != FALSE;
     drop(process);
     if wait != WAIT_OBJECT_0 || !queried {
-        fail("bootstrap target wait failed", 4);
+        fail_with(
+            &format!("bootstrap target wait failed (wait={wait:#X} queried={queried})"),
+            std::io::Error::last_os_error(),
+            4,
+        );
     }
     std::process::exit(status as i32);
 }

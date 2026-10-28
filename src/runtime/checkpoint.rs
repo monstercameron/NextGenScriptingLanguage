@@ -602,8 +602,12 @@ impl Journal {
         let requested_directory: PathBuf = options.directory.components().collect();
         #[cfg(unix)]
         let (directory_handle, checkpoint_dir_existed) = {
-            let Some((handle, created)) =
-                open_or_create_directory_tree(&requested_directory, !options.resume, 0o700)?
+            let Some((handle, created)) = open_or_create_directory_tree(
+                &requested_directory,
+                "checkpoint",
+                !options.resume,
+                0o700,
+            )?
             else {
                 bail!("checkpoint directory does not exist for resume");
             };
@@ -3510,6 +3514,8 @@ fn atomic_write_with_inner(
     crate::failpoint::hit("checkpoint.atomic.renamed")?;
     #[cfg(unix)]
     {
+        #[cfg(feature = "failpoints")]
+        crate::failpoint::hit("checkpoint.atomic.directory_sync")?;
         pinned_directory
             .expect("pinned checkpoint directory")
             .sync_all()
@@ -3540,15 +3546,17 @@ pub(crate) fn open_pinned_directory_with_path(directory: &Path) -> Result<(File,
 #[cfg(unix)]
 pub(crate) fn open_or_create_directory_tree(
     path: &Path,
+    label: &str,
     create: bool,
     mode: libc::mode_t,
 ) -> Result<Option<(File, bool)>> {
-    open_or_create_directory_tree_with_hook(path, create, mode, || {})
+    open_or_create_directory_tree_with_hook(path, label, create, mode, || {})
 }
 
 #[cfg(unix)]
 fn open_or_create_directory_tree_with_hook(
     path: &Path,
+    label: &str,
     create: bool,
     mode: libc::mode_t,
     after_ancestor_pin: impl FnOnce(),
@@ -3564,13 +3572,13 @@ fn open_or_create_directory_tree_with_hook(
     let initial_leaf = match fs::symlink_metadata(&requested) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                bail!("state path must be a real directory");
+                bail!("{label} path must be a real directory");
             }
             Some(metadata)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound && !create => return Ok(None),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error).context("checking state directory"),
+        Err(error) => return Err(error).with_context(|| format!("checking {label} directory")),
     };
 
     // Pin the parent of an existing leaf, rather than the leaf itself, so the
@@ -3588,27 +3596,29 @@ fn open_or_create_directory_tree_with_hook(
         match fs::symlink_metadata(&ancestor) {
             Ok(metadata) => {
                 if ancestor == requested && initial_leaf.is_none() {
-                    bail!("state directory appeared while it was being validated");
+                    bail!("{label} directory appeared while it was being validated");
                 }
                 if ancestor == requested && metadata.file_type().is_symlink() {
-                    bail!("state path cannot be a symbolic link");
+                    bail!("{label} path cannot be a symbolic link");
                 }
                 if metadata.file_type().is_symlink() {
-                    bail!("state directory ancestor cannot be a symbolic link");
+                    bail!("{label} directory ancestor cannot be a symbolic link");
                 }
                 break metadata;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
                 let Some(parent) = ancestor.parent() else {
-                    bail!("state path has no existing ancestor");
+                    bail!("{label} path has no existing ancestor");
                 };
                 if parent == ancestor {
-                    bail!("state path has no existing ancestor");
+                    bail!("{label} path has no existing ancestor");
                 }
                 ancestor = parent.to_path_buf();
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).context("finding state directory ancestor"),
+            Err(error) => {
+                return Err(error).with_context(|| format!("finding {label} directory ancestor"))
+            }
         }
     };
 
@@ -3617,15 +3627,15 @@ fn open_or_create_directory_tree_with_hook(
     // matching normal path semantics before pinning its canonical target.
     let expected = fs::metadata(&ancestor)?;
     if !expected.is_dir() {
-        bail!("state directory ancestor is not a directory");
+        bail!("{label} directory ancestor is not a directory");
     }
     if ancestor_metadata.dev() != expected.dev() || ancestor_metadata.ino() != expected.ino() {
-        bail!("state directory ancestor changed while validating it");
+        bail!("{label} directory ancestor changed while validating it");
     }
     if ancestor == requested {
         if let Some(initial) = initial_leaf.as_ref() {
             if initial.dev() != expected.dev() || initial.ino() != expected.ino() {
-                bail!("state directory changed while validating it");
+                bail!("{label} directory changed while validating it");
             }
         }
     }
@@ -3635,7 +3645,7 @@ fn open_or_create_directory_tree_with_hook(
 
     let suffix = requested
         .strip_prefix(&ancestor)
-        .context("state directory suffix is outside its ancestor")?;
+        .with_context(|| format!("{label} directory suffix is outside its ancestor"))?;
     let components: Vec<_> = suffix.components().collect();
     if components.is_empty() {
         return Ok(Some((directory, false)));
@@ -3662,21 +3672,22 @@ fn open_or_create_directory_tree_with_hook(
                 if !created {
                     let error = io::Error::last_os_error();
                     if error.kind() != io::ErrorKind::AlreadyExists {
-                        return Err(error).context("creating state directory component");
+                        return Err(error)
+                            .with_context(|| format!("creating {label} directory component"));
                     }
                     if initial_leaf.is_none() && index + 1 == components.len() {
-                        bail!("state directory appeared while it was being created");
+                        bail!("{label} directory appeared while it was being created");
                     }
                 } else {
                     if initial_leaf.is_some() && index + 1 == components.len() {
                         // The validated leaf disappeared. Leave the new empty
                         // directory in place rather than unlinking a name that
                         // an attacker could replace before cleanup.
-                        bail!("state directory disappeared while it was being opened");
+                        bail!("{label} directory disappeared while it was being opened");
                     }
                     directory
                         .sync_all()
-                        .context("syncing state directory parent")?;
+                        .with_context(|| format!("syncing {label} directory parent"))?;
                 }
                 directory = open_child_at(&directory, name, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
                 if index + 1 == components.len() {
@@ -3684,18 +3695,18 @@ fn open_or_create_directory_tree_with_hook(
                     if let Some(initial) = initial_leaf.as_ref() {
                         let actual = directory.metadata()?;
                         if initial.dev() != actual.dev() || initial.ino() != actual.ino() {
-                            bail!("state directory changed while opening it");
+                            bail!("{label} directory changed while opening it");
                         }
                     }
                 }
             }
             std::path::Component::Prefix(_) => {
-                bail!("state directory path contains an unsupported prefix")
+                bail!("{label} directory path contains an unsupported prefix")
             }
         }
     }
     if !directory.metadata()?.is_dir() {
-        bail!("state path is not a directory");
+        bail!("{label} path is not a directory");
     }
     Ok(Some((directory, created_leaf)))
 }
@@ -3880,7 +3891,7 @@ mod tests {
         let displaced = temp.path().join("displaced-parent");
 
         let (pinned, created) =
-            open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
+            open_or_create_directory_tree_with_hook(&requested, "checkpoint", true, 0o700, || {
                 fs::rename(&parent, &displaced).unwrap();
                 fs::create_dir(&parent).unwrap();
             })
@@ -3900,9 +3911,10 @@ mod tests {
         fs::create_dir(&parent).unwrap();
         let requested = parent.join("nested/checkpoint");
 
-        let result = open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
-            fs::create_dir_all(&requested).unwrap();
-        });
+        let result =
+            open_or_create_directory_tree_with_hook(&requested, "checkpoint", true, 0o700, || {
+                fs::create_dir_all(&requested).unwrap();
+            });
 
         assert!(result.is_err());
         assert!(requested.is_dir());
@@ -3920,7 +3932,7 @@ mod tests {
         symlink(&target, &alias).unwrap();
         let requested = alias.join("new-checkpoint");
 
-        assert!(open_or_create_directory_tree(&requested, true, 0o700).is_err());
+        assert!(open_or_create_directory_tree(&requested, "checkpoint", true, 0o700).is_err());
         assert!(!target.join("new-checkpoint").exists());
     }
 
@@ -3939,7 +3951,7 @@ mod tests {
         let requested = alias.join("sub/new-checkpoint");
 
         let (pinned, created) =
-            open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
+            open_or_create_directory_tree_with_hook(&requested, "checkpoint", true, 0o700, || {
                 fs::remove_file(&alias).unwrap();
                 symlink(&second, &alias).unwrap();
             })
@@ -3960,10 +3972,11 @@ mod tests {
         fs::create_dir_all(&requested).unwrap();
         let displaced_leaf = temp.path().join("displaced-checkpoint");
 
-        let result = open_or_create_directory_tree_with_hook(&requested, true, 0o700, || {
-            fs::rename(&requested, &displaced_leaf).unwrap();
-            fs::create_dir(&requested).unwrap();
-        });
+        let result =
+            open_or_create_directory_tree_with_hook(&requested, "checkpoint", true, 0o700, || {
+                fs::rename(&requested, &displaced_leaf).unwrap();
+                fs::create_dir(&requested).unwrap();
+            });
 
         assert!(result.is_err());
         assert!(displaced_leaf.is_dir());

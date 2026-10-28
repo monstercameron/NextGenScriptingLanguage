@@ -16,6 +16,29 @@ pub fn escape_terminal_field(text: &str) -> String {
     escape(text, false)
 }
 
+/// Whether pipeline output is bound for a terminal: the actual stdout sink,
+/// not the content source. Model text becomes an ordinary pipeline value, so
+/// the sink cannot tell model bytes apart later; every stdout sink below
+/// reads this one decision. Pipes and files keep exact bytes; TTYs get
+/// escaped text.
+pub fn stdout_is_terminal() -> bool {
+    std::io::IsTerminal::is_terminal(&std::io::stdout())
+}
+
+/// Encode pipeline bytes for the stdout sink. Pipes and files keep the exact
+/// bytes (H17 pipe guarantee); a TTY sink gets [`escape_controls`] over the
+/// text so OSC/CSI/C1 escapes and bidi overrides in untrusted model output
+/// cannot rewrite the terminal. Invalid UTF-8 renders lossily on a TTY: it
+/// cannot display as text there, while pipes still carry the original bytes.
+/// The `stdout_is_terminal` flag is a parameter (rather than read here) so the
+/// sink decision stays testable without a real TTY.
+pub fn encode_pipeline_for_stdout(bytes: &[u8], stdout_is_terminal: bool) -> Vec<u8> {
+    if !stdout_is_terminal {
+        return bytes.to_vec();
+    }
+    escape_controls(&String::from_utf8_lossy(bytes)).into_bytes()
+}
+
 fn escape(text: &str, preserve_layout: bool) -> String {
     let mut out = String::with_capacity(text.len());
     for character in text.chars() {
@@ -83,6 +106,61 @@ mod tests {
         assert_eq!(
             escape_controls(&char::from_u32(0x9b).unwrap().to_string()),
             r"\u{9b}"
+        );
+    }
+
+    #[test]
+    fn pipeline_sink_escapes_model_escapes_on_a_tty() {
+        use super::encode_pipeline_for_stdout;
+        // OSC title-set, CSI erase, C1 CSI and a bidi override: the model
+        // payload from #522 must not reach a terminal writer raw.
+        let hostile = "go\u{1b}]0;pwned\u{7}now\u{1b}[2Jthen\u{9b}31mswap\u{202e}end\nnext\tcol";
+        let rendered = encode_pipeline_for_stdout(hostile.as_bytes(), true);
+        let rendered = String::from_utf8(rendered).expect("escaped output is UTF-8");
+        assert!(
+            !rendered.contains('\u{1b}'),
+            "raw ESC reached the TTY encoding: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\u{9b}'),
+            "raw C1 CSI reached the TTY encoding: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\u{202e}'),
+            "raw bidi override reached the TTY encoding: {rendered:?}"
+        );
+        assert_eq!(
+            rendered,
+            "go\\u{1b}]0;pwned\\u{7}now\\u{1b}[2Jthen\\u{9b}31mswap\\u{202e}end\nnext\tcol"
+        );
+    }
+
+    #[test]
+    fn pipeline_sink_keeps_pipe_bytes_exact() {
+        use super::encode_pipeline_for_stdout;
+        let hostile = "go\u{1b}]0;pwned\u{7}now\u{1b}[2Jthen\u{9b}31mswap\u{202e}end\ncaf\u{e9}\n";
+        assert_eq!(
+            encode_pipeline_for_stdout(hostile.as_bytes(), false),
+            hostile.as_bytes()
+        );
+    }
+
+    #[test]
+    fn pipeline_sink_preserves_valid_text_and_shows_invalid_lossily_on_a_tty() {
+        use super::encode_pipeline_for_stdout;
+        // Valid UTF-8 (including non-ASCII) survives TTY escaping unchanged.
+        assert_eq!(
+            encode_pipeline_for_stdout("caf\u{e9} \u{6f22}\u{5b57}\n".as_bytes(), true),
+            "caf\u{e9} \u{6f22}\u{5b57}\n".as_bytes()
+        );
+        // Invalid bytes cannot render as terminal text; they become a visible
+        // placeholder instead of passing through raw or vanishing.
+        let rendered = encode_pipeline_for_stdout(b"a\xffb", true);
+        assert_eq!(rendered, "a\u{fffd}b".as_bytes());
+        assert_eq!(
+            encode_pipeline_for_stdout(b"a\xffb", false),
+            b"a\xffb".to_vec(),
+            "pipes keep even invalid bytes exact"
         );
     }
 

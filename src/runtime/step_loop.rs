@@ -2344,8 +2344,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         } else {
                             // An observer needs the bytes, so a streamed step is captured
                             // and written after it completes, as streaming already does.
+                            // A TTY sink is captured for the same reason: model text
+                            // becomes an ordinary pipeline value, so the sink cannot
+                            // tell it apart later, and every TTY byte must go through
+                            // the escaped pipeline sinks. Pipes keep the inherited
+                            // fast path with exact bytes (H17).
                             let _inherit = InheritTerminalStdout::enter(
-                                streamed && !observe::captures_streamed_stdout(),
+                                streamed
+                                    && !observe::captures_streamed_stdout()
+                                    && !crate::terminal_text::stdout_is_terminal(),
                             );
                             let _handoff = terminal::Scope::enter(handoff);
                             // One native command receives a file or stdout redirect as

@@ -137,7 +137,16 @@ pub struct RunOptions {
     pub command_timeout: Option<Duration>,
     /// Maximum lifetime of the full runtime operation, including scheduler waits.
     pub total_timeout: Option<Duration>,
+    /// Grace between the polite group signal (SIGTERM, or SIGINT when the run
+    /// was interrupted by SIGINT) and the final SIGKILL. Bounds every
+    /// cancellation and timeout path so a trapping child can clean up while an
+    /// ignoring child is still reaped. Issue #525; per-command tuning stays
+    /// with #310.
+    pub kill_grace: Duration,
 }
+
+/// Grace before SIGKILL when a cancel or timeout escalates a process group.
+pub const DEFAULT_KILL_GRACE: Duration = Duration::from_secs(2);
 
 impl RunOptions {
     /// Options for a run in `working_directory` with no inputs, cache, trace or
@@ -153,6 +162,7 @@ impl RunOptions {
             loop_budget_scope: LoopBudgetScope::PerLoop,
             command_timeout: None,
             total_timeout: None,
+            kill_grace: DEFAULT_KILL_GRACE,
         }
     }
 }
@@ -390,6 +400,7 @@ fn configured_inputs<'a>(
         loop_budget_scope: options.loop_budget_scope,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        kill_grace: options.kill_grace,
         ..RunOptions::new(options.working_directory.clone())
     };
     preflight_inputs_with_loop_limit(
@@ -549,6 +560,10 @@ pub(crate) struct Signals {
     job_stage_results: Option<Arc<Mutex<Vec<Option<execution_result::StageResult>>>>>,
     job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
     output_writers: Arc<stdio::OutputWriterPool>,
+    /// Bounded grace between the polite group signal and SIGKILL on
+    /// cancellation or timeout (issue #525). Copied from `RunOptions` for
+    /// the run and its bounded group scopes.
+    pub(crate) kill_grace: Duration,
     #[cfg(test)]
     job_panic_before_ack: Option<Arc<JobAckPanicProbe>>,
 }
@@ -660,6 +675,11 @@ impl Signals {
     }
 
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
+        // A fresh run owns fresh signal state: a SIGINT recorded by an
+        // earlier in-process run must not leak into this run's escalation
+        // choice (issue #525). Handlers installed below re-record any new
+        // interrupt.
+        crate::platform::clear_cancel_signal();
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
@@ -687,6 +707,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
+            kill_grace: DEFAULT_KILL_GRACE,
             #[cfg(test)]
             job_panic_before_ack: None,
         };
@@ -718,6 +739,9 @@ impl Signals {
     ) -> Result<Self> {
         // The caller can set this flag directly without notifying the signal
         // wake, so native supervisors retain the bounded cancellation check.
+        // Like `register`, this installs fresh handlers, so it owns fresh
+        // signal state too (issue #525).
+        crate::platform::clear_cancel_signal();
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
         let signal_wake = Arc::new(crate::tasks::CancellationWake::new()?);
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
@@ -763,6 +787,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
+            kill_grace: DEFAULT_KILL_GRACE,
             #[cfg(test)]
             job_panic_before_ack: None,
         })
@@ -799,6 +824,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
+            kill_grace: self.kill_grace,
             #[cfg(test)]
             job_panic_before_ack: None,
         }
@@ -848,6 +874,7 @@ impl Signals {
             job_stage_results: self.job_stage_results.clone(),
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
+            kill_grace: self.kill_grace,
             #[cfg(test)]
             job_panic_before_ack: self.job_panic_before_ack.clone(),
         })
@@ -2298,11 +2325,12 @@ pub fn run_with_drain_timeout(
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
-    let signals = if has_interrupt_handler(program) {
+    let mut signals = if has_interrupt_handler(program) {
         Signals::register_with_drain(deadline, drain_timeout)?
     } else {
         Signals::register_with_deadline(deadline)?
     };
+    signals.kill_grace = options.kill_grace;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;

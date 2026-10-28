@@ -17,7 +17,14 @@ use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
-    System::{Diagnostics::ToolHelp::*, JobObjects::*, Pipes::*, Threading::*, IO::*},
+    System::{
+        Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT},
+        Diagnostics::ToolHelp::*,
+        JobObjects::*,
+        Pipes::*,
+        Threading::*,
+        IO::*,
+    },
 };
 
 /// Add arguments with a command-line representation accepted by both the MSVC
@@ -270,12 +277,31 @@ impl Job {
             TerminateJobObject(self.0.as_raw_handle(), 1);
         }
     }
+    /// Polite stop for one process group before `terminate`. Best-effort
+    /// `CTRL_BREAK_EVENT` gives console children a chance to flush output,
+    /// remove locks and restore state (issue #525); the job object still
+    /// ends stragglers. Failures are ignored: not every child has a console.
+    pub(crate) fn send_ctrl_break(process_group_id: u32) {
+        // SAFETY: GenerateConsoleCtrlEvent takes a control-event constant and
+        // a group id, reads no memory, and only signals console processes.
+        // A zero return (no console, no such group) is ignored on purpose.
+        unsafe {
+            GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process_group_id);
+        }
+    }
     pub(crate) fn spawn(command: &mut Command) -> Result<(Child, Self)> {
         use std::os::windows::process::CommandExt;
+        // CREATE_NEW_PROCESS_GROUP isolates Ctrl-C handling so the parent's
+        // console Ctrl-C does not kill children directly; the parent forwards
+        // a polite CTRL_BREAK (see `send_ctrl_break`) before the job ends
+        // them. Combined with CREATE_SUSPENDED so no code runs before the job
+        // assignment below.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
         let job = Self::new()?;
         // No untrusted child instruction runs until it belongs to our job.
         let mut child = command
-            .creation_flags(CREATE_SUSPENDED)
+            .creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP)
             .spawn()
             .context("spawning native Windows child")?;
         let setup = (|| -> Result<()> {

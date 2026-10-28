@@ -10,11 +10,11 @@ _execute() {
         check) options="--json --input --manifest-dir --manifest-catalog --capability-policy --data-flow-policy --format --help -h" ;;
         explain) options="--json --input --manifest-dir --manifest-catalog --capability-policy --data-flow-policy --allow --policy-header --format --help -h" ;;
         inspect) options="--input --manifest-dir --manifest-catalog --capability-policy --data-flow-policy --help -h" ;;
-        resume) options="--input --manifest-dir --manifest-catalog --capability-policy --data-flow-policy --cache-dir --checkpoint --retry-uncertain --trace --max-output-bytes --max-loop-iterations --command-timeout-ms --total-timeout-ms --max-record-bytes --help -h" ;;
+        resume) options="--input --manifest-dir --manifest-catalog --capability-policy --data-flow-policy --cache-dir --checkpoint --retry-uncertain --trace --max-output-bytes --max-loop-iterations --command-timeout-ms --total-timeout-ms --kill-grace-ms --max-record-bytes --help -h" ;;
         test) options="--answers --json --help -h" ;;
         run-parts) options="--once --continue --json --manifest-dir --help -h" ;;
         compile) options="--to --out --manifest-dir --manifest-catalog --help -h" ;;
-        *) options="--input --manifest-dir --manifest-catalog --capability-policy --data-flow-policy --cache-dir --checkpoint --answers --record --what-if --confirm --single-instance --control --break-at --daemon --json-errors --headless --once --init --trace --max-output-bytes --max-loop-iterations --max-runs --missed-ticks --max-catch-up --calendar-dedup --command-timeout-ms --drain-timeout-ms --total-timeout-ms --max-record-bytes --help -h" ;;
+        *) options="--input --manifest-dir --manifest-catalog --capability-policy --data-flow-policy --cache-dir --checkpoint --answers --record --what-if --confirm --single-instance --control --break-at --daemon --json-errors --headless --once --init --trace --max-output-bytes --max-loop-iterations --max-runs --missed-ticks --max-catch-up --calendar-dedup --command-timeout-ms --drain-timeout-ms --total-timeout-ms --kill-grace-ms --max-record-bytes --help -h" ;;
     esac
     case "$prev" in
         --manifest-dir|--cache-dir|--checkpoint|--single-instance)

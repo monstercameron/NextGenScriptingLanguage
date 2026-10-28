@@ -36,5 +36,6 @@ complete -c execute -l calendar-dedup -r -a 'instant local' -d 'Calendar fold po
 complete -c execute -l command-timeout-ms -r -d 'Native pipeline lifetime'
 complete -c execute -l total-timeout-ms -r -d 'Workflow lifetime'
 complete -c execute -l drain-timeout-ms -r -d 'Interrupt drain budget'
+complete -c execute -l kill-grace-ms -r -d 'Polite kill grace'
 complete -c execute -l max-record-bytes -r -d 'Listener record limit'
 complete -c execute -l help -s h -d 'Show help'

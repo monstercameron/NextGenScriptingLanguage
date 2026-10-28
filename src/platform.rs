@@ -81,6 +81,15 @@ pub(crate) fn record_cancel_signal(signal: i32) {
     CANCEL_SIGNAL.store(signal, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// Clear the recorded interrupt at the start of a fresh run. The signal number
+/// is process-global, so without this a SIGINT that cancelled one in-process
+/// run (tests, daemon, library reuse) would still be visible to the next run
+/// and poison its escalation choice: a plain timeout would send SIGINT instead
+/// of SIGTERM (see issue #525).
+pub(crate) fn clear_cancel_signal() {
+    CANCEL_SIGNAL.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Exit status for a run cancelled by an interrupt: 128 plus the signal number.
 pub(crate) fn cancel_exit_code() -> Option<i32> {
     match CANCEL_SIGNAL.load(std::sync::atomic::Ordering::SeqCst) {

@@ -32,7 +32,10 @@ concurrency:
 jobs:
   linux-denial:
     name: Linux sandbox denial (bubblewrap, no silent skips)
-    runs-on: ubuntu-24.04
+    # Ubuntu 24.04 runners currently deny the required user namespaces.
+    # This temporary runner is retired on 2027-04-17; replace it with a
+    # 24.04+ runner that can exercise the same real sandbox before that date.
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
       EXECUTE_REQUIRE_OS_SANDBOX: "1"

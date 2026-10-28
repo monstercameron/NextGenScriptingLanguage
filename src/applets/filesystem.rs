@@ -15,7 +15,9 @@
 //! ACLs, extended attributes and timestamps are not copied. File content is
 //! capped at 16 MiB to keep reads and CAS checks bounded.
 
-use super::{failed, invalid, io_error, required_string, AppletError};
+use super::{
+    checkpoint_work, failed, invalid, io_error, required_string, AppletError, ExecutionContext,
+};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
@@ -27,6 +29,16 @@ use std::time::{Duration, Instant};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
+/// Advisory-lock polling slice. Each slice rechecks the execution budget, so
+/// cancellation and deadlines preempt a held lock within milliseconds. No
+/// helper thread is spawned: the waiter polls and returns, never abandoning
+/// work to a detached thread.
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(5);
+/// File copy chunk. Reads and temp-file writes move through this many bytes
+/// between budget checks, so large files stay interruptible while each
+/// individual `read`/`write` system call can still block on a stalled
+/// filesystem (for example NFS).
+const IO_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SymlinkPolicy {
@@ -56,9 +68,14 @@ struct BrokenSymlink {
     target: PathBuf,
 }
 
-pub(super) fn read(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn read(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let path = resolve_path(required_string(args, "path")?, cwd);
-    let state = inspect(&path)?.ok_or_else(|| {
+    let state = inspect(&path, context)?.ok_or_else(|| {
         super::absence(
             "not_found",
             format!("file does not exist: {}", path.display()),
@@ -79,7 +96,9 @@ pub(super) fn write_atomic(
     args: &Map<String, Value>,
     input: &[u8],
     cwd: &Path,
+    context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let path = resolve_path(required_string(args, "path")?, cwd);
     let content = match args.get("content") {
         Some(Value::String(value)) => value.as_bytes().to_vec(),
@@ -98,13 +117,14 @@ pub(super) fn write_atomic(
     validate_lock_path(&lock_path, &path)?;
     let lock_timeout = lock_timeout(args)?;
 
-    with_path_lock(&lock_path, lock_timeout, || {
+    with_path_lock(&lock_path, lock_timeout, context, || {
         write_atomic_locked(
             &path,
             &content,
             expected_hash,
             symlink_policy,
             permission_policy,
+            context,
         )
     })
 }
@@ -113,15 +133,20 @@ pub(super) fn write_atomic(
 /// For a symlink this removes the link itself and never follows it for the
 /// unlink operation. Snapshot reads still inspect the target so callers can
 /// use `fs.snapshot` for either regular files or live symlinks.
-pub(super) fn unlink_checked(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn unlink_checked(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let path = resolve_path(required_string(args, "path")?, cwd);
     let expected_snapshot = required_string(args, "expected_snapshot")?;
     let lock_path = lock_path(args, &path, cwd)?;
     validate_lock_path(&lock_path, &path)?;
     let lock_timeout = lock_timeout(args)?;
 
-    with_path_lock(&lock_path, lock_timeout, || {
-        let initial = inspect(&path)?.ok_or_else(|| {
+    with_path_lock(&lock_path, lock_timeout, context, || {
+        let initial = inspect(&path, context)?.ok_or_else(|| {
             super::absence(
                 "not_found",
                 format!("file does not exist: {}", path.display()),
@@ -137,7 +162,8 @@ pub(super) fn unlink_checked(args: &Map<String, Value>, cwd: &Path) -> Result<Va
         // Re-read immediately before unlinking to narrow the window for
         // non-cooperating writers. The stable advisory lock coordinates only
         // cooperating applets; the containing directory must be trusted.
-        let current = inspect(&path)?.ok_or_else(|| {
+        context.checkpoint()?;
+        let current = inspect(&path, context)?.ok_or_else(|| {
             failed(
                 "conflict",
                 format!("file disappeared before unlink: {}", path.display()),
@@ -150,6 +176,10 @@ pub(super) fn unlink_checked(args: &Map<String, Value>, cwd: &Path) -> Result<Va
             ));
         }
         let symlink = current.symlink.clone();
+        // A single unlink or sync call can still block inside the operating
+        // system; only the slices between calls are interruptible. Error
+        // codes are unchanged.
+        context.checkpoint()?;
         fs::remove_file(&path).map_err(|error| {
             failed(
                 "uncertain_effect",
@@ -160,12 +190,14 @@ pub(super) fn unlink_checked(args: &Map<String, Value>, cwd: &Path) -> Result<Va
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        context.checkpoint()?;
         sync_directory(parent).map_err(|error| {
             failed(
                 "uncertain_effect",
                 format!("entry was unlinked but parent sync failed: {error}"),
             )
         })?;
+        context.checkpoint()?;
         match fs::symlink_metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Ok(_) => {
@@ -197,6 +229,7 @@ pub(crate) struct PathLock {
 pub(crate) fn acquire_path_lock(
     lock_path: &Path,
     timeout: Duration,
+    context: &ExecutionContext<'_>,
 ) -> Result<PathLock, AppletError> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true);
@@ -221,12 +254,20 @@ pub(crate) fn acquire_path_lock(
     }
     let started = Instant::now();
     loop {
+        // Check the budget before each attempt so a cancelled or expired
+        // caller preempts the wait instead of sleeping through it. This
+        // returns the caller's cancellation or deadline error, never a
+        // retried or converted lock result.
+        context.checkpoint()?;
         match file.try_lock() {
             Ok(()) => break,
             Err(std::fs::TryLockError::Error(error)) => {
                 return Err(io_error(error, format!("locking {}", lock_path.display())));
             }
             Err(std::fs::TryLockError::WouldBlock) if started.elapsed() >= timeout => {
+                // Re-check the budget so a wait that outlived its deadline
+                // reports the deadline instead of a plain lock timeout.
+                context.checkpoint()?;
                 return Err(failed(
                     "lock_timeout",
                     format!("timed out waiting for lock {}", lock_path.display()),
@@ -234,7 +275,7 @@ pub(crate) fn acquire_path_lock(
             }
             Err(std::fs::TryLockError::WouldBlock) => {
                 std::thread::sleep(
-                    Duration::from_millis(10).min(timeout.saturating_sub(started.elapsed())),
+                    LOCK_POLL_INTERVAL.min(timeout.saturating_sub(started.elapsed())),
                 );
             }
         }
@@ -245,12 +286,13 @@ pub(crate) fn acquire_path_lock(
 pub(super) fn with_path_lock<T>(
     lock_path: &Path,
     timeout: Duration,
+    context: &ExecutionContext<'_>,
     action: impl FnOnce() -> Result<T, AppletError>,
 ) -> Result<T, AppletError> {
     // Keep this descriptor alive through the operation. The stable lock file
     // is intentionally retained: unlinking it could split concurrent lockers
     // across different inodes.
-    let _guard = acquire_path_lock(lock_path, timeout)?;
+    let _guard = acquire_path_lock(lock_path, timeout, context)?;
     action()
 }
 
@@ -263,6 +305,7 @@ pub(crate) fn atomic_replace_locked(
     symlink_policy: &str,
     permissions_policy: &str,
     mode: Option<u32>,
+    context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     if content.len() > MAX_FILE_BYTES {
         return Err(invalid(format!(
@@ -275,6 +318,7 @@ pub(crate) fn atomic_replace_locked(
         expected_hash,
         parse_symlink_policy_value(symlink_policy)?,
         parse_permission_policy_value(permissions_policy, mode)?,
+        context,
     )
 }
 
@@ -284,6 +328,7 @@ fn write_atomic_locked(
     expected_hash: &str,
     symlink_policy: SymlinkPolicy,
     permission_policy: PermissionPolicy,
+    context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     if symlink_policy == SymlinkPolicy::Reject {
         match fs::symlink_metadata(path) {
@@ -305,7 +350,8 @@ fn write_atomic_locked(
             format!("symlink target does not exist: {}", path.display()),
         ));
     }
-    let initial = match inspect(path) {
+    context.checkpoint()?;
+    let initial = match inspect(path, context) {
         Ok(initial) => initial,
         Err(error)
             if symlink_policy == SymlinkPolicy::Replace
@@ -380,12 +426,7 @@ fn write_atomic_locked(
     };
     let (temp_path, mut temp_file) = create_temp(parent, file_name)?;
     let mut cleanup = TempCleanup(Some(temp_path.clone()));
-    temp_file.write_all(content).map_err(|error| {
-        io_error(
-            error,
-            format!("writing temporary file {}", temp_path.display()),
-        )
-    })?;
+    write_chunked(&mut temp_file, content, &temp_path, context)?;
     if let Some(mode) = mode {
         set_mode(&temp_file, mode).map_err(|error| {
             io_error(
@@ -394,6 +435,11 @@ fn write_atomic_locked(
             )
         })?;
     }
+    // Each single sync, link-metadata, or rename call below can still block
+    // inside the operating system; only the slices between calls are
+    // interruptible. Error codes are unchanged: rename and parent-sync
+    // failures keep reporting `uncertain_effect`.
+    context.checkpoint()?;
     temp_file.sync_all().map_err(|error| {
         io_error(
             error,
@@ -402,8 +448,10 @@ fn write_atomic_locked(
     })?;
     drop(temp_file);
 
+    context.checkpoint()?;
     let current_broken_link = broken_symlink(path)?;
-    let current = match inspect(path) {
+    context.checkpoint()?;
+    let current = match inspect(path, context) {
         Ok(current) => current,
         Err(error)
             if symlink_policy == SymlinkPolicy::Replace
@@ -457,6 +505,7 @@ fn write_atomic_locked(
         }
     }
 
+    context.checkpoint()?;
     // On Windows this also asks the OS to persist the rename entry; on Unix
     // it is a plain rename and the parent flush below provides durability.
     crate::platform::replace_file(&temp_path, &target).map_err(|error| {
@@ -484,6 +533,7 @@ fn write_atomic_locked(
         }
     })?;
     cleanup.0 = None;
+    context.checkpoint()?;
     sync_directory(parent).map_err(|error| {
         failed(
             "uncertain_effect",
@@ -493,11 +543,13 @@ fn write_atomic_locked(
             ),
         )
     })?;
+    context.checkpoint()?;
 
     // Report the same path view that callers used to read the snapshot. In
     // particular, `preserve` must keep reporting the original symlink rather
     // than only the canonical target we atomically replaced.
-    let written = inspect(path)
+    context.checkpoint()?;
+    let written = inspect(path, context)
         .map_err(|error| {
             failed(
                 "uncertain_effect",
@@ -527,8 +579,10 @@ fn write_atomic_locked(
 pub(crate) fn write_jsonc_update(
     args: &Map<String, Value>,
     cwd: &Path,
+    context: &ExecutionContext<'_>,
     updated: impl FnOnce(&str) -> Result<Option<String>, AppletError>,
 ) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let path = resolve_path(required_string(args, "path")?, cwd);
     let expected_hash = required_string(args, "expected_content_hash")?;
     let symlink_policy = parse_symlink_policy(args)?;
@@ -536,8 +590,8 @@ pub(crate) fn write_jsonc_update(
     let lock_path = lock_path(args, &path, cwd)?;
     validate_lock_path(&lock_path, &path)?;
     let lock_timeout = lock_timeout(args)?;
-    with_path_lock(&lock_path, lock_timeout, || {
-        let initial = inspect(&path)?.ok_or_else(|| {
+    with_path_lock(&lock_path, lock_timeout, context, || {
+        let initial = inspect(&path, context)?.ok_or_else(|| {
             super::absence(
                 "not_found",
                 format!("file does not exist: {}", path.display()),
@@ -552,7 +606,8 @@ pub(crate) fn write_jsonc_update(
         let original = String::from_utf8(initial.content.clone())
             .map_err(|error| invalid(format!("JSONC file is not UTF-8: {error}")))?;
         let Some(updated) = updated(&original)? else {
-            let current = inspect(&path)?.ok_or_else(|| {
+            context.checkpoint()?;
+            let current = inspect(&path, context)?.ok_or_else(|| {
                 failed(
                     "conflict",
                     format!("file disappeared during JSONC update: {}", path.display()),
@@ -577,6 +632,7 @@ pub(crate) fn write_jsonc_update(
             expected_hash,
             symlink_policy,
             permission_policy,
+            context,
         )
     })
 }
@@ -745,13 +801,15 @@ pub(crate) fn validate_lock_path(lock: &Path, target: &Path) -> Result<(), Apple
     Ok(())
 }
 
-fn inspect(path: &Path) -> Result<Option<FileState>, AppletError> {
+fn inspect(path: &Path, context: &ExecutionContext<'_>) -> Result<Option<FileState>, AppletError> {
+    context.checkpoint()?;
     let link_metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(io_error(error, format!("checking {}", path.display()))),
     };
     let symlink = if link_metadata.file_type().is_symlink() {
+        context.checkpoint()?;
         let target = fs::read_link(path)
             .map_err(|error| io_error(error, format!("reading symlink {}", path.display())))?;
         Some(target.to_string_lossy().into_owned())
@@ -772,10 +830,7 @@ fn inspect(path: &Path) -> Result<Option<FileState>, AppletError> {
         )));
     }
     let mut content = Vec::new();
-    (&mut file)
-        .take((MAX_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut content)
-        .map_err(|error| io_error(error, format!("reading {}", path.display())))?;
+    read_chunked(&mut file, &mut content, path, context)?;
     if content.len() > MAX_FILE_BYTES {
         return Err(invalid(format!(
             "file exceeds the {MAX_FILE_BYTES}-byte read limit: {}",
@@ -807,7 +862,7 @@ fn inspect(path: &Path) -> Result<Option<FileState>, AppletError> {
         ));
     }
 
-    let content_hash = hash(&content);
+    let content_hash = hash_chunked(&content, context)?;
     let mut hasher = Sha256::new();
     hasher.update(path.as_os_str().to_string_lossy().as_bytes());
     hasher.update([0]);
@@ -839,6 +894,86 @@ fn open_no_follow(path: &Path) -> std::io::Result<File> {
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     options.open(path)
+}
+
+/// Copy at most `MAX_FILE_BYTES + 1` bytes from `file` in chunks, checking
+/// the execution budget between chunks. Each individual `read` call can
+/// still block on a stalled filesystem; only the slices between calls are
+/// interruptible. Reads one byte past the limit so callers can distinguish
+/// an over-limit file without a second pass.
+fn read_chunked(
+    file: &mut File,
+    content: &mut Vec<u8>,
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    let limit = MAX_FILE_BYTES + 1;
+    let mut chunk = vec![0u8; IO_CHUNK_BYTES];
+    let mut work = 0usize;
+    loop {
+        context.checkpoint()?;
+        let end = content.len().saturating_add(IO_CHUNK_BYTES).min(limit);
+        let want = end.saturating_sub(content.len());
+        if want == 0 {
+            // Already read past the limit; drain nothing further.
+            break;
+        }
+        let read = file
+            .read(&mut chunk[..want])
+            .map_err(|error| io_error(error, format!("reading {}", path.display())))?;
+        if read == 0 {
+            break;
+        }
+        content.extend_from_slice(&chunk[..read]);
+        work += 1;
+        checkpoint_work(context, work)?;
+        if content.len() >= limit {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Write `content` to an already-created temp file in chunks, checking the
+/// execution budget between chunks. A cancelled or expired caller stops
+/// before the rename, so no partial replacement becomes visible.
+fn write_chunked(
+    file: &mut File,
+    content: &[u8],
+    temp_path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    let mut written = 0usize;
+    let mut work = 0usize;
+    while written < content.len() {
+        context.checkpoint()?;
+        let end = written.saturating_add(IO_CHUNK_BYTES).min(content.len());
+        file.write_all(&content[written..end]).map_err(|error| {
+            io_error(
+                error,
+                format!("writing temporary file {}", temp_path.display()),
+            )
+        })?;
+        written = end;
+        work += 1;
+        checkpoint_work(context, work)?;
+    }
+    Ok(())
+}
+
+/// Hash `content` in 64 KiB chunks, checking the budget for every chunk so
+/// a large file stops promptly on cancellation or deadline instead of
+/// hashing to completion first. Each chunk hash is plain CPU work; a thread
+/// blocked inside a single operating-system call stays blocked, and only the
+/// slices between calls are interruptible.
+fn hash_chunked(content: &[u8], context: &ExecutionContext<'_>) -> Result<String, AppletError> {
+    let mut hasher = Sha256::new();
+    for chunk in content.chunks(IO_CHUNK_BYTES) {
+        context.checkpoint()?;
+        hasher.update(chunk);
+    }
+    context.checkpoint()?;
+    Ok(to_hex(hasher.finalize().as_slice()))
 }
 
 fn same_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {

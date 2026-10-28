@@ -1,6 +1,21 @@
 {
   "name": "pwd",
-  "description": "Prints the script’s current working directory.",
+  "description": "Prints the script’s current working directory. Output reflects live host state for the invoking process.",
   "binary": "pwd",
-  "arguments": []
+  "arguments": [],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec"
+    ],
+    "effects": []
+  }
 }

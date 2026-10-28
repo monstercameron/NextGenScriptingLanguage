@@ -599,9 +599,9 @@ def _graph_oracle(payload: bytes) -> Dict[str, Any]:
         raise AssertionError("typed in-process graph should drop and launch no work")
     outputs = report.get("outputs")
     expected_ports = {
-        "joined.status": {"kind": "value", "value": {"Integer": 0}},
-        "cleaned.status": {"kind": "value", "value": {"Integer": 0}},
-        "cleaned.value": {"kind": "value", "value": {"String": "paired graph"}},
+        "joined.status": {"kind": "value", "value": 0},
+        "cleaned.status": {"kind": "value", "value": 0},
+        "cleaned.value": {"kind": "value", "value": "paired graph"},
     }
     if not isinstance(outputs, list) or len(outputs) != len(expected_ports):
         raise AssertionError("typed graph should emit its two node statuses and terminal value")

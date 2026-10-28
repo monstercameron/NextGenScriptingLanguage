@@ -147,7 +147,18 @@ llm.ask with model "local-model" and instruction "Summarize." and endpoint "http
 Endpoint rules: HTTPS is required for remote hosts. Plain HTTP is accepted only
 for loopback hosts (`127.0.0.1`, `::1`, `localhost`). Userinfo, query strings,
 and fragments are rejected. Redirects are never followed. Proxy environment
-variables are ignored; the explicit endpoint is the only destination.
+variables are ignored; the explicit endpoint is the only destination. Live
+loopback endpoints additionally require `EXECUTE_MODEL_ALLOW_LOOPBACK` in the
+helper's environment (presence enables it); without it the request fails as
+configuration before any credential read or connection. Filtered child
+environments (`--clear-env`, `--env-allow`, or a capability-policy environment
+grant) must list the variable explicitly. In default trusted mode without a
+policy or host filter, a program can set the variable itself via
+`use environment` or `and environment`; only policy mode (or a host filter)
+prevents that self-grant. Fixture runs never open a socket and
+do not need it. Model endpoints accept no `network_origins` grant: dependency
+#375 keeps them outside that policy, so this variable is the interim explicit
+grant until that work lands.
 
 Credential rule, which is the security boundary for provider keys:
 
@@ -211,7 +222,12 @@ environment. The environment file accepts `jev=...` for TypeSafe or
 `OPENAI_API_KEY` are also accepted. Process environment values take precedence
 over values in the file. Keep secrets out of `.program` source and manifests.
 The helper emits sanitized error classes without provider response bodies,
-request values, paths, or credentials.
+request values, paths, or credentials. The file must be a private regular
+file (owner-only permissions, no links): group-readable or symlinked files
+are rejected fail-closed. Under a capability policy the parent additionally
+authorizes every resolved `path`-typed parameter (`fixture`, `env_file`)
+against the applet's own filesystem grant before spawn, after bindings
+resolve, including background jobs.
 
 Fixtures allow deterministic offline operation and validation without
 contacting a provider. A fixture checks the complete semantic request, including
@@ -219,6 +235,20 @@ input state and operation settings, before supplying a provider-native response;
 this exercises the same response validation as a live request. If `fixture` is
 present, the helper must open and validate that file. An empty, missing, or
 mismatched fixture is an error and never falls back to a live provider request.
+Final-component links and non-regular files (such as FIFOs) are rejected
+without blocking; fixture reads carry a size cap plus a 30-second slow-drip
+deadline, with the outer command timeout as the ultimate bound.
+
+Platform limitations (not secure on these paths, by design). Parent
+authorization canonicalizes at check time while the child pins only the final
+component at open time, so an ancestor directory renamed between the two can
+redirect either file; treat the parent check as advisory where a concurrent
+actor can rename above. `fixture` intentionally has no ownership check (replay
+data, not a credential); only `env_file` enforces owner-private checks.
+Windows fixture opens deny reparse points at open time; other non-Unix
+platforms have a final-component check-to-open window. A custom manifest that
+declares a file parameter as `string` instead of `path` escapes the generic
+parent authorization; declare file inputs as `path`.
 Omit `fixture` for live calls. The presence of `EXECUTE_MODELS_OFFLINE` in the
 process environment, even with an empty value, rejects every fixtureless call
 before reading input, credentials, or opening a connection. Fixture calls still

@@ -777,11 +777,114 @@ mod secret_binding_tests {
     }
 }
 
+#[cfg(test)]
+mod flood_budget_tests {
+    use super::*;
+
+    fn at(start: std::time::Instant, millis: u64) -> std::time::Instant {
+        start + std::time::Duration::from_millis(millis)
+    }
+
+    #[test]
+    fn burst_admits_then_sheds_until_refill() {
+        let mut budget = FloodBudget::new();
+        let start = std::time::Instant::now();
+        for _ in 0..FLOOD_BURST {
+            assert!(budget.try_admit(start));
+        }
+        assert!(
+            !budget.try_admit(start),
+            "past the burst, non-priority sheds"
+        );
+        // A full second refills exactly SUSTAINED_ACCEPTS_PER_SECOND tokens.
+        let later = at(start, 1000);
+        for _ in 0..SUSTAINED_ACCEPTS_PER_SECOND {
+            assert!(budget.try_admit(later));
+        }
+        assert!(!budget.try_admit(later));
+    }
+
+    #[test]
+    fn refill_never_exceeds_the_burst() {
+        let mut budget = FloodBudget::new();
+        let start = std::time::Instant::now();
+        assert!(budget.try_admit(start));
+        // Even an hour of idleness refills only up to the burst cap.
+        let much_later = at(start, 3_600_000);
+        for _ in 0..FLOOD_BURST {
+            assert!(budget.try_admit(much_later));
+        }
+        assert!(!budget.try_admit(much_later));
+    }
+}
+
+/// Burst-tolerant flood budget for non-priority admissions on the live control
+/// endpoint. A fresh server starts with [`FLOOD_BURST`] immediate non-priority
+/// admissions — enough for a legitimate burst such as eight workers driving a
+/// thousand back-to-back CRUD operations — and the budget refills at
+/// [`SUSTAINED_ACCEPTS_PER_SECOND`] per second. Past the burst, a sustained
+/// same-user flood of non-priority traffic sheds with `busy` instead of costing
+/// a handler thread (Unix) or reaching policy/state work. Reserve-eligible
+/// priority (`read`, `control stop` that may claim the reserve lane) never
+/// spends the budget; fake-priority frames demoted to the general lane do,
+/// like any other general-lane traffic. Partial connections that never
+/// deliver a full request never spend it either.
+pub(crate) const FLOOD_BURST: usize = 2048;
+pub(crate) const SUSTAINED_ACCEPTS_PER_SECOND: u64 = 64;
+
+/// Token bucket behind [`FLOOD_BURST`]/[`SUSTAINED_ACCEPTS_PER_SECOND`].
+/// Checked under its lock in the accept loop on Unix (before any thread or
+/// slot is claimed) and in the handler on Windows (after parsing, before
+/// policy/state work). Refills lazily by the clock, so shedding lifts promptly
+/// once a burst ends, and the balance is capped so the tracker itself stays
+/// bounded however long a flood lasts.
+#[derive(Debug)]
+pub(crate) struct FloodBudget {
+    tokens: f64,
+    updated: std::time::Instant,
+}
+
+impl FloodBudget {
+    pub(crate) fn new() -> Self {
+        Self {
+            tokens: FLOOD_BURST as f64,
+            updated: std::time::Instant::now(),
+        }
+    }
+
+    fn refill(&mut self, now: std::time::Instant) {
+        let elapsed = now.saturating_duration_since(self.updated).as_secs_f64();
+        if elapsed > 0.0 {
+            self.tokens = (self.tokens + elapsed * SUSTAINED_ACCEPTS_PER_SECOND as f64)
+                .min(FLOOD_BURST as f64);
+            self.updated = now;
+        }
+    }
+
+    /// Spend one token for a non-priority admission, refilling first by the
+    /// clock. Returns false past the burst: the caller sheds with `busy`
+    /// without spawning a handler or touching policy/state.
+    pub(crate) fn try_admit(&mut self, now: std::time::Instant) -> bool {
+        self.refill(now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub(crate) struct Shared {
     pub state: Mutex<State>,
     pub wake: Condvar,
     pub stop: Arc<AtomicBool>,
     pub registry: Registry,
+    /// Burst-tolerant flood budget (see [`FloodBudget`]). Unix checks it in the
+    /// accept loop before spawning; Windows checks it in the handler after
+    /// parsing but before policy/state work. Reserve-eligible priority never
+    /// spends it; demoted fake-priority frames do.
+    pub flood: Mutex<FloodBudget>,
     pub max_bytes: usize,
     pub initial_cwd: PathBuf,
     pub initial_bindings: BTreeMap<String, Json>,

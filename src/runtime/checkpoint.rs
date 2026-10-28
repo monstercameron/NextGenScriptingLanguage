@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub(super) mod elements;
 #[cfg(feature = "graph")]
 pub(crate) mod graph;
+pub(crate) mod resolutions;
 
 /// The `kind` a graph run's journal body carries. It lives here rather than in the graph
 /// module so a build without graph support still recognizes and refuses a graph checkpoint.
@@ -61,7 +62,15 @@ const ELEMENTS_JOURNAL_VERSION: u32 = 4;
 /// Version 5 is the one version gate for every journal. It adds mode `graph`:
 /// `journal.json` holds the graph's committed count and in-flight set, and
 /// `graph.jsonl` holds its completed nodes. Older builds refuse it by version.
-const JOURNAL_VERSION: u32 = 5;
+/// Version 6 marks the in-flight node's element kind (`for_each` or
+/// `parallel_for_each`) so `checkpoint resolve` can tell element nodes from
+/// plain nodes and sequential loops from parallel groups. Older builds refuse
+/// it by version; this build reads versions 1 through 6, treating a missing
+/// marker as a pre-marking journal and failing closed where the kind matters.
+const JOURNAL_VERSION: u32 = 6;
+/// Version 5 added step ids. Version 6 journals carry the same body plus the
+/// optional in-flight `element_kind` marker.
+const STEP_ID_JOURNAL_VERSION: u32 = 5;
 const COMPLETED_LOG: &str = "completed.jsonl";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -230,6 +239,21 @@ pub(super) struct NodeBegin<'a> {
     pub retry_safe: bool,
     /// The first step's id, from `ast::step_ids`.
     pub step_id: Option<String>,
+    /// Which element-node kind this node is, if it tracks per-element records.
+    /// `None` for plain nodes. The marker lets resolve and resume tell element
+    /// nodes from plain nodes without the program.
+    pub element_kind: Option<ElementNodeKind>,
+}
+
+/// Which per-element tracking an in-flight node uses (#536). Sequential
+/// `for each` loops replay committed output and bindings per element; parallel
+/// (`parallel for each`) groups replay only whole-element results, so their
+/// elements resolve as retry, never as committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ElementNodeKind {
+    ForEach,
+    ParallelForEach,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +279,11 @@ struct InFlightNode {
     /// The first step's id, carried into the completed record. Absent before v5.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     step_id: Option<String>,
+    /// Which element-node kind the in-flight node is. Absent before v6 (and
+    /// for plain nodes): pre-marking journals fall back to the element log,
+    /// failing closed where the kind matters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    element_kind: Option<ElementNodeKind>,
 }
 
 impl InFlightNode {
@@ -972,11 +1001,159 @@ impl Journal {
             .as_ref()
             .is_some_and(|node| !node.retry_safe);
         if uncertain && !self.retry_uncertain {
+            // A per-node `committed` or `retry` resolution explicitly allows
+            // this node without the bulk `--retry-uncertain` flag (#536).
+            if self.node_resolution_allows_retry()? {
+                return Ok(());
+            }
+            // Element (`for each`) nodes resolve per element. Any element
+            // resolution for this node lets resume reach the precise per-element
+            // gates, which still refuse every uncovered uncertain element by
+            // name before it runs; see `elements::check_pending` and
+            // `element_may_start`.
+            if self.element_resolutions_allow_retry()? {
+                return Ok(());
+            }
             bail!(
                 "checkpoint may contain an interrupted side effect; pass --retry-uncertain to retry"
             );
         }
         Ok(())
+    }
+
+    /// Whether a node-level resolution allows the in-flight uncertain node to
+    /// be retried or skipped. Element (`for each`) nodes are resolved per
+    /// element; a node-level record never covers them, so it authorizes
+    /// nothing there however broad its wording. A `committed` record also
+    /// allows the retry check because resume completes committed nodes before
+    /// any begin path runs; see `apply_committed_node_resolution`. A torn or
+    /// duplicate resolutions log is reported as corrupt, never as a missing
+    /// override.
+    fn node_resolution_allows_retry(&self) -> Result<bool> {
+        let Some(node) = self.data.in_flight.as_ref() else {
+            return Ok(false);
+        };
+        if in_flight_is_element_node(self)? {
+            return Ok(false);
+        }
+        let Some(step_id) = node.step_id.as_deref() else {
+            return Ok(false);
+        };
+        let resolutions = resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        Ok(resolutions::node_resolution(&resolutions, step_id).is_some())
+    }
+
+    /// Whether an element resolution lets resume reach the per-element gates.
+    /// Only element (`for each`) nodes resolve per element: the in-flight node
+    /// must carry element markers or already hold element-log progress, and at
+    /// least one resolution must name one of its elements. A node-level `retry`
+    /// record is already honored by `node_resolution_allows_retry`; this covers
+    /// only per-element records. Returning true never authorizes an effect by
+    /// itself: `elements::for_each_resume`, `check_pending` and
+    /// `element_may_start` still refuse every uncovered uncertain element.
+    fn element_resolutions_allow_retry(&self) -> Result<bool> {
+        let Some(node) = self.data.in_flight.as_ref() else {
+            return Ok(false);
+        };
+        if !in_flight_is_element_node(self)? {
+            return Ok(false);
+        }
+        let Some(step_id) = node.step_id.as_deref() else {
+            return Ok(false);
+        };
+        let resolutions = resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        Ok(resolutions
+            .iter()
+            .any(|record| record.node == step_id && record.element.is_some()))
+    }
+
+    /// In-flight node start index, if any. Resume uses it with the program to
+    /// tell element loops from plain nodes on pre-marking journals that carry
+    /// no `element_kind` marker yet.
+    pub(super) fn in_flight_start(&self) -> Option<usize> {
+        self.data.in_flight.as_ref().map(|node| node.start)
+    }
+
+    /// Refuse a node-level resolution when the program says the in-flight
+    /// node is an element loop. The journal marker covers version 6 journals
+    /// and the element log covers loops that already began; this covers the
+    /// remaining case — a pre-marking loop killed before its first begin, or
+    /// a hand-written record — so a node-level `committed` can never silently
+    /// skip a whole loop and a node-level `retry` can never be mistaken for
+    /// element authorization. Callers compute `is_element_step` from the
+    /// program step at [`Self::in_flight_start`].
+    pub(super) fn refuse_node_level_resolution_for_element_step(
+        &self,
+        is_element_step: bool,
+    ) -> Result<()> {
+        if !is_element_step {
+            return Ok(());
+        }
+        let Some(node) = self.data.in_flight.as_ref() else {
+            return Ok(());
+        };
+        let Some(step_id) = node.step_id.as_deref() else {
+            return Ok(());
+        };
+        let resolutions = resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        if resolutions::node_resolution(&resolutions, step_id).is_some() {
+            anyhow::bail!(
+                "node-level committed resolution is not valid for for-each nodes; resolve each element instead"
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether resume is running from an existing checkpoint.
+    pub fn is_resuming(&self) -> bool {
+        self.resuming
+    }
+
+    /// Apply a node-level `committed` resolution by completing the in-flight
+    /// node with the operator-supplied output and bindings. Returns true when
+    /// a resolution was applied. Element (`for each`) nodes are never completed
+    /// this way; they resolve per element.
+    pub fn apply_committed_node_resolution(&mut self) -> Result<bool> {
+        let step_id = match self.data.in_flight.as_ref() {
+            Some(node) => node.step_id.clone(),
+            None => return Ok(false),
+        };
+        let Some(step_id) = step_id else {
+            return Ok(false);
+        };
+        let resolutions = resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        let Some(record) = resolutions
+            .iter()
+            .find(|record| {
+                record.node == step_id
+                    && record.element.is_none()
+                    && record.decision == resolutions::ResolutionDecision::Committed
+            })
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        // A node-level commit cannot stand in for per-element progress. The
+        // resolve command refuses this combination; double-check at resume so
+        // a hand-written record cannot silently skip a loop. The kind marker
+        // catches version 6 loops killed before their first begin, which have
+        // no log records yet; pre-marking journals without the marker are
+        // caught program-aware in `resume::prepare_with_modules`, which sees
+        // the loop step the journal alone cannot name.
+        if in_flight_is_element_node(self)? {
+            bail!(
+                "node-level committed resolution is not valid for for-each nodes; resolve each element instead"
+            );
+        }
+        let output = record.output_bytes(self.max_output_bytes)?;
+        let bindings = record.bindings_map(self.max_output_bytes)?;
+        let cwd = self.restored_state()?.cwd;
+        self.complete_node_parts(
+            &cwd,
+            &output,
+            bindings.iter().map(|(name, value)| (name.as_str(), value)),
+        )?;
+        Ok(true)
     }
 
     #[cfg(all(test, unix))]
@@ -1126,6 +1303,7 @@ impl Journal {
             cwd_before,
             retry_safe,
             step_id: None,
+            element_kind: None,
         })
     }
 
@@ -1140,6 +1318,7 @@ impl Journal {
             cwd_before,
             retry_safe,
             step_id,
+            element_kind,
         } = node;
         if start >= end {
             bail!("checkpoint node must cover at least one step");
@@ -1149,6 +1328,37 @@ impl Journal {
         }
         if self.data.in_flight.is_some() {
             self.ensure_retry_allowed()?;
+        }
+        // Issue #536: a refused resume must not orphan pre-edit element
+        // resolutions. When resuming the same element loop with a changed
+        // program identity, the old step id keys existing per-element records.
+        // Persisting the new id before the resume is known to succeed would
+        // orphan those records, so restoring the program would leave the
+        // journal under the edited id and the follow-up resolve refused with
+        // "no unfinished node". Fail closed here, before mutating or
+        // persisting, when the element log already holds progress or the old
+        // id already has resolutions. Bulk retry does not bypass this: it
+        // authorizes rerunning uncertain work, not changing the list.
+        if self.resuming {
+            if let Some(old) = self.data.in_flight.as_ref() {
+                if old.start == start && (old.fingerprint != fingerprint || old.step_id != step_id)
+                {
+                    let progress = has_element_progress(&self.directory)?;
+                    let has_records = match &old.step_id {
+                        Some(id) => {
+                            resolutions::read_resolutions(&self.directory, self.max_output_bytes)?
+                                .iter()
+                                .any(|record| record.node.as_str() == id.as_str())
+                        }
+                        None => false,
+                    };
+                    if progress || has_records {
+                        bail!(
+                            "checkpoint program changed at the in-flight step; restore the program or use a fresh checkpoint"
+                        );
+                    }
+                }
+            }
         }
         let previous_status = self.data.status;
         let previous_error = self.data.error.take();
@@ -1203,6 +1413,7 @@ impl Journal {
             retry_safe,
             elements: None,
             step_id,
+            element_kind,
         });
         // Re-beginning the same node on resume keeps the element records that were
         // replayed at open. A different node starts an empty element log.
@@ -1703,6 +1914,40 @@ fn lock_directory(directory: &Path, #[cfg(unix)] pinned_directory: &File) -> Res
     Ok(lock)
 }
 
+/// Whether the in-flight node tracks per-element records: a `for each` loop
+/// or a `parallel for each` group. Version 6 journals mark the kind on the
+/// node itself; older journals fall back to element-log records, so a
+/// pre-marking loop killed before its first begin looks like a plain node and
+/// its elements resolve as retry (explicit future authorization) rather than
+/// by node-level records. Fails closed on a damaged element log.
+pub(super) fn in_flight_is_element_node(journal: &Journal) -> Result<bool> {
+    if journal
+        .data
+        .in_flight
+        .as_ref()
+        .is_some_and(|node| node.element_kind.is_some())
+    {
+        return Ok(true);
+    }
+    has_element_progress(&journal.directory)
+}
+
+/// Whether the checkpoint holds any element-log progress for its in-flight
+/// node. A node-level committed resolution never covers element progress.
+fn has_element_progress(directory: &Path) -> Result<bool> {
+    let path = directory.join("elements.jsonl");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                bail!("checkpoint element log must be a regular file");
+            }
+            Ok(metadata.len() > 0)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).context("inspecting checkpoint element log"),
+    }
+}
+
 /// Probe the existing lock without creating files or changing permissions. All
 /// errors other than lock contention are reported rather than treated as unlocked.
 #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
@@ -1766,6 +2011,94 @@ pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
             Err(error).context("probing checkpoint lock")
         }
     }
+}
+
+/// The checkpoint's exclusive lock, held while a resolution is validated and
+/// appended. End-to-end: the running program holds this same `lock` file from
+/// `Journal::open` (via `lock_directory`) until the journal drops, covering
+/// the whole resume; resolve holds it here across journal validation,
+/// element-log reads, and the resolutions append; status probes it without
+/// creating it. Dropping the guard releases the lock (closing the descriptor
+/// releases flock on Unix and LockFileEx on Windows), so concurrent resolves
+/// serialize on it: exactly one read-check-append runs at a time, and a
+/// resume holding the journal lock makes resolve fail with `locked` instead
+/// of racing it. The concurrency test covers `append_resolution`; the
+/// `checkpoint resolve` CLI path holds this same guard across its wider
+/// validation in `agent::checkpoint::resolve_uncertain`.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) struct ResolveLock {
+    _file: File,
+}
+
+/// Acquire the checkpoint's exclusive lock for one resolution. Fails closed
+/// with `locked` when a run or resume holds the journal lock for the whole
+/// resume, and for any other lock error. The lock file is created when absent
+/// so two resolves serialize even on a checkpoint no process currently holds;
+/// status never creates it (it probes only), so `lock_file_present` plus
+/// `lock_held` tells a live resume apart from an idle checkpoint.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
+    let path = directory.join("lock");
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
+        options.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*};
+        // `restrict_file` calls SetSecurityInfo, which needs WRITE_DAC on the
+        // handle; a plain read/write open fails with Access denied on Windows.
+        options
+            .access_mode(GENERIC_READ | GENERIC_WRITE | WRITE_DAC | READ_CONTROL)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    }
+    let file = options
+        .open(&path)
+        .context("opening checkpoint lock for resolve")?;
+    if !file.metadata()?.is_file() {
+        bail!("checkpoint lock must be a regular file");
+    }
+    #[cfg(windows)]
+    {
+        if crate::platform::windows::is_reparse(&file.metadata()?) {
+            bail!("checkpoint lock cannot be a reparse point");
+        }
+    }
+    restrict_file(&file)?;
+    #[cfg(windows)]
+    {
+        match crate::platform::windows::lock(&file) {
+            Ok(()) => {}
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .and_then(io::Error::raw_os_error)
+                    == Some(windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION as i32) =>
+            {
+                bail!("checkpoint is locked by a running process; stop it before resolving");
+            }
+            Err(error) => return Err(error).context("locking checkpoint for resolve"),
+        }
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: file is a live descriptor kept alive by the returned guard.
+        // flock takes only descriptor and flags; dropping the guard closes the
+        // descriptor and releases the lock.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == -1 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                bail!("checkpoint is locked by a running process; stop it before resolving");
+            }
+            return Err(error).context("locking checkpoint for resolve");
+        }
+    }
+    Ok(ResolveLock { _file: file })
 }
 
 /// Assemble `{"checksum":…,"data":…}` exactly as `JournalEnvelopeRef` serializes
@@ -2028,6 +2361,7 @@ fn read_journal_parts_file(
         (data, log)
     } else if version == SEGMENTED_JOURNAL_VERSION
         || version == ELEMENTS_JOURNAL_VERSION
+        || version == STEP_ID_JOURNAL_VERSION
         || version == JOURNAL_VERSION
     {
         let disk: JournalDisk =
@@ -4556,7 +4890,7 @@ fn restrict_directory(path: &Path) -> Result<()> {
         crate::platform::windows::restrict_directory(path)
     }
 }
-fn restrict_file(file: &File) -> Result<()> {
+pub(crate) fn restrict_file(file: &File) -> Result<()> {
     #[cfg(unix)]
     {
         file.set_permissions(fs::Permissions::from_mode(0o600))

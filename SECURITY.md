@@ -6,8 +6,37 @@ untrusted mode as described below.
 Literal argument passing prevents implicit shell expansion; it does not make an
 arbitrary command safe. An explicit shell invocation can still interpret shell
 code. Scripts, applet manifests, selected executables and their dependencies
-remain trusted inputs. Process groups and Windows jobs supervise children;
-they do not sandbox filesystem, network or detached-process access.
+remain trusted inputs. Manifest directories, manifest files, module roots and
+sources, and the bundled helper binaries pass an ownership and writability
+gate before they decide what runs: on Unix each leaf must be owned by the
+effective user or root and must not be group/world-writable (file leaves
+additionally refuse setuid/setgid bits and extra hardlinks), and every ancestor
+directory up to the filesystem root passes the same ownership and
+writability check (sticky root-owned directories such as `/tmp` are accepted
+because the sticky bit blocks cross-user renames). Symlinked manifest or
+module files embedded in directory scans (and Windows reparse points) are
+refused; an explicitly named single manifest file or catalog may be a symlink
+alias, which is resolved and verified at its canonical target before reading.
+On Linux a leaf or ancestor with a POSIX `system.posix_acl_access` ACL fails
+closed because mode bits cannot attest ACL-granted writes; NFSv4, RichACL
+and macOS ACLs use different attributes and are not probed, so an
+ACL-granted write through those mechanisms would pass the mode check
+undetected. Other Unix systems do not expose ACLs to this gate. The opened
+descriptor is re-checked on the descriptor itself (Linux `fgetxattr`, Windows
+handle ACL), so an ACL or owner attached between the path check and the open
+fails closed. On Windows each leaf and ancestor must be owned by the
+current user, SYSTEM or Administrators and must grant write, delete, and
+extended-attribute-write access to no other principal (data/attribute writes,
+delete, child add/delete, DACL/owner takeover, and the generic umbrellas);
+read grants to others stay allowed so shared installs keep working, and an
+unreadable ACL fails closed. Manifest-selected executables pass the same
+leaf-plus-ancestor, hardlink/setuid and ACL gate as manifests: a trusted
+manifest naming a writable binary is refused at resolution time. Install or
+extract release archives only into locations writable solely by their owner
+or Administrators (default per-user and Program Files locations qualify;
+shared world-writable trees such as a bare `C:\` subfolder do not), and keep
+those permissions after extraction. Process groups and Windows jobs supervise
+children; they do not sandbox filesystem, network or detached-process access.
 
 ## Cache and checkpoint state
 
@@ -92,6 +121,16 @@ responsibility. Failure diagnostics omit credentials, request/response bodies
 and endpoint details. Local fixture tests do not establish provider safety,
 model accuracy or resistance to prompt injection.
 
+Model file inputs (`fixture`, `env_file`) are declared as `path` parameters
+so a capability policy authorizes them against the applet's own filesystem
+grant after bindings resolve, including background jobs. The child pins only
+the final path component at open time; a concurrent ancestor rename between
+the parent check and the child open can redirect the file and is not stopped
+on any platform. Fixture files have no ownership check by design (replay
+data); only `env_file` requires an owner-private file. Non-Unix platforms
+without an atomic no-follow open retain a final-component check-to-open
+window. These paths are documented as advisory, not proven secure.
+
 ## Applet contracts and optional capability policy
 
 Current source adds version-1 applet contracts and a separate opt-in policy.
@@ -149,8 +188,22 @@ variables a program may read through `accept ... from environment`; it is empty
 by default. `deny_privileged` classifies interpreters and text processors such
 as Python, Perl, Node, awk, sed, git, make and tar as wrappers that require
 `allow_wrappers`. The explain/effects gate marks launchers such as find, xargs,
-ssh, parallel, bwrap and tmux as privileged. Versioned executable names such as
-`python3.12` use the same classification as `python`.
+ssh, parallel, bwrap, tmux, container-host escape (`flatpak-spawn`, `host-spawn`,
+`distrobox-host-exec`, `toolbox`, `docker`, `podman`, `kubectl`), schedulers
+(`at`, `batch`, `crontab`), D-Bus launchers (`dbus-send`, `gdbus`, `busctl`), and
+desktop launchers (`xdg-open`, `gio`) as privileged, whatever their arguments. An
+absolute path or alias that keeps the listed file name, and a symlink whose
+canonical target keeps the listed file name, are classified the same way; a
+renamed copy or hardlink with an unlisted file name is not recognised because
+classification is by name, not content. Versioned
+executable names such as `python3.12` use the same classification as `python`.
+Hyphenated same-family variants that are not listed (for example
+`docker-compose`, `dbus-run-session`, `atq`) are also not recognised. The list
+is a review aid, not a sandbox or a complete boundary: unlisted or renamed
+tools are not recognised, and enforcement stays with the strict capability
+policy and OS confinement in untrusted mode. An alias that fails to resolve at
+review time falls back to its written name, so runtime enforcement remains
+authoritative.
 
 `--record` redacts secret and environment input values. The review fingerprint
 covers module sources and packages. Replay refuses detached launches and handovers.
@@ -164,6 +217,30 @@ available native sandbox backends can enforce only all-or-none network access.
 Remote endpoint authorization runs before discovery or invocation; redirects
 and environment proxies are disabled. A remote applet's bearer-file path is
 checked against that applet's own filesystem read grant.
+
+SSRF protection is fail-closed at two layers for host-managed remote applets
+and the model helper. Before any resolution or socket use, a non-public
+endpoint host (loopback, RFC1918, CGNAT including 100.100.100.200, link-local
+including 169.254.169.254, ULA, multicast, and IPv4-mapped IPv6 forms) is
+refused by name; at connect time the resolver pins the whole resolved address
+set, so a hostname that first resolves to a public address cannot rebind to a
+private one. Only an origin explicitly listed in `network_origins` preserves a
+private destination, and only for remote applets; a broad empty-list grant
+does not. The model helper accepts no origin grants (dependency #375 keeps
+model endpoints outside `network_origins`, which `Command`-backend applets
+cannot declare): its endpoints stay restricted to HTTPS, or HTTP to loopback,
+with the same guard. A script-controlled `--endpoint` therefore cannot reach
+metadata or private destinations, and live loopback endpoints additionally
+require the explicit `EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's
+environment — without it the request fails as configuration before any
+credential read or connection, so an unauthenticated local service is never
+reachable by default. Hermetic `--fixture` runs never open a socket and do
+not need the grant. The self-grant prevention holds only when the ambient
+environment is constrained: under a capability policy, or a host
+`--clear-env`/`--env-allow` filter, a program cannot grant the variable to
+itself via `use environment` or `and environment` unless the applet's
+`environment` grant lists it. In default trusted mode with full ambient
+inheritance, a program can set the variable itself.
 
 `--execution-mode trusted|untrusted` selects native-child confinement. With no
 policy the default is `trusted`; a capability policy defaults to `untrusted`.
@@ -270,7 +347,34 @@ capability policy does not supply those data-flow grants.
 
 The cache security regressions cover ordinary cache reuse, exact binary bytes,
 output limits, symlinked files/directories including trailing separators,
-FIFOs, sockets and Unix write permissions. Real CLI tests require no output,
+FIFOs, sockets and Unix write permissions. The manifest-trust regressions
+cover the same shape of attack on the inputs that pick the executable:
+group/world-writable manifest directories, manifest files, module roots and
+helper binaries are refused with the offending path named, as are
+group/world-writable ancestors, extra hardlinks, setuid/setgid bits, Unix
+sockets, symlinked and FIFO manifest entries (which fail closed without
+hanging), and an owned directory still runs. Explicit single-file and catalog
+symlink aliases resolve to a verified target; embedded directory-scan links
+stay refused. Directory aliases resolve to a verified canonical target and
+list that target; single-file and catalog aliases do the same, while an alias
+to an untrusted target is refused with the real path named. Manifest-selected
+executables resolve the same way: the canonical target is verified and the
+selected spelling is kept for launch, so a writable binary or writable binary
+parent named by a trusted manifest is refused before any native launch.
+Residual limits: the gate stats each path without following a
+trailing link, verifies before reading, and re-checks the opened descriptor
+(including descriptor-side ACL/owner on Linux via `fgetxattr` and on Windows
+via the open handle),
+but a replacement between the final check and use remains a race — the gate
+narrows check-then-use races without eliminating them, and a replacement
+between helper or executable verification and `exec` in particular cannot be
+pinned from userspace. A same-user process can rewrite what it owns (as with
+the cache key). POSIX `system.posix_acl_access` ACLs fail closed on Linux;
+NFSv4, RichACL and macOS ACLs are not probed and would pass the mode check
+undetected, and other Unix systems do not expose ACLs to this gate at all.
+Windows enforces owner plus no-foreign-write/delete/EA-ACE on leaves
+and ancestors with fail-closed unreadable ACLs, re-checked on the open
+handle, but a replacement after that handle check still races. Real CLI tests require no output,
 no later save and no native launch when an invalid cache is encountered. Unit
 regressions also cover same-user cache-byte tampering, malformed integrity tags,
 and a parent replacement after the Unix cache directory descriptor is pinned.

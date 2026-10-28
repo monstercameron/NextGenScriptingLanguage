@@ -812,6 +812,7 @@ mod escalation_tests {
         let mut slave: libc::c_int = -1;
         // SAFETY: plain out-fds; defaults for name, termios and window size.
         assert_eq!(
+            // SAFETY: plain out-fds; null name, termios, and window size.
             unsafe {
                 libc::openpty(
                     &mut master,
@@ -829,6 +830,7 @@ mod escalation_tests {
         let mut altered = saved;
         altered.c_lflag &= !(libc::ICANON | libc::ECHO);
         assert_eq!(
+            // SAFETY: the termios comes from the live slave descriptor.
             unsafe { libc::tcsetattr(slave, libc::TCSANOW, &altered) },
             0
         );
@@ -876,6 +878,7 @@ pub fn record_interrupt(signal: i32) {
 fn save_termios(fd: libc::c_int) -> Option<libc::termios> {
     // SAFETY: termios is plain data; tcgetattr writes only through the pointer.
     let mut raw: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: tcgetattr writes only through the pointer to plain data.
     if unsafe { libc::tcgetattr(fd, &mut raw) } == 0 {
         Some(raw)
     } else {

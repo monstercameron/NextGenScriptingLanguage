@@ -142,6 +142,7 @@ fn assert_owned_children_reaped(output: &Output) {
         // Signal 0 delivers nothing; the pid comes from a completed spawn trace
         // record for a child this run started.
         assert_eq!(
+            // SAFETY: signal 0 delivers nothing; pid is from a spawn trace.
             unsafe { libc::kill(pid, 0) },
             -1,
             "owned child {pid} leaked"

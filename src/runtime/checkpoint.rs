@@ -1496,6 +1496,11 @@ impl Journal {
         let previous_snapshot = std::mem::replace(&mut self.data.snapshot, snapshot);
         let previous_error = self.data.error.take();
         if let Err(error) = self.persist() {
+            // The node ran and its completed record is staged, but the journal
+            // is not durably updated. Keep the in-flight intent and gate resume
+            // on the uncertain-retry policy, like the branches above, instead
+            // of letting the caller record a known failure over it.
+            self.persistence_failed = true;
             self.data.completed.truncate(previous_completed_len);
             self.completed_chain = previous_chain;
             self.completed_log_bytes = previous_log_bytes;
@@ -3493,17 +3498,35 @@ fn atomic_write_with_inner(
     );
     #[cfg(not(unix))]
     let publish = crate::platform::replace_file(&temporary, &target);
+    #[cfg(unix)]
     if let Err(error) = publish {
-        #[cfg(unix)]
         unlink_at(
             pinned_directory.expect("pinned checkpoint directory"),
             temporary
                 .file_name()
                 .expect("checkpoint temporary basename"),
         );
-        #[cfg(not(unix))]
-        let _ = fs::remove_file(&temporary);
         return Err(error)
+            .with_context(|| format!("publishing checkpoint file {}", target.display()));
+    }
+    #[cfg(not(unix))]
+    if let Err(error) = publish {
+        if error.published {
+            // The temporary is gone: the rename succeeded and only the
+            // durability flush failed. Do not unlink and do not report a
+            // failed publish; resume may observe the new data. Keep the typed
+            // `ReplaceError` in the error chain (instead of only its message)
+            // so callers can detect the published-but-unsynced effect
+            // programmatically, matching the applet `uncertain_effect` path.
+            return Err(error).with_context(|| {
+                format!(
+                    "published checkpoint file {} but its directory entry may not be on disk; effect is uncertain",
+                    target.display()
+                )
+            });
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.error)
             .with_context(|| format!("publishing checkpoint file {}", target.display()));
     }
     #[cfg(feature = "failpoints")]
@@ -4531,6 +4554,12 @@ mod tests {
         assert_eq!(journal.data.in_flight.as_ref(), Some(&intent));
         assert_eq!(journal.restored_state().unwrap(), completed);
         assert!(journal.ensure_retry_allowed().is_err());
+        // Resume stays gated on `--retry-uncertain`, and recording a known
+        // failure over the uncertain intent is refused while persistence is
+        // known-bad: the durable error must stay untouched.
+        assert!(journal.fail("command returned nonzero", false).is_err());
+        assert_eq!(journal.data.error, durable.error);
+        assert_eq!(journal.data.in_flight.as_ref(), Some(&intent));
     }
 
     #[test]
@@ -4874,12 +4903,21 @@ pub(crate) fn restrict_file(file: &File) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn sync_directory(_directory: &Path) -> Result<()> {
+fn sync_directory(directory: &Path) -> Result<()> {
     #[cfg(feature = "failpoints")]
     crate::failpoint::hit("checkpoint.atomic.directory_sync")?;
-    // Publication uses MOVEFILE_WRITE_THROUGH after flushing each file. Windows
-    // does not provide the Unix directory-fsync contract through std::fs.
-    Ok(())
+    // The POSIX fast path in `platform::replace_file` already flushed this
+    // directory after the rename; this second flush keeps the Unix ordering
+    // (rename, then directory sync) so the OS is asked to persist the publish.
+    // The flush is filesystem dependent and a failure is an error: use a local
+    // NTFS directory for checkpoints.
+    crate::platform::windows::sync_directory(directory).with_context(|| {
+        format!(
+            "syncing directory {} (directory flushes are filesystem dependent; \
+             use a local NTFS directory)",
+            directory.display()
+        )
+    })
 }
 
 #[cfg(test)]

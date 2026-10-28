@@ -109,9 +109,9 @@ fn visible_job_scopes(
     scopes
 }
 
-/// Sync the directory entry after a checkpointed file write where the platform
-/// supports opening directories as ordinary files. Windows requires backup
-/// semantics flags to open a directory; the file itself is synced by its writer.
+/// Sync the directory entry after a checkpointed file write. Unix opens the
+/// directory directly; Windows flushes it through a backup-semantics handle.
+/// Either way the file itself was already synced by its writer.
 fn sync_destination_parent(destination: &Path, cwd: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -125,7 +125,19 @@ fn sync_destination_parent(destination: &Path, cwd: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        let _ = (destination, cwd);
+        let resolved = if destination.is_absolute() {
+            destination.to_path_buf()
+        } else {
+            cwd.join(destination)
+        };
+        let parent = resolved.parent().unwrap_or(cwd);
+        crate::platform::windows::sync_directory(parent).with_context(|| {
+            format!(
+                "syncing parent directory {} (directory flushes are filesystem \
+                 dependent; use a local NTFS directory)",
+                parent.display()
+            )
+        })?;
     }
     Ok(())
 }

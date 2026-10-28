@@ -7,6 +7,25 @@ original version labels.
 
 ## Unreleased
 
+- Windows file publishes now ask the OS to persist the rename: both the
+  POSIX-semantics rename path and the `MoveFileEx` write-through fallback end
+  with a flush of the published parent directory, and the checkpoint, `then
+  save to`, transaction-journal, and applet file/directory syncs run real
+  directory flushes instead of no-ops. The parent directory is pinned open
+  before the rename so the flush addresses that handle rather than a
+  re-resolved path (a publish whose parent cannot be pinned fails before any
+  rename); the pin-to-rename window itself is still path-based and only
+  journal publishes exclude it via the checkpoint lock. Flushes open the
+  parent without following a trailing reparse point (a junction or symlink
+  parent is refused), but intermediate junctions in the parent path are still
+  followed. A flush failure after a successful rename is reported as
+  published-but-unsynced (the new data may be live; resume treats the effect
+  as uncertain) instead of as a failed publish. These flushes only ask the OS
+  to persist the rename: success means the flush call succeeded, volumes
+  without flush support fail closed with an explicit error asking for a local
+  NTFS directory, and no hard power-loss survival is claimed until the
+  50-trial hard-reset lab passes.
+
 - `execute run GRAPH --events jsonl` streams one `execute.graph-event/1` JSON
   line per terminal event as it arrives, flushing after every event and holding
   no collected outputs. Graphs with persistent nodes (timers, listeners, native

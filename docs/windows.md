@@ -47,10 +47,36 @@ and SYSTEM; both peers also check the connected process's user SID.
 
 Checkpoint directories and files receive protected owner/SYSTEM DACLs and an
 exclusive `LockFileEx` lock. NTFS reparse points are rejected at the checkpoint
-boundary. Journal replacement flushes the file and uses `MoveFileEx` with
-write-through. This is not a promise of Unix directory-fsync durability on every
-Windows filesystem. Binary identity is rehashed on resume rather than trusting
-weaker Windows metadata. Use a local NTFS directory for checkpoints.
+boundary, and directory flushes never follow a trailing reparse point either:
+a junction or symlink parent is refused instead of flushing another
+directory. Only the trailing component is checked; intermediate junctions in
+the parent path are still followed. Journal replacement flushes the file,
+publishes it with a POSIX-semantics
+rename (or `MoveFileEx` with write-through where POSIX rename is unavailable),
+then flushes the published parent directory and syncs the checkpoint directory;
+the transaction-journal, `then save to`, and applet file/directory syncs that
+were previously no-ops on Windows now run the same directory flush. The
+publish backend opens the parent directory before the rename and flushes that
+pinned handle rather than a re-resolved path; when the parent cannot be opened
+as a real directory the publish fails before any rename, so no path-based flush
+fallback ever runs. The pin does not cover the rename itself: both rename
+APIs take paths, so a parent swap between the pin and the rename (or a swap
+of the target's own path) can still redirect the publish, and replacement
+identity is not re-verified after the rename. The checkpoint lock excludes
+that window for journal publishes; other publishers need their own exclusion
+for the same guarantee. Flush handles
+require `GENERIC_WRITE`, so the writer needs write access to the parent
+directory. These flushes only ask the OS to persist the rename. A successful
+flush means the flush call succeeded; it does not by itself prove the entry
+survives a hard power loss, and no power-loss survival is claimed until the
+50-trial hard-reset lab passes. Volumes without directory-flush support fail
+closed with an explicit error naming the local-NTFS requirement instead of
+degrading silently (write-through is documented for copy-and-delete moves, so
+same-volume rename persistence is likewise unproven). A flush failure after a
+successful rename is reported as published-but-unsynced: the new data may be
+live, so recovery treats the effect as uncertain instead of re-running the
+publish. Binary identity is rehashed on resume rather than trusting weaker
+Windows metadata. Use a local NTFS directory for checkpoints.
 
 Redirected standard I/O preserves bytes. Interactive console output uses UTF-16
 console APIs, and console input uses Rust's Unicode-aware standard input.

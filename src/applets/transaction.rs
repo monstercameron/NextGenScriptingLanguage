@@ -285,11 +285,26 @@ fn apply_with_fault(
     // final name first and then verifies the prepared checksum under the lock.
     #[cfg(windows)]
     let _journal_lock = {
-        fs::rename(&stage, &published).map_err(|error| {
-            super::io_error(
-                error,
-                format!("publishing transaction journal {}", published.display()),
-            )
+        // Route the directory publish through the pinned-parent backend so the
+        // post-rename flush addresses the pre-rename handle instead of a
+        // re-resolved path. A flush failure after the rename is
+        // published-but-unsynced; only a failed rename keeps `io_error`.
+        crate::platform::replace_file(&stage, &published).map_err(|error| {
+            if error.published {
+                failed(
+                    "uncertain_effect",
+                    format!(
+                        "transaction journal {} was published but its directory entry may not be on disk: {}",
+                        published.display(),
+                        error.error
+                    ),
+                )
+            } else {
+                super::io_error(
+                    error.error,
+                    format!("publishing transaction journal {}", published.display()),
+                )
+            }
         })?;
         cleanup.0 = None;
         let lock = lock_published_prepared_journal(&published, &data, timeout, context)?;
@@ -308,11 +323,24 @@ fn apply_with_fault(
     let _journal_lock = {
         let lock =
             filesystem::acquire_path_lock(&stage.join("transaction.lock"), timeout, context)?;
-        fs::rename(&stage, &published).map_err(|error| {
-            super::io_error(
-                error,
-                format!("publishing transaction journal {}", published.display()),
-            )
+        // Same pinned-parent backend as the Windows branch above; on Unix this
+        // is a plain rename with unchanged failure codes.
+        crate::platform::replace_file(&stage, &published).map_err(|error| {
+            if error.published {
+                failed(
+                    "uncertain_effect",
+                    format!(
+                        "transaction journal {} was published but its directory entry may not be on disk: {}",
+                        published.display(),
+                        error.error
+                    ),
+                )
+            } else {
+                super::io_error(
+                    error.error,
+                    format!("publishing transaction journal {}", published.display()),
+                )
+            }
         })?;
         cleanup.0 = None;
         sync_directory(published.parent().unwrap_or_else(|| Path::new("."))).map_err(|error| {
@@ -1246,12 +1274,27 @@ fn persist_journal(
     // are unchanged.
     context.checkpoint()?;
     if let Err(error) = crate::platform::replace_file(&temporary, &final_path) {
+        if error.published {
+            // The temporary is gone: the rename succeeded and only the
+            // durability flush failed. Report the published-but-unsynced
+            // effect so recovery treats the new journal as possibly live
+            // instead of re-running a publish that already happened.
+            return Err(failed(
+                "uncertain_effect",
+                format!(
+                    "transaction journal {} was published but its directory entry may not be on disk: {}",
+                    final_path.display(),
+                    error.error
+                ),
+            ));
+        }
         let _ = fs::remove_file(&temporary);
         return Err(failed(
             "uncertain_effect",
             format!(
-                "could not publish transaction journal {}: {error}",
-                final_path.display()
+                "could not publish transaction journal {}: {}",
+                final_path.display(),
+                error.error
             ),
         ));
     }
@@ -1629,10 +1672,21 @@ fn check_private_metadata(metadata: &fs::Metadata, label: &str) -> Result<(), Ap
 
 fn sync_directory(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
-    File::open(path)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
+    {
+        File::open(path)?.sync_all()
+    }
+    #[cfg(windows)]
+    {
+        // Ask the OS to persist a just-published rename's directory entry.
+        // Success means the flush call succeeded, not that the entry provably
+        // survives power loss; see `platform::windows::sync_directory`.
+        crate::platform::windows::sync_directory(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 fn lock_timeout(args: &Map<String, Value>) -> Result<Duration, AppletError> {

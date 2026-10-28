@@ -64,16 +64,32 @@ pub(crate) fn private_options() -> OpenOptions {
     }
     options
 }
-pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
+/// The Windows atomic-publish contract (rename plus parent-directory flush)
+/// lives in [`publish`] so the standalone Windows test harness includes the
+/// same source instead of duplicating it. Every platform's [`replace_file`]
+/// reports failures through `publish::ReplaceError`.
+mod publish;
+
+pub(crate) fn replace_file(
+    source: &Path,
+    target: &Path,
+) -> std::result::Result<(), publish::ReplaceError> {
     #[cfg(unix)]
     {
-        std::fs::rename(source, target)
+        std::fs::rename(source, target).map_err(publish::ReplaceError::not_published)
     }
     #[cfg(windows)]
     {
         windows::replace_file(source, target)
     }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // No durability flush exists on other targets: a plain rename with
+        // failures reported as not-published (the temporary is still intact).
+        std::fs::rename(source, target).map_err(publish::ReplaceError::not_published)
+    }
 }
+
 /// Signal number of the latest interrupt this process saw; 0 when none. This is
 /// only a fallback channel for entry points that own no run (the CLI's error
 /// reporter and the graph cancellation handler). Per-run truth lives on each
@@ -213,6 +229,168 @@ pub(crate) fn signals(
         let _ = wake;
         windows::signals(cancel, drain, cleanup, signal_code)?;
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publish::*;
+    use super::*;
+    use std::cell::RefCell;
+
+    /// Records the backend calls behind one publish for ordering assertions.
+    struct RecordingBackend {
+        posix: std::io::Result<bool>,
+        move_fails: bool,
+        flush_fails: bool,
+        calls: RefCell<Vec<&'static str>>,
+    }
+
+    impl RecordingBackend {
+        fn with_posix(posix: std::io::Result<bool>) -> Self {
+            Self {
+                posix,
+                move_fails: false,
+                flush_fails: false,
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl WindowsPublishBackend for RecordingBackend {
+        fn posix_rename(&self, _source: &Path, _target: &Path) -> std::io::Result<bool> {
+            self.calls.borrow_mut().push("posix_rename");
+            match &self.posix {
+                Ok(supported) => Ok(*supported),
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected rename failure",
+                )),
+            }
+        }
+
+        fn write_through_move(&self, _source: &Path, _target: &Path) -> std::io::Result<()> {
+            self.calls.borrow_mut().push("write_through_move");
+            if self.move_fails {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected move failure",
+                ));
+            }
+            Ok(())
+        }
+
+        fn flush_published(&self, _target: &Path) -> std::io::Result<()> {
+            self.calls.borrow_mut().push("flush_published");
+            if self.flush_fails {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected flush failure",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn publish_with(
+        backend: &RecordingBackend,
+    ) -> (
+        std::result::Result<WindowsPublishDurability, ReplaceError>,
+        Vec<&'static str>,
+    ) {
+        let outcome =
+            windows_publish_with(backend, Path::new("source.tmp"), Path::new("target.json"));
+        (outcome, backend.calls.borrow().clone())
+    }
+
+    #[test]
+    fn posix_rename_path_flushes_before_returning() {
+        let backend = RecordingBackend::with_posix(Ok(true));
+        let (outcome, calls) = publish_with(&backend);
+        assert_eq!(
+            outcome.unwrap(),
+            WindowsPublishDurability::PosixRenameFlushed
+        );
+        assert_eq!(calls, vec!["posix_rename", "flush_published"]);
+    }
+
+    #[test]
+    fn unsupported_volume_falls_back_to_write_through_move_then_flushes() {
+        // The fallback cannot skip the parent flush: non-POSIX volumes need the
+        // entry flush as much as the fast path does.
+        let backend = RecordingBackend::with_posix(Ok(false));
+        let (outcome, calls) = publish_with(&backend);
+        assert_eq!(
+            outcome.unwrap(),
+            WindowsPublishDurability::MoveFileWriteThrough
+        );
+        assert_eq!(
+            calls,
+            vec!["posix_rename", "write_through_move", "flush_published"]
+        );
+    }
+
+    #[test]
+    fn posix_error_falls_through_to_write_through_move() {
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let backend = RecordingBackend::with_posix(Err(denied));
+        let (outcome, calls) = publish_with(&backend);
+        assert_eq!(
+            outcome.unwrap(),
+            WindowsPublishDurability::MoveFileWriteThrough
+        );
+        assert_eq!(
+            calls,
+            vec!["posix_rename", "write_through_move", "flush_published"]
+        );
+    }
+
+    #[test]
+    fn failed_move_is_not_published() {
+        let backend = RecordingBackend {
+            posix: Ok(false),
+            move_fails: true,
+            flush_fails: false,
+            calls: RefCell::new(Vec::new()),
+        };
+        let (outcome, calls) = publish_with(&backend);
+        let error = outcome.unwrap_err();
+        assert!(!error.published);
+        assert_eq!(calls, vec!["posix_rename", "write_through_move"]);
+    }
+
+    #[test]
+    fn flush_failure_after_posix_rename_is_published_but_unsynced() {
+        // The bytes are published; only the entry flush failed. Callers must
+        // take the published-but-unsynced path instead of reporting that the
+        // publish failed and retrying it.
+        let backend = RecordingBackend {
+            posix: Ok(true),
+            move_fails: false,
+            flush_fails: true,
+            calls: RefCell::new(Vec::new()),
+        };
+        let (outcome, calls) = publish_with(&backend);
+        let error = outcome.unwrap_err();
+        assert!(error.published);
+        assert_eq!(calls, vec!["posix_rename", "flush_published"]);
+    }
+
+    #[test]
+    fn flush_failure_after_fallback_move_is_published_but_unsynced() {
+        let backend = RecordingBackend {
+            posix: Ok(false),
+            move_fails: false,
+            flush_fails: true,
+            calls: RefCell::new(Vec::new()),
+        };
+        let (outcome, calls) = publish_with(&backend);
+        let error = outcome.unwrap_err();
+        assert!(error.published);
+        assert_eq!(
+            calls,
+            vec!["posix_rename", "write_through_move", "flush_published"]
+        );
     }
 }
 

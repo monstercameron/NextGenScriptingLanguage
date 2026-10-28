@@ -7,8 +7,11 @@
 //!
 //! A preserved final symlink is resolved to its canonical target and opened
 //! without following another final symlink; the link and target identity are
-//! rechecked before replacement. Unix writes sync the temp file and parent
-//! directory. Permission preservation covers Unix mode bits only; ownership,
+//! rechecked before replacement. Writes sync the temp file; Unix then syncs
+//! the parent directory, while Windows asks the OS to persist the rename
+//! entry during replacement and syncs the parent afterwards. A successful
+//! flush means the OS was asked, not that the entry provably survives power
+//! loss. Permission preservation covers Unix mode bits only; ownership,
 //! ACLs, extended attributes and timestamps are not copied. File content is
 //! capped at 16 MiB to keep reads and CAS checks bounded.
 
@@ -503,14 +506,31 @@ fn write_atomic_locked(
     }
 
     context.checkpoint()?;
-    fs::rename(&temp_path, &target).map_err(|error| {
-        failed(
-            "uncertain_effect",
-            format!(
-                "could not confirm replacement of {}: {error}",
-                target.display()
-            ),
-        )
+    // On Windows this also asks the OS to persist the rename entry; on Unix
+    // it is a plain rename and the parent flush below provides durability.
+    crate::platform::replace_file(&temp_path, &target).map_err(|error| {
+        if error.published {
+            // The temporary is gone: the rename succeeded and only the
+            // durability flush failed. The replacement must be treated as
+            // possibly live instead of re-run.
+            failed(
+                "uncertain_effect",
+                format!(
+                    "replacement of {} was published but its directory entry may not be on disk: {}",
+                    target.display(),
+                    error.error
+                ),
+            )
+        } else {
+            failed(
+                "uncertain_effect",
+                format!(
+                    "could not confirm replacement of {}: {}",
+                    target.display(),
+                    error.error
+                ),
+            )
+        }
     })?;
     cleanup.0 = None;
     context.checkpoint()?;
@@ -1078,7 +1098,15 @@ fn sync_directory(path: &Path) -> Result<(), AppletError> {
             .and_then(|directory| directory.sync_all())
             .map_err(|error| io_error(error, format!("syncing directory {}", path.display())))?;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Ask the OS to persist a just-published rename's directory entry.
+        // Success means the flush call succeeded, not that the entry provably
+        // survives power loss; see `platform::windows::sync_directory`.
+        crate::platform::windows::sync_directory(path)
+            .map_err(|error| io_error(error, format!("syncing directory {}", path.display())))?;
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = path;
     Ok(())
 }

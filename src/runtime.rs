@@ -2582,10 +2582,26 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
             file.set_permissions(permissions)?;
         }
         file.sync_all()?;
-        crate::platform::replace_file(&temporary, path)?;
+        crate::platform::replace_file(&temporary, path).map_err(|error| {
+            if error.published {
+                // The temporary is gone: the rename succeeded and only the
+                // durability flush failed. Report the published-but-unsynced
+                // effect instead of a failed write; the new data may be live.
+                // Keep the typed error in the chain so the uncertainty stays
+                // detectable programmatically, not just in the message text.
+                anyhow::Error::new(error).context(format!(
+                    "published {} but its directory entry may not be on disk; effect is uncertain",
+                    path.display(),
+                ))
+            } else {
+                anyhow::Error::from(error.error).context(format!("publishing {}", path.display()))
+            }
+        })?;
         Ok(())
     })();
     if result.is_err() {
+        // Best effort: after a published rename the temporary is already gone
+        // and this remove fails silently.
         let _ = fs::remove_file(&temporary);
     }
     result.with_context(|| format!("writing {}", path.display()))

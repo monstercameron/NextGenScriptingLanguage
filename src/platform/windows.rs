@@ -7,7 +7,7 @@ use std::os::windows::{
     fs::OpenOptionsExt,
     io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::{
     atomic::{AtomicBool, AtomicI32, Ordering},
@@ -220,20 +220,94 @@ fn posix_replace(source: &Path, target: &Path) -> std::io::Result<bool> {
     }
 }
 
-pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
-    // A POSIX-semantics rename replaces the target even while a reader holds it open
-    // with FILE_SHARE_DELETE (std's default share mode, and the checkpoint readers'),
-    // which MoveFileExW refuses with access denied. File systems without it (FAT,
-    // older Windows) fall back to MoveFileExW below.
-    // Any failure of the POSIX rename falls through to MoveFileExW, which reports its
-    // own error if the replace really cannot happen.
-    if matches!(posix_replace(source, target), Ok(true)) {
-        return Ok(());
+/// Open `path` as a directory handle for durability flushes. The open never
+/// follows a trailing reparse point (`FILE_FLAG_OPEN_REPARSE_POINT`), and the
+/// handle is verified to be a directory before use: a junction or symlink
+/// parent is refused fail-closed instead of flushing some other directory's
+/// metadata. `FlushFileBuffers` requires `GENERIC_WRITE`, so a parent the
+/// caller cannot write fails here with access denied rather than at flush
+/// time; checkpoint and journal directories must grant the writer write access
+/// to their parent directory.
+fn open_directory_no_reparse(path: &Path) -> std::io::Result<File> {
+    let directory = OpenOptions::new()
+        .access_mode(GENERIC_READ | GENERIC_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)?;
+    if !directory.metadata()?.file_type().is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to flush {}: it is a reparse point or not a directory; checkpoint and journal directories must live in a real local directory",
+                path.display()
+            ),
+        ));
     }
+    Ok(directory)
+}
+
+/// Map a directory-flush failure fail-closed. Volumes without directory-flush
+/// support (FAT/exFAT, some network redirectors) stay errors: the rename
+/// already happened, so the caller still reports published-but-unsynced rather
+/// than silently succeeding or re-running the publish. Only the message is
+/// enriched, naming the likely volume limitation and the local-NTFS
+/// requirement. There is deliberately no silent degraded mode: an unflushed
+/// entry must stay visible as uncertainty.
+fn map_flush_error(path: &Path, error: std::io::Error) -> std::io::Error {
+    // ERROR_INVALID_FUNCTION (1), ERROR_NOT_SUPPORTED (50),
+    // ERROR_INVALID_PARAMETER (87): the volume or redirector rejects the flush.
+    match error.raw_os_error() {
+        Some(1 | 50 | 87) => std::io::Error::new(
+            error.kind(),
+            format!(
+                "directory flush is not supported for {path} ({error}); checkpoint and journal directories must live on a local NTFS volume",
+                path = path.display()
+            ),
+        ),
+        _ => error,
+    }
+}
+
+/// Flush one open directory handle. `path` is only a label for error messages;
+/// the flush addresses the handle, so a parent-path swap after the open cannot
+/// redirect it.
+fn flush_directory_handle(directory: &File, path: &Path) -> std::io::Result<()> {
+    // SAFETY: `directory` is a live directory handle for this call, and
+    // FlushFileBuffers only flushes that handle's metadata without copying any
+    // bytes. A handle of the wrong type makes the call fail, not misbehave.
+    if unsafe { FlushFileBuffers(directory.as_raw_handle()) } == 0 {
+        return Err(map_flush_error(path, std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+/// Ask the OS to persist a just-published rename's directory entry. The file's
+/// contents were already synced before the rename; only the directory entry is
+/// new. Directories open only with `FILE_FLAG_BACKUP_SEMANTICS`, never through
+/// a trailing reparse point, and the handle is verified to be a directory, so
+/// a junction parent fails instead of flushing another directory.
+/// `FlushFileBuffers` requires the handle to have `GENERIC_WRITE` access, so
+/// the directory opens for read and write; a read-only handle would fail the
+/// flush. Success means the flush call succeeded, not that the entry provably
+/// survives power loss: directory-entry persistence is filesystem dependent
+/// (use a local NTFS directory), volumes without flush support fail closed
+/// with an explicit error rather than degrading silently, and a parent swap
+/// between the rename and a path-based flush is not pinned the way Unix
+/// pinned-directory handles are (the publish backend pins the parent handle
+/// before the rename to narrow this; see below). Hard power-loss survival is
+/// proven only by the 50-trial hard-reset lab.
+pub(crate) fn sync_directory(path: &Path) -> std::io::Result<()> {
+    let directory = open_directory_no_reparse(path)?;
+    flush_directory_handle(&directory, path)
+}
+
+/// Replace `target` with `source` without returning until the move is on disk.
+/// A reader that holds the target open (a status poller, an antivirus scan)
+/// makes the replace fail with access denied or a sharing violation for a
+/// moment, so those two errors are retried with a short backoff before the
+/// publish fails.
+fn move_file_write_through(source: &Path, target: &Path) -> std::io::Result<()> {
     let (source, target) = (wide(source.as_os_str()), wide(target.as_os_str()));
-    // A reader that holds the target open (a status poller, an antivirus scan) makes
-    // the replace fail with access denied or a sharing violation for a moment, so
-    // those two errors are retried with a short backoff before the publish fails.
     let mut attempt = 0;
     loop {
         // SAFETY: MoveFileExW reads two NUL-terminated UTF-16 paths. `wide` appends the
@@ -256,6 +330,106 @@ pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> 
         std::thread::sleep(std::time::Duration::from_millis(5 << attempt));
         attempt += 1;
     }
+}
+
+/// The production Win32 backend for [`super::publish::windows_publish_with`].
+///
+/// The target's parent directory is opened before either rename attempt, and
+/// the post-rename flush addresses that pinned handle rather than a path
+/// re-resolved after the rename, so a parent-path swap between the rename and
+/// the flush cannot redirect the flush to the wrong directory. The pin is
+/// mandatory and fail-closed: if the parent cannot be opened as a real
+/// (non-reparse) directory, the publish fails before any rename occurs, so no
+/// path-based flush fallback ever runs. A failed re-pin never clears an
+/// earlier good pin. The residual window is a swap between the pin and the
+/// rename itself (both rename APIs take paths, so the rename destination is
+/// not handle-pinned); journal publishes hold the checkpoint lock across the
+/// whole publish, excluding that swap for the checkpoint path, and other
+/// callers must hold their own exclusion if they need the same guarantee.
+struct NativePublishBackend {
+    /// `(parent path, open handle)` pinned before the rename. The path is only
+    /// a label for error messages; the flush addresses the handle.
+    pinned_parent: Mutex<Option<(PathBuf, File)>>,
+}
+
+impl NativePublishBackend {
+    fn new() -> Self {
+        Self {
+            pinned_parent: Mutex::new(None),
+        }
+    }
+
+    /// Pin `target`'s parent directory before a rename attempt. Failure is
+    /// fatal and fail-closed: the caller must not rename at all, because the
+    /// post-rename flush would otherwise have to re-resolve the parent by
+    /// path and could flush the wrong directory after a path swap.
+    fn pin_parent(&self, target: &Path) -> std::io::Result<()> {
+        let parent = match target.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        let directory = open_directory_no_reparse(&parent)?;
+        let mut pinned = self
+            .pinned_parent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *pinned = Some((parent, directory));
+        Ok(())
+    }
+}
+
+impl super::publish::WindowsPublishBackend for NativePublishBackend {
+    fn posix_rename(&self, source: &Path, target: &Path) -> std::io::Result<bool> {
+        self.pin_parent(target)?;
+        posix_replace(source, target)
+    }
+
+    fn write_through_move(&self, source: &Path, target: &Path) -> std::io::Result<()> {
+        self.pin_parent(target)?;
+        move_file_write_through(source, target)
+    }
+
+    fn flush_published(&self, target: &Path) -> std::io::Result<()> {
+        let _ = target;
+        match self
+            .pinned_parent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            Some((parent, pinned)) => flush_directory_handle(&pinned, &parent),
+            // No pinned handle means the pre-rename pin was never taken; fail
+            // closed (published-but-unsynced) rather than re-resolving the
+            // parent by path, which a path swap could redirect.
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "published target has no pinned parent directory handle to flush",
+            )),
+        }
+    }
+}
+
+pub(crate) fn replace_file(
+    source: &Path,
+    target: &Path,
+) -> std::result::Result<(), super::publish::ReplaceError> {
+    // A POSIX-semantics rename replaces the target even while a reader holds it open
+    // with FILE_SHARE_DELETE (std's default share mode, and the checkpoint readers'),
+    // which MoveFileExW refuses with access denied. File systems without it (FAT,
+    // older Windows) fall back to MoveFileExW below.
+    // The backend pins the target's parent directory before either rename so the
+    // post-rename flush addresses that handle rather than a re-resolved path.
+    // Both paths end with a flush of the pinned parent so the OS is asked to
+    // persist the move; the fallback additionally requests
+    // MOVEFILE_WRITE_THROUGH. Write-through is documented for copy-and-delete
+    // moves, so same-volume rename persistence stays filesystem dependent and
+    // unproven without the hard-reset lab. Any failure of the POSIX rename falls
+    // through to MoveFileExW, which reports its own error if the replace really
+    // cannot happen. A flush failure after a successful rename returns
+    // `ReplaceError` with `published == true`: the target is published and the
+    // caller must not report a failed publish. Volumes without flush support
+    // fail closed with an explicit error; there is no silent degraded mode.
+    super::publish::windows_publish_with(&NativePublishBackend::new(), source, target).map(|_| ())
 }
 
 pub(crate) struct Job(OwnedHandle);
@@ -969,6 +1143,7 @@ impl Drop for Pump {
 
 #[cfg(test)]
 mod tests {
+    use super::super::publish::WindowsPublishBackend;
     use super::*;
     use std::os::windows::process::CommandExt;
 
@@ -1022,5 +1197,62 @@ mod tests {
         // child was created with CREATE_SUSPENDED, so the previous suspend count is 1.
         assert_eq!(unsafe { ResumeThread(fast.as_raw_handle()) }, 1);
         assert!(child.wait().expect("waiting for child").success());
+    }
+
+    #[test]
+    fn published_directory_flush_reaches_a_temporary_directory() {
+        // `FlushFileBuffers` requires `GENERIC_WRITE` access, so this fails on
+        // a read-only directory handle and passes with the read/write opener
+        // above. It runs in the Windows `--lib` jobs. Success proves the
+        // directory handle opens and the flush call succeeds, not that the
+        // entry provably survives power loss.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        super::sync_directory(temp.path()).expect("flushing a directory");
+    }
+
+    #[test]
+    fn replace_file_publishes_bytes_and_flushes_parent() {
+        // This asserts the rename happened and the follow-up flush call
+        // succeeded — not that the entry provably survives power loss. Only
+        // the 50-trial hard-reset lab proves that.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let source = temp.path().join("journal.json.tmp");
+        let target = temp.path().join("journal.json");
+        std::fs::write(&source, b"begin record").expect("staging a journal file");
+        super::replace_file(&source, &target).expect("publishing a journal file");
+        assert_eq!(
+            std::fs::read(&target).expect("reading the published file"),
+            b"begin record"
+        );
+    }
+
+    #[test]
+    fn flush_without_a_pinned_parent_fails_closed() {
+        // A backend that never pinned the parent (the pre-rename pin was never
+        // taken) must fail instead of re-resolving the parent by path, which a
+        // parent-path swap could redirect to the wrong directory. It runs in
+        // the Windows `--lib` jobs.
+        let backend = NativePublishBackend::new();
+        let error = backend
+            .flush_published(Path::new("journal.json"))
+            .expect_err("flush without a pinned parent must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn unpinnable_parent_blocks_rename_before_any_move() {
+        // The pin is mandatory and fail-closed: when the parent cannot be
+        // opened as a real directory, neither rename path runs, so the source
+        // is untouched and there is nothing half-published to flush. It runs
+        // in the Windows `--lib` jobs.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let source = temp.path().join("journal.json.tmp");
+        std::fs::write(&source, b"begin record").expect("staging a journal file");
+        let target = temp.path().join("missing-parent").join("journal.json");
+        let backend = NativePublishBackend::new();
+        assert!(backend.posix_rename(&source, &target).is_err());
+        assert!(source.exists(), "a failed pin must not rename the source");
+        assert!(backend.write_through_move(&source, &target).is_err());
+        assert!(source.exists(), "a failed pin must not move the source");
     }
 }

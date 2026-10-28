@@ -24,6 +24,12 @@ original version labels.
   client streams them directly. A closed reader that lands after a worker
   failure reports the failure instead of a quiet pipe close.
 
+- A repeat interrupt (Ctrl-C) during a `finally`, `on exit` or `on interrupt`
+  body now aborts the cleanup at once and kills its running command, exiting
+  with status 128 plus the interrupting signal (130 for SIGINT) and a
+  `cleanup interrupted` diagnostic instead of waiting out the 5 s cleanup
+  budget. A single interrupt still runs cleanup to completion.
+
 - Run records now carry a durable policy-decision audit. `execute run
   --record` writes the allow/deny decisions into `run.json` with the execution
   mode and which policies were configured (never policy contents), including a

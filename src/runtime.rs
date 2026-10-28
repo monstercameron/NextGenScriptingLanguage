@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -223,6 +223,40 @@ fn is_timeout_error(error: &anyhow::Error) -> bool {
             .downcast_ref::<execution_result::ExecutionFailure>()
             .is_some_and(|failure| failure.result.kind == execution_result::ExecutionKind::Timeout)
 }
+
+/// Whether an error already reports an interrupt cancellation. Only these are
+/// rewritten when a repeat interrupt lands during cleanup: native
+/// `ExecutionKind::Cancelled` failures plus the plain-text cancellations the
+/// task-group, parallel fan-out, in-process applet and model backends report
+/// (`task group ...`, `parallel for each was cancelled ...`, `observed parent
+/// cancellation`, `model request cancelled ...`). Timeouts, cleanup budgets
+/// and ordinary step failures keep their own errors so they still unwind
+/// through the cleanup frames.
+fn is_cancellation_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<execution_result::ExecutionFailure>()
+            .is_some_and(|failure| {
+                failure.result.kind == execution_result::ExecutionKind::Cancelled
+            })
+    }) || error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("workflow cancelled")
+            || message.contains("cancelled by handle")
+            || message.contains("cancelled while")
+            || message.contains("task group cancelled")
+            || message.contains("was cancelled")
+            || message.contains("observed parent cancellation")
+            || message.contains("model request cancelled")
+    })
+}
+
+/// A repeat interrupt landed while cleanup was active: the cleanup stops at
+/// once and its running command is killed. The pending failure stays on the
+/// error chain as context when the control-flow machinery records this.
+fn cleanup_interrupted() -> anyhow::Error {
+    anyhow!("cleanup interrupted")
+}
 fn deadline_after(timeout: Option<Duration>, label: &str) -> Result<Option<Instant>> {
     timeout
         .map(|duration| {
@@ -341,6 +375,178 @@ mod program_exit_tests {
             exit.message.as_deref(),
             Some("before\\u{1b}[2J\\u{9b}31m\nafter")
         );
+    }
+}
+
+#[cfg(test)]
+mod cleanup_interrupt_tests {
+    use super::*;
+
+    fn cancelled_failure(message: &str) -> anyhow::Error {
+        anyhow::Error::new(execution_result::ExecutionFailure::new(
+            execution_result::ExecutionResult::runtime_failure(
+                execution_result::ExecutionKind::Cancelled,
+                message,
+                execution_result::EffectCertainty::Uncertain,
+            ),
+        ))
+    }
+
+    #[test]
+    fn cleanup_interrupted_names_the_interruption() {
+        assert!(
+            format!("{:#}", cleanup_interrupted()).contains("cleanup interrupted"),
+            "repeat interrupts must report the interruption, not the abandoned cleanup step"
+        );
+    }
+
+    #[test]
+    fn cancellation_errors_are_rewritten_and_others_are_not() {
+        assert!(is_cancellation_error(&cancelled_failure(
+            "workflow cancelled by signal"
+        )));
+        // The pending failure stays recognizable through added context.
+        let chained = Err::<(), _>(cancelled_failure("workflow cancelled by signal"))
+            .context("outer step")
+            .unwrap_err();
+        assert!(is_cancellation_error(&chained));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "cancelled by handle"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "cancelled while draining"
+        )));
+        // Task-group, parallel fan-out, in-process applet and model
+        // cancellations unwound mid-statement must rewrite the same way.
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "task group cancelled"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "task group was cancelled before preflight"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "parallel for each was cancelled before element launch"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "in-process applet observed parent cancellation"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "model request cancelled; its remote outcome may be uncertain"
+        )));
+        // Timeouts, cleanup budgets and ordinary step failures keep their own
+        // errors so they still unwind through the cleanup frames.
+        assert!(!is_cancellation_error(&anyhow::Error::new(
+            execution_result::ExecutionFailure::new(
+                execution_result::ExecutionResult::runtime_failure(
+                    execution_result::ExecutionKind::Timeout,
+                    "command timed out",
+                    execution_result::EffectCertainty::Uncertain,
+                ),
+            )
+        )));
+        // A task-group error without a cancellation keeps its own error: the
+        // match is on the cancellation, not on the subsystem name.
+        assert!(!is_cancellation_error(&anyhow::anyhow!(
+            "task group result metadata exceeds the configured output limit"
+        )));
+        assert!(!is_cancellation_error(&anyhow::Error::new(CommandTimedOut)));
+        assert!(!is_cancellation_error(&anyhow::Error::new(
+            control_flow::CleanupBudgetExceeded {
+                after_success: false
+            }
+        )));
+        assert!(!is_cancellation_error(&anyhow::anyhow!("boom")));
+    }
+
+    #[test]
+    fn cleanup_scope_shares_the_second_interrupt_flag() {
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let scope = signals.cleanup_scope(None);
+        assert!(Arc::ptr_eq(&scope.cancelled, &signals.cleanup_cancel));
+        assert!(Arc::ptr_eq(&scope.cleanup_cancel, &signals.cleanup_cancel));
+        assert!(!scope.is_cancelled());
+        signals.cleanup_cancel.store(true, Ordering::SeqCst);
+        assert!(scope.is_cancelled());
+    }
+
+    #[test]
+    fn entering_cleanup_does_not_inherit_the_first_interrupt() {
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(true)), false, None)
+                .unwrap();
+        let scope = signals.cleanup_scope(None);
+        assert!(
+            !scope.is_cancelled(),
+            "the first interrupt runs cleanup; only a repeat interrupt sets the shared flag"
+        );
+    }
+
+    #[test]
+    fn cleanup_scope_inherits_outer_cancellation_but_not_the_first_interrupt() {
+        let mut signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(true)), false, None)
+                .unwrap();
+        let ancestor = Arc::new(AtomicBool::new(false));
+        signals.outer_cancelled.push(Arc::clone(&ancestor));
+        let scope = signals.cleanup_scope(None);
+        assert!(
+            !scope.is_cancelled(),
+            "neither the first interrupt nor an unset ancestor cancels cleanup"
+        );
+        ancestor.store(true, Ordering::SeqCst);
+        assert!(
+            scope.is_cancelled(),
+            "an ancestor task-group cancel during cleanup must abort it"
+        );
+    }
+
+    #[test]
+    fn cleanup_scope_inherits_job_cancellation() {
+        let mut signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let job = Arc::new(AtomicBool::new(false));
+        signals.job_cancelled = Some(Arc::clone(&job));
+        let scope = signals.cleanup_scope(None);
+        assert!(!scope.is_cancelled());
+        job.store(true, Ordering::SeqCst);
+        assert!(
+            scope.is_cancelled(),
+            "a job-handle cancel during cleanup must abort it"
+        );
+    }
+
+    #[test]
+    fn expired_drain_marks_cleanup_cancel_like_a_second_interrupt() {
+        let drain = Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cleanup_cancel = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_drain_watchdog(
+            Arc::clone(&drain),
+            Arc::clone(&cancelled),
+            Arc::clone(&cleanup_cancel),
+            Duration::from_millis(50),
+            Arc::clone(&stop),
+            None,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cleanup_cancel.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            cleanup_cancel.load(Ordering::SeqCst),
+            "the expired drain never marked cleanup"
+        );
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert_eq!(
+            drain.load(Ordering::SeqCst),
+            crate::platform::DRAIN_CANCELLED
+        );
+        stop.store(true, Ordering::SeqCst);
     }
 }
 
@@ -522,6 +728,20 @@ pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
     /// Interrupt drain state (`platform::DRAIN_*`); shared with cleanup scopes.
     drain: Arc<AtomicU8>,
+    /// Set by a repeat interrupt (or an expired interrupt drain) while cleanup
+    /// may be active. Cleanup scopes share this flag instead of minting a fresh
+    /// one, so a second Ctrl-C aborts the cleanup at once and kills its running
+    /// command. The first interrupt never sets it, so cleanup still runs.
+    cleanup_cancel: Arc<AtomicBool>,
+    /// Signal number of the interrupt that cancelled this run; 0 when none.
+    /// Each run owns its slot, so overlapping signal-owning runs keep their
+    /// own exit codes and runs that never install handlers cannot inherit a
+    /// previous run's code. Only entry points without a run (the CLI error
+    /// reporter) read the process-wide fallback in `platform`. OS delivery is
+    /// broadcast: one process-wide signal runs every installed owner's
+    /// handler set, so overlapping owners each record that same signal while
+    /// runs without handlers stay clean.
+    cancel_signal: Arc<AtomicI32>,
     /// Stops this run's drain watchdog when the run's signals are dropped.
     drain_stop: Option<Arc<AtomicBool>>,
     registrations: Vec<signal_hook::SigId>,
@@ -660,9 +880,15 @@ impl Signals {
     }
 
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
+        // A fresh per-run slot starts at zero, so a new signal-owned run can
+        // neither inherit nor erase another run's recorded interrupt.
+        let cleanup_cancel = Arc::new(AtomicBool::new(false));
+        let cancel_signal = Arc::new(AtomicI32::new(0));
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            cleanup_cancel: Arc::clone(&cleanup_cancel),
+            cancel_signal: Arc::clone(&cancel_signal),
             drain_stop: None,
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
@@ -697,6 +923,7 @@ impl Signals {
                 spawn_drain_watchdog(
                     Arc::clone(&guard.drain),
                     Arc::clone(&guard.cancelled),
+                    Arc::clone(&guard.cleanup_cancel),
                     budget,
                     Arc::clone(&stop),
                     Some(Arc::clone(&signal_wake)),
@@ -707,8 +934,13 @@ impl Signals {
             None => None,
         };
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations =
-            crate::platform::signals(guard.cancelled.clone(), armed, Some(signal_wake))?;
+        guard.registrations = crate::platform::signals(
+            guard.cancelled.clone(),
+            armed,
+            Some(signal_wake),
+            Arc::clone(&guard.cleanup_cancel),
+            Arc::clone(&guard.cancel_signal),
+        )?;
         Ok(guard)
     }
 
@@ -716,13 +948,20 @@ impl Signals {
         cancelled: Arc<AtomicBool>,
         deadline: Option<Instant>,
     ) -> Result<Self> {
+        // As with `register`: the fresh per-run slot starts without a recorded
+        // interrupt, so this run can neither inherit nor erase another run's.
         // The caller can set this flag directly without notifying the signal
         // wake, so native supervisors retain the bounded cancellation check.
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
         let signal_wake = Arc::new(crate::tasks::CancellationWake::new()?);
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations =
-            crate::platform::signals(guard.cancelled.clone(), None, Some(signal_wake))?;
+        guard.registrations = crate::platform::signals(
+            guard.cancelled.clone(),
+            None,
+            Some(signal_wake),
+            Arc::clone(&guard.cleanup_cancel),
+            Arc::clone(&guard.cancel_signal),
+        )?;
         Ok(guard)
     }
 
@@ -739,6 +978,8 @@ impl Signals {
         Ok(Self {
             cancelled,
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            cleanup_cancel: Arc::new(AtomicBool::new(false)),
+            cancel_signal: Arc::new(AtomicI32::new(0)),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics,
@@ -768,13 +1009,20 @@ impl Signals {
         })
     }
 
-    /// Fork the execution context for bounded finally cleanup. Cleanup gets
-    /// fresh cancellation and deadline state while retaining its enclosing
+    /// Fork the execution context for bounded finally cleanup. Cleanup keeps
+    /// the shared second-interrupt flag and wakes so a repeat interrupt aborts
+    /// it at once, with a fresh deadline, while retaining its enclosing
     /// module, worker, provenance, accounting, observation, and job-run scope.
+    /// Ancestor task-group (`outer_cancelled`) and job-handle (`job_cancelled`)
+    /// flags are inherited so an outer or job cancel during cleanup still
+    /// aborts it; the run's own first-interrupt flag is deliberately not
+    /// inherited, so one interrupt still runs cleanup to completion.
     fn cleanup_scope(&self, deadline: Option<Instant>) -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::clone(&self.cleanup_cancel),
             drain: Arc::clone(&self.drain),
+            cleanup_cancel: Arc::clone(&self.cleanup_cancel),
+            cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
@@ -786,10 +1034,10 @@ impl Signals {
             process_launches: Arc::clone(&self.process_launches),
             process_observer: Arc::clone(&self.process_observer),
             worker_pool: self.worker_pool.clone(),
-            outer_cancelled: Vec::new(),
-            cancel_wakes: Vec::new(),
-            unnotified_cancellation: true,
-            job_cancelled: None,
+            outer_cancelled: self.outer_cancelled.clone(),
+            cancel_wakes: self.cancel_wakes.clone(),
+            unnotified_cancellation: self.unnotified_cancellation,
+            job_cancelled: self.job_cancelled.clone(),
             job_launch_ack: None,
             job_output_budget: None,
             job_output_limit: None,
@@ -816,6 +1064,8 @@ impl Signals {
         Some(Self {
             cancelled: Arc::clone(&self.cancelled),
             drain: Arc::clone(&self.drain),
+            cleanup_cancel: Arc::clone(&self.cleanup_cancel),
+            cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
@@ -971,6 +1221,32 @@ impl Signals {
                 Ordering::SeqCst,
             )
             .is_ok()
+    }
+
+    /// Record the signal that interrupted this run. Production signal handlers
+    /// store into both this slot and the process-wide fallback; tests use this
+    /// to record against one run without delivering a real signal.
+    #[cfg(test)]
+    fn record_cancel_signal(&self, signal: i32) {
+        self.cancel_signal.store(signal, Ordering::SeqCst);
+    }
+
+    /// Exit status for this run when cancelled by an interrupt: 128 plus the
+    /// recorded signal. Runs that never recorded a signal report `None`, even
+    /// when another run in this process was interrupted.
+    pub(crate) fn cancel_exit_code(&self) -> Option<i32> {
+        match self.cancel_signal.load(Ordering::SeqCst) {
+            0 => None,
+            signal => Some(crate::platform::exit_code_for_signal(signal)),
+        }
+    }
+
+    /// Exit status of this run ended by an interrupt drain: 128 plus the
+    /// recorded signal (130 for SIGINT), or 130 when no signal was recorded.
+    pub(crate) fn drain_exit_status(&self) -> u8 {
+        self.cancel_exit_code()
+            .and_then(|code| u8::try_from(code).ok())
+            .unwrap_or(130)
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
@@ -1253,11 +1529,12 @@ impl DrainClock {
 }
 
 /// Polls a run's drain state and turns an expired drain into a cancel: the same
-/// state change and flag a second interrupt makes. It exits once the run cancels
+/// state change and flags a second interrupt makes. It exits once the run cancels
 /// or its signals are dropped.
 fn spawn_drain_watchdog(
     drain: Arc<AtomicU8>,
     cancelled: Arc<AtomicBool>,
+    cleanup_cancel: Arc<AtomicBool>,
     budget: Duration,
     stop: Arc<AtomicBool>,
     wake: Option<Arc<crate::tasks::CancellationWake>>,
@@ -1274,6 +1551,7 @@ fn spawn_drain_watchdog(
                 if clock.expired(state, Instant::now()) {
                     drain.store(crate::platform::DRAIN_CANCELLED, Ordering::SeqCst);
                     cancelled.store(true, Ordering::SeqCst);
+                    cleanup_cancel.store(true, Ordering::SeqCst);
                     if let Some(wake) = &wake {
                         wake.notify();
                     }
@@ -2266,13 +2544,6 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     result.with_context(|| format!("writing {}", path.display()))
-}
-
-/// Exit status of a run ended by an interrupt drain: the interrupt's own status, or 130.
-fn drain_exit_status() -> u8 {
-    crate::platform::cancel_exit_code()
-        .and_then(|code| u8::try_from(code).ok())
-        .unwrap_or(130)
 }
 
 /// Programs with an `on interrupt` body drain on their first interrupt.
@@ -5826,6 +6097,8 @@ mod drain_tests {
 
     /// Runs `source` in a fresh directory with the drain state preset, without
     /// installing OS signal handlers. The directory keeps any files the run wrote.
+    /// Each run owns its interrupt slot, so no process-wide lock or clear is
+    /// needed: a concurrent probe cannot move this run off 130.
     fn run_with_drain(
         source: &str,
         state: u8,
@@ -5901,6 +6174,188 @@ mod drain_tests {
         assert!(directory.path().join("interrupted.txt").exists());
         assert!(directory.path().join("exit.txt").exists());
         assert!(!directory.path().join("main.txt").exists());
+    }
+
+    #[test]
+    fn overlapping_signal_owners_keep_their_own_exit_codes() {
+        // Two live signal-owning runs record different signals: with the old
+        // process-wide slot the second record overwrote the first run's code.
+        // The serial lock keeps the installed handlers' fallback writes away
+        // from concurrent tests while both runs overlap. This injects per-slot
+        // signals to prove slot independence; the real-delivery broadcast proof
+        // is `both_overlapping_owners_observe_a_real_broadcast_signal` below.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        first.record_cancel_signal(2);
+        second.record_cancel_signal(15);
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(second.cancel_exit_code(), Some(143));
+        assert_eq!(first.drain_exit_status(), 130);
+        assert_eq!(second.drain_exit_status(), 143);
+    }
+
+    #[test]
+    fn a_run_without_signal_handlers_ignores_an_earlier_runs_signal() {
+        // A stale process-wide record must not leak into a later run that
+        // never owned signal handlers: nested live, service, job, and worker
+        // runs all build on `with_cancellation_and_deadline`.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::platform::record_cancel_signal(15);
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        assert_eq!(signals.cancel_exit_code(), None);
+        crate::platform::clear_cancel_signal();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_handlers_record_into_their_own_run() {
+        // End to end through real OS delivery: a SIGINT addressed to this
+        // process lands in the owning run's slot and the CLI fallback, while
+        // an overlapping run without handlers stays clean. Real delivery runs
+        // in a child test process (see the invariant on
+        // `CANCEL_SIGNAL_TEST_LOCK`) so the broadcast cannot reach handlers
+        // installed by parallel tests in this process; the parent installs no
+        // handlers and touches no fallback state.
+        const HELPER_ENV: &str = "EXECUTE_TEST_INSTALLED_HANDLERS_CHILD";
+        const TEST_NAME: &str =
+            "runtime::drain_tests::installed_handlers_record_into_their_own_run";
+        if std::env::var_os(HELPER_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(HELPER_ENV, "1")
+            .output()
+            .expect("starting installed-handlers child");
+            assert!(
+                output.status.success(),
+                "installed-handlers child failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // Child process: the only place a real signal is raised for this test.
+        // The `Drop` guard clears the process-wide fallback even when an
+        // assertion below panics; the child then exits, so no fallback state
+        // can leak into parallel tests in the parent process.
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        let signals = Signals::register_with_deadline(None).unwrap();
+        let other =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        // SAFETY: the installed handler only performs atomic stores and a
+        // nonblocking wake write, so delivering a real SIGINT is safe.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+        // `signal_hook` relays through a background thread, so poll briefly.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while signals.cancel_exit_code().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(signals.cancel_exit_code(), Some(130));
+        assert_eq!(signals.drain_exit_status(), 130);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        assert_eq!(other.cancel_exit_code(), None);
+        drop(signals);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn both_overlapping_owners_observe_a_real_broadcast_signal() {
+        // Real OS delivery is process-wide broadcast: one SIGINT addressed to
+        // this process runs every installed owner's handler set, so two
+        // overlapping signal-owning runs each record the same signal in their
+        // own slot (and the CLI fallback), while an overlapping run without
+        // handlers stays clean. Real delivery runs in a child test process
+        // (see the invariant on `CANCEL_SIGNAL_TEST_LOCK`) so the broadcast
+        // cannot reach handlers installed by parallel tests in this process;
+        // the parent installs no handlers and touches no fallback state.
+        const HELPER_ENV: &str = "EXECUTE_TEST_BROADCAST_SIGNAL_CHILD";
+        const TEST_NAME: &str =
+            "runtime::drain_tests::both_overlapping_owners_observe_a_real_broadcast_signal";
+        if std::env::var_os(HELPER_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(HELPER_ENV, "1")
+            .output()
+            .expect("starting broadcast-signal child");
+            assert!(
+                output.status.success(),
+                "broadcast-signal child failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // Child process: the only place a real signal is raised for #554.
+        // The `Drop` guard clears the process-wide fallback even when an
+        // assertion below panics; the child then exits, so no fallback state
+        // can leak into parallel tests in the parent process.
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let other =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        // SAFETY: both owners installed signal-safe handlers (atomic stores
+        // plus a nonblocking wake write), so delivering a real SIGINT is safe.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+        // `signal_hook` relays through a background thread, so poll briefly.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (first.cancel_exit_code().is_none() || second.cancel_exit_code().is_none())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(second.cancel_exit_code(), Some(130));
+        assert_eq!(first.drain_exit_status(), 130);
+        assert_eq!(second.drain_exit_status(), 130);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        assert_eq!(other.cancel_exit_code(), None);
+        drop(first);
+        drop(second);
     }
 
     #[test]
@@ -6088,6 +6543,7 @@ mod drain_tests {
         spawn_drain_watchdog(
             Arc::clone(&drain),
             Arc::clone(&cancelled),
+            Arc::new(AtomicBool::new(false)),
             Duration::from_millis(50),
             Arc::clone(&stop),
             None,
@@ -6116,6 +6572,7 @@ mod drain_tests {
         spawn_drain_watchdog(
             Arc::clone(&drain),
             Arc::clone(&cancelled),
+            Arc::new(AtomicBool::new(false)),
             Duration::from_millis(10),
             Arc::clone(&stop),
             None,

@@ -570,8 +570,7 @@ fn drive_journal(
         };
         let state = if before_matches {
             CurrentState::Before
-        } else if after_matches
-        {
+        } else if after_matches {
             CurrentState::After
         } else {
             CurrentState::Conflict
@@ -1162,9 +1161,7 @@ fn read_blob(
     let mut file = open_private_regular(&path, "transaction blob")?;
     let mut bytes = Vec::with_capacity(blob.length.min(MAX_FILE_BYTES as u64) as usize);
     read_chunked(&mut file, &mut bytes, &path, context)?;
-    if bytes.len() != blob.length as usize
-        || digest_with_context(&bytes, context)? != blob.sha256
-    {
+    if bytes.len() != blob.length as usize || digest_with_context(&bytes, context)? != blob.sha256 {
         return Err(failed(
             "journal_corrupt",
             format!("transaction blob {} is truncated or corrupt", blob.name),
@@ -1173,7 +1170,10 @@ fn read_blob(
     Ok(bytes)
 }
 
-fn read_journal(directory: &Path, context: &ExecutionContext<'_>) -> Result<JournalData, AppletError> {
+fn read_journal(
+    directory: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<JournalData, AppletError> {
     context.checkpoint()?;
     validate_journal_directory(directory)?;
     let path = directory.join("journal.json");
@@ -1362,7 +1362,10 @@ fn open_private_regular(path: &Path, label: &str) -> Result<File, AppletError> {
     Ok(file)
 }
 
-fn read_existing_regular(path: &Path, context: &ExecutionContext<'_>) -> Result<Vec<u8>, AppletError> {
+fn read_existing_regular(
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<u8>, AppletError> {
     read_existing_regular_with_mode(path, context).map(|(content, _)| content)
 }
 
@@ -1650,7 +1653,10 @@ fn lock_timeout(args: &Map<String, Value>) -> Result<Duration, AppletError> {
 /// Chunk between budget checks; each slice is plain CPU work with no helper thread.
 const IO_CHUNK_BYTES: usize = 64 * 1024;
 
-fn digest_with_context(bytes: &[u8], context: &ExecutionContext<'_>) -> Result<String, AppletError> {
+fn digest_with_context(
+    bytes: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<String, AppletError> {
     let mut hasher = Sha256::new();
     for chunk in bytes.chunks(IO_CHUNK_BYTES) {
         context.checkpoint()?;

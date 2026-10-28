@@ -32,13 +32,7 @@ fn args(value: Value) -> Map<String, Value> {
 }
 
 fn read_hash(dir: &Path, path: &Path) -> String {
-    let state = execute_in_cwd(
-        "fs.read",
-        &args(json!({"path": path})),
-        &[],
-        dir,
-    )
-    .unwrap();
+    let state = execute_in_cwd("fs.read", &args(json!({"path": path})), &[], dir).unwrap();
     state["content_hash"].as_str().unwrap().to_owned()
 }
 
@@ -206,10 +200,7 @@ fn contended_lock_fails_within_its_bounded_timeout() {
 
     assert_eq!(error.code, "lock_timeout");
     assert_eq!(error.kind, AppletErrorKind::Retryable);
-    assert!(
-        elapsed < BOUND,
-        "lock wait outlived its bound: {elapsed:?}"
-    );
+    assert!(elapsed < BOUND, "lock wait outlived its bound: {elapsed:?}");
     assert_eq!(fs::read_to_string(&target).unwrap(), "before");
 }
 
@@ -339,8 +330,14 @@ fn hash_reports_cancellation_mid_hash_within_bound() {
     };
     let context = ExecutionContext::new(&on_budget);
     let started = Instant::now();
-    let error = execute_with_context("hash.sha256", &args(json!({})), &input, dir.path(), &context)
-        .expect_err("cancellation must preempt a mid-hash run");
+    let error = execute_with_context(
+        "hash.sha256",
+        &args(json!({})),
+        &input,
+        dir.path(),
+        &context,
+    )
+    .expect_err("cancellation must preempt a mid-hash run");
     let elapsed = started.elapsed();
 
     assert_eq!(error.kind, AppletErrorKind::Cancelled);
@@ -371,8 +368,14 @@ fn hash_reports_deadline_mid_hash_within_bound() {
     };
     let context = ExecutionContext::new(&on_budget);
     let started = Instant::now();
-    let error = execute_with_context("hash.sha256", &args(json!({})), &input, dir.path(), &context)
-        .expect_err("an expired deadline must preempt a mid-hash run");
+    let error = execute_with_context(
+        "hash.sha256",
+        &args(json!({})),
+        &input,
+        dir.path(),
+        &context,
+    )
+    .expect_err("an expired deadline must preempt a mid-hash run");
     let elapsed = started.elapsed();
 
     assert_eq!(error.kind, AppletErrorKind::Timeout);
@@ -486,9 +489,8 @@ fn cancelled_transaction_stays_recoverable_and_leaves_no_temps() {
     let journal = dir.path().join("journal");
     if journal.join("journal.json").is_file() {
         let rollback = args(json!({"journal": &journal, "decision": "rollback"}));
-        let recovered =
-            execute_in_cwd("fs.transaction.recover", &rollback, &[], dir.path())
-                .expect("a retained journal must stay recoverable after cancellation");
+        let recovered = execute_in_cwd("fs.transaction.recover", &rollback, &[], dir.path())
+            .expect("a retained journal must stay recoverable after cancellation");
         assert_eq!(recovered["status"], "rolled_back");
         for (path, old) in &before {
             assert_eq!(fs::read_to_string(path).unwrap(), *old);

@@ -1,4 +1,6 @@
-use super::{checkpoint_work, invalid, optional_bool, required_string, AppletError, ExecutionContext};
+use super::{
+    checkpoint_work, invalid, optional_bool, required_string, AppletError, ExecutionContext,
+};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256, Sha512};
 
@@ -24,8 +26,11 @@ pub(super) fn run(
         "hash.sha512" => Ok(Value::String(hex(&digest_sha512(bytes, context)?))),
         "encode.hex" => Ok(Value::String(hex_chunked(bytes, context)?)),
         "decode.hex" => Ok(Value::String(
-            String::from_utf8(decode_hex_with_context(required_string(args, "text")?, context)?)
-                .map_err(|_| invalid("hex input is not UTF-8"))?,
+            String::from_utf8(decode_hex_with_context(
+                required_string(args, "text")?,
+                context,
+            )?)
+            .map_err(|_| invalid("hex input is not UTF-8"))?,
         )),
         "encode.base64" => {
             let mut encoded = base64(bytes, context)?;
@@ -58,9 +63,9 @@ pub(super) fn run(
                     .map_err(|_| invalid("base64 input is not UTF-8"))?,
             ))
         }
-        "encode.url" | "encode.form" => Ok(Value::String(url_encode(
-            operation, args, bytes, context,
-        )?)),
+        "encode.url" | "encode.form" => {
+            Ok(Value::String(url_encode(operation, args, bytes, context)?))
+        }
         "decode.url" => Ok(Value::String(url_decode(
             required_string(args, "text")?,
             optional_bool(args, "form", false)?,
@@ -358,7 +363,10 @@ mod tests {
             ("url_safe".into(), Value::Bool(true)),
             ("padding".into(), Value::Bool(false)),
         ]);
-        assert_eq!(run("decode.base64", &url_args, b"", &context).unwrap(), "foo");
+        assert_eq!(
+            run("decode.base64", &url_args, b"", &context).unwrap(),
+            "foo"
+        );
     }
     #[test]
     fn malformed_encodings_return_errors() {

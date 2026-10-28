@@ -297,7 +297,10 @@ fn parse_mode(args: &Map<String, Value>) -> Result<Option<u32>, AppletError> {
         .map_err(|_| invalid(format!("args.mode {text:?} is not an octal mode")))
 }
 
-fn read_current(path: &Path, context: &ExecutionContext<'_>) -> Result<Option<Current>, AppletError> {
+fn read_current(
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Option<Current>, AppletError> {
     context.checkpoint()?;
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,

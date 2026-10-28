@@ -80,6 +80,27 @@ type Registration = (
     Weak<AtomicI32>,
 );
 
+/// Ensure the process-wide console handler is installed, retrying after a
+/// failure (B3). A cached failure would brick every later run in this process;
+/// only a successful install is cached, so a transient `SetConsoleCtrlHandler`
+/// failure stays retryable while concurrent installers still install once.
+fn ensure_console_handler_installed(
+    installed: &OnceLock<()>,
+    lock: &Mutex<()>,
+    install: impl FnOnce() -> std::result::Result<(), String>,
+) -> std::result::Result<bool, String> {
+    if installed.get().is_some() {
+        return Ok(false);
+    }
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if installed.get().is_some() {
+        return Ok(false);
+    }
+    install()?;
+    let _ = installed.set(());
+    Ok(true)
+}
+
 pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
@@ -87,9 +108,10 @@ pub(crate) fn signals(
     signal_code: Arc<AtomicI32>,
 ) -> Result<()> {
     static FLAGS: OnceLock<Mutex<Vec<Registration>>> = OnceLock::new();
-    static INSTALLED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    static INSTALL_LOCK: Mutex<()> = Mutex::new(());
     FLAGS.get_or_init(|| Mutex::new(Vec::new()));
-    let installed = INSTALLED.get_or_init(|| {
+    if let Err(message) = ensure_console_handler_installed(&INSTALLED, &INSTALL_LOCK, || {
         ctrlc::set_handler(|| {
             super::record_cancel_signal(2);
             if let Some(flags) = FLAGS.get() {
@@ -129,8 +151,7 @@ pub(crate) fn signals(
             }
         })
         .map_err(|e| e.to_string())
-    });
-    if let Err(message) = installed {
+    }) {
         bail!("registering Windows console cancellation: {message}");
     }
     let mut flags = FLAGS
@@ -1023,6 +1044,31 @@ mod tests {
             more = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
         }
         ids
+    }
+
+    #[test]
+    fn failed_console_install_stays_retryable_and_caches_only_success() {
+        // B3: a cached `set_handler` failure must not brick later runs. Only a
+        // successful install is cached, so a transient failure stays retryable
+        // while a second installer after success is a no-op. Deterministic:
+        // fake installs, no console touched.
+        let installed = OnceLock::new();
+        let lock = Mutex::new(());
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let failed = ensure_console_handler_installed(&installed, &lock, || {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("transient".to_string())
+        });
+        assert!(failed.is_err());
+        assert!(installed.get().is_none());
+        let retried = ensure_console_handler_installed(&installed, &lock, || Ok(()));
+        assert_eq!(retried, Ok(true));
+        assert!(installed.get().is_some());
+        let cached = ensure_console_handler_installed(&installed, &lock, || {
+            panic!("cached success must not reinstall");
+        });
+        assert_eq!(cached, Ok(false));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

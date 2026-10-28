@@ -170,15 +170,26 @@ fn register_cancellation_signal(
     let reported = signal_hook::consts::SIGINT;
     #[cfg(not(windows))]
     let reported = signal;
+    // Drop a sequential stale record before installing the global-only handler,
+    // so a previous finite run's interrupt cannot poison this graph run's CLI
+    // fallback report (B5). Guarded by live signal owners: an overlapping
+    // signal-owning run keeps its pending report. Restored when this install
+    // fails so the fallback the graph never started with survives (B2).
+    let cleared = runtime::clear_stale_interrupt_for_graph();
     // SAFETY: the action only performs atomic stores, which are async-signal-safe.
-    unsafe {
+    let registered = unsafe {
         signal_hook::low_level::register(signal, move || {
             runtime::record_interrupt(reported);
             cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
         })
+    };
+    match registered {
+        Ok(id) => Ok(SignalRegistration(id)),
+        Err(error) => {
+            runtime::restore_stale_interrupt_after_failed_graph_install(cleared);
+            Err(error).context("registering graph cancellation handler")
+        }
     }
-    .map(SignalRegistration)
-    .context("registering graph cancellation handler")
 }
 
 fn main() {

@@ -668,13 +668,12 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     // The ConPTY host pipe ends must never be inherited by the child, so
     // they are created non-inheritable here; that attribute (not the
     // CreateProcessW flag below) is what keeps the host ends out of the
-    // child's handle table. CreateProcessW itself must still use
-    // bInheritHandles TRUE: the canonical ConPTY reference (Rich Turner,
-    // "Meet the Windows pseudo console", Aug 2018) launches the hosted
-    // client with TRUE, and the native probe showed that FALSE leaves the
-    // child with the parent's redirected cargo-test pipes
-    // (type=PIPE, console=false, WriteConsoleW failing) instead of the
-    // ConPTY-provided console handles.
+    // child's handle table. CreateProcessW itself still uses bInheritHandles
+    // TRUE, matching the canonical ConPTY reference (Rich Turner, "Meet the
+    // Windows pseudo console", Aug 2018); native CI showed the session
+    // attaches either way (conhost titles the screen with the child image)
+    // yet the child keeps the parent's redirected cargo-test pipes as stdio
+    // in both cases, so the inherit flag never controlled routing.
     let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: std::ptr::null_mut(),
@@ -761,16 +760,15 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         std::io::Error::last_os_error()
     );
 
-    // Per STARTUPINFO docs, without STARTF_USESTDHANDLES the hStd* members
-    // are ignored and stdio defaults to the console window's buffer, and
-    // per the handle-inheritance docs std handles are inherited only when
-    // STARTF_USESTDHANDLES is set. So with dwFlags 0 the parent's
-    // redirected cargo-test pipes can never become the child's std
-    // handles, even though bInheritHandles below is TRUE. For a ConPTY
-    // child that buffer is the pseudo-console screen, so attached output
-    // (including the console U+FFFD replacement) reaches the captured
-    // screen instead of leaking to the test runner. Explicit zeros lock
-    // that contract in.
+    // Native CI refuted the "defaults to the console buffer" assumption:
+    // without STARTF_USESTDHANDLES the parent's redirected cargo-test pipes
+    // propagate as the ConPTY child's stdio (GetStdHandle type=PIPE,
+    // console=false, WriteConsoleW failing, WriteFile marker landing in the
+    // cargo output) even though the session is attached. Only explicit
+    // console handles route to the screen, so the direct child below is the
+    // fixture bootstrap, which re-spawns the real target with CONIN$/CONOUT$
+    // stdio plus a HANDLE_LIST containing exactly those three console
+    // handles. The zeros here just keep this hop free of inherited stdio.
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
@@ -782,7 +780,15 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         },
         lpAttributeList: attr_list,
     };
-    let text = std::iter::once(exe)
+    // The direct child is the fixture bootstrap, not the target: the
+    // bootstrap is already inside the pseudo-console session, so it can open
+    // CONIN$/CONOUT$ and re-spawn the real target with genuine console stdio
+    // (STARTF_USESTDHANDLES plus an exact three-handle HANDLE_LIST, so no
+    // other handle leaks across). It exits with the target's code, keeping
+    // the status contract below transparent.
+    let bootstrap = fixture();
+    let text = std::iter::once(bootstrap.as_str())
+        .chain(["conpty-bootstrap", exe])
         .chain(args.iter().copied())
         .map(quote_conpty_arg)
         .collect::<Vec<_>>()
@@ -791,11 +797,10 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     let mut info = PROCESS_INFORMATION::default();
     // SAFETY: the command buffer is a live nul-terminated mutable UTF-16
     // buffer; startup carries the pseudo-console attribute; environment and
-    // directory are inherited. bInheritHandles is TRUE so the child
-    // receives the ConPTY-provided console handles (the canonical ConPTY
-    // reference launches its client with TRUE); the host pipe ends stay
-    // host-only because they were created non-inheritable, and std handles
-    // are not inherited because dwFlags omits STARTF_USESTDHANDLES.
+    // directory are inherited. bInheritHandles is TRUE per the canonical
+    // ConPTY reference; the host pipe ends stay host-only because they were
+    // created non-inheritable, and the target's own stdio routing is
+    // established by the bootstrap's HANDLE_LIST hop, not this flag.
     let created = unsafe {
         CreateProcessW(
             std::ptr::null(),
@@ -989,9 +994,10 @@ fn conpty_child_stdio_is_a_console_and_write_console_reaches_screen() {
         screen.len(),
         text
     );
-    // The in-console report must show the child stdout as a console handle,
-    // not an inherited cargo-test pipe: this pins the bInheritHandles TRUE
-    // contract after the native probe measured type=PIPE console=false.
+    // The in-console report must show the target stdout as a console handle,
+    // not an inherited cargo-test pipe: this pins the bootstrap's explicit
+    // console-handle contract after the native probe measured type=PIPE
+    // console=false on the direct child.
     let report = probe_report_lines(&screen);
     assert!(
         report

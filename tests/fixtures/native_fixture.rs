@@ -94,6 +94,321 @@ fn conpty_probe_report() {
     println!("PROBE-REPORT write_file ok={file_ok}");
 }
 
+/// Second-stage ConPTY launcher: this process is already attached to the
+/// pseudo-console, but its own stdio are still the parent's pipes (without
+/// STARTF_USESTDHANDLES the parent std handles propagate into the ConPTY
+/// child instead of defaulting to the console buffer). Re-spawn the real
+/// target with genuine console standard handles: open CONIN$/CONOUT$ on the
+/// attached console, spawn suspended with STARTF_USESTDHANDLES plus a
+/// HANDLE_LIST containing exactly those three console handles so no other
+/// handle leaks into the target, hold it in a KILL_ON_JOB_CLOSE-only job so
+/// a harness timeout can never orphan it, then wait and exit with the
+/// target's code. Silent on success; every failure prints to the inherited
+/// cargo stderr and exits nonzero.
+#[cfg(windows)]
+fn conpty_bootstrap(args: &[String]) -> ! {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::*,
+        Storage::FileSystem::*,
+        System::{
+            JobObjects::*,
+            Threading::{
+                CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+                GetExitCodeProcess, InitializeProcThreadAttributeList, ResumeThread,
+                TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
+                CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+                LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+                STARTUPINFOW,
+            },
+        },
+    };
+    let fail = |message: &str, code: i32| -> ! {
+        eprintln!("conpty-bootstrap: {message}");
+        std::process::exit(code);
+    };
+    let Some(target) = args.first() else {
+        fail("usage: conpty-bootstrap <exe> [args...]", 64);
+    };
+    // CONIN$/CONOUT$ resolve to this process's attached console, which is the
+    // pseudo-console session. Opening them is also the attach proof: failure
+    // here means the session never attached, and failing loudly beats running
+    // the target on cargo pipes while the harness waits for screen bytes.
+    let wide = |name: &str| {
+        name.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let conout_name = wide("CONOUT$");
+    let conin_name = wide("CONIN$");
+    // SAFETY: the names are live NUL-terminated UTF-16 locals; no security
+    // attributes, no template. The returned handles are checked before use.
+    let conout = unsafe {
+        CreateFileW(
+            conout_name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    // SAFETY: same contract as the CONOUT$ open above.
+    let conin = unsafe {
+        CreateFileW(
+            conin_name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if conout.is_null()
+        || conout == INVALID_HANDLE_VALUE
+        || conin.is_null()
+        || conin == INVALID_HANDLE_VALUE
+    {
+        fail(
+            "attached console unavailable (CONIN$/CONOUT$ did not open)",
+            3,
+        );
+    }
+    // The CreateFileW handles are non-inheritable; duplicate them inheritable
+    // for the target. OwnedHandle takes each duplicate exactly once below.
+    let mut conout_dup: HANDLE = std::ptr::null_mut();
+    let mut conin_dup: HANDLE = std::ptr::null_mut();
+    // SAFETY: the current-process pseudo-handle is valid for duplication, the
+    // source handles are live console handles from above, and each out-pointer
+    // is a live local. DUPLICATE_SAME_ACCESS keeps the console access rights.
+    let duplicated = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            conout,
+            GetCurrentProcess(),
+            &mut conout_dup,
+            0,
+            TRUE,
+            DUPLICATE_SAME_ACCESS,
+        ) != FALSE
+            && DuplicateHandle(
+                GetCurrentProcess(),
+                conin,
+                GetCurrentProcess(),
+                &mut conin_dup,
+                0,
+                TRUE,
+                DUPLICATE_SAME_ACCESS,
+            ) != FALSE
+    };
+    if !duplicated {
+        fail("console handle duplication failed", 4);
+    }
+    // SAFETY: the duplicates are valid and uniquely owned from here on.
+    let (conout_dup, conin_dup) = unsafe {
+        (
+            OwnedHandle::from_raw_handle(conout_dup),
+            OwnedHandle::from_raw_handle(conin_dup),
+        )
+    };
+    // A KILL_ON_JOB_CLOSE-only job: no other limits, so the runtime's own
+    // inner jobs (every native spawn nests the same way the handoff path
+    // already does) keep working, while a harness timeout that terminates
+    // this bootstrap still ends the target instead of orphaning it.
+    // SAFETY: both arguments null ask for default security and an unnamed
+    // job; the handle is checked before use.
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job.is_null() {
+        fail("bootstrap job creation failed", 4);
+    }
+    // SAFETY: the job handle is live and uniquely owned here.
+    let job = unsafe { OwnedHandle::from_raw_handle(job) };
+    // SAFETY: JOBOBJECT_EXTENDED_LIMIT_INFORMATION is plain integers, so the
+    // zeroed value is valid; only LimitFlags is set, which means no other
+    // limit. The info class matches the struct, and address plus size_of_val
+    // delimit exactly one struct for the kernel.
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: the job handle is live; the struct layout matches the class.
+    if unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle() as HANDLE,
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32,
+        )
+    } == FALSE
+    {
+        fail("bootstrap job configuration failed", 4);
+    }
+    // Exactly the three console handles: the target inherits nothing else, so
+    // the host pipe ends and the cargo pipes stay out of its handle table.
+    let inherit = [
+        conout_dup.as_raw_handle() as HANDLE,
+        conout_dup.as_raw_handle() as HANDLE,
+        conin_dup.as_raw_handle() as HANDLE,
+    ];
+    let mut attr_size: usize = 0;
+    // SAFETY: a null list with a live size out-pointer is the documented size
+    // query; failure with ERROR_INSUFFICIENT_BUFFER is expected here.
+    unsafe {
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    if attr_size == 0 {
+        fail("bootstrap attribute list size query failed", 4);
+    }
+    let mut attr_storage = vec![0u8; attr_size];
+    let attr_list = attr_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+    // SAFETY: the storage is exactly the queried size and outlives process
+    // creation; one attribute slot is requested.
+    if unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == FALSE {
+        fail("bootstrap attribute list init failed", 4);
+    }
+    // SAFETY: the list is initialized; the array holds three live inheritable
+    // console handles that outlive the spawn (OwnedHandles above).
+    if unsafe {
+        UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            inherit.as_ptr().cast(),
+            (inherit.len() * std::mem::size_of::<HANDLE>()) as usize,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    } == FALSE
+    {
+        // SAFETY: the list was initialized above and is deleted exactly once.
+        unsafe {
+            DeleteProcThreadAttributeList(attr_list);
+        }
+        fail("bootstrap handle-list attribute failed", 4);
+    }
+    let startup = STARTUPINFOEXW {
+        StartupInfo: STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdInput: conin_dup.as_raw_handle() as HANDLE,
+            hStdOutput: conout_dup.as_raw_handle() as HANDLE,
+            hStdError: conout_dup.as_raw_handle() as HANDLE,
+            ..Default::default()
+        },
+        lpAttributeList: attr_list,
+    };
+    let text = std::iter::once(target)
+        .chain(args[1..].iter())
+        .map(|arg| quote_bootstrap_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut command: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut info = PROCESS_INFORMATION::default();
+    // SAFETY: the command buffer is a live NUL-terminated mutable UTF-16
+    // buffer; startup carries explicit console stdio plus the exact handle
+    // list; environment and directory are inherited. The grandchild shares
+    // this process's console by ordinary inheritance, so no pseudo-console
+    // attribute is needed on this hop.
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            TRUE,
+            CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup.StartupInfo as *const STARTUPINFOW,
+            &mut info,
+        )
+    };
+    // SAFETY: the attribute list was initialized above and is deleted exactly
+    // once here on every path past initialization.
+    unsafe {
+        DeleteProcThreadAttributeList(attr_list);
+    }
+    drop(attr_storage);
+    if created == FALSE {
+        fail("bootstrap target launch failed", 4);
+    }
+    // SAFETY: CreateProcessW succeeded, so both handles are valid and uniquely
+    // owned here.
+    let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess) };
+    // SAFETY: same successful launch owns the suspended primary thread; it is
+    // resumed into the job below, then the handle closes at once.
+    let thread = unsafe { OwnedHandle::from_raw_handle(info.hThread) };
+    // No target instruction runs until it belongs to the bootstrap job.
+    // SAFETY: the job and process handles are live for this call, and the
+    // target is still suspended, so none of its code has run yet.
+    if unsafe {
+        AssignProcessToJobObject(
+            job.as_raw_handle() as HANDLE,
+            process.as_raw_handle() as HANDLE,
+        )
+    } == FALSE
+    {
+        // SAFETY: the process handle is live; terminating a suspended target
+        // whose job assignment failed keeps the session bounded.
+        unsafe {
+            TerminateProcess(process.as_raw_handle() as HANDLE, 1);
+        }
+        fail("bootstrap job assignment failed", 4);
+    }
+    // SAFETY: the thread handle is the suspended primary thread from the
+    // launch above and stays open for this call.
+    if unsafe { ResumeThread(thread.as_raw_handle() as HANDLE) } == u32::MAX {
+        // SAFETY: the process handle is live; see the assignment-failure path.
+        unsafe {
+            TerminateProcess(process.as_raw_handle() as HANDLE, 1);
+        }
+        fail("bootstrap thread resume failed", 4);
+    }
+    drop(thread);
+    // The harness bounds this wait from the outside and terminates this
+    // process on timeout, which closes the job and ends the target; INFINITE
+    // here therefore cannot deadlock teardown.
+    // SAFETY: the process handle is live and owned; the wait ends when the
+    // target exits or this process is terminated.
+    let wait = unsafe { WaitForSingleObject(process.as_raw_handle() as HANDLE, INFINITE) };
+    let mut status = 1u32;
+    // SAFETY: the process handle and the exit-code pointer are live; both
+    // results are checked before the code propagates below.
+    let queried =
+        unsafe { GetExitCodeProcess(process.as_raw_handle() as HANDLE, &mut status) } != FALSE;
+    drop(process);
+    if wait != WAIT_OBJECT_0 || !queried {
+        fail("bootstrap target wait failed", 4);
+    }
+    std::process::exit(status as i32);
+}
+
+/// Command-line quoting with the MSVCRT rules, so the bootstrap target sees
+/// the exact argv the harness intended.
+#[cfg(windows)]
+fn quote_bootstrap_arg(arg: &str) -> String {
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut slashes = 0usize;
+    for ch in arg.chars() {
+        if ch == '\\' {
+            slashes += 1;
+        } else {
+            if ch == '"' {
+                quoted.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
+            } else {
+                quoted.extend(std::iter::repeat_n('\\', slashes));
+            }
+            slashes = 0;
+            quoted.push(ch);
+        }
+    }
+    quoted.extend(std::iter::repeat_n('\\', slashes * 2));
+    quoted.push('"');
+    quoted
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str).unwrap_or("") {
@@ -121,6 +436,17 @@ fn main() {
             conpty_probe_report();
             #[cfg(not(windows))]
             println!("PROBE-REPORT windows-only");
+        }
+        "conpty-bootstrap" => {
+            // Second-stage ConPTY launcher: re-spawns the real target with
+            // genuine console stdio; see conpty_bootstrap.
+            #[cfg(windows)]
+            conpty_bootstrap(&args[1..]);
+            #[cfg(not(windows))]
+            {
+                eprintln!("conpty-bootstrap is Windows-only");
+                std::process::exit(64);
+            }
         }
         "repeat-byte" => {
             let mut remaining: usize = args[1].parse().unwrap();

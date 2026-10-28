@@ -1606,7 +1606,7 @@ pub(crate) fn verify_trusted_fd(
     {
         // Handle-side owner/ACE re-check: an owner or DACL swap between the
         // path check and the open must fail closed here.
-        check_trusted_windows_handle(file, path, label)?;
+        check_trusted_windows_handle(file, path, label, false)?;
     }
     Ok(())
 }
@@ -1758,6 +1758,48 @@ fn has_posix_extended_acl_fd(file: &File) -> bool {
     }
 }
 
+/// Windows ACE write masks, shared by the leaf and ancestor halves of the
+/// trusted-input gate and by pure-logic tests that run on every platform.
+///
+/// Bit meanings follow the Windows file access mask: `0x2` is
+/// FILE_WRITE_DATA (`FILE_ADD_FILE` on a directory), `0x4` is
+/// FILE_APPEND_DATA (`FILE_ADD_SUBDIRECTORY` on a directory), `0x10` is
+/// FILE_WRITE_EA, `0x40` is FILE_DELETE_CHILD, `0x100` is
+/// FILE_WRITE_ATTRIBUTES, `0x10000` is DELETE, `0x40000` is WRITE_DAC,
+/// `0x80000` is WRITE_OWNER, `0x40000000` is GENERIC_WRITE and `0x10000000`
+/// is GENERIC_ALL. `0x8` (FILE_READ_EA) is a read-only right and is granted
+/// by neither mask.
+///
+/// A leaf directory holding a trusted input must not grant any write-level
+/// right to another principal: creating files or subdirectories inside it
+/// already compromises the trusted content. An ancestor directory is only
+/// dangerous when another principal can rename, delete or replace the child
+/// entry on the canonical path (or take over the ancestor's DACL to gain
+/// that power). Create-file / create-subdirectory / write-EA /
+/// write-attributes rights on an ancestor do not confer that replacement
+/// power — e.g. the standard `C:\Users` grant letting Authenticated Users
+/// create profile directories cannot rename, delete or replace an existing
+/// `C:\Users\<name>` entry — so the ancestor mask excludes them.
+#[allow(dead_code)]
+pub(crate) const WINDOWS_LEAF_WRITE_MASK: u32 =
+    0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+#[allow(dead_code)]
+pub(crate) const WINDOWS_ANCESTOR_REPLACE_MASK: u32 =
+    0x40 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+
+/// Pure ACE-mask evaluation behind the Windows gate: whether an allow ACE
+/// with `mask` for an untrusted principal is disqualifying. Ancestors use
+/// the narrower replacement mask; leaves use the full write mask. Kept free
+/// of Win32 calls so unit tests run on every platform.
+#[allow(dead_code)]
+pub(crate) fn windows_ace_mask_is_disqualifying(mask: u32, ancestor: bool) -> bool {
+    if ancestor {
+        mask & WINDOWS_ANCESTOR_REPLACE_MASK != 0
+    } else {
+        mask & WINDOWS_LEAF_WRITE_MASK != 0
+    }
+}
+
 /// Windows writability gate for trusted inputs. The path must be owned by the
 /// current user, SYSTEM or Administrators, and no other principal may hold an
 /// allow ACE granting write-level access. Read grants to others are allowed
@@ -1777,13 +1819,19 @@ pub(crate) fn verify_trusted_windows_acl(path: &Path, label: &str) -> Result<()>
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(path)
         .with_context(|| format!("reading {label} Windows ACL {}", path.display()))?;
-    check_trusted_windows_handle(&handle, path, label)
+    check_trusted_windows_handle(&handle, path, label, false)
 }
 
 /// Ancestor half of the Windows gate: every ancestor directory of the
-/// canonical path must pass the same owner/no-foreign-write check as the
-/// leaf, since a writable ancestor lets an attacker rename or replace the
-/// verified leaf. Reparse-point ancestors are refused.
+/// canonical path must pass the owner check plus the narrower
+/// replacement-power check (FILE_DELETE_CHILD, DELETE, WRITE_DAC,
+/// WRITE_OWNER and the generic umbrellas), since only those rights let
+/// another principal rename or replace the verified leaf. Create-only
+/// rights (add-file, add-subdirectory, write-EA, write-attributes) and
+/// read-only rights do not confer replacement power, so standard ancestors
+/// such as `C:\Users` — which grants Authenticated Users only
+/// create-subdirectory rights for profile creation — pass. Reparse-point
+/// ancestors are refused.
 #[cfg(windows)]
 pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
@@ -1815,7 +1863,7 @@ pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Resu
             .with_context(|| {
                 format!("reading {label} ancestor Windows ACL {}", current.display())
             })?;
-        check_trusted_windows_handle(&handle, current, label)?;
+        check_trusted_windows_handle(&handle, current, label, true)?;
         if current.parent().is_none() {
             break;
         }
@@ -1823,11 +1871,19 @@ pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Resu
     Ok(())
 }
 
-/// Shared DACL inspection behind [`verify_trusted_windows_acl`]: owner must
-/// be the current user, SYSTEM or Administrators, and no allow ACE may grant
-/// write-level rights to anyone else.
+/// Shared DACL inspection behind [`verify_trusted_windows_acl`] and
+/// [`verify_trusted_windows_ancestors`]: owner must be the current user,
+/// SYSTEM or Administrators, and no allow ACE for anyone else may grant the
+/// rights selected by `for_ancestor` (see [`windows_ace_mask_is_disqualifying`]:
+/// full write-level rights for the leaf itself, replacement-power rights
+/// only for ancestors).
 #[cfg(windows)]
-fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Result<()> {
+fn check_trusted_windows_handle(
+    handle: &File,
+    path: &Path,
+    label: &str,
+    for_ancestor: bool,
+) -> Result<()> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -1843,22 +1899,6 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
     const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
     const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
     const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
-    // Write-level rights that would let another principal replace content,
-    // delete the path itself, or rename entries: data writes, extended-attribute
-    // writes, child add/delete, delete, DACL/owner takeover, and the generic
-    // umbrellas covering them. `0x10` is FILE_WRITE_EA and `0x10000` is
-    // DELETE; both let a foreign principal replace or remove a trusted input.
-    const WRITE_MASK: u32 = 0x2
-        | 0x4
-        | 0x8
-        | 0x10
-        | 0x40
-        | 0x100
-        | 0x10000
-        | 0x40000
-        | 0x80000
-        | 0x40000000
-        | 0x10000000;
 
     let mut owner = std::ptr::null_mut();
     let mut dacl = std::ptr::null_mut();
@@ -2041,7 +2081,7 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
             } else {
                 continue;
             };
-            if mask & WRITE_MASK == 0 {
+            if !windows_ace_mask_is_disqualifying(mask, for_ancestor) {
                 continue;
             }
             // SAFETY: the ACE SID lies inside the validated ACL; the compared
@@ -2504,6 +2544,53 @@ mod tests {
             open_private_file(&administrators).is_ok(),
             "Administrators and SYSTEM ACEs are trusted exceptions"
         );
+    }
+
+    #[test]
+    fn windows_ancestor_mask_allows_create_only_rights_but_refuses_replacement() {
+        // `C:\Users` grants Authenticated Users create-subdirectory rights so
+        // profiles can be created. That right (and its create-only siblings)
+        // cannot rename, delete or replace an existing child directory, so the
+        // ancestor gate must allow it while the leaf gate still refuses it.
+        for mask in [0x2u32, 0x4, 0x10, 0x100] {
+            assert!(
+                !windows_ace_mask_is_disqualifying(mask, true),
+                "ancestor must allow create-only mask {mask:#x}"
+            );
+            assert!(
+                windows_ace_mask_is_disqualifying(mask, false),
+                "leaf must still refuse create-only mask {mask:#x}"
+            );
+        }
+        // The combined create-only shape plus read-only rights also pass as
+        // an ancestor: none of these bits lets another principal replace an
+        // existing child entry.
+        assert!(!windows_ace_mask_is_disqualifying(
+            0x2 | 0x4 | 0x10 | 0x100,
+            true
+        ));
+        for mask in [0x0u32, 0x1, 0x8, 0x20, 0x80] {
+            assert!(
+                !windows_ace_mask_is_disqualifying(mask, true),
+                "ancestor must allow read-only mask {mask:#x}"
+            );
+            assert!(
+                !windows_ace_mask_is_disqualifying(mask, false),
+                "leaf must allow read-only mask {mask:#x}"
+            );
+        }
+        // Fail-closed: any replacement-power right stays disqualifying on
+        // both the ancestor and the leaf.
+        for mask in [0x40u32, 0x10000, 0x40000, 0x80000, 0x40000000, 0x10000000] {
+            assert!(
+                windows_ace_mask_is_disqualifying(mask, true),
+                "ancestor must refuse replacement mask {mask:#x}"
+            );
+            assert!(
+                windows_ace_mask_is_disqualifying(mask, false),
+                "leaf must refuse replacement mask {mask:#x}"
+            );
+        }
     }
 
     #[test]

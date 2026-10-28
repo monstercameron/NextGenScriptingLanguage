@@ -267,6 +267,8 @@ fn execute_group_with_sink(
     let bounded = Signals {
         cancelled: signals.cancelled.clone(),
         drain: Arc::clone(&signals.drain),
+        cleanup_cancel: Arc::clone(&signals.cleanup_cancel),
+        cancel_signal: Arc::clone(&signals.cancel_signal),
         drain_stop: None,
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
@@ -321,6 +323,19 @@ fn execute_group_with_sink(
                 &sensitivities,
             )?;
         }
+        // The `execute-model` child reads `fixture`/`env_file` with no registry
+        // access, so authorize the resolved values here, against the effective
+        // working directory, before any child spawns.
+        for (call, manifest, _) in calls {
+            crate::capabilities::authorize_model_file_params(
+                registry,
+                manifest,
+                &call.parameters,
+                bindings,
+                cwd,
+                false,
+            )?;
+        }
         for (index, (_, manifest, line)) in calls.iter().enumerate() {
             if index + 1 != calls.len()
                 && manifest.stdio().is_some_and(|stdio| {
@@ -369,6 +384,9 @@ fn execute_group_with_sink(
                 "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
             );
         }
+        // Set when a terminal-stage child's stdout is captured for the lossy
+        // console relay below instead of inherited from a console.
+        let mut console_relay = false;
         for (index, (call, manifest, line)) in calls.iter().enumerate() {
             check_native_abort(calls, &children, &observed_stages, signals)?;
             let binary;
@@ -423,7 +441,24 @@ fn execute_group_with_sink(
                 }
             };
             let resolved_io = resolved_call_stdio(call, manifest, signals);
-            let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
+            let mut stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
+            // A child that inherits a console writes through its own runtime,
+            // which can reject non-UTF-8 bytes before this process sees them
+            // (the ConPTY failure for #532: Rust stdio panics on 0xFF). Capture
+            // a terminal-stage child instead when our stdout is a console and
+            // relay its bytes below through the lossy console writer, which
+            // substitutes U+FFFD. Redirected stdout is not a console, so it
+            // keeps direct inheritance and its exact bytes; an interactive
+            // (terminal-requested) child still owns the console. A redirected
+            // stream attached by take_redirected_stdio below overrides this
+            // capture with its file handle, preserving exact bytes there too.
+            if stdout_disposition == invocation_io::StdioDisposition::Inherit
+                && !terminal::requested()
+                && stdio::stdout_is_console()
+            {
+                stdout_disposition = invocation_io::StdioDisposition::Capture;
+                console_relay = true;
+            }
             command
                 .current_dir(cwd)
                 .stdout(invocation_io::process_stdio(stdout_disposition))
@@ -559,6 +594,8 @@ fn execute_group_with_sink(
             )?;
         }
         let mut stdout = previous.take();
+        // Trailing bytes of a UTF-8 character split across relay chunks.
+        let mut relay_pending: Vec<u8> = Vec::new();
         let mut output = Vec::new();
         let mut chunk = [0u8; 32768];
         let mut eof = stdout.is_none();
@@ -634,6 +671,26 @@ fn execute_group_with_sink(
                                         ),
                                     });
                                 }
+                            } else if console_relay {
+                                // Relay as bytes arrive instead of retaining
+                                // them: displayed bytes are not captured
+                                // output, so the capture limit does not apply
+                                // and the returned bytes stay empty, exactly
+                                // as when the child inherited the console. The
+                                // console writer replaces invalid sequences
+                                // with U+FFFD, so this cannot fail the run on
+                                // non-UTF-8 output.
+                                let ready =
+                                    stdio::console_relay_ready(&mut relay_pending, &chunk[..count]);
+                                if !ready.is_empty() {
+                                    stdio::write_with_deadline(
+                                        1,
+                                        &ready,
+                                        &signals.cancelled,
+                                        signals.deadline,
+                                    )
+                                    .context("writing terminal")?;
+                                }
                             } else {
                                 let remaining =
                                     options.max_output_bytes.saturating_sub(output.len());
@@ -673,6 +730,13 @@ fn execute_group_with_sink(
             }
             if eof && children.0.iter().all(|c| c.reaped) {
                 children.finish_bridges()?;
+                if console_relay && !relay_pending.is_empty() {
+                    // A final incomplete sequence is displayed as U+FFFD by
+                    // the lossy console writer, matching a truncated write.
+                    let ready = std::mem::take(&mut relay_pending);
+                    stdio::write_with_deadline(1, &ready, &signals.cancelled, signals.deadline)
+                        .context("writing terminal")?;
+                }
                 if let Some(sink) = sink.as_deref_mut() {
                     sink.finish(signals)?;
                 }

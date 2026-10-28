@@ -163,6 +163,10 @@ path = "tests/fixtures/native_fixture.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "checkpoint_resolve_elements"
+required-features = ["test-fixtures", "agent-advisory"]
+
+[[test]]
 name = "execution_results"
 required-features = ["test-fixtures", "remote"]
 

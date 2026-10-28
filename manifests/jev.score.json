@@ -1,6 +1,6 @@
 {
   "name": "jev.score",
-  "description": "Scores the question against the ordered levels and returns the score, confidence, and separate threshold-based accepted flag.",
+  "description": "Scores the question against the ordered levels and returns the score, confidence, and separate threshold-based accepted flag. The env_file and fixture options read files, and live requests connect to the model endpoint.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,
@@ -40,10 +40,10 @@
       "maximum": 300000
     },
     "env_file": {
-      "type": "string"
+      "type": "path"
     },
     "fixture": {
-      "type": "string"
+      "type": "path"
     }
   },
   "arguments": [
@@ -200,6 +200,15 @@
         "confidence_percent",
         "accepted"
       ]
-    }
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "network.connect"
+    ],
+    "effects": [
+      "filesystem.read",
+      "network.connect"
+    ]
   }
 }

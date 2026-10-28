@@ -5,6 +5,7 @@
 //! kills an in-flight request with the rest of its process group.
 
 use crate::model_schema::{parse_unique_json, validate_schema_definition, DuplicateJsonKey};
+use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
@@ -13,7 +14,8 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use url::{Host, Url};
 
 const DEFAULT_MAX_BYTES: usize = 1024 * 1024;
@@ -220,6 +222,11 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
     let endpoint = endpoint_for(&options).map_err(|_| failure(FailureClass::Configuration))?;
     validate_endpoint(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
     let parsed = Url::parse(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    // Hermetic fixture runs never open a socket, so loopback endpoints stay
+    // usable there without the live-loopback grant below.
+    let allow_loopback = options.fixture.is_some() || model_loopback_allowed();
+    check_endpoint_ssrf(&parsed, allow_loopback)
+        .map_err(|_| failure(FailureClass::Configuration))?;
     let transport = if options.fixture.is_some() {
         "fixture"
     } else if parsed.scheme() == "https" {
@@ -299,7 +306,8 @@ Options: --provider jev|openai --model NAME --question TEXT --instruction TEXT\n
 Jev defaults to jev-latest. OpenAI requires --model. Fixture mode never reads\n\
 credentials or contacts a network service. OpenAI output is capped at 512\n\
 tokens unless --max-tokens overrides it. Values beginning with -- cannot be\n\
-used as labels or levels. Set EXECUTE_MODELS_OFFLINE to reject live requests.\n\
+used as labels or levels. Set EXECUTE_MODELS_OFFLINE to reject live requests.
+Set EXECUTE_MODEL_ALLOW_LOOPBACK to allow live loopback endpoints.\n\
 Default provider keys go only to the provider default host. A custom endpoint\n\
 gets a key only from --api-key-env NAME; otherwise it gets none. No automatic\n\
 retries are\n\
@@ -960,14 +968,133 @@ fn provider_request(options: &Options, state: Option<&Value>) -> Result<Value> {
     }
 }
 
-fn read_fixture(path: &str, expected: &Value, limit: usize) -> Result<Value> {
-    let mut file = File::open(path).context("opening fixture")?;
+/// Open a model fixture without following a link in its final component and
+/// without blocking on a FIFO on Unix.
+///
+/// The parent authorizes the path against the applet grant before spawn, but
+/// that check canonicalizes (follows) symlinks at check time while this open
+/// pins only the final component. An ancestor directory swapped between
+/// authorization and open is NOT pinned here: the opened file can differ from
+/// the authorized one. Parent authorization is therefore advisory against a
+/// concurrent writer in an ancestor; the child pin only guarantees the final
+/// component was not a link at open time. See the platform-limitation notes in
+/// `docs/models.md`: do not treat the parent check as a guarantee on paths a
+/// concurrent actor can rename above.
+///
+/// This mirrors the record no-follow reads: on Unix a FIFO opens (O_NONBLOCK)
+/// but the regular-file check rejects it without waiting for a writer.
+/// Fixture input intentionally has no ownership check: it is replay data, not
+/// a credential. Credential files go through `open_private_file` below, which
+/// enforces owner and private-mode checks.
+#[cfg(unix)]
+fn open_regular_no_follow(path: &str) -> Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .context("opening model file")?;
+    if !file
+        .metadata()
+        .context("reading model file metadata")?
+        .is_file()
+    {
+        bail!("model file is not a regular file");
+    }
+    Ok(file)
+}
+
+/// Windows fixture open: deny reparse points at open time, like
+/// `open_private_file`. `symlink_metadata` alone would leave a
+/// check-to-open window for the final component; `FILE_FLAG_OPEN_REPARSE_POINT`
+/// makes the open itself refuse to traverse a link, and the metadata checks
+/// below confirm the opened handle is a non-reparse regular file. Ancestor
+/// swaps above the final component remain unpinned on every platform.
+#[cfg(windows)]
+fn open_regular_no_follow(path: &str) -> Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .context("opening model file")?;
+    let metadata = file.metadata().context("reading model file metadata")?;
+    if !metadata.is_file() || crate::platform::windows::is_reparse(&metadata) {
+        bail!("model file is not a regular file");
+    }
+    Ok(file)
+}
+
+/// Non-Unix, non-Windows fallback: no open flag can pin the final component,
+/// so a link check before open leaves a check-to-open window even for the
+/// final component. Documented as a platform limitation; fixtures on such
+/// platforms rely on the parent grant check and the regular-file check only.
+#[cfg(not(any(unix, windows)))]
+fn open_regular_no_follow(path: &str) -> Result<File> {
+    if std::fs::symlink_metadata(path)
+        .context("opening model file")?
+        .file_type()
+        .is_symlink()
+    {
+        bail!("model file is not a regular file");
+    }
+    let file = File::open(path).context("opening model file")?;
+    if !file
+        .metadata()
+        .context("reading model file metadata")?
+        .is_file()
+    {
+        bail!("model file is not a regular file");
+    }
+    Ok(file)
+}
+
+/// Bounded read with a wall-clock deadline, matching the record/remote
+/// size-cap pattern plus a slow-drip bound. Regular files complete at once;
+/// a FUSE or special file that drips slowly as a regular file would otherwise
+/// rely only on the outer command timeout. Would-block is a fail-closed
+/// error, never a retry, so a FIFO that slips past the type check cannot spin.
+fn read_bounded(file: &mut File, limit: usize, what: &'static str) -> Result<Vec<u8>> {
+    const CHUNK: usize = 8192;
+    // Defense in depth: the outer command timeout remains the ultimate bound.
+    // This 30-second read budget only keeps a dripping fixture/env file from
+    // stalling the child past its own argv lifetime.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take((limit.saturating_mul(4).saturating_add(4096)) as u64)
-        .read_to_end(&mut bytes)
-        .context("reading fixture")?;
-    if bytes.len() > limit.saturating_mul(4).saturating_add(4096) {
+    let mut chunk = vec![0u8; CHUNK];
+    loop {
+        if Instant::now() > deadline {
+            bail!("{what} read timed out");
+        }
+        if bytes.len() > limit {
+            break;
+        }
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                bytes.extend_from_slice(&chunk[..n]);
+                if bytes.len() > limit {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                bail!("{what} would block");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error).context(what),
+        }
+    }
+    if bytes.len() > limit {
+        bail!("{what} exceeds size limit");
+    }
+    Ok(bytes)
+}
+
+fn read_fixture(path: &str, expected: &Value, limit: usize) -> Result<Value> {
+    let mut file = open_regular_no_follow(path)?;
+    let cap = limit.saturating_mul(4).saturating_add(4096);
+    let bytes = read_bounded(&mut file, cap, "reading fixture").context("reading fixture")?;
+    if bytes.len() > cap {
         bail!("fixture exceeds size limit");
     }
     let fixture = parse_unique_json(&bytes).context("parsing fixture")?;
@@ -1040,6 +1167,80 @@ fn is_loopback(host: Host<&str>) -> bool {
         Host::Ipv4(address) => address.is_loopback(),
         Host::Ipv6(address) => address.is_loopback(),
         Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+    }
+}
+
+/// Explicit opt-in for live loopback model endpoints.
+///
+/// A script-controlled `--endpoint` can otherwise reach any unauthenticated
+/// local HTTP/HTTPS service, so production loopback requests require
+/// `EXECUTE_MODEL_ALLOW_LOOPBACK` in the helper's environment (presence
+/// enables it, mirroring `EXECUTE_MODELS_OFFLINE`). Filtered child
+/// environments must list the variable explicitly. Hermetic `--fixture` runs
+/// never open a socket and do not need it.
+///
+/// Model endpoints have no `network_origins` grant yet: dependency #375 keeps
+/// them outside `network_origins`, which `Command`-backend applets cannot
+/// declare, so this variable is the interim explicit grant until that policy
+/// work lands.
+fn model_loopback_allowed() -> bool {
+    std::env::var_os("EXECUTE_MODEL_ALLOW_LOOPBACK").is_some()
+}
+
+/// Refuse non-public endpoint hosts by name, before any credential is read
+/// or socket opened. Hostnames that look benign pass here and are pinned
+/// again by the resolver in [`post_json`], which stops DNS rebinding.
+///
+/// `allow_loopback` is the explicit grant from [`model_loopback_allowed`]
+/// (or hermetic fixture mode, which never reaches the network): the HTTP form
+/// is already restricted to loopback by [`validate_endpoint`], and HTTPS
+/// loopback covers local TLS servers. Fixture mode with a non-public,
+/// non-loopback endpoint is still refused.
+fn check_endpoint_ssrf(parsed: &Url, allow_loopback: bool) -> Result<()> {
+    let host = match parsed.host() {
+        Some(Host::Ipv4(address)) => address.to_string(),
+        Some(Host::Ipv6(address)) => address.to_string(),
+        Some(Host::Domain(name)) => name.to_string(),
+        None => bail!("endpoint must name a host"),
+    };
+    let origin = model_origin(parsed);
+    ssrf::check_endpoint_host(&host, &origin, allow_loopback, &Default::default())
+        .map_err(|denied| anyhow!("{denied}"))
+}
+
+/// Canonical origin of a validated model endpoint for SSRF diagnostics.
+fn model_origin(parsed: &Url) -> String {
+    let host = parsed.host_str().unwrap_or_default();
+    let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
+    match parsed.port() {
+        Some(port) if port != default_port => {
+            format!("{}://{host}:{port}", parsed.scheme())
+        }
+        _ => format!("{}://{host}", parsed.scheme()),
+    }
+}
+
+/// Resolver that pins the endpoint against DNS rebinding: every resolved
+/// address must be publicly routable (loopback excepted only under the
+/// explicit [`model_loopback_allowed`] grant), otherwise the whole set is
+/// refused before the transport connects. The default is fail-closed.
+#[derive(Debug, Default)]
+struct SsrfSystemResolver {
+    allow_loopback: bool,
+}
+
+impl Resolver for SsrfSystemResolver {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let addrs = ureq::unversioned::resolver::DefaultResolver::default()
+            .resolve(uri, config, timeout)?;
+        ssrf::check_resolved_addrs(&addrs, self.allow_loopback, false)
+            .map_err(|_| ureq::Error::HostNotFound)?;
+        Ok(addrs)
     }
 }
 
@@ -1160,12 +1361,18 @@ fn select_credential(
 /// Read only the requested names from an explicit env file. Other entries are
 /// skipped without being parsed, so unrelated lines cannot affect a request.
 fn parse_env_file(path: &str, wanted: &[&str]) -> Result<BTreeMap<String, String>> {
-    let mut file = File::open(path).context("opening explicit environment file")?;
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take((MAX_ENV_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .context("reading explicit environment file")?;
+    // Credentials demand the bearer-file checks (owner, private mode, no
+    // reparse point): a group-readable or linked file fails closed here.
+    // Ancestor swaps between parent authorization and this open remain
+    // unpinned; see `open_regular_no_follow` and `docs/models.md`.
+    let mut file = crate::security::open_private_file(std::path::Path::new(path))
+        .context("opening explicit environment file")?;
+    let bytes = read_bounded(
+        &mut file,
+        MAX_ENV_FILE_BYTES,
+        "reading explicit environment file",
+    )
+    .context("reading explicit environment file")?;
     if bytes.len() > MAX_ENV_FILE_BYTES {
         bail!("environment file exceeds size limit");
     }
@@ -1251,6 +1458,12 @@ fn post_json(
     max_bytes: usize,
 ) -> Result<Value> {
     validate_endpoint(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    let parsed = Url::parse(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    // Defense in depth: `run` checks the same gate, but `post_json` rechecks
+    // so a live request can never bypass the explicit loopback grant.
+    let allow_loopback = model_loopback_allowed();
+    check_endpoint_ssrf(&parsed, allow_loopback)
+        .map_err(|_| failure(FailureClass::Configuration))?;
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(timeout_ms)))
         .http_status_as_error(false)
@@ -1263,7 +1476,13 @@ fn post_json(
             .build(),
     );
     let config = config.build();
-    let agent: ureq::Agent = config.into();
+    // Pin the resolved addresses at connect time: the default resolver would
+    // use a rebinding hostname's private address as-is.
+    let agent = ureq::Agent::with_parts(
+        config,
+        ureq::unversioned::transport::DefaultConnector::new(),
+        SsrfSystemResolver { allow_loopback },
+    );
     let request = agent
         .post(endpoint)
         .header("Accept", "application/json")
@@ -2386,6 +2605,37 @@ mod unit_tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn fixture_symlink_is_rejected_instead_of_followed() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("real-fixture.json");
+        let expected = json!({"provider":"jev","kind":"judge","model":"jev-latest","state":"text","question":"Is it true?","minimum":0});
+        let raw = json!({"model":"jev-latest","answers":{"decision":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1,"output_tokens":2}});
+        std::fs::write(
+            &target,
+            json!({"expected_request":expected,"response":raw}).to_string(),
+        )
+        .unwrap();
+        let link = temp.path().join("link-fixture.json");
+        symlink(&target, &link).unwrap();
+        assert!(read_fixture(link.to_str().unwrap(), &expected, 1024).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fixture_fifo_is_rejected_without_waiting_for_a_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("fixture.json");
+        let raw = std::ffi::CString::new(path.to_str().expect("fixture path is UTF-8")).unwrap();
+        // SAFETY: raw is a NUL-terminated path with no interior NUL; mkfifo
+        // takes a path and a mode.
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let expected = json!({"provider":"jev","kind":"judge","state":"text"});
+        assert!(read_fixture(path.to_str().unwrap(), &expected, 1024).is_err());
+    }
+
+    #[test]
     fn unique_json_rejects_duplicate_keys_at_every_depth() {
         assert!(parse_unique_json(br#"{"status":"incomplete","status":"completed"}"#).is_err());
         assert!(parse_unique_json(br#"{"outer":[{"n":0,"n":1}]}"#).is_err());
@@ -2438,6 +2688,15 @@ mod credential_policy_tests {
     fn env_file(directory: &tempfile::TempDir, text: &str) -> String {
         let path = directory.path().join("credentials.env");
         std::fs::write(&path, text).unwrap();
+        // Credential files must be private: the helper refuses group- or
+        // world-readable files fail-closed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        #[cfg(windows)]
+        crate::prompt::private_answers::make_private(&path);
         path.to_string_lossy().into_owned()
     }
 
@@ -2544,6 +2803,52 @@ mod credential_policy_tests {
                 .unwrap();
             assert_eq!(key, None, "file default key leaked to {endpoint}");
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn group_readable_env_file_is_rejected_before_parsing() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("group.env");
+        std::fs::write(&path, "OPENAI_API_KEY=group-key\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let error = parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("opening explicit environment file"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn env_file_symlink_is_rejected_instead_of_followed() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("real.env");
+        std::fs::write(&target, "OPENAI_API_KEY=file-key\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.path().join("link.env");
+        symlink(&target, &link).unwrap();
+        assert!(
+            parse_env_file(link.to_str().unwrap(), &["OPENAI_API_KEY"]).is_err(),
+            "symlinked credential file was accepted"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn private_env_file_still_parses() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("private.env");
+        std::fs::write(&path, "OPENAI_API_KEY=file-key\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let values = parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap();
+        assert_eq!(
+            values.get("OPENAI_API_KEY").map(String::as_str),
+            Some("file-key")
+        );
     }
 
     #[test]

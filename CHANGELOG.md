@@ -15,6 +15,71 @@ original version labels.
   `hand over to` is refused before any step runs under hardening because the
   handed-over program would write to the log unsanitized. Non-CI output is
   byte-identical.
+- `execute run GRAPH --events jsonl` streams one `execute.graph-event/1` JSON
+  line per terminal event as it arrives, flushing after every event and holding
+  no collected outputs. Graphs with persistent nodes (timers, listeners, native
+  streams, program services, or renderers) stream by default so a timer graph
+  prints each tick within milliseconds and runs indefinitely; closing the
+  reader (`| head -n 3`) cancels the session and exits quietly through the
+  SIGPIPE convention (141). Finite
+  graphs keep the closing `execute.graph-run/1` document unless `--events jsonl`
+  is passed. The event schema is `docs/schemas/graph-event.v1.schema.json`.
+  Follow-up hardening: queued events are now delivered before a worker failure
+  surfaces instead of a clean EOF, each streamed line is bounded by a per-event
+  limit derived from the message byte limit, graph runs refuse `--record` and
+  `--answers` instead of ignoring them, and the daemon declines event streams
+  (explicit `--events jsonl` and unflagged persistent graphs alike) so the
+  client streams them directly. A closed reader that lands after a worker
+  failure reports the failure instead of a quiet pipe close.
+
+- Uncertain nodes and `for each` elements can now be resolved per item.
+  `execute checkpoint resolve DIR --node STEP_ID [--element N] --as committed|retry`
+  records one operator decision with who (`uid:<euid>` on Unix), when and why;
+  `committed` replays the supplied output and bindings at resume instead of
+  rerunning the effect, `retry` authorizes one item to run again without the
+  bulk `--retry-uncertain` flag. Element nodes take only per-element records;
+  parallel (`parallel for each`) elements resolve as `retry` only. Resolve holds
+  the checkpoint lock across validation and append, so concurrent resolves fail
+  closed. Journals are version 6 (in-flight element kind); versions 1-6 read,
+  graph journals 5-6 read. `checkpoint status --json` reports decisions under
+  `resolutions` and still-undecided items under `unresolved_uncertain`, using
+  the same step ids and 0-based element indices. Run records and `show-run`
+  have no checkpoint pointer and do not show resolutions.
+
+- A repeat interrupt (Ctrl-C) during a `finally`, `on exit` or `on interrupt`
+  body now aborts the cleanup at once and kills its running command, exiting
+  with status 128 plus the interrupting signal (130 for SIGINT) and a
+  `cleanup interrupted` diagnostic instead of waiting out the 5 s cleanup
+  budget. A single interrupt still runs cleanup to completion.
+
+- Run records now carry a durable policy-decision audit. `execute run
+  --record` writes the allow/deny decisions into `run.json` with the execution
+  mode and which policies were configured (never policy contents), including a
+  baseline on runs with no policy so a record never silently implies
+  confinement that was not there. `execute show-run` prints the audit in text
+  and JSON output. The audit keeps the most recent 256 decisions with an
+  explicit total and truncation flag.
+
+- The run-record policy audit is hash-chained and verified. Each kept decision
+  links into the record's `audit_head`, and `execute show-run` re-verifies the
+  links, the sequence order and the truncation accounting on every read: an
+  edited, deleted or reordered decision, or a truncation flag that disagrees
+  with the total, is shown labeled untrusted with an `audit_error` rather than
+  hidden. Records from the first bounded
+  audit stay readable but are labeled unverified. The chain evidences naive
+  edits and corruption, not a same-user forger who recomputes it;
+  whole-record tamper evidence remains separate record-integrity work.
+
+- The run-record policy audit is sealed and warn-open. `execute run --record`
+  seals the chain head plus the truncation accounting with `audit_mac`, an
+  HMAC under the per-user key, and names each configured policy by version
+  and a one-way content digest (never policy contents). `execute show-run`
+  always presents the audit instead of hiding it on tamper: a failed chain or
+  seal check, or a record with no usable seal, is shown labeled unsealed or
+  untrusted, with an `audit_error` in JSON output. The seal raises the bar to
+  key holders -- a same-user editor with key access can still rewrite the
+  audit and reseal it, so whole-record tamper evidence remains separate
+  record-integrity work.
 
 - `env.load` can mark loaded values secret with `secret true` or
   `secret ["NAME", ...]`; marked values are redacted from records, traces and
@@ -59,6 +124,32 @@ original version labels.
   4.37 ms) and marginally on a 100-spawn loop (63.86 against 67.07 ms). The workflow also
   compares `opt-level = "s"`, static musl and musl `min`-profile builds. Optimisation is
   ongoing. See [the numbers and method](docs/production-readiness.md#performance-against-bash-and-dash).
+- Operational instruction gate on shared runners. `tools/bash_compare.py` reports a deterministic
+  bootstrap 95% confidence interval for every median wall time; the wall-time
+  comparison runs counter-free so counting never perturbs its medians or budget.
+  The `Execute vs bash` workflow installs valgrind, builds two distinct binaries
+  on the same runner (the baseline at the base revision and the candidate at the
+  head revision), and measures the eight gated
+  CPU-bound scenarios once per build, back-to-back, pinned to cachegrind
+  `I refs` (no PMU required), both with the head-revision tool so a base
+  predating newer flags still gates and both reports share one tool hash
+  (`--source-revision` stamps each report with its built revision); each
+  focused report records the backend plus counter diagnostics
+  (`perf_event_paranoid`, probe outcomes), the measurement-tool hash, and the
+  `valgrind --version` provider string, and CI prints real
+  per-scenario counts with coverage. `tools/check_instruction_regression.py`
+  defines the +2% gate for CPU-bound rows: CI runs it fail-closed with
+  `--fail-closed --require-provenance` on the baseline-versus-candidate pair, then runs a canary
+  proving the wired gate fails a synthetic +3% regression on the measured candidate.
+  The canary proves the wiring is live but is not itself a regression gate.
+  Revisions come from `tools/resolve_gate_revisions.py` (pull-request base/head;
+  push before/sha with a HEAD~1 fallback; dispatch inputs or HEAD~1 versus HEAD).
+  An inconclusive canary or incomplete pair fails the job; a missing backend
+  against a recorded one is rejected as incomparable units, as are a differing
+  tool hash or valgrind version. Measurement budgets
+  match the former same-binary pair; cachegrind overhead against the shared
+  10-minute step timeout, static musl behavior, and the doubled per-variant
+  build cost are still unverified on Linux CI.
 - Twenty more Omarchy v4.0.4 scripts are ported under `examples/omarchy-ports/<script>/`
   with the Bash original, the port and a `case.json`. `tools/port_compare.py` runs both in
   sandboxes with logging fake binaries and compares status, stdout, stderr, the
@@ -79,6 +170,24 @@ original version labels.
   policy setup dominates: a one-line program is level with a cold run, and a
   530-manifest directory with two policies ran 14 percent faster. Unix only. See the
   [daemon section](docs/language.md#warm-daemon---daemon).
+- Live control endpoints are confined to private directories. `execute live serve`
+  refuses a Unix socket whose parent directory is not owned by you and private
+  (mode 0700), and `run --control` hosts its endpoint under a private per-user
+  directory with a randomized name instead of a predictable `$TMPDIR` path. A
+  reserved lane keeps `control stop` and `read` working while all 16 client slots
+  hold long polls; other requests past the slot limit fail fast with `busy`. A
+  burst-tolerant flood budget admits benign bursts (2048 back-to-back
+  non-priority requests, refilling at 64 per second) while sustained floods shed
+  with `busy`; reserve-eligible priority never spends the budget, and partial
+  senders wait in a bounded 64-connection queue holding no thread or slot. When
+  `--agent-policy` is configured, only requests already authorized for `read` or
+  `control stop` may claim a reserve slot; other fake-priority frames are demoted
+  to the general lane, as are no-policy claims carrying `auth` and
+  authorized-but-invalid `read`/`stop` frames the handler would reject. Shed
+  `busy` replies use non-blocking writes that may truncate under saturation
+  (callers should retry `busy`, EOF, and truncated responses like `busy`; the
+  CLI itself performs a single attempt and does not auto-retry). See the
+  [live control contract](docs/live-control.md#resource-and-compatibility-contract).
 - Bundled manifest index. The shipped manifests are embedded as one deflate stream with a
   generated index and parsed on first use, so registry load fell from 5.41 to 0.32 ms.
   The default directory uses the index when it matches by name and size; a directory

@@ -335,10 +335,121 @@ fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunCon
         context.decline("the program takes the terminal");
         return 0;
     }
+    if streams_graph_events(arguments) {
+        // An event stream holds the client's stdout open indefinitely and a
+        // closed pipe reader is its normal stop; the daemon's captured run
+        // protocol cannot serve either, so the client streams it directly.
+        context.decline("graph event streams run on the client");
+        return 0;
+    }
+    if implicit_graph_stream(arguments, context.registry()) {
+        // Same as above for a persistent graph without an explicit flag: the
+        // default for persistent nodes is `--events jsonl`, so the daemon
+        // would inherit an indefinite stream. Declining runs it on the client.
+        context.decline("graph event streams run on the client");
+        return 0;
+    }
     match execute_forwarded(arguments.to_vec(), context.registry()) {
         Ok(()) => 0,
         Err(error) => report_error(&error),
     }
+}
+
+/// Whether a run streams graph events: an explicit `--events jsonl` before the
+/// `--` separator. Only the separate-argument form exists (see
+/// `take_option_value`), and anything after `--` is program data, not a flag.
+fn streams_graph_events(arguments: &[String]) -> bool {
+    let separator = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    arguments[..separator]
+        .windows(2)
+        .any(|pair| pair[0] == "--events" && pair[1] == "jsonl")
+}
+
+/// Whether a run without an explicit `--events` flag will still stream: a
+/// `run` of a persistent graph with no `--checkpoint` defaults to `--events
+/// jsonl`. Detection needs the run's own registry: a persistent graph that
+/// needs custom manifests fails to parse against the preloaded registry, so
+/// the request's manifest selectors are honoured here instead of letting the
+/// daemon child inherit an indefinite stream that holds a daemon slot.
+/// Anything unreadable still returns false so the normal path reports the
+/// real diagnostic; a custom registry that cannot even load is declined (true)
+/// so the client reports the diagnostic directly instead of holding the daemon.
+fn implicit_graph_stream(arguments: &[String], registry: &Registry) -> bool {
+    let separator = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    if arguments[..separator]
+        .windows(2)
+        .any(|pair| pair[0] == "--events")
+    {
+        // An explicit mode always decides: `jsonl` was declined above and
+        // `document` keeps the closing document.
+        return false;
+    }
+    let Ok(Some(args)) = parse_args(arguments) else {
+        return false;
+    };
+    if args.command != "run" || args.checkpoint_dir.is_some() {
+        // Only plain `run` without `--checkpoint` can take the streaming path;
+        // `resume` and checkpointed runs keep (or refuse) the document path.
+        return false;
+    }
+    let Ok(source) = fs::read_to_string(&args.file) else {
+        return false;
+    };
+    #[cfg(feature = "graph")]
+    {
+        if !flow::graph::is_graph(&source) {
+            return false;
+        }
+        if args.manifest_dir.is_some() || args.manifest_catalog.is_some() {
+            // The preloaded registry cannot see the run's custom manifests, so
+            // detect against the requested registry instead.
+            let Ok(custom) = load_registry(
+                args.manifest_dir.clone(),
+                args.manifest_catalog.clone(),
+                ManifestCheck::Lazy,
+            ) else {
+                return true;
+            };
+            if custom.manifests().is_err() {
+                return true;
+            }
+            return flow::graph::parse(&source, &custom)
+                .map(|plan| plan.has_persistent_nodes())
+                .unwrap_or(true);
+        }
+        flow::graph::parse(&source, registry)
+            .map(|plan| plan.has_persistent_nodes())
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "graph"))]
+    {
+        let _ = (source, registry);
+        false
+    }
+}
+
+/// Decide the error when a streamed event line cannot be written, usually
+/// because a closed reader (`| head -n 3`) ended the stream. A worker failure
+/// that predated the close wins so a failing graph is never reported as a
+/// clean pipe close; otherwise the write error itself is reported, and a
+/// closed stdout exits quietly through the SIGPIPE convention (141).
+/// `cancel_and_join` only reports failures that predated our cancel, so
+/// cancellation fallout cannot mask the reader's close here.
+#[cfg(feature = "graph")]
+fn stream_write_error(
+    session: &mut flow::graph::GraphSession,
+    error: std::io::Error,
+) -> anyhow::Error {
+    if let Err(join_error) = session.cancel_and_join() {
+        return join_error;
+    }
+    error.into()
 }
 
 /// Whether a run may take the terminal: `interactively`, `hand over`, or a prompt input
@@ -1158,6 +1269,81 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let _signal_registration =
                     register_cancellation_signal(std::sync::Arc::clone(&cancelled))?;
+                let stream_events = match args.events.as_deref() {
+                    Some("jsonl") => true,
+                    Some("document") => false,
+                    Some(_) => bail!("--events accepts document or jsonl"),
+                    None => graph.has_persistent_nodes(),
+                };
+                if stream_events && (args.command == "resume" || args.checkpoint_dir.is_some()) {
+                    bail!(
+                        "--events jsonl cannot be combined with --checkpoint or resume; stream persistent graphs with plain `run`"
+                    );
+                }
+                // Graph runs never honour these finite-program options; refuse
+                // them instead of silently ignoring them on either path.
+                if args.record_dir.is_some() {
+                    bail!("--record applies only to finite programs, not graph programs");
+                }
+                if args.answers.is_some() {
+                    bail!("--answers applies only to finite programs, not graph programs");
+                }
+                if stream_events {
+                    // Long-lived graphs print one `execute.graph-event/1`
+                    // line per terminal event as it arrives, flushing after
+                    // every event. Nothing is collected, so a graph can run
+                    // indefinitely with flat memory. A closed reader
+                    // (`| head -n 3`) cancels the session and exits quietly
+                    // through the SIGPIPE convention (141); each line is
+                    // bounded by the session's per-event limit so one huge
+                    // event cannot allocate unbounded JSON.
+                    let (graph_name, mut session) =
+                        flow::graph::start_session(graph, &registry, &options, cancelled)?;
+                    let generation = session.context().generation;
+                    let revision = session.context().revision;
+                    let event_limit = session.max_stream_event_bytes();
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    loop {
+                        let event = match session.recv_output() {
+                            Ok(Some(event)) => event,
+                            Ok(None) => break,
+                            Err(error) => {
+                                let _ = session.cancel_and_join();
+                                return Err(error);
+                            }
+                        };
+                        let mut text = match flow::graph::graph_event_line_json(
+                            &graph_name,
+                            generation,
+                            revision,
+                            &event,
+                            event_limit,
+                        ) {
+                            Ok(line) => line,
+                            Err(error) => {
+                                let _ = session.cancel_and_join();
+                                return Err(error);
+                            }
+                        };
+                        text.push('\n');
+                        if let Err(error) = (|| -> io::Result<()> {
+                            out.write_all(text.as_bytes())?;
+                            out.flush()
+                        })() {
+                            // A closed reader (`| head -n 3`) is this stream's
+                            // normal stop: cancel promptly, then surface a
+                            // worker failure that predated the close when
+                            // there is one. Otherwise report the write error
+                            // itself so a closed stdout exits quietly through
+                            // the SIGPIPE convention (141), like every other
+                            // pipe writer, instead of succeeding.
+                            return Err(stream_write_error(&mut session, error));
+                        }
+                    }
+                    session.cancel_and_join()?;
+                    return Ok(());
+                }
                 let result = match args.checkpoint_dir.as_deref() {
                     Some(directory) => {
                         let cwd = resolved_cwd
@@ -1189,7 +1375,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                             "revision": event.revision,
                             "sequence": event.sequence,
                             "sensitivity": event.sensitivity,
-                            "payload": event.payload
+                            "payload": flow::graph::graph_event_payload_json(&event.payload)
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1627,9 +1813,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         if args.command == "explain" || args.what_if {
             flow::capabilities::preflight_plan(&program, &registry, &cwd)?;
-        } else {
+        } else if args.record_dir.is_none() {
             flow::capabilities::preflight(&program, &registry, &cwd)?;
         }
+        // A recorded run defers preflight to `run_recorded`, after the
+        // recorder exists: `runtime::run` enforces the same policy there,
+        // and a denial is then persisted in the record's decision audit
+        // instead of failing before any `run.json` exists.
     }
 
     #[cfg(feature = "agent-advisory")]
@@ -3362,7 +3552,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {
@@ -3475,5 +3665,313 @@ mod startup_path_tests {
         assert!(diagnostic.closed_stdout);
         assert!(diagnostic.message.contains("[REDACTED]"));
         assert!(!diagnostic.message.contains("PIPE-SECRET-CANARY"));
+    }
+}
+
+#[cfg(feature = "graph")]
+#[cfg(test)]
+mod graph_stream_tests {
+    use super::{implicit_graph_stream, report_error, stream_write_error};
+    use flow::contracts::{OutputType, ValueSchema};
+    use flow::graph::{
+        GraphContext, GraphExecutor, GraphNode, GraphNodeKind, GraphPlan, GraphRunOptions,
+        GraphSession, NodeIo, PortSchema,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    const TIMER_GRAPH: &str = "graph ticks\nevery 10 milliseconds as ticker\nend graph\n";
+    const FINITE_GRAPH: &str =
+        "graph legacy\n  run text.concat with parts [\"hello\"] as message\nend graph\n";
+
+    fn int_schema() -> ValueSchema {
+        ValueSchema {
+            min_items: None,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            kind: OutputType::Integer,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            single_line: false,
+            minimum: None,
+            pattern: None,
+        }
+    }
+
+    fn event_node(id: &str) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            kind: GraphNodeKind::Renderer {
+                backend: "mock".into(),
+            },
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            events: BTreeMap::from([("tick".into(), PortSchema::events(int_schema()))]),
+            line: None,
+        }
+    }
+
+    fn plan_with(node: GraphNode) -> GraphPlan {
+        let mut plan = GraphPlan::new("stream-test");
+        plan.add_node(node).expect("mock node is admitted");
+        plan
+    }
+
+    struct FailFastExecutor;
+
+    impl GraphExecutor for FailFastExecutor {
+        fn execute(&self, _: &GraphNode, _: &mut NodeIo, _: &GraphContext) -> anyhow::Result<()> {
+            anyhow::bail!("stream-test worker failure marker")
+        }
+    }
+
+    struct WaitForCancelExecutor;
+
+    impl GraphExecutor for WaitForCancelExecutor {
+        fn execute(&self, _: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> anyhow::Result<()> {
+            while !io.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(())
+        }
+    }
+
+    fn broken_pipe() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed reader marker")
+    }
+
+    #[test]
+    fn closed_reader_reports_a_predating_worker_failure() {
+        let mut session = GraphSession::start(
+            plan_with(event_node("source")),
+            Arc::new(FailFastExecutor),
+            GraphRunOptions::default(),
+        )
+        .expect("failing session starts");
+        // The worker fails asynchronously at startup, before any event line
+        // is written. Wait until that failure is observable instead of
+        // racing it: `recv_output` reports the recorded worker failure once
+        // the worker has finished, so a closed reader that lands afterwards
+        // deterministically surfaces the failure, not a quiet pipe close.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match session.recv_output() {
+                Err(error) => {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("stream-test worker failure marker"),
+                        "the worker failure must surface before the close: {error:#}"
+                    );
+                    break;
+                }
+                Ok(_) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the startup worker failure never surfaced"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+        let error = stream_write_error(&mut session, broken_pipe());
+        assert!(
+            error
+                .to_string()
+                .contains("stream-test worker failure marker"),
+            "unexpected write-error decision: {error:#}"
+        );
+        assert_ne!(
+            report_error(&error),
+            141,
+            "a predating failure must not exit through the pipe-close convention"
+        );
+    }
+
+    #[test]
+    fn closed_reader_without_worker_failure_exits_141_quietly() {
+        let mut session = GraphSession::start(
+            plan_with(event_node("source")),
+            Arc::new(WaitForCancelExecutor),
+            GraphRunOptions::default(),
+        )
+        .expect("pausable session starts");
+        let error = stream_write_error(&mut session, broken_pipe());
+        assert!(
+            error.to_string().contains("closed reader marker"),
+            "unexpected write-error decision: {error:#}"
+        );
+        assert_eq!(
+            report_error(&error),
+            141,
+            "a clean closed reader exits through the SIGPIPE convention"
+        );
+    }
+
+    fn empty_registry() -> flow::manifest::Registry {
+        flow::manifest::Registry::from_sources(&[] as &[&str]).expect("empty registry parses")
+    }
+
+    fn run_arguments(directory: &std::path::Path, extra: &[&str]) -> Vec<String> {
+        let mut arguments = vec![
+            "run".to_owned(),
+            directory
+                .join("graph.program")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        arguments.extend(extra.iter().map(|item| item.to_string()));
+        arguments
+    }
+
+    #[test]
+    fn implicit_streaming_detects_an_unflagged_timer_graph() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        assert!(
+            implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "an unflagged persistent graph streams, so the daemon must decline it"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_ignores_modes_that_keep_the_document() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        let registry = empty_registry();
+        // An explicit mode always decides: `document` keeps the closing
+        // document and `jsonl` was declined before this gate runs.
+        assert!(!implicit_graph_stream(
+            &run_arguments(directory.path(), &["--events", "document"]),
+            &registry
+        ));
+        assert!(!implicit_graph_stream(
+            &run_arguments(directory.path(), &["--events", "jsonl"]),
+            &registry
+        ));
+        // Checkpointed runs never stream; a resume is never an implicit stream.
+        assert!(!implicit_graph_stream(
+            &run_arguments(directory.path(), &["--checkpoint", "journal"]),
+            &registry
+        ));
+        let mut resume = run_arguments(directory.path(), &["--checkpoint", "journal"]);
+        resume[0] = "resume".to_owned();
+        assert!(!implicit_graph_stream(&resume, &registry));
+    }
+
+    #[test]
+    fn implicit_streaming_ignores_finite_graphs_and_programs() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("graph.program"),
+            "graph empty\nend graph\n",
+        )
+        .unwrap();
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "a graph without persistent nodes keeps the closing document"
+        );
+        std::fs::write(
+            directory.path().join("graph.program"),
+            "run printf with message \"hi\"\n",
+        )
+        .unwrap();
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "a finite program never takes the event-stream path"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_leaves_unreadable_or_unknown_sources_to_the_normal_path() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "a missing file still reports its own diagnostic"
+        );
+        // `text.concat` needs the real manifests; the empty registry cannot
+        // parse it, so detection stays conservative instead of guessing.
+        std::fs::write(directory.path().join("graph.program"), FINITE_GRAPH).unwrap();
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
+            "an unparseable graph still reports its own diagnostic"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_detects_a_finite_graph_as_non_streaming() {
+        let registry = super::load_registry(None, None, flow::manifest::ManifestCheck::Lazy)
+            .expect("default manifests load");
+        registry.manifests().expect("default manifests parse");
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), FINITE_GRAPH).unwrap();
+        let plan = flow::graph::parse(FINITE_GRAPH, &registry)
+            .expect("finite graph parses with manifests");
+        assert!(
+            !plan.has_persistent_nodes(),
+            "the applet graph must stay on the document path"
+        );
+        assert!(
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &registry),
+            "a finite applet graph runs on the daemon"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_detects_persistent_graphs_through_custom_manifests() {
+        // The preloaded registry cannot see a run's custom manifests, so
+        // detection reloads the requested registry. Point at the repository
+        // manifests so the custom registry parses exactly like the default.
+        let custom = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let manifest_dir = custom.to_string_lossy().into_owned();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        assert!(
+            implicit_graph_stream(
+                &run_arguments(directory.path(), &["--manifest-dir", manifest_dir.as_str()]),
+                &empty_registry()
+            ),
+            "a persistent graph with custom manifests still declines to the client"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_keeps_finite_graphs_on_the_daemon_with_custom_manifests() {
+        let custom = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let manifest_dir = custom.to_string_lossy().into_owned();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), FINITE_GRAPH).unwrap();
+        assert!(
+            !implicit_graph_stream(
+                &run_arguments(directory.path(), &["--manifest-dir", manifest_dir.as_str()]),
+                &empty_registry()
+            ),
+            "a finite applet graph keeps the document path under custom manifests"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_declines_when_custom_manifests_cannot_load() {
+        // An unloadable custom registry cannot prove the graph is finite, so
+        // detection declines and the client reports the real diagnostic
+        // instead of holding a daemon slot.
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        let missing = directory.path().join("no-such-manifests");
+        let manifest_dir = missing.to_string_lossy().into_owned();
+        assert!(
+            implicit_graph_stream(
+                &run_arguments(directory.path(), &["--manifest-dir", manifest_dir.as_str()]),
+                &empty_registry()
+            ),
+            "an unloadable custom registry still declines to the client"
+        );
     }
 }

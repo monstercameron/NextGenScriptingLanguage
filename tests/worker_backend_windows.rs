@@ -32,6 +32,15 @@ pub(crate) fn request_drain(state: &std::sync::atomic::AtomicU8) -> bool {
         .is_ok()
 }
 
+/// Parent surface for the standalone `windows_platform` include above, whose
+/// `super::publish::` paths resolve through this module. The publish trio is
+/// not duplicated here: it is the same `src/platform/publish.rs` source the
+/// library builds, included by path, so this harness cannot drift from
+/// `platform::windows_publish_with` ordering semantics.
+#[path = "../src/platform/publish.rs"]
+#[allow(dead_code)]
+mod publish;
+
 mod capabilities {
     pub use flow::capabilities::*;
 }

@@ -7,6 +7,21 @@ original version labels.
 
 ## Unreleased
 
+- Windows file publishes now ask the OS to persist the rename: both the
+  POSIX-semantics rename path and the `MoveFileEx` write-through fallback end
+  with a flush of the published parent directory, and the checkpoint, `then
+  save to`, transaction-journal, and applet file/directory syncs run real
+  directory flushes instead of no-ops. The parent directory is pinned open
+  before the rename so the flush cannot be redirected by a later path swap,
+  and flushes never follow a trailing reparse point (a junction parent is
+  refused). A flush failure after a successful rename is reported as
+  published-but-unsynced (the new data may be live; resume treats the effect
+  as uncertain) instead of as a failed publish. These flushes only ask the OS
+  to persist the rename: success means the flush call succeeded, volumes
+  without flush support fail closed with an explicit error asking for a local
+  NTFS directory, and no hard power-loss survival is claimed until the
+  50-trial hard-reset lab passes.
+
 - `env.load` can mark loaded values secret with `secret true` or
   `secret ["NAME", ...]`; marked values are redacted from records, traces and
   diagnostics and refuse `--checkpoint` before effects. Checkpoint

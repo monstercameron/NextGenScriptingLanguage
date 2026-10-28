@@ -1171,12 +1171,27 @@ fn persist_journal(directory: &Path, data: &JournalData) -> Result<(), AppletErr
     ));
     write_private_new(&temporary, &bytes)?;
     if let Err(error) = crate::platform::replace_file(&temporary, &final_path) {
+        if error.published {
+            // The temporary is gone: the rename succeeded and only the
+            // durability flush failed. Report the published-but-unsynced
+            // effect so recovery treats the new journal as possibly live
+            // instead of re-running a publish that already happened.
+            return Err(failed(
+                "uncertain_effect",
+                format!(
+                    "transaction journal {} was published but its directory entry may not be on disk: {}",
+                    final_path.display(),
+                    error.error
+                ),
+            ));
+        }
         let _ = fs::remove_file(&temporary);
         return Err(failed(
             "uncertain_effect",
             format!(
-                "could not publish transaction journal {}: {error}",
-                final_path.display()
+                "could not publish transaction journal {}: {}",
+                final_path.display(),
+                error.error
             ),
         ));
     }
@@ -1522,10 +1537,21 @@ fn check_private_metadata(metadata: &fs::Metadata, label: &str) -> Result<(), Ap
 
 fn sync_directory(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
-    File::open(path)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
+    {
+        File::open(path)?.sync_all()
+    }
+    #[cfg(windows)]
+    {
+        // Ask the OS to persist a just-published rename's directory entry.
+        // Success means the flush call succeeded, not that the entry provably
+        // survives power loss; see `platform::windows::sync_directory`.
+        crate::platform::windows::sync_directory(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 fn lock_timeout(args: &Map<String, Value>) -> Result<Duration, AppletError> {

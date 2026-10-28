@@ -1908,7 +1908,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &std::sync::atomic::AtomicBool::new(false),
                         None,
                     )?;
-                    flow::security::register_sensitive_program(&registry, &program, &std::sync::atomic::AtomicBool::new(false), None)?;
+                    flow::security::register_sensitive_program(
+                        &registry,
+                        &program,
+                        &std::sync::atomic::AtomicBool::new(false),
+                        None,
+                    )?;
                     record_cli::run_recorded(directory, &args.file, &program, &registry, &options)
                         .map_err(|error| redact_runtime_error(&registry, error))?
                 } else {
@@ -3455,7 +3460,11 @@ mod startup_path_tests {
     fn redacted_runtime_errors_keep_broken_pipe_and_safe_message() {
         let registry = flow::manifest::Registry::default();
         flow::security::secret_redactor(&registry)
-            .register(b"PIPE-SECRET-CANARY", &std::sync::atomic::AtomicBool::new(false), None)
+            .register(
+                b"PIPE-SECRET-CANARY",
+                &std::sync::atomic::AtomicBool::new(false),
+                None,
+            )
             .unwrap();
         let error = anyhow::Error::new(std::io::Error::new(
             std::io::ErrorKind::BrokenPipe,

@@ -674,7 +674,9 @@ pub fn register_sensitive_program(
         while index < end {
             let step = &steps[index];
             match &step.kind {
-                StepKind::Invoke { call, .. } => register_call(redactor, call, cancelled, deadline)?,
+                StepKind::Invoke { call, .. } => {
+                    register_call(redactor, call, cancelled, deadline)?
+                }
                 StepKind::CallProgram {
                     call, end: span, ..
                 } => {
@@ -2053,8 +2055,12 @@ mod tests {
     #[test]
     fn explicit_redactor_uses_exact_values_longest_first_and_denies_overflow() {
         let redactor = SecretRedactor::default();
-        redactor.register(b"sword", &AtomicBool::new(false), None).unwrap();
-        redactor.register(b"swordfish", &AtomicBool::new(false), None).unwrap();
+        redactor
+            .register(b"sword", &AtomicBool::new(false), None)
+            .unwrap();
+        redactor
+            .register(b"swordfish", &AtomicBool::new(false), None)
+            .unwrap();
         assert_eq!(
             redactor.redact_bytes(b"swordfish sword"),
             b"[REDACTED] [REDACTED]"
@@ -2064,7 +2070,11 @@ mod tests {
         let bounded = SecretRedactor::default();
         for index in 0..MAX_REDACTION_SECRETS {
             bounded
-                .register(format!("known-secret-{index:04}").as_bytes(), &AtomicBool::new(false), None)
+                .register(
+                    format!("known-secret-{index:04}").as_bytes(),
+                    &AtomicBool::new(false),
+                    None,
+                )
                 .unwrap();
         }
         assert_eq!(
@@ -2072,7 +2082,11 @@ mod tests {
             Err(PolicyError::RedactionLimitExceeded)
         );
         assert_eq!(
-            SecretRedactor::default().register(&vec![b'x'; MAX_REDACTION_SECRET_BYTES_EACH + 1], &AtomicBool::new(false), None),
+            SecretRedactor::default().register(
+                &vec![b'x'; MAX_REDACTION_SECRET_BYTES_EACH + 1],
+                &AtomicBool::new(false),
+                None
+            ),
             Err(PolicyError::RedactionLimitExceeded)
         );
 
@@ -2080,7 +2094,9 @@ mod tests {
         for marker in 0..4u8 {
             let mut value = vec![b'a'; MAX_REDACTION_SECRET_BYTES_EACH];
             value[0] = marker;
-            aggregate.register(&value, &AtomicBool::new(false), None).unwrap();
+            aggregate
+                .register(&value, &AtomicBool::new(false), None)
+                .unwrap();
         }
         let mut over_limit = vec![b'b'; MAX_REDACTION_SECRET_BYTES_EACH];
         over_limit[0] = 9;

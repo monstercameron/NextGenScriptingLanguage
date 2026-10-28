@@ -530,8 +530,13 @@ pub(super) fn run_group(
         }
         match completion.result {
             Ok(result) => {
-                if let Err(error) = register_task_result(&secret_redactor, task.sensitive, &result, &cancelled, deadline)
-                {
+                if let Err(error) = register_task_result(
+                    &secret_redactor,
+                    task.sensitive,
+                    &result,
+                    &cancelled,
+                    deadline,
+                ) {
                     let message =
                         format!("could not safely redact sensitive task output: {error:#}");
                     records[index].state = TaskState::Failed;
@@ -586,11 +591,17 @@ pub(super) fn run_group(
                 } else {
                     TaskState::Failed
                 };
-                let error_text = register_task_error(&secret_redactor, task.sensitive, &error, &cancelled, deadline)
-                    .unwrap_or_else(|_| {
-                        "sensitive task failure was withheld because redaction could not be secured"
-                            .into()
-                    });
+                let error_text = register_task_error(
+                    &secret_redactor,
+                    task.sensitive,
+                    &error,
+                    &cancelled,
+                    deadline,
+                )
+                .unwrap_or_else(|_| {
+                    "sensitive task failure was withheld because redaction could not be secured"
+                        .into()
+                });
                 records[index].error = Some(error_text.clone());
                 let uncertain = task_error_uncertain(&error, task.uncertain_on_error);
                 records[index].uncertain = uncertain;
@@ -1293,7 +1304,15 @@ fn update_record(
     };
     match result {
         Ok(result) => {
-            if register_task_result(secret_redactor, record.sensitive, &result, cancelled, deadline).is_err() {
+            if register_task_result(
+                secret_redactor,
+                record.sensitive,
+                &result,
+                cancelled,
+                deadline,
+            )
+            .is_err()
+            {
                 record.state = TaskState::Failed;
                 record.error = Some(
                     "sensitive task output was withheld because redaction could not be secured"
@@ -1323,12 +1342,17 @@ fn update_record(
                 TaskState::Failed
             };
             record.error = Some(
-                register_task_error(secret_redactor, record.sensitive, &error, cancelled, deadline).unwrap_or_else(
-                    |_| {
-                        "sensitive task failure was withheld because redaction could not be secured"
-                            .into()
-                    },
-                ),
+                register_task_error(
+                    secret_redactor,
+                    record.sensitive,
+                    &error,
+                    cancelled,
+                    deadline,
+                )
+                .unwrap_or_else(|_| {
+                    "sensitive task failure was withheld because redaction could not be secured"
+                        .into()
+                }),
             );
             record.uncertain = task_error_uncertain(&error, tasks[index].uncertain_on_error);
             record.launched_processes = launched_processes;

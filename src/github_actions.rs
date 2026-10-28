@@ -1000,9 +1000,7 @@ fn write_direct_bytes_with_cancel(
             return Err(std::io::Error::other("program cancelled by signal"));
         }
         if deadline.is_some_and(|end| Instant::now() >= end) {
-            return Err(std::io::Error::other(
-                "terminal wait reached its deadline",
-            ));
+            return Err(std::io::Error::other("terminal wait reached its deadline"));
         }
         return Ok(());
     }
@@ -1056,9 +1054,7 @@ fn write_direct_bytes_with_cancel(
                 }
                 if let Some(end) = deadline {
                     if Instant::now() >= end {
-                        return Err(std::io::Error::other(
-                            "terminal wait reached its deadline",
-                        ));
+                        return Err(std::io::Error::other("terminal wait reached its deadline"));
                     }
                 }
                 return result;
@@ -1069,25 +1065,20 @@ fn write_direct_bytes_with_cancel(
                     return Err(std::io::Error::other("program cancelled by signal"));
                 }
                 if deadline.is_some_and(|end| Instant::now() >= end) {
-                    return Err(std::io::Error::other(
-                        "terminal wait reached its deadline",
-                    ));
+                    return Err(std::io::Error::other("terminal wait reached its deadline"));
                 }
                 return Err(std::io::Error::other(
                     "direct terminal writer stopped without a result",
                 ));
             }
         }
-        if cancelled.load(Ordering::Relaxed) || deadline.is_some_and(|end| Instant::now() >= end)
-        {
+        if cancelled.load(Ordering::Relaxed) || deadline.is_some_and(|end| Instant::now() >= end) {
             if let Some(until) = drain_until {
                 if Instant::now() >= until {
                     if cancelled.load(Ordering::Relaxed) {
                         return Err(std::io::Error::other("program cancelled by signal"));
                     }
-                    return Err(std::io::Error::other(
-                        "terminal wait reached its deadline",
-                    ));
+                    return Err(std::io::Error::other("terminal wait reached its deadline"));
                 }
             }
         }
@@ -1162,9 +1153,7 @@ pub fn write_direct_stderr_with_cancel(
     }
     if let Some(end) = deadline {
         if Instant::now() >= end {
-            return Err(std::io::Error::other(
-                "terminal wait reached its deadline",
-            ));
+            return Err(std::io::Error::other("terminal wait reached its deadline"));
         }
     }
     let filtered = if enabled() {
@@ -1307,9 +1296,7 @@ pub fn write_stdout_final_with_cancel(
     }
     if let Some(end) = deadline {
         if Instant::now() >= end {
-            return Err(std::io::Error::other(
-                "terminal wait reached its deadline",
-            ));
+            return Err(std::io::Error::other("terminal wait reached its deadline"));
         }
     }
     let filtered = if enabled() {
@@ -1368,9 +1355,7 @@ pub fn write_stderr_final_with_cancel(
     }
     if let Some(end) = deadline {
         if Instant::now() >= end {
-            return Err(std::io::Error::other(
-                "terminal wait reached its deadline",
-            ));
+            return Err(std::io::Error::other("terminal wait reached its deadline"));
         }
     }
     let filtered = if enabled() {

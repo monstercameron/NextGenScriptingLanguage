@@ -1165,7 +1165,9 @@ mod tests {
     #[test]
     fn redaction_applies_to_keys_and_values() {
         let redactor = SecretRedactor::default();
-        redactor.register(b"hunter2", &std::sync::atomic::AtomicBool::new(false), None).unwrap();
+        redactor
+            .register(b"hunter2", &std::sync::atomic::AtomicBool::new(false), None)
+            .unwrap();
         let value = json!({"hunter2": ["x hunter2 y"]});
         let redacted = redact_json(&redactor, &value);
         let text = redacted.to_string();
@@ -1180,7 +1182,13 @@ mod tests {
             key.to_owned(),
             crate::ast::Value::String("public value".into()),
         )]));
-        security::register_sensitive_value(&registry, &value, &std::sync::atomic::AtomicBool::new(false), None).unwrap();
+        security::register_sensitive_value(
+            &registry,
+            &value,
+            &std::sync::atomic::AtomicBool::new(false),
+            None,
+        )
+        .unwrap();
         let serialized = json!({(key): "public value"});
         let redacted = redact_json(&security::secret_redactor(&registry), &serialized);
         assert!(!redacted.to_string().contains(key));
@@ -1190,7 +1198,13 @@ mod tests {
     fn a_secret_straddling_the_plan_limit_never_survives_truncation() {
         let redactor = SecretRedactor::default();
         let secret = "SECRET-straddle-value-9731";
-        redactor.register(secret.as_bytes(), &std::sync::atomic::AtomicBool::new(false), None).unwrap();
+        redactor
+            .register(
+                secret.as_bytes(),
+                &std::sync::atomic::AtomicBool::new(false),
+                None,
+            )
+            .unwrap();
         // Truncating first would keep "SECRET-str" as an unredactable fragment.
         let plan = format!("{}{secret}tail", "x".repeat(MAX_PLAN_BYTES - 10));
         let (stored, _) = prepare_plan(&redactor, &plan);
@@ -1209,7 +1223,13 @@ mod tests {
     fn the_plan_hash_is_over_the_redacted_plan_not_the_raw_plan() {
         let redactor = SecretRedactor::default();
         let secret = "SECRET-confirmation-value-5521";
-        redactor.register(secret.as_bytes(), &std::sync::atomic::AtomicBool::new(false), None).unwrap();
+        redactor
+            .register(
+                secret.as_bytes(),
+                &std::sync::atomic::AtomicBool::new(false),
+                None,
+            )
+            .unwrap();
         let plan = format!("run printf with message \"{secret}\"\n");
         let (stored, sha256) = prepare_plan(&redactor, &plan);
         assert_ne!(

@@ -49,6 +49,31 @@ fn run_with_manifests(
     command.output().unwrap()
 }
 
+fn run_merged_source(source: &str) -> String {
+    // Both descriptors share one file sink, the way the runner's merged job
+    // log shares lines across stdout and stderr. Separate pipes would hide a
+    // mask glued across streams; the shared file shows the merged byte order.
+    use std::process::Stdio;
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("job.program");
+    fs::write(&program, source).unwrap();
+    let merged_path = directory.path().join("merged.log");
+    let stdout_file = fs::File::create(&merged_path).unwrap();
+    let stderr_file = stdout_file.try_clone().unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run"])
+        .arg(&program)
+        .current_dir(directory.path())
+        .env_remove("GITHUB_ACTIONS")
+        .env("GITHUB_ACTIONS", "true")
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    fs::read_to_string(&merged_path).unwrap()
+}
+
 fn inherit_manifests() -> tempfile::TempDir {
     // One applet whose manifest declares `inherit` stdout: without hardening
     // the child writes straight to the terminal descriptor.
@@ -549,5 +574,198 @@ fn handover_is_refused_under_ci_before_the_child_runs() {
         !stdout(&output).contains("::error::handover-raw"),
         "forged command reached the log: {:?}",
         stdout(&output)
+    );
+}
+
+#[test]
+fn masks_parse_in_a_merged_stdout_stderr_file_sink() {
+    // The runner parses one merged log, not two isolated pipes: a stderr
+    // partial sharing lines with stdout must not glue the next stdout mask
+    // mid-line. Both descriptors point at one file here, so the test observes
+    // the merged byte order the pipe-split assertions cannot see.
+    let source = concat!(
+        "run \"sh\" with arguments [\"-c\", \"printf 'lead'\"]\n",
+        "run \"sh\" with arguments [\"-c\", \"printf 'err-lead' >&2\"]\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::masked-forgery\\n'\"] as token and keep secret\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::after-mask\\n'\"]\n",
+    );
+    let text = run_merged_source(source);
+    assert_no_glued_masks(&text);
+    let commands = runner_commands(&text);
+    assert!(
+        commands
+            .iter()
+            .any(|(name, _)| name == "add-mask"),
+        "no mask recognized in merged sink {text:?}"
+    );
+    assert!(
+        commands.iter().all(|(name, _)| name == "add-mask"),
+        "forgery parsed as a command in merged sink {text:?} (parsed: {commands:?})"
+    );
+    assert_neutralized(&non_mask_text(&text), "::error::after-mask");
+}
+
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    haystack.match_indices(needle).count()
+}
+
+#[test]
+fn stdout_to_stderr_success_reaches_stderr_once_in_order_under_ci() {
+    let source = "run \"sh\" with arguments [\"-c\", \"printf 'out-line-499\\n'; printf 'err-line-499\\n' >&2\"] and stdout to stderr\n";
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    // A `stdout to stderr` redirect leaves nothing for the pipeline.
+    assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
+    let err = stderr(&output);
+    let out_pos = err.find("out-line-499").expect("stdout must reach stderr");
+    let err_pos = err.find("err-line-499").expect("command stderr must reach stderr");
+    assert!(out_pos < err_pos, "program order lost in {err:?}");
+    assert_eq!(count_occurrences(&err, "out-line-499"), 1, "duplicated stdout in {err:?}");
+    assert_eq!(count_occurrences(&err, "err-line-499"), 1, "duplicated stderr in {err:?}");
+}
+
+#[test]
+fn stdout_to_stderr_failure_keeps_order_without_duplication_under_ci() {
+    let source = "run \"sh\" with arguments [\"-c\", \"printf 'fail-out-499\\n'; printf 'fail-err-499\\n' >&2; exit 1\"] and stdout to stderr\n";
+    let output = run_source(source, &[], true);
+    assert!(!output.status.success(), "failure must propagate: {output:?}");
+    assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
+    let err = stderr(&output);
+    let out_pos = err.find("fail-out-499").expect("failed stdout must reach stderr");
+    let err_pos = err.find("fail-err-499").expect("failed stderr must reach stderr");
+    assert!(out_pos < err_pos, "failure order lost in {err:?}");
+    assert_eq!(count_occurrences(&err, "fail-out-499"), 1, "duplicated stdout in {err:?}");
+    assert_eq!(count_occurrences(&err, "fail-err-499"), 1, "duplicated stderr in {err:?}");
+}
+
+#[test]
+fn stdout_to_stderr_timeout_keeps_partial_bytes_sanitized_under_ci() {
+    let source = "run \"sh\" with arguments [\"-c\", \"printf 'early-out-499\\n'; printf 'early-err-499\\n' >&2; sleep 6; printf 'late-out-499\\n'\"] and stdout to stderr\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("job.program");
+    fs::write(&program, source).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run"])
+        .arg(&program)
+        .args(["--command-timeout-ms", "1500"])
+        .current_dir(directory.path())
+        .env_remove("GITHUB_ACTIONS")
+        .env("GITHUB_ACTIONS", "true")
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "the command must time out: {output:?}");
+    assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
+    let err = stderr(&output);
+    assert!(err.contains("early-out-499"), "partial stdout lost in {err:?}");
+    assert!(err.contains("early-err-499"), "partial stderr lost in {err:?}");
+    assert!(!err.contains("late-out-499"), "post-timeout bytes leaked in {err:?}");
+    assert_eq!(count_occurrences(&err, "early-out-499"), 1, "duplicated partial stdout in {err:?}");
+    assert_eq!(count_occurrences(&err, "early-err-499"), 1, "duplicated partial stderr in {err:?}");
+}
+
+#[test]
+fn stdout_to_stderr_forgery_is_neutralized_under_ci() {
+    let source = "run \"sh\" with arguments [\"-c\", \"printf '::error::via-redirect-499\\n'\"] and stdout to stderr\n";
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
+    let err = stderr(&output);
+    assert_neutralized(&err, "::error::via-redirect-499");
+    assert!(
+        runner_commands(&err).is_empty(),
+        "forgery parsed in {err:?}"
+    );
+}
+
+#[test]
+fn stdout_to_stderr_sensitive_value_is_masked_before_it_is_echoed_under_ci() {
+    let canary = "SECRET-STDERR-499-XYZ";
+    let source = concat!(
+        "accept token as text from secret prompt \"Token?\"\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '%s\\n' \\\"$TOKEN\\\"\"] and environment {\"TOKEN\": token} and stdout to stderr\n",
+    );
+    let output = run_source(source, &[ "--input", &format!("token={canary}") ], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let out = stdout(&output);
+    let err = stderr(&output);
+    // Masks are emitted to stdout even when the value travels on stderr; the
+    // merged runner log sees the mask first and redacts the value.
+    assert!(
+        out.contains(&format!("::add-mask::{canary}")),
+        "mask missing in {out:?}"
+    );
+    assert_no_glued_masks(&out);
+    // The value reaches stderr exactly once; the runner-side mask (above)
+    // is what redacts it in the merged log, so Execute must not duplicate it.
+    assert_eq!(
+        count_occurrences(&err, canary),
+        1,
+        "sensitive value duplicated or lost in {err:?}"
+    );
+    assert!(
+        runner_commands(&format!("{out}\n{err}"))
+            .iter()
+            .all(|(name, _)| name == "add-mask"),
+        "unexpected runner command in {out:?} / {err:?}"
+    );
+}
+
+#[test]
+fn stdout_to_stderr_sensitive_failure_never_leaks_unmasked_bytes_under_ci() {
+    // A failing sensitive step registers its captured stdout and stderr as
+    // secrets before anything reaches the log. The fail-closed policy then
+    // redacts the whole failure stderr to `[REDACTED]` — including nonsecret
+    // bytes — so the test asserts the conservative marker, never the raw
+    // `fail-err-499` text. The captured stdout canary still reaches stderr
+    // exactly once (runner-masked by the stdout mask line).
+    let canary = "SECRET-FAIL-499-XYZ";
+    let source = concat!(
+        "accept token as text from secret prompt \"Token?\"\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '%s\\n' \\\"$TOKEN\\\"; printf 'fail-err-499\\n' >&2; exit 1\"] and environment {\"TOKEN\": token} and stdout to stderr\n",
+    );
+    let output = run_source(source, &[ "--input", &format!("token={canary}") ], true);
+    assert!(!output.status.success(), "failure must propagate: {output:?}");
+    let out = stdout(&output);
+    let err = stderr(&output);
+    assert!(
+        out.contains(&format!("::add-mask::{canary}")),
+        "failure mask missing in {out:?}"
+    );
+    assert_no_glued_masks(&out);
+    // Captured stdout reaches stderr once in program order (before the
+    // diagnostic); the runner mask above is what redacts it in the merged log.
+    assert_eq!(
+        count_occurrences(&err, canary),
+        1,
+        "sensitive stdout duplicated or lost under fail-closed redaction"
+    );
+    // Fail-closed: the whole failure stderr (including nonsecret bytes) is
+    // redacted, so the raw text must never appear and the marker must.
+    assert!(
+        !err.contains("fail-err-499"),
+        "failure stderr must stay redacted under the sensitive fail-closed policy"
+    );
+    assert_eq!(
+        count_occurrences(&err, "[REDACTED]"),
+        1,
+        "conservative redaction marker missing or duplicated"
+    );
+    let out_pos = err.find(canary).expect("sensitive stdout must reach stderr");
+    let redacted_pos = err.find("[REDACTED]").expect("redaction marker must reach stderr");
+    assert!(
+        out_pos < redacted_pos,
+        "program order lost: stdout must precede the redacted diagnostic"
     );
 }

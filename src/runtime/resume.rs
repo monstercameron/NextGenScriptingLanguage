@@ -44,7 +44,12 @@ impl From<std::fs::Metadata> for BinaryIdentity {
 }
 type BinaryDigests = HashMap<PathBuf, (BinaryIdentity, [u8; 32])>;
 
-pub(super) fn node_end(program: &Program, start: usize) -> usize {
+/// The end (exclusive) of the top-level checkpoint node starting at `start`.
+/// Nodes are the atomic unit of resume: a redirect with its command, an
+/// environment step with its command, a conditional/loop/call node, a try with a
+/// catch, or one piped invocation. Exposed crate-wide so repair and
+/// resume-from-record agree with checkpoint resume on node boundaries.
+pub(crate) fn node_end(program: &Program, start: usize) -> usize {
     // A redirect is one node with the command it routes, which validation keeps
     // as the single following invocation. Splitting them would let resume run the
     // command without its routing state.

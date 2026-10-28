@@ -54,6 +54,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut data_flow_policy = None;
     let mut cache_dir = None;
     let mut checkpoint_dir = None;
+    let mut from_record_dir = None;
     let mut record_dir = None;
     let mut retry_uncertain = false;
     let mut once = false;
@@ -319,6 +320,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     "a directory",
                 )?));
             }
+            "--from-record" if command == "resume" => {
+                if from_record_dir.is_some() {
+                    bail!("--from-record may be specified only once");
+                }
+                from_record_dir = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--from-record",
+                    "a record directory",
+                )?));
+            }
             "--retry-uncertain" if command == "resume" => {
                 if retry_uncertain {
                     bail!("--retry-uncertain may be specified only once");
@@ -482,8 +494,11 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         (None, true) => PathBuf::new(),
         (None, false) => return Err(anyhow!("missing workflow file\n{}", usage())),
     };
-    if command == "resume" && checkpoint_dir.is_none() {
-        bail!("resume requires --checkpoint DIR");
+    if command == "resume" && checkpoint_dir.is_none() && from_record_dir.is_none() {
+        bail!("resume requires --checkpoint DIR or --from-record DIR");
+    }
+    if checkpoint_dir.is_some() && from_record_dir.is_some() {
+        bail!("--from-record cannot be combined with --checkpoint");
     }
     if !break_at.is_empty() && !control {
         bail!("--break-at requires --control");
@@ -518,6 +533,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         data_flow_policy,
         cache_dir,
         checkpoint_dir,
+        from_record_dir,
         retry_uncertain,
         once,
         trace,

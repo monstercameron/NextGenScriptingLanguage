@@ -38,6 +38,7 @@ pub fn run_recorded(
         plan: &plan,
         inputs: record::inputs_json_for(&options.inputs, &program.inputs),
         registry,
+        working_directory: &options.working_directory,
     })?);
     recorder.set_loop_budget(options.max_loop_iterations, options.loop_budget_scope)?;
     let guard = runtime::observe::install(recorder.clone())?;
@@ -61,7 +62,103 @@ pub fn run_recorded(
         },
     };
     recorder.finish(&summary)?;
+    if !summary.ok {
+        // The first failure usually has no checkpoint, since agents rarely know
+        // in advance which run will fail. Name the repair loop so the failure
+        // itself is repairable and resumable without re-running completed steps.
+        eprintln!(
+            "next: execute show-run {} to diagnose the failure",
+            directory.display()
+        );
+        eprintln!(
+            "next: execute repair --from-record {} --program {} --op '<operation>', then execute resume {} --from-record {}",
+            directory.display(),
+            source_path.display(),
+            source_path.display(),
+            directory.display()
+        );
+    }
     result
+}
+
+/// `execute resume FILE --from-record DIR`: run the repaired program with the
+/// record's completed prefix replayed from captured results.
+///
+/// Every recorded step before the record's first failed step is answered from
+/// the record — no process is launched and no file is written for those steps.
+/// The repaired suffix runs natively. Inputs and the loop budget come from the
+/// record; a group in the completed prefix that no longer matches is refused
+/// rather than re-run, and a group whose bytes were not recorded is refused
+/// with its step index and reason.
+///
+/// The completed prefix itself is pinned: the resume program must keep every
+/// byte before the recorded boundary, and a truncated, torn, or
+/// provenance-mismatched record refuses the resume instead of re-running
+/// completed effects.
+pub fn resume_from_record(
+    program: &Program,
+    source_path: &Path,
+    source: &str,
+    record_directory: &Path,
+    registry: &flow::manifest::Registry,
+    base_options: &RunOptions,
+) -> Result<()> {
+    let record = StoredRecord::open(record_directory)?;
+    if record.run["result"]["ok"].as_bool() == Some(true) {
+        bail!("the record completed successfully; there is nothing to resume");
+    }
+    record::check_from_record_usable(&record, registry, &base_options.working_directory)?;
+    if let Some(reason) = replay::unsupported_reason(program) {
+        bail!("resume --from-record does not support {reason}");
+    }
+    let inputs = replay::recorded_inputs(&record)?;
+    let (max_loop_iterations, loop_budget_scope) = replay::recorded_loop_budget(&record)?;
+    // The boundary comes from the recorded program, never from the program
+    // being resumed: line numbers in the untrusted file must not move the
+    // line that suppresses the completed prefix's file writes.
+    let recorded_source = record.program_source()?;
+    let recorded_text =
+        std::str::from_utf8(&recorded_source).context("the recorded program is not UTF-8")?;
+    let (boundary, failed_line) =
+        flow::repair::from_record_boundary(recorded_text, Some(source_path), &record)?;
+    flow::repair::check_resume_prefix(recorded_text, source, boundary)?;
+    let replayer = Arc::new(replay::PrefixReplayer::new(record, registry, boundary)?);
+    eprintln!(
+        "resume: {} recorded steps, {} replayable{}",
+        replayer.record().steps.len(),
+        replayer.prefix(),
+        failed_line
+            .map(|line| format!(" (first failure at line {line})"))
+            .unwrap_or_default()
+    );
+    let guard = runtime::observe::install(replayer.clone())?;
+    let mut options = base_options.clone();
+    options.inputs = inputs;
+    options.max_loop_iterations = max_loop_iterations;
+    options.loop_budget_scope = loop_budget_scope;
+    let result = runtime::with_streamed_stdout(|| runtime::run(program, registry, &options));
+    drop(guard);
+    let result = result?;
+    io::stdout()
+        .write_all(&result.output)
+        .context("could not write workflow output")?;
+    eprintln!(
+        "resume: {} steps replayed from {}, suffix ran natively, {} processes launched",
+        replayer.steps_replayed(),
+        record_directory.display(),
+        result.launched_processes
+    );
+    if let Some(exit) = result.exit {
+        io::stdout()
+            .flush()
+            .context("could not write workflow output")?;
+        if let Some(message) = &exit.message {
+            let message = flow::security::secret_redactor(registry).redact_text(message);
+            runtime::write_diagnostic(format!("{message}\n").as_bytes());
+        }
+        std::process::exit(i32::from(exit.status));
+    }
+    Ok(())
 }
 
 /// `execute show-run RECORD [--json]`.

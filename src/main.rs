@@ -477,7 +477,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             "show-run" => "Usage: execute show-run [OPTIONS] RECORD",
             "replay" => "Usage: execute replay [OPTIONS] RECORD",
             "repl" => "Usage: execute repl [OPTIONS] RECORD",
-            "repair" => "Usage: execute repair CHECKPOINT --op OPERATION",
+            "repair" => "Usage: execute repair CHECKPOINT --op OPERATION | execute repair --from-record DIR --program FILE --op OPERATION",
             "lsp" => "Usage: execute lsp [--stdio]",
             "help" => "Usage: execute help [--json] FILE",
             "attach" => "Usage: execute attach [OPTIONS] SESSION",
@@ -1821,6 +1821,38 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 total_timeout: args.total_timeout,
                 ..RunOptions::new(cwd.clone())
             };
+            #[cfg(feature = "records")]
+            if let Some(record) = args.from_record_dir.as_deref() {
+                if args.command != "resume" {
+                    bail!("--from-record applies only to resume");
+                }
+                if args.checkpoint_dir.is_some() {
+                    bail!("--from-record cannot be combined with --checkpoint");
+                }
+                if !args.inputs.is_empty()
+                    || args.answers.is_some()
+                    || !args.program_arguments.is_empty()
+                {
+                    bail!("resume --from-record takes its inputs from the record, not from --input, --answers, or positional arguments");
+                }
+                if args.retry_uncertain {
+                    bail!("--retry-uncertain applies only to checkpoint resume");
+                }
+                return record_cli::resume_from_record(
+                    &program,
+                    &canonical_file,
+                    &source,
+                    record,
+                    &registry,
+                    &options,
+                );
+            }
+            #[cfg(not(feature = "records"))]
+            if args.from_record_dir.is_some() {
+                bail!(
+                    "--from-record requires the records feature; rebuild with --features records"
+                );
+            }
             if args.once {
                 if args.checkpoint_dir.is_some() {
                     bail!("--once cannot be combined with checkpoints");
@@ -2010,6 +2042,9 @@ fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
     if args.control {
         bail!("--control applies only to finite programs, not {program_kind} programs");
     }
+    if args.from_record_dir.is_some() {
+        bail!("--from-record applies only to finite programs, not {program_kind} programs");
+    }
     Ok(())
 }
 
@@ -2032,6 +2067,7 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
         (args.retry_uncertain, "--retry-uncertain"),
         (args.max_record_bytes_set, "--max-record-bytes"),
         (args.record_dir.is_some(), "--record"),
+        (args.from_record_dir.is_some(), "--from-record"),
         (!args.allow.is_empty(), "--allow"),
         (args.what_if, "--what-if"),
         (args.confirm.is_some(), "--confirm"),
@@ -3341,7 +3377,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --from-record DIR       Replay a record's completed prefix (resume)\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

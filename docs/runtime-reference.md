@@ -705,6 +705,19 @@ a failed command may have completed part of its work. Even after editing the fai
 node, resume requires `--retry-uncertain` to authorize repeating it. Use a fresh
 checkpoint directory when starting the example again.
 
+Without a checkpoint, the same loop works from a run record: `execute repair
+--from-record DIR --program FILE --op '...'` derives the completed prefix from
+the record's first failed step, and `execute resume FILE --from-record DIR`
+replays the recorded results instead of re-running them. A prefix that no
+longer matches, bytes the record never kept, and a record that completed
+successfully refuse the repair or resume with the step and reason, as do
+truncated or torn records, short or count-mismatched traces, edited program
+copies, and changed manifests, executables, or working directories. Records
+involving an executable larger than the 64 MiB identity limit refuse as well:
+a length-only marker never proves the bytes. Records
+are not tamper-evident (no authentication code, unlike checkpoint journals):
+a fully consistently rewritten record is not detected.
+
 Resume restores the latest completed node's output, named results, and working
 directory. It skips completed commands and saves, including commands that are not
 cacheable. `and cache` still provides reusable pure results across fresh runs;

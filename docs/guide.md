@@ -507,6 +507,44 @@ execute replay .runs/deploy --as-test tests/deploy-recorded   # then: execute te
 inputs, exit status, and terminal stdout. The fixture runs the real program, so it
 needs the tools the program calls.
 
+A failed recorded run can be repaired without a checkpoint: the failure names
+the loop. `repair --from-record` edits only the failed suffix — the first
+failed step's top-level statement and everything after it — and refuses lines in
+the completed prefix. `resume --from-record` then replays the completed prefix
+from the captured blobs, launching no process and writing no file for those
+steps, and runs the repaired suffix natively:
+
+```sh
+execute run deploy.program --record .runs/deploy   # fails at line 42
+execute repair --from-record .runs/deploy --program deploy.program --op 'replace-command 42 ...'
+execute resume deploy.program --from-record .runs/deploy
+```
+
+A prefix that no longer matches the record, bytes the record never kept, and a
+record that completed successfully are refused with the step and reason instead
+of re-running anything. The same refusal covers records that outgrew their byte
+budget (`truncated`), traces the run died in the middle of (torn), finished
+traces shorter than their step count, unfinished records with a nonzero step
+count, records whose program copy no longer matches its recorded hash, and
+resumes under different applet manifests, executables, or working directories
+than the recorded run: none of them can prove the completed prefix, so none of
+them re-runs it. The resume program must keep every byte before the recorded
+boundary; the boundary itself comes from the recorded program, never from the
+file being resumed. The repair is logged in `repairs.jsonl` beside the record;
+`run.json` and `trace.jsonl` are never modified.
+
+Records are not tamper-evident. Unlike checkpoint journals, `run.json` and
+`trace.jsonl` carry no authentication code, so an edit that rewrites those
+files fully consistently — for example flipping a step's failure flag together
+with its status while keeping every count — is not detected. Swapping an
+executable behind an identical manifest is detected: the record pins the bytes
+each observed binary resolved to. Executables larger than the 64 MiB identity
+limit pin only their length, which never proves their bytes, so any record
+involving one refuses repair and resume instead of replaying its prefix.
+Only resume records written on this machine
+by a run you trust, from a record directory only you can write (record
+directories are private to their owner).
+
 ## Try statements in a session
 
 `test`, `run-parts`, and `repl` accept `--capability-policy FILE`,

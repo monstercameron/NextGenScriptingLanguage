@@ -54,6 +54,29 @@ class FeatureMatrixTests(unittest.TestCase):
         self.assertIn("--test prompt_inputs", command)
         self.assertIn("--test child_env_minimize_windows", command)
 
+    def test_repair_from_record_portable_acceptance_runs_on_both_windows_targets(self) -> None:
+        windows = self.workflow.split("  windows:\n", maxsplit=1)[1]
+        self.assertIn("target: x86_64-pc-windows-msvc", windows)
+        self.assertIn("target: aarch64-pc-windows-msvc", windows)
+        commands = [
+            line for line in windows.splitlines()
+            if "cargo test --locked --target ${{ matrix.target }}" in line
+            and "--test repair_from_record" in line
+        ]
+        portable = [
+            command for command in commands
+            if "recorded_failure_repairs_and_resumes_without_repeating_completed_effects_portable" in command
+        ]
+        oversize = [
+            command for command in commands
+            if "repair_and_resume_refuse_an_oversize_executable_without_rerunning" in command
+        ]
+        self.assertTrue(portable, "portable repair/resume acceptance is missing from native Windows CI")
+        self.assertTrue(oversize, "oversize fail-closed acceptance is missing from native Windows CI")
+        for command in portable + oversize:
+            with self.subTest(command=command):
+                self.assertIn("--features full,test-fixtures", command)
+
     def test_windows_service_answers_privacy_regression_requires_tooling_and_runs_in_ci(self) -> None:
         source = (ROOT / "tests/lane_w1_regressions.rs").read_text(encoding="utf-8")
         self.assertRegex(

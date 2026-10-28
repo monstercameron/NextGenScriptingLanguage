@@ -1,6 +1,6 @@
 {
   "name": "jev.ask",
-  "description": "Asks the configured JEV model provider the named questions and returns its structured answers with usage metadata.",
+  "description": "Asks the configured JEV model provider the named questions and returns its structured answers with usage metadata. The env_file and fixture options read files, and live requests connect to the model endpoint.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,
@@ -105,5 +105,25 @@
         }
       ]
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "network.connect"
+    ],
+    "effects": [
+      "filesystem.read",
+      "network.connect"
+    ]
+  }
 }

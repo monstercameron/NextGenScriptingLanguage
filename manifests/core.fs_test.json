@@ -49,7 +49,9 @@
     "capabilities": [
       "filesystem.read"
     ],
-    "effects": [],
+    "effects": [
+      "filesystem.read"
+    ],
     "ports": {
       "inputs": {
         "path": {

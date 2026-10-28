@@ -405,6 +405,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --check
       - run: rustfmt --edition 2021 --check src/runtime/shared.rs
+      - name: Audit native-tool contracts and bundled index freshness
+        # Pure-Python static audit: needs no build, so it runs even when the
+        # bundled manifest index is stale (coordinator regenerates it).
+        shell: bash
+        run: python tests/native_tool_contracts.py
       - run: cargo clippy --locked --features full,test-fixtures --target ${{ matrix.target }} --all-targets -- -D warnings
       - run: cargo build --locked --target ${{ matrix.target }} --release --features full,test-fixtures --bins
       - name: Verify Git for Windows MSYS printf fixture

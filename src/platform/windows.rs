@@ -10,7 +10,7 @@ use std::os::windows::{
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicI32, Ordering},
     Arc, Mutex, OnceLock, Weak,
 };
 use windows_sys::Win32::{
@@ -66,11 +66,18 @@ where
 pub(crate) fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
-type Registration = (Weak<AtomicBool>, Option<Weak<std::sync::atomic::AtomicU8>>);
+type Registration = (
+    Weak<AtomicBool>,
+    Option<Weak<std::sync::atomic::AtomicU8>>,
+    Weak<AtomicBool>,
+    Weak<AtomicI32>,
+);
 
 pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
+    cleanup: Arc<AtomicBool>,
+    signal_code: Arc<AtomicI32>,
 ) -> Result<()> {
     static FLAGS: OnceLock<Mutex<Vec<Registration>>> = OnceLock::new();
     static INSTALLED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
@@ -80,17 +87,36 @@ pub(crate) fn signals(
             super::record_cancel_signal(2);
             if let Some(flags) = FLAGS.get() {
                 let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
-                flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-                for (cancel, drain) in flags.iter() {
+                flags.retain(|(cancel, _, _, _)| cancel.strong_count() != 0);
+                for (cancel, drain, cleanup, signal_code) in flags.iter() {
+                    // The run's own slot is per-run truth; the process-wide
+                    // fallback keeps the CLI entry point reporting after the
+                    // run (and its slot) is gone.
+                    if let Some(code) = signal_code.upgrade() {
+                        code.store(2, Ordering::SeqCst);
+                    }
                     // A run with an `on interrupt` body drains on its first interrupt.
+                    // A repeat interrupt also marks the shared cleanup flag so a
+                    // `finally`, `on exit` or `on interrupt` body aborts at once.
                     if let Some(drain) = drain.as_ref().and_then(|weak| weak.upgrade()) {
                         if super::request_drain(&drain) {
                             continue;
                         }
                         drain.store(super::DRAIN_CANCELLED, Ordering::SeqCst);
+                        if let Some(flag) = cancel.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        if let Some(flag) = cleanup.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        continue;
                     }
                     if let Some(flag) = cancel.upgrade() {
-                        flag.store(true, Ordering::Relaxed);
+                        if flag.swap(true, Ordering::Relaxed) {
+                            if let Some(flag) = cleanup.upgrade() {
+                                flag.store(true, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
             }
@@ -105,8 +131,13 @@ pub(crate) fn signals(
         .unwrap()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-    flags.push((Arc::downgrade(&cancel), drain.as_ref().map(Arc::downgrade)));
+    flags.retain(|(cancel, _, _, _)| cancel.strong_count() != 0);
+    flags.push((
+        Arc::downgrade(&cancel),
+        drain.as_ref().map(Arc::downgrade),
+        Arc::downgrade(&cleanup),
+        Arc::downgrade(&signal_code),
+    ));
     Ok(())
 }
 

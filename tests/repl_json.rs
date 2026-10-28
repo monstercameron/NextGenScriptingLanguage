@@ -2,6 +2,9 @@ use serde_json::Value;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 #[test]
 fn json_repl_returns_one_response_per_request_and_reports_block_spans() {
     let directory = tempfile::tempdir().unwrap();
@@ -107,11 +110,9 @@ fn json_redaction_preserves_protocol_keys_and_redacts_marker_containing_secrets(
         r#"{"version":1,"secrets":{"environment":{"secret.echo":["REPL_SECRET","KEY_SECRET"]}}}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    // The data-flow policy loader accepts only an owner-private file: on Windows
+    // an inherited tempdir DACL is refused before any redaction runs.
+    private_answers::make_private(&policy);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--manifest-dir"])
@@ -255,11 +256,9 @@ fn failed_json_submission_returns_redacted_partial_stdout() {
         r#"{"version":1,"secrets":{"environment":{"secret.fail":["REPL_SECRET"]}}}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    // Same private-file requirement as above; without it Windows refuses the
+    // policy before the failure redaction runs.
+    private_answers::make_private(&policy);
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--manifest-dir"])
         .arg(&manifests)
@@ -335,11 +334,9 @@ fn failed_multicommand_submission_keeps_ordered_redacted_partial_stdout() {
         r#"{"version":1,"secrets":{"environment":{"first.echo":["FIRST_SECRET"],"last.fail":["FAILED_SECRET"]}}}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    // Same private-file requirement as above; without it Windows refuses the
+    // policy before the ordered redaction runs.
+    private_answers::make_private(&policy);
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--manifest-dir"])
         .arg(&manifests)
@@ -400,11 +397,9 @@ fn failed_pipeline_submission_returns_redacted_terminal_partial_stdout() {
         r#"{"version":1,"secrets":{"environment":{"pipeline.last":["PIPELINE_SECRET"]}}}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    // Same private-file requirement as above; without it Windows refuses the
+    // policy before the pipeline redaction runs.
+    private_answers::make_private(&policy);
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--manifest-dir"])
         .arg(&manifests)
@@ -589,11 +584,9 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
         r#"{"version":1,"secrets":{"environment":{"secret.echo":["REPL_SECRET"]}}}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    // Same private-file requirement as above; without it Windows refuses the
+    // policy before the protocol redaction runs.
+    private_answers::make_private(&policy);
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--manifest-dir"])
         .arg(&manifests)

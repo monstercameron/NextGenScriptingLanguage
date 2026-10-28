@@ -6411,10 +6411,7 @@ mod lane_v2_path_tests {
             (root.path().join("one"), path_one.as_os_str()),
             (root.path().join("two"), path_one.as_os_str()),
             (root.path().join("two"), path_two.as_os_str()),
-            (
-                root.path().join("two").join("."),
-                path_two.as_os_str(),
-            ),
+            (root.path().join("two").join("."), path_two.as_os_str()),
         ] {
             assert!(cache.lookup("absent", &cwd, path).is_err());
             assert_eq!(cache.entries[0].as_os_str(), path);
@@ -6455,10 +6452,7 @@ mod lane_v2_path_tests {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(second.join(name), fs::Permissions::from_mode(0o755)).unwrap();
         }
-        assert_eq!(
-            cache.lookup(name, &cwd, &path).unwrap(),
-            second.join(name)
-        );
+        assert_eq!(cache.lookup(name, &cwd, &path).unwrap(), second.join(name));
     }
 
     #[cfg(unix)]

@@ -713,6 +713,41 @@ pub(in crate::runtime) fn group_journal<'a>(
     )))
 }
 
+/// Early resume gate for a parallel `parallel for each` group: verify the
+/// replayed commits and pending elements against the program as it resolves
+/// now, before the group node is re-begun and before any element launches.
+/// This is the same verification `group_journal` performs when the group step
+/// executes; running it at restore time makes a refusal happen before any
+/// other step of the resumed run can execute, and keeps the refusal intact
+/// even if the group step is reached through a path that does not journal it.
+/// The replay is only peeked, not taken: `group_journal` still consumes it
+/// and re-verifies when the group actually runs (e.g. under
+/// `--retry-uncertain`, where the pending check passes).
+pub(in crate::runtime) fn group_resume_gate(
+    journal: &Journal,
+    program: &Program,
+    index: usize,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<()> {
+    if !tracks_in_flight(journal, program, index) {
+        return Ok(());
+    }
+    let StepKind::TaskGroup {
+        each: Some(each), ..
+    } = &program.steps[index].kind
+    else {
+        return Ok(());
+    };
+    let Some(replay) = journal.element_replay() else {
+        return Ok(());
+    };
+    let items = list_items(&each.values, bindings)?;
+    let node_fingerprint = journal.element_node_fingerprint()?;
+    verify_commits(&node_fingerprint, &replay.commits, &items, false)?;
+    check_pending(journal, &replay.pending)?;
+    Ok(())
+}
+
 /// Commits are group-synced: at most one sync per interval while elements run, and
 /// always before the journal is written and when the journal is dropped.
 const ELEMENT_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
@@ -940,6 +975,11 @@ impl Journal {
 
     pub(super) fn take_element_replay(&mut self) -> Option<ElementReplay> {
         self.element_replay.take()
+    }
+
+    /// The replayed element log without consuming it, for the early resume gate.
+    pub(super) fn element_replay(&self) -> Option<&ElementReplay> {
+        self.element_replay.as_ref()
     }
 
     fn load_element_state(&self, disk: &ElementStateDisk) -> Result<ExecutionState> {

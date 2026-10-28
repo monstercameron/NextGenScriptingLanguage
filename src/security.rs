@@ -1800,6 +1800,7 @@ pub(crate) fn windows_allow_ace_grants_write(mask: u32) -> bool {
 ///   control over the verified path.
 /// - `GENERIC_WRITE` (`0x40000000`) and `GENERIC_ALL` (`0x10000000`) refuse:
 ///   umbrella rights that include the refused rights above.
+///
 /// `FILE_READ_EA` (`0x8`) is a read right and refuses nowhere (already
 /// excluded from the leaf mask).
 #[cfg_attr(not(windows), allow(dead_code))]

@@ -5239,6 +5239,39 @@ mod opt_manifest_binary_path_tests {
     }
 
     #[test]
+    fn opt_manifest_binary_path_resolves_absolute_non_utf8_entry() {
+        let root = tempdir().unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let binary = "probe";
+
+        // An absolute directory whose bytes are not valid UTF-8. The lookup
+        // must resolve an executable through it, not merely preserve the
+        // bytes while refusing: both sides share `split_paths`, so parity
+        // alone would pass even if the bytes were mangled.
+        let mut entry_bytes = root.path().as_os_str().as_encoded_bytes().to_vec();
+        entry_bytes.extend_from_slice(b"/non-utf8-\x80");
+        let entry = PathBuf::from(OsString::from_vec(entry_bytes));
+        assert!(entry.is_absolute());
+        let candidate = entry.join(binary);
+        let path = opt_manifest_join_path(std::slice::from_ref(&entry));
+        // APFS rejects invalid UTF-8 filenames, so the fixture cannot be
+        // planted there; the split bytes must still parse identically.
+        if cfg!(target_os = "macos") {
+            opt_manifest_assert_path_parity(binary, &cwd, &path);
+            assert!(binary_path_from_path(binary, &cwd, &path).is_err());
+            return;
+        }
+        opt_manifest_write_file(&candidate, 0o755).unwrap();
+        opt_manifest_assert_path_parity(binary, &cwd, &path);
+        let selected = binary_path_from_path(binary, &cwd, &path).unwrap();
+        assert_eq!(
+            selected.as_os_str().as_encoded_bytes(),
+            candidate.as_os_str().as_encoded_bytes()
+        );
+    }
+
+    #[test]
     fn opt_manifest_slash_binary_keeps_direct_lookup_and_metadata_error() {
         let root = tempdir().unwrap();
         let cwd = root.path().join("work");
@@ -6394,6 +6427,40 @@ mod lane_v2_path_tests {
         assert!(cache.entries.is_empty());
     }
 
+    #[test]
+    fn lane_v2_path_cache_drops_relative_entries_without_reordering() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("abs-first-514");
+        let second = root.path().join("abs-second-514");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let relative = PathBuf::from("relative-514");
+        let path = std::env::join_paths([&first, &relative, &second]).unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let mut cache = LaunchPathCache::default();
+        // A filter that reordered entries or truncated at the first relative
+        // entry would go uncaught by single-entry tests; the surviving
+        // absolute entries must keep their order.
+        let entries = cache.components(&cwd, &path);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], first);
+        assert_eq!(entries[1], second);
+        // The trailing absolute entry must still be reachable: plant the
+        // executable only there and prove the lookup reaches past the gap.
+        let name = if cfg!(windows) { "probe.exe" } else { "probe" };
+        fs::write(second.join(name), b"fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(second.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            cache.lookup(name, &cwd, &path).unwrap(),
+            second.join(name)
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn lane_v2_path_cache_preserves_symlink_alias_and_permission_changes() {
@@ -6428,6 +6495,28 @@ mod lane_v2_path_tests {
         assert_eq!(cache.entries[0].as_os_str(), absolute.as_os_str());
         assert!(cache.lookup("absent", root.path(), &path).is_err());
         assert_eq!(cache.entries[0].as_os_str(), absolute.as_os_str());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lane_v2_path_cache_drops_drive_relative_and_rooted_entries() {
+        // `C:foo` is drive-relative and `\foo` is rooted without a drive:
+        // `Path::is_absolute` is false for both, so neither may survive
+        // filtering even though each carries a separator-like shape.
+        let root = tempfile::tempdir().unwrap();
+        let absolute = root.path().join("real-514");
+        let path = std::env::join_paths([
+            absolute.as_os_str(),
+            OsStr::new("C:drive-relative-514"),
+            OsStr::new("\\rooted-no-drive-514"),
+            OsStr::new("rel"),
+        ])
+        .unwrap();
+        let mut cache = LaunchPathCache::default();
+        let entries = cache.components(root.path(), &path);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], absolute);
+        assert!(cache.lookup("absent", root.path(), &path).is_err());
     }
 
     #[test]

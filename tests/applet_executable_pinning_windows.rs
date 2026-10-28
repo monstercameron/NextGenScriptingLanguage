@@ -140,9 +140,14 @@ fn bare_name_path_ignores_cwd_and_relative_entries() {
             "arguments": [{"literal": "write"}, {"literal": "REAL"}],
         }),
     );
-    // Leading empty entry, `.`, and a bare relative entry would all resolve
-    // against the runtime cwd under the old lookup; all are ignored now.
-    let path_value = format!(";.;rel;{}", real.display());
+    // Leading empty entry, `.`, a bare relative entry, a drive-relative
+    // entry (`C:foo`), and a rooted entry without a drive (`\foo`) would all
+    // resolve against the runtime cwd under the old lookup; all are ignored
+    // now, so the shadow (an invalid PE) cannot win over the real entry.
+    let path_value = format!(
+        ";.;rel;C:no-such-drive-relative-514;\\no-such-rooted-514;{}",
+        real.display()
+    );
     let result = run_case(&shadow, &catalog, "run probe\n", Some(&path_value));
     assert!(
         result.status.success(),

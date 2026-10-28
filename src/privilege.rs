@@ -4,14 +4,21 @@
 //! Classification is by executable name, after its directory and any `.exe` suffix
 //! are removed, compared case-insensitively. Both the name written in the program and
 //! the name of the executable that would actually run (the canonical resolved path,
-//! see `capabilities::check_privileged_launch`) are checked, so a link or a renamed
-//! copy of an elevator is still an elevator. A name that is not on a list is not
-//! recognised: this is a marker and a policy hook, not a sandbox.
+//! see `capabilities::check_privileged_launch`) are checked, so a link, an absolute
+//! path, a `PATH` alias, or a renamed copy of a listed program is still classified
+//! the same way. A trailing version (`python3.12`, `lua5.4`) is ignored the same
+//! way. A name that is not on a list is not recognised: this is a review aid and a
+//! policy hook, not a sandbox and not a complete confinement boundary. Fail-closed
+//! enforcement is the strict capability policy itself with OS confinement in
+//! untrusted mode; `deny_privileged` only refuses the known names below.
 //!
 //! The lists are conservative. `deny_privileged` in a capability policy refuses every
-//! listed elevator, and it also refuses every wrapper and shell listed here, because
-//! their arguments can name a program the program text never mentions. A wrapper can
-//! be allowed by name with `allow_wrappers`. Elevators cannot be allowed.
+//! listed elevator, and it also refuses every wrapper and shell listed here whatever
+//! their arguments, because their arguments can name a program the program text
+//! never mentions (including host-escape, scheduling, D-Bus, and desktop-launch
+//! arguments such as `flatpak-spawn --host`, `at` job text, a `systemd1` D-Bus call,
+//! or `gio open`). A wrapper can be allowed by name with `allow_wrappers`.
+//! Elevators cannot be allowed.
 
 /// Executables that run a command with elevated rights.
 pub const ELEVATORS: &[&str] = &[
@@ -67,6 +74,32 @@ pub const WRAPPERS: &[&str] = &[
     "tmux",
     "screen",
     "expect",
+    // Container-host escape and container CLIs: the arguments name the program
+    // that runs outside Execute's view (for example `flatpak-spawn --host`,
+    // `toolbox run`, `docker exec`, `kubectl exec`). Denied whatever the
+    // subcommand, so a benign-looking invocation cannot pass as harmless.
+    "flatpak-spawn",
+    "host-spawn",
+    "distrobox",
+    "distrobox-host-exec",
+    "toolbox",
+    "docker",
+    "podman",
+    "kubectl",
+    // Scheduling and deferred execution: the command runs later, outside the run.
+    "at",
+    "batch",
+    "crontab",
+    // D-Bus launchers: a message can start a transient unit, activate a name,
+    // or reach host services such as `org.freedesktop.systemd1` and
+    // `org.freedesktop.Flatpak`. Denied whatever the destination.
+    "dbus-send",
+    "gdbus",
+    "busctl",
+    // Desktop launchers: the arguments name a URI or file handed to a desktop
+    // handler outside Execute's view (for example `gio open`).
+    "xdg-open",
+    "gio",
 ];
 
 /// Interpreters, text processors and tools with command hooks (`awk 'BEGIN{system()}'`,
@@ -193,13 +226,34 @@ pub fn is_elevator(binary: &str) -> bool {
 }
 
 /// Whether a step is privileged or is a wrapper that can run another program. This is
-/// the single answer `explain` (text and JSON) uses. It looks at the name only.
+/// the name-only answer; `explain` combines it with the resolved path below so an
+/// alias, symlink, or absolute path to a listed program is still privileged.
 pub fn is_privileged_invocation(binary: &str) -> bool {
     match classify(binary) {
         Privilege::Standard => false,
         Privilege::Wrapper => !is_interpreter(binary),
         Privilege::Elevator => true,
     }
+}
+
+/// Whether an explain row is a privileged step, given the binary as written and the
+/// canonical resolved path when it is known. An invocation whose binary is unknown
+/// is privileged, so an unclassified step cannot pass as harmless. A known binary
+/// that resolves to a listed launcher or elevator is privileged even when the
+/// written name is an unlisted alias, which keeps `explain` consistent with
+/// `capabilities::check_privileged_launch`.
+pub fn is_privileged_step(binary: Option<&str>, resolved_path: Option<&str>) -> bool {
+    if let Some(path) = resolved_path {
+        let privileged = match classify(path) {
+            Privilege::Standard => false,
+            Privilege::Wrapper => !is_interpreter(path),
+            Privilege::Elevator => true,
+        };
+        if privileged {
+            return true;
+        }
+    }
+    binary.is_none_or(is_privileged_invocation)
 }
 
 /// Whether the name is on [`INTERPRETERS`]: a wrapper for `deny_privileged`, but not
@@ -316,5 +370,74 @@ mod tests {
         assert_eq!(Privilege::Elevator.label(), "elevator");
         assert_eq!(Privilege::Wrapper.label(), "wrapper");
         assert_eq!(Privilege::Standard.label(), "standard");
+    }
+
+    #[test]
+    fn host_escape_launchers_are_privileged_wrappers() {
+        for name in [
+            "flatpak-spawn",
+            "host-spawn",
+            "distrobox",
+            "distrobox-host-exec",
+            "toolbox",
+            "docker",
+            "podman",
+            "kubectl",
+        ] {
+            assert_eq!(classify(name), Privilege::Wrapper, "{name}");
+            assert!(is_privileged_invocation(name), "{name}");
+            assert!(
+                is_privileged_invocation(&format!("/usr/bin/{name}")),
+                "{name} by absolute path"
+            );
+        }
+    }
+
+    #[test]
+    fn schedulers_are_privileged_wrappers_whatever_their_arguments() {
+        for name in ["at", "batch", "crontab"] {
+            assert_eq!(classify(name), Privilege::Wrapper, "{name}");
+            assert!(is_privileged_invocation(name), "{name}");
+            assert!(
+                is_privileged_invocation(&format!("/usr/bin/{name}")),
+                "{name} by absolute path"
+            );
+        }
+    }
+
+    #[test]
+    fn dbus_and_desktop_launchers_are_privileged_wrappers() {
+        for name in [
+            "dbus-send",
+            "gdbus",
+            "busctl",
+            "xdg-open",
+            "gio",
+        ] {
+            assert_eq!(classify(name), Privilege::Wrapper, "{name}");
+            assert!(is_privileged_invocation(name), "{name}");
+        }
+        // Case, directory, and Windows suffix do not hide a launcher.
+        assert!(is_privileged_invocation("/usr/bin/DBUS-SEND"));
+        assert!(is_privileged_invocation("C:\\Windows\\System32\\gio.exe"));
+        assert!(is_privileged_invocation("/usr/bin/xdg-open"));
+    }
+
+    #[test]
+    fn resolved_path_keeps_an_alias_privileged() {
+        // The written name is unlisted, but the executable that would run is a
+        // listed launcher: still privileged, matching `check_privileged_launch`.
+        assert!(is_privileged_step(Some("tool"), Some("/usr/bin/docker")));
+        assert!(is_privileged_step(Some("tool"), Some("/usr/bin/at")));
+        assert!(is_privileged_step(Some("tool"), Some("/usr/bin/dbus-send")));
+        assert!(is_privileged_step(Some("tool"), Some("/usr/bin/gio")));
+        assert!(is_privileged_step(
+            Some("tool"),
+            Some("/usr/bin/flatpak-spawn")
+        ));
+        assert!(!is_privileged_step(Some("printf"), Some("/usr/bin/printf")));
+        assert!(!is_privileged_step(Some("printf"), None));
+        // An unknown binary stays privileged (fail closed).
+        assert!(is_privileged_step(None, None));
     }
 }

@@ -28,7 +28,7 @@ use crate::ast::{
     ReusableProgram, Step, StepKind, Value,
 };
 use crate::manifest::{Builtin, Registry};
-use crate::privilege::is_privileged_invocation;
+use crate::privilege::is_privileged_step;
 use anyhow::Result;
 use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1603,9 +1603,15 @@ fn is_write_effect(effect: &str) -> bool {
 
 /// Whether a row is a privileged step: an elevator, or a wrapper that can run
 /// another program. An invocation whose binary is unknown is privileged, so an
-/// unclassified step cannot pass as harmless.
+/// unclassified step cannot pass as harmless. Both the written binary and the
+/// canonical resolved path are checked, so an absolute path, symlink, or alias
+/// to a listed launcher stays privileged, matching `check_privileged_launch`.
 fn row_privileged(row: &Row) -> bool {
-    row.invocation && row.binary.as_deref().is_none_or(is_privileged_invocation)
+    row.invocation
+        && is_privileged_step(
+            row.binary.as_deref(),
+            row.resolved_path.as_deref(),
+        )
 }
 
 fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {

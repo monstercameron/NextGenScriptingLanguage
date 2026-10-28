@@ -149,8 +149,16 @@ variables a program may read through `accept ... from environment`; it is empty
 by default. `deny_privileged` classifies interpreters and text processors such
 as Python, Perl, Node, awk, sed, git, make and tar as wrappers that require
 `allow_wrappers`. The explain/effects gate marks launchers such as find, xargs,
-ssh, parallel, bwrap and tmux as privileged. Versioned executable names such as
-`python3.12` use the same classification as `python`.
+ssh, parallel, bwrap, tmux, container-host escape (`flatpak-spawn`, `host-spawn`,
+`distrobox-host-exec`, `toolbox`, `docker`, `podman`, `kubectl`), schedulers
+(`at`, `batch`, `crontab`), D-Bus launchers (`dbus-send`, `gdbus`, `busctl`), and
+desktop launchers (`xdg-open`, `gio`) as privileged, whatever their arguments. An
+absolute path, symlink, alias, or canonical resolved path to a listed program is
+classified the same way. Versioned executable names such as
+`python3.12` use the same classification as `python`. The list is a review aid,
+not a sandbox or a complete boundary: unlisted or renamed tools are not
+recognised, and enforcement stays with the strict capability policy and OS
+confinement in untrusted mode.
 
 `--record` redacts secret and environment input values. The review fingerprint
 covers module sources and packages. Replay refuses detached launches and handovers.

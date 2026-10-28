@@ -70,7 +70,12 @@ fn shell_quote(path: &Path) -> String {
 
 #[cfg(target_os = "linux")]
 fn python_quote(path: &Path) -> String {
-    format!("\"{}\"", path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\""))
+    format!(
+        "\"{}\"",
+        path.to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    )
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -224,8 +229,8 @@ fn untrusted_mode_denies_an_ungranted_write() {
     );
     #[cfg(target_os = "macos")]
     {
-        let child_stderr = fs::read_to_string(layout.verdict_dir.join("write-verdict.err"))
-            .unwrap_or_default();
+        let child_stderr =
+            fs::read_to_string(layout.verdict_dir.join("write-verdict.err")).unwrap_or_default();
         assert!(
             child_stderr.contains("Operation not permitted"),
             "{label}: expected an OS sandbox denial, got: {child_stderr}"

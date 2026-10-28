@@ -1844,9 +1844,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 // sanitizer with streamed output, so a forged command split
                 // across the stream boundary is still neutralized. The flush
                 // releases a trailing line-leading `:` at true end of stream.
-                let output = flow::github_actions::filter_stdout_final(&result.output);
-                io::stdout()
-                    .write_all(&output)
+                // The sink lock spans filter and write so a concurrent mask
+                // cannot interleave between classification and landing.
+                flow::github_actions::write_stdout_final(&result.output)
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // Same contract as the finite path: flush output, report the
@@ -1948,9 +1948,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 };
                 // Same end-of-stream sanitization as `--once`: the shared stdout
                 // sanitizer keeps line-start state across streamed writes.
-                let output = flow::github_actions::filter_stdout_final(&result.output);
-                io::stdout()
-                    .write_all(&output)
+                // The sink lock spans filter and write (see above).
+                flow::github_actions::write_stdout_final(&result.output)
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // The pipeline output above is already delivered. Flush it

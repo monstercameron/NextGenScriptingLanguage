@@ -26,11 +26,7 @@ fn run_source(source: &str, args: &[&str], github_actions: bool) -> Output {
     command.output().unwrap()
 }
 
-fn run_with_manifests(
-    source: &str,
-    manifests: &std::path::Path,
-    github_actions: bool,
-) -> Output {
+fn run_with_manifests(source: &str, manifests: &std::path::Path, github_actions: bool) -> Output {
     let directory = tempfile::tempdir().unwrap();
     let program = directory.path().join("job.program");
     fs::write(&program, source).unwrap();
@@ -150,15 +146,9 @@ fn assert_neutralized(text: &str, forged: &str) {
     if let Some(offset) = forged.find("##[") {
         // Legacy commands are searched for anywhere in the line: the output
         // must not contain the raw `##[` window at all.
-        assert!(
-            !text.contains("##["),
-            "legacy command leaked in {text:?}"
-        );
+        assert!(!text.contains("##["), "legacy command leaked in {text:?}");
         let mut neutralized = forged.to_owned();
-        neutralized.replace_range(
-            offset..offset + 3,
-            &format!("#{ZWSP}#["),
-        );
+        neutralized.replace_range(offset..offset + 3, &format!("#{ZWSP}#["));
         assert!(
             text.contains(&neutralized),
             "neutralized command missing: {neutralized:?} in {text:?}"
@@ -181,13 +171,10 @@ fn assert_neutralized(text: &str, forged: &str) {
 
 #[test]
 fn streamed_child_forgery_is_neutralized_under_ci() {
-    let source = "run \"sh\" with arguments [\"-c\", \"printf '::stop-commands::x\\n::error::boom\\n'\"]\n";
+    let source =
+        "run \"sh\" with arguments [\"-c\", \"printf '::stop-commands::x\\n::error::boom\\n'\"]\n";
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert_neutralized(&text, "::stop-commands::x");
     assert_neutralized(&text, "::error::boom");
@@ -203,11 +190,7 @@ fn final_program_output_forgery_is_neutralized_under_ci() {
         "use value out\n",
     );
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert_neutralized(&text, "::error::final");
     assert!(text.contains("first\n"), "{text:?}");
@@ -215,14 +198,9 @@ fn final_program_output_forgery_is_neutralized_under_ci() {
 
 #[test]
 fn successful_stderr_forgery_is_preserved_sanitized_under_ci() {
-    let source =
-        "run \"sh\" with arguments [\"-c\", \"printf '::error::via-stderr\\n' >&2\"]\n";
+    let source = "run \"sh\" with arguments [\"-c\", \"printf '::error::via-stderr\\n' >&2\"]\n";
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stderr(&output);
     assert_neutralized(&text, "::error::via-stderr");
     // The success-path stderr is re-emitted, not swallowed.
@@ -233,11 +211,7 @@ fn successful_stderr_forgery_is_preserved_sanitized_under_ci() {
 fn multiline_and_midline_pairs_only_neutralize_line_leading_prefixes() {
     let source = "run \"sh\" with arguments [\"-c\", \"printf 'ok\\n::notice::hi\\nmid a::b\\n  ::error::indented\\n'\"]\n";
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert_neutralized(&text, "::notice::hi");
     // The runner trims leading whitespace, so the indented command is
@@ -253,11 +227,7 @@ fn leading_whitespace_forgery_is_neutralized_under_ci() {
     // them before checking the prefix.
     let source = "run \"sh\" with arguments [\"-c\", \"printf '   ::error::spaces\\n\\t::warning::tab\\n'\"]\n";
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert_neutralized(&text, "::error::spaces");
     assert_neutralized(&text, "::warning::tab");
@@ -266,13 +236,10 @@ fn leading_whitespace_forgery_is_neutralized_under_ci() {
 #[test]
 fn legacy_hash_command_is_neutralized_anywhere_under_ci() {
     // The legacy runner searches for `##[` anywhere in the line.
-    let source = "run \"sh\" with arguments [\"-c\", \"printf '##[error]legacy\\nmid ##[warning]x\\n'\"]\n";
+    let source =
+        "run \"sh\" with arguments [\"-c\", \"printf '##[error]legacy\\nmid ##[warning]x\\n'\"]\n";
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert_neutralized(&text, "##[error]legacy");
     assert_neutralized(&text, "##[warning]x");
@@ -288,16 +255,8 @@ fn registered_secret_emits_an_escaped_mask_line_under_ci() {
         "accept token as text from secret prompt \"Token?\"\n",
         "run \"sh\" with arguments [\"-c\", \"printf '%s\\n' \\\"$TOKEN\\\"\"] and environment {\"TOKEN\": token}\n",
     );
-    let output = run_source(
-        source,
-        &[ "--input", &format!("token={canary}") ],
-        true,
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    let output = run_source(source, &["--input", &format!("token={canary}")], true);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     let escaped = canary.replace('%', "%25");
     assert!(
@@ -312,14 +271,13 @@ fn registered_secret_emits_an_escaped_mask_line_under_ci() {
 fn output_stays_raw_without_the_ci_marker() {
     let source = "run \"sh\" with arguments [\"-c\", \"printf '::error::raw\\n'\"]\n";
     let output = run_source(source, &[], false);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert!(text.contains("::error::raw\n"), "{text:?}");
-    assert!(!text.contains(ZWSP), "non-CI output was rewritten: {text:?}");
+    assert!(
+        !text.contains(ZWSP),
+        "non-CI output was rewritten: {text:?}"
+    );
 }
 
 #[test]
@@ -353,35 +311,22 @@ fn manifest_inherit_forgery_is_neutralized_under_ci() {
     // A manifest `inherit` disposition must not bypass sanitization: under
     // hardening the stream is force-captured and re-emitted filtered.
     let root = inherit_manifests();
-    let output = run_with_manifests(
-        "run forge-inherit\n",
-        &root.path().join("manifests"),
-        true,
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    let output = run_with_manifests("run forge-inherit\n", &root.path().join("manifests"), true);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_neutralized(&stdout(&output), "::error::via-inherit");
 }
 
 #[test]
 fn manifest_inherit_output_stays_raw_without_the_ci_marker() {
     let root = inherit_manifests();
-    let output = run_with_manifests(
-        "run forge-inherit\n",
-        &root.path().join("manifests"),
-        false,
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    let output = run_with_manifests("run forge-inherit\n", &root.path().join("manifests"), false);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert!(text.contains("::error::via-inherit\n"), "{text:?}");
-    assert!(!text.contains(ZWSP), "non-CI output was rewritten: {text:?}");
+    assert!(
+        !text.contains(ZWSP),
+        "non-CI output was rewritten: {text:?}"
+    );
 }
 
 #[test]
@@ -395,11 +340,7 @@ fn sensitive_streamed_value_is_masked_before_it_is_echoed() {
         "run \"sh\" with arguments [\"-c\", \"printf '::error::masked-forgery\\n'\"] as token and keep secret\n",
     );
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert_no_glued_masks(&text);
     let commands = runner_commands(&text);
@@ -408,9 +349,7 @@ fn sensitive_streamed_value_is_masked_before_it_is_echoed() {
         "no mask recognized in {text:?}"
     );
     assert!(
-        commands
-            .iter()
-            .all(|(name, _)| name == "add-mask"),
+        commands.iter().all(|(name, _)| name == "add-mask"),
         "forgery parsed as a command in {text:?} (parsed: {commands:?})"
     );
 }
@@ -430,11 +369,7 @@ fn masks_start_their_own_lines_after_partial_output() {
         "run \"sh\" with arguments [\"-c\", \"printf '::error::after-mask\\n'\"]\n",
     );
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert_no_glued_masks(&text);
     assert!(
@@ -453,15 +388,10 @@ fn masks_start_their_own_lines_after_partial_output() {
     // Neither forged command parses: the literals only travel as mask data,
     // and the post-mask copy is neutralized.
     assert!(
-        commands
-            .iter()
-            .all(|(name, _)| name == "add-mask"),
+        commands.iter().all(|(name, _)| name == "add-mask"),
         "forgery parsed as a command in {text:?} (parsed: {commands:?})"
     );
-    assert_neutralized(
-        &non_mask_text(&text),
-        "::error::after-mask",
-    );
+    assert_neutralized(&non_mask_text(&text), "::error::after-mask");
 }
 
 #[test]
@@ -476,11 +406,7 @@ fn masks_start_a_fresh_line_after_partial_stderr() {
         "run \"sh\" with arguments [\"-c\", \"printf 'value\\n'\"] as token and keep secret\n",
     );
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(stderr(&output), "err-lead");
     let text = stdout(&output);
     assert_no_glued_masks(&text);
@@ -494,9 +420,7 @@ fn masks_start_a_fresh_line_after_partial_stderr() {
         "value mask missing in {text:?} (parsed: {commands:?})"
     );
     assert!(
-        commands
-            .iter()
-            .all(|(name, _)| name == "add-mask"),
+        commands.iter().all(|(name, _)| name == "add-mask"),
         "unexpected runner command in {text:?} (parsed: {commands:?})"
     );
 }
@@ -593,9 +517,7 @@ fn masks_parse_in_a_merged_stdout_stderr_file_sink() {
     assert_no_glued_masks(&text);
     let commands = runner_commands(&text);
     assert!(
-        commands
-            .iter()
-            .any(|(name, _)| name == "add-mask"),
+        commands.iter().any(|(name, _)| name == "add-mask"),
         "no mask recognized in merged sink {text:?}"
     );
     assert!(
@@ -613,33 +535,54 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 fn stdout_to_stderr_success_reaches_stderr_once_in_order_under_ci() {
     let source = "run \"sh\" with arguments [\"-c\", \"printf 'out-line-499\\n'; printf 'err-line-499\\n' >&2\"] and stdout to stderr\n";
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     // A `stdout to stderr` redirect leaves nothing for the pipeline.
     assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
     let err = stderr(&output);
     let out_pos = err.find("out-line-499").expect("stdout must reach stderr");
-    let err_pos = err.find("err-line-499").expect("command stderr must reach stderr");
+    let err_pos = err
+        .find("err-line-499")
+        .expect("command stderr must reach stderr");
     assert!(out_pos < err_pos, "program order lost in {err:?}");
-    assert_eq!(count_occurrences(&err, "out-line-499"), 1, "duplicated stdout in {err:?}");
-    assert_eq!(count_occurrences(&err, "err-line-499"), 1, "duplicated stderr in {err:?}");
+    assert_eq!(
+        count_occurrences(&err, "out-line-499"),
+        1,
+        "duplicated stdout in {err:?}"
+    );
+    assert_eq!(
+        count_occurrences(&err, "err-line-499"),
+        1,
+        "duplicated stderr in {err:?}"
+    );
 }
 
 #[test]
 fn stdout_to_stderr_failure_keeps_order_without_duplication_under_ci() {
     let source = "run \"sh\" with arguments [\"-c\", \"printf 'fail-out-499\\n'; printf 'fail-err-499\\n' >&2; exit 1\"] and stdout to stderr\n";
     let output = run_source(source, &[], true);
-    assert!(!output.status.success(), "failure must propagate: {output:?}");
+    assert!(
+        !output.status.success(),
+        "failure must propagate: {output:?}"
+    );
     assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
     let err = stderr(&output);
-    let out_pos = err.find("fail-out-499").expect("failed stdout must reach stderr");
-    let err_pos = err.find("fail-err-499").expect("failed stderr must reach stderr");
+    let out_pos = err
+        .find("fail-out-499")
+        .expect("failed stdout must reach stderr");
+    let err_pos = err
+        .find("fail-err-499")
+        .expect("failed stderr must reach stderr");
     assert!(out_pos < err_pos, "failure order lost in {err:?}");
-    assert_eq!(count_occurrences(&err, "fail-out-499"), 1, "duplicated stdout in {err:?}");
-    assert_eq!(count_occurrences(&err, "fail-err-499"), 1, "duplicated stderr in {err:?}");
+    assert_eq!(
+        count_occurrences(&err, "fail-out-499"),
+        1,
+        "duplicated stdout in {err:?}"
+    );
+    assert_eq!(
+        count_occurrences(&err, "fail-err-499"),
+        1,
+        "duplicated stderr in {err:?}"
+    );
 }
 
 #[test]
@@ -657,25 +600,41 @@ fn stdout_to_stderr_timeout_keeps_partial_bytes_sanitized_under_ci() {
         .env("GITHUB_ACTIONS", "true")
         .output()
         .unwrap();
-    assert!(!output.status.success(), "the command must time out: {output:?}");
+    assert!(
+        !output.status.success(),
+        "the command must time out: {output:?}"
+    );
     assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
     let err = stderr(&output);
-    assert!(err.contains("early-out-499"), "partial stdout lost in {err:?}");
-    assert!(err.contains("early-err-499"), "partial stderr lost in {err:?}");
-    assert!(!err.contains("late-out-499"), "post-timeout bytes leaked in {err:?}");
-    assert_eq!(count_occurrences(&err, "early-out-499"), 1, "duplicated partial stdout in {err:?}");
-    assert_eq!(count_occurrences(&err, "early-err-499"), 1, "duplicated partial stderr in {err:?}");
+    assert!(
+        err.contains("early-out-499"),
+        "partial stdout lost in {err:?}"
+    );
+    assert!(
+        err.contains("early-err-499"),
+        "partial stderr lost in {err:?}"
+    );
+    assert!(
+        !err.contains("late-out-499"),
+        "post-timeout bytes leaked in {err:?}"
+    );
+    assert_eq!(
+        count_occurrences(&err, "early-out-499"),
+        1,
+        "duplicated partial stdout in {err:?}"
+    );
+    assert_eq!(
+        count_occurrences(&err, "early-err-499"),
+        1,
+        "duplicated partial stderr in {err:?}"
+    );
 }
 
 #[test]
 fn stdout_to_stderr_forgery_is_neutralized_under_ci() {
     let source = "run \"sh\" with arguments [\"-c\", \"printf '::error::via-redirect-499\\n'\"] and stdout to stderr\n";
     let output = run_source(source, &[], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
     let err = stderr(&output);
     assert_neutralized(&err, "::error::via-redirect-499");
@@ -692,12 +651,8 @@ fn stdout_to_stderr_sensitive_value_is_masked_before_it_is_echoed_under_ci() {
         "accept token as text from secret prompt \"Token?\"\n",
         "run \"sh\" with arguments [\"-c\", \"printf '%s\\n' \\\"$TOKEN\\\"\"] and environment {\"TOKEN\": token} and stdout to stderr\n",
     );
-    let output = run_source(source, &[ "--input", &format!("token={canary}") ], true);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        stderr(&output)
-    );
+    let output = run_source(source, &["--input", &format!("token={canary}")], true);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     let out = stdout(&output);
     let err = stderr(&output);
     // Masks are emitted to stdout even when the value travels on stderr; the
@@ -735,8 +690,11 @@ fn stdout_to_stderr_sensitive_failure_never_leaks_unmasked_bytes_under_ci() {
         "accept token as text from secret prompt \"Token?\"\n",
         "run \"sh\" with arguments [\"-c\", \"printf '%s\\n' \\\"$TOKEN\\\"; printf 'fail-err-499\\n' >&2; exit 1\"] and environment {\"TOKEN\": token} and stdout to stderr\n",
     );
-    let output = run_source(source, &[ "--input", &format!("token={canary}") ], true);
-    assert!(!output.status.success(), "failure must propagate: {output:?}");
+    let output = run_source(source, &["--input", &format!("token={canary}")], true);
+    assert!(
+        !output.status.success(),
+        "failure must propagate: {output:?}"
+    );
     let out = stdout(&output);
     let err = stderr(&output);
     assert!(
@@ -762,8 +720,12 @@ fn stdout_to_stderr_sensitive_failure_never_leaks_unmasked_bytes_under_ci() {
         1,
         "conservative redaction marker missing or duplicated"
     );
-    let out_pos = err.find(canary).expect("sensitive stdout must reach stderr");
-    let redacted_pos = err.find("[REDACTED]").expect("redaction marker must reach stderr");
+    let out_pos = err
+        .find(canary)
+        .expect("sensitive stdout must reach stderr");
+    let redacted_pos = err
+        .find("[REDACTED]")
+        .expect("redaction marker must reach stderr");
     assert!(
         out_pos < redacted_pos,
         "program order lost: stdout must precede the redacted diagnostic"

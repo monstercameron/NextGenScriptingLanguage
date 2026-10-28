@@ -288,7 +288,12 @@ fn write_with_deadline_inner_with_pool(
     // step output, redirected stdout-to-stderr, trace events and diagnostics
     // are all covered without touching framed protocols or file targets.
     // `check --format github` intentionally emits workflow commands and never
-    // enables hardening, so it stays raw.
+    // enables hardening, so it stays raw. Hardened fd 1/2 writes hold the
+    // merged-sink lock across filter and worker completion so classification
+    // matches landing order in the merged runner log; file targets stay
+    // concurrent.
+    let hardened_terminal = crate::github_actions::enabled() && (fd == 1 || fd == 2);
+    let _sink = hardened_terminal.then(crate::github_actions::terminal_sink_lock);
     let owned = if crate::github_actions::enabled() {
         if fd == 1 {
             crate::github_actions::filter_stdout(bytes)
@@ -308,7 +313,15 @@ fn write_with_deadline_inner_with_pool(
     // split-`::` protection across writes. Only flush when the caller signals
     // end-of-stream (final output paths do this explicitly); live streams keep
     // the pending colon for the next write.
-    write_with_deadline_owned_inner(pool, fd, owned, cancelled, deadline, worker_gate)
+    write_with_deadline_owned_inner(
+        pool,
+        fd,
+        owned,
+        cancelled,
+        deadline,
+        worker_gate,
+        hardened_terminal,
+    )
 }
 
 pub(super) fn write_with_deadline_owned_reusing(
@@ -327,6 +340,10 @@ pub(super) fn write_with_deadline_owned_reusing(
     }
     // Same terminal choke point as the borrowing path: owned streamed writes
     // (the hot path for step output) are neutralized before reaching the fd.
+    // Hardened fd 1/2 writes hold the merged-sink lock across filter and
+    // worker completion, matching the borrowing path above.
+    let hardened_terminal = crate::github_actions::enabled() && (fd == 1 || fd == 2);
+    let _sink = hardened_terminal.then(crate::github_actions::terminal_sink_lock);
     let filtered = if crate::github_actions::enabled() {
         if fd == 1 {
             crate::github_actions::filter_stdout(&bytes)
@@ -348,7 +365,15 @@ pub(super) fn write_with_deadline_owned_reusing(
         }
         return Ok(());
     }
-    write_with_deadline_owned_inner(pool, fd, filtered, cancelled, deadline, None)
+    write_with_deadline_owned_inner(
+        pool,
+        fd,
+        filtered,
+        cancelled,
+        deadline,
+        None,
+        hardened_terminal,
+    )
 }
 
 fn write_with_deadline_owned_inner(
@@ -358,6 +383,7 @@ fn write_with_deadline_owned_inner(
     cancelled: &AtomicBool,
     deadline: Option<Instant>,
     worker_gate: Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>,
+    terminal_serialized: bool,
 ) -> Result<()> {
     let (target, write_limit, may_sigpipe) = output_target_and_write_limit(fd)?;
     let reservation = reserve_output_target(target, cancelled, deadline)?;
@@ -379,20 +405,41 @@ fn write_with_deadline_owned_inner(
         deadline,
     )?;
 
+    // When `terminal_serialized` the caller holds the merged-sink lock across
+    // this wait. A cancel or deadline must not release it while the worker is
+    // still in flight: the next filter would then classify before the prior
+    // bytes land, re-opening the reorder forgery. Fail closed by signalling
+    // `stop`, waiting for the worker to finish (it checks `stop` between
+    // bounded chunks), and only then reporting the cancellation.
+    let wait_for_worker_then = |result: Result<()>| -> Result<()> {
+        if !terminal_serialized {
+            return result;
+        }
+        match receiver.recv() {
+            Ok(worker_result) => {
+                let _ = worker_result;
+                result
+            }
+            Err(_) => result,
+        }
+    };
     loop {
         if cancelled.load(Ordering::Relaxed) {
             stop.store(true, Ordering::Release);
-            bail!("program cancelled by signal");
+            return wait_for_worker_then(Err(anyhow::anyhow!("program cancelled by signal")));
         }
         if let Err(error) = super::check_deadline(deadline) {
             stop.store(true, Ordering::Release);
-            return Err(error);
+            return wait_for_worker_then(Err(error));
         }
         match receiver.recv_timeout(Duration::from_millis(5)) {
             Ok(result) => {
                 super::check_deadline(deadline)?;
                 if cancelled.load(Ordering::Relaxed) {
-                    bail!("program cancelled by signal");
+                    stop.store(true, Ordering::Release);
+                    return wait_for_worker_then(Err(anyhow::anyhow!(
+                        "program cancelled by signal"
+                    )));
                 }
                 return result;
             }

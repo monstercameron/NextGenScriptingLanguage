@@ -431,8 +431,7 @@ impl SecretRedactor {
                 None
             } else {
                 if state.values.len() >= MAX_REDACTION_SECRETS
-                    || state.total_bytes.saturating_add(secret.len())
-                        > MAX_REDACTION_SECRET_BYTES
+                    || state.total_bytes.saturating_add(secret.len()) > MAX_REDACTION_SECRET_BYTES
                 {
                     return Err(PolicyError::RedactionLimitExceeded);
                 }

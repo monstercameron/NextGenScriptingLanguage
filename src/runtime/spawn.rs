@@ -191,6 +191,83 @@ mod lane_v2_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod poll_timeout_tests {
+    use super::poll_maximum_wait_ms;
+
+    #[test]
+    fn cancellation_arms_always_poll_with_a_bound() {
+        // Cancellation must never depend on output, observer or reap state:
+        // an unnotified cancellation or a missing cancel wake polls at 100 ms
+        // in every combination so a stuck child cannot delay the abort.
+        for eof in [false, true] {
+            for observer_present in [false, true] {
+                for unreaped_children in [false, true] {
+                    assert_eq!(
+                        poll_maximum_wait_ms(true, false, eof, observer_present, unreaped_children),
+                        100,
+                        "unnotified cancellation must stay bounded",
+                    );
+                    assert_eq!(
+                        poll_maximum_wait_ms(false, true, eof, observer_present, unreaped_children),
+                        100,
+                        "missing cancel wake must stay bounded",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn idle_children_sleep_in_kernel_before_stdout_eof() {
+        // The perf regression guard: a live child with stdout still open
+        // parks in `poll(-1)` on every platform, including Darwin with a
+        // live observer. A 60 s child therefore wakes ~0 times (kernel wake
+        // on output/exit/cancel only), not ~600 times at a 100 ms cadence.
+        // The stdout pipe itself still wakes the loop, so no bound is needed.
+        for observer_present in [false, true] {
+            for unreaped_children in [false, true] {
+                assert_eq!(
+                    poll_maximum_wait_ms(false, false, false, observer_present, unreaped_children),
+                    -1,
+                    "pre-EOF waits must sleep in the kernel",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_observer_after_eof_stays_bounded_everywhere() {
+        // The pre-existing fallback: without any child-exit observer the
+        // loop has no exit wakeup after stdout EOF, so it polls at 100 ms.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, false, true), 100);
+        assert_eq!(poll_maximum_wait_ms(false, false, true, false, false), 100);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_post_eof_missed_wake_is_bounded() {
+        // The observed Darwin stall shape: stdout EOF reached while children
+        // stay unreaped behind a live (possibly silent) kqueue observer. The
+        // 100 ms bound turns the unbounded hang into a ≤100 ms stall; exit
+        // authority stays with waitid/Child::wait.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, true), 100);
+        // Reaped children need no bound even post-EOF: the loop breaks next
+        // iteration without parking.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, false), -1);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_darwin_present_observer_after_eof_keeps_kernel_sleep() {
+        // Linux (epoll/pidfd) has no reported lost-wake, so a live observer
+        // after stdout EOF keeps sleeping in the kernel: no 100 ms tax on
+        // long-lived children outside Darwin.
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, true), -1);
+        assert_eq!(poll_maximum_wait_ms(false, false, true, true, false), -1);
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct GroupOutput {
     pub(super) bytes: Vec<u8>,
@@ -514,6 +591,37 @@ pub(super) fn redact_command_failure<T>(registry: &Registry, mut result: Result<
         }
     }
     result
+}
+
+/// Maximum `poll` wait for one native group wait-loop iteration: 100 ms when
+/// the loop cannot otherwise sleep safely, `-1` to sleep in the kernel.
+///
+/// Cancellation always wins (unnotified cancellation or no cancel wake
+/// descriptor must poll periodically), as does a missing child-exit observer
+/// after stdout EOF. A present-but-silent observer only shortens the wait on
+/// Darwin after stdout EOF, where a missed `NOTE_EXIT` wake was observed to
+/// stall the loop with unreaped children still present: Linux keeps its
+/// epoll/pidfd wake (no reported lost-wake) and pre-EOF waits keep the stdout
+/// pipe descriptor armed, so both stay at `-1` and slow children sleep in
+/// the kernel. Exit authority stays with `waitid`/`Child::wait`; this only
+/// bounds how long a missed wake can park the loop.
+#[cfg(unix)]
+fn poll_maximum_wait_ms(
+    unnotified_cancellation: bool,
+    cancel_wakes_empty: bool,
+    eof: bool,
+    observer_present: bool,
+    unreaped_children: bool,
+) -> libc::c_int {
+    if unnotified_cancellation
+        || cancel_wakes_empty
+        || (eof && !observer_present)
+        || (eof && observer_present && cfg!(target_os = "macos") && unreaped_children)
+    {
+        100
+    } else {
+        -1
+    }
 }
 
 #[cfg(unix)]
@@ -1038,22 +1146,27 @@ pub(super) fn execute_group_with_sink(
         }
         // Output, child-exit and cancellation descriptors wake this poll.
         // Use a timeout when no child-exit observer is available after stdout
-        // EOF, and while unreaped children remain behind a live observer.
-        // The observer is only a wakeup optimization: every loop iteration
-        // still probes each child with waitid, so bounding a missed wake to
-        // 100 ms (at most 10 wakeups/s while waiting) only shortens the stall.
-        // No cause for a missed wake is established; this bounds the symptom.
-        // Otherwise slow native children sleep in the kernel.
-        let unreaped_children = children.0.iter().any(|child| !child.reaped);
-        let maximum_wait_ms = if signals.unnotified_cancellation
-            || signals.cancel_wakes.is_empty()
-            || (eof && child_observer.is_none())
-            || (unreaped_children && child_observer.is_some())
-        {
-            100
-        } else {
-            -1
-        };
+        // EOF, and — Darwin only — while unreaped children remain behind a
+        // live observer after stdout EOF. The observer is only a wakeup
+        // optimization: every loop iteration still probes each child with
+        // waitid, so bounding a missed NOTE_EXIT wake to 100 ms only shortens
+        // the stall. No cause for a missed wake is established; this bounds
+        // the symptom. The extra arm is Darwin-only (kqueue path, where the
+        // stall was observed) and post-EOF only (before EOF the stdout pipe
+        // itself still wakes the loop): Linux keeps sleeping in the kernel on
+        // its epoll/pidfd wake, which has no reported lost-wake, and slow
+        // native children everywhere else keep sleeping in the kernel too.
+        // Near a command deadline `deadline_poll_timeout` takes the smaller
+        // remaining time, so the rate can briefly exceed 10/s; each
+        // concurrent group also runs its own loop, and the Windows wait path
+        // has no such bound (Unix-only).
+        let maximum_wait_ms = poll_maximum_wait_ms(
+            signals.unnotified_cancellation,
+            signals.cancel_wakes.is_empty(),
+            eof,
+            child_observer.is_some(),
+            children.0.iter().any(|child| !child.reaped),
+        );
         let timeout_ms = deadline_poll_timeout(signals.deadline, maximum_wait_ms);
         let observer_notified;
         let ready = if capture_diagnostics {

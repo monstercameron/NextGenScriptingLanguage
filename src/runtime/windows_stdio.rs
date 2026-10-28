@@ -102,6 +102,11 @@ pub fn write_with_deadline(
     deadline: Option<Instant>,
 ) -> Result<()> {
     let target = handle(fd)? as usize;
+    // Same merged-sink discipline as the Unix pooled path: hardened fd 1/2
+    // writes hold the sink lock across filter and write so the merged log
+    // order matches classification. File targets and raw mode stay lock-free.
+    let hardened_terminal = crate::github_actions::enabled() && (fd == 1 || fd == 2);
+    let _sink = hardened_terminal.then(crate::github_actions::terminal_sink_lock);
     let data = if crate::github_actions::enabled() {
         if fd == 1 {
             crate::github_actions::filter_stdout(bytes)
@@ -204,6 +209,9 @@ pub fn write_diagnostic(bytes: &[u8]) {
     let Ok(target) = handle(2) else {
         return;
     };
+    // Diagnostics share the merged log: serialize filter+write like any
+    // other hardened stderr write.
+    let _sink = crate::github_actions::enabled().then(crate::github_actions::terminal_sink_lock);
     let data = if crate::github_actions::enabled() {
         crate::github_actions::filter_stderr(bytes)
     } else {

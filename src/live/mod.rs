@@ -906,10 +906,9 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
             Data::Text { text } => text.into_bytes(),
             Data::Bytes { bytes } => bytes,
         };
-        let filtered = crate::github_actions::filter_stdout_final(&bytes);
-        let mut stdout = std::io::stdout().lock();
-        stdout.write_all(&filtered)?;
-        stdout.flush()?;
+        // Sink-serialized like every other hardened terminal write so a
+        // concurrent mask cannot land between classification and write.
+        crate::github_actions::write_stdout_final(&bytes)?;
     }
     if let Some(diagnostic) = &end.diagnostic {
         crate::runtime::write_diagnostic(diagnostic.as_bytes());

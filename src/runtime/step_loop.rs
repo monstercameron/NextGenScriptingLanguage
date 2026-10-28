@@ -1986,11 +1986,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 // below shares the stdout sanitizer with
                                 // streamed writes; the flush releases a
                                 // trailing line-leading `:` at true end of
-                                // stream.
-                                let filtered =
-                                    crate::github_actions::filter_stdout_final(&pending);
-                                std::io::stdout()
-                                    .write_all(&filtered)
+                                // stream. The helper holds the sink lock
+                                // across filter and write when hardening is
+                                // on, so the handover write is atomic too.
+                                crate::github_actions::write_stdout_final(&pending)
                                     .with_context(|| format!("line {}: hand over", step.line))?;
                                 let code = handoff::hand_over(command)
                                     .with_context(|| format!("line {}: hand over", step.line))?;

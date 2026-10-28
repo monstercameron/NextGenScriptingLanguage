@@ -2,10 +2,15 @@
 //! Real native executables, files, pipes, jobs and named-pipe state control.
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
+    io::Write,
     path::{Path, PathBuf},
-    process::{Child, Command, Output, Stdio},
+    process::{Command, Output, Stdio},
     time::{Duration, Instant},
+};
+#[cfg(feature = "live")]
+use std::{
+    io::{BufRead, BufReader},
+    process::Child,
 };
 fn fixture() -> String {
     env!("CARGO_BIN_EXE_native-fixture").to_owned()

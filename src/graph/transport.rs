@@ -3122,9 +3122,8 @@ pub fn graph_event_payload_json(payload: &PortValue) -> serde_json::Value {
     match payload {
         PortValue::Bytes(bytes) => serde_json::json!({"kind": "bytes", "value": bytes}),
         PortValue::Value(value) => {
-            let natural = crate::structured::to_json(value).unwrap_or_else(|_| {
-                serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
-            });
+            let natural = crate::structured::to_json(value)
+                .unwrap_or_else(|_| serde_json::to_value(value).unwrap_or(serde_json::Value::Null));
             serde_json::json!({"kind": "value", "value": natural})
         }
     }
@@ -3279,10 +3278,7 @@ fn prepare_session(
     options: &RunOptions,
     cancelled: Arc<AtomicBool>,
     checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
-) -> Result<(
-    GraphSession,
-    Option<Arc<dyn GraphCheckpointStore>>,
-)> {
+) -> Result<(GraphSession, Option<Arc<dyn GraphCheckpointStore>>)> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = options

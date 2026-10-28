@@ -72,13 +72,15 @@ fn piped_head_stops_the_timer_stream_quietly_at_141() {
             .read_line(&mut line)
             .expect("stream stays open for three ticks");
         assert!(count > 0, "stream ended before three ticks");
-        let event: Value =
-            serde_json::from_str(&line).expect("one JSON line per terminal event");
+        let event: Value = serde_json::from_str(&line).expect("one JSON line per terminal event");
         assert_eq!(event["protocol"], "execute.graph-event/1");
         assert_eq!(event["graph"], "ticks");
         assert_eq!(event["port"]["node"], "ticker");
         assert_eq!(event["sequence"], expected);
-        assert!(event.get("payload").is_some(), "payload travels with the event");
+        assert!(
+            event.get("payload").is_some(),
+            "payload travels with the event"
+        );
     }
     drop(reader);
     let output = child
@@ -244,8 +246,33 @@ fn finite_graph_streams_events_jsonl_on_request() {
         .expect("stream is UTF-8")
         .lines()
         .collect();
-    assert_eq!(lines.len(), 1, "the finite graph emits one terminal event");
-    let event: Value = serde_json::from_str(lines[0]).expect("one JSON line per event");
-    assert_eq!(event["protocol"], "execute.graph-event/1");
-    assert_eq!(event["graph"], "legacy");
+    assert_eq!(
+        lines.len(),
+        2,
+        "the finite graph emits its value and status terminals"
+    );
+    let mut ports = Vec::new();
+    for line in &lines {
+        let event: Value = serde_json::from_str(line).expect("one JSON line per event");
+        assert_eq!(event["protocol"], "execute.graph-event/1");
+        assert_eq!(event["graph"], "legacy");
+        assert!(
+            event.get("payload").is_some(),
+            "payload travels with the event"
+        );
+        let node = event["port"]["node"].as_str().unwrap_or("?");
+        let port = event["port"]["port"].as_str().unwrap_or("?");
+        ports.push(format!("{node}.{port}"));
+    }
+    ports.sort();
+    assert_eq!(
+        ports,
+        vec!["message.status".to_owned(), "message.value".to_owned()],
+        "one JSON line per terminal event and no extra protocol output"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "a clean finite stream stays quiet: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

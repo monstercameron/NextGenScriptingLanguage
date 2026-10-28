@@ -469,12 +469,8 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                 if events.is_some() {
                     bail!("--events may be specified only once");
                 }
-                let value = take_option_value(
-                    arguments,
-                    &mut index,
-                    "--events",
-                    "document or jsonl",
-                )?;
+                let value =
+                    take_option_value(arguments, &mut index, "--events", "document or jsonl")?;
                 match value.as_str() {
                     "document" | "jsonl" => events = Some(value),
                     _ => bail!("--events accepts document or jsonl"),

@@ -75,7 +75,10 @@ fn streamed_line_carries_the_graph_event_protocol_and_arrival_metadata() {
     assert_eq!(line["sequence"], 42);
     assert_eq!(line["port"]["node"], "ticker");
     assert_eq!(line["port"]["port"], "tick");
-    assert!(line.get("payload").is_some(), "payload must travel with the event");
+    assert!(
+        line.get("payload").is_some(),
+        "payload must travel with the event"
+    );
 }
 
 #[test]
@@ -85,8 +88,8 @@ fn streamed_line_renders_as_one_line_for_stdout_piping() {
     let mut text = serde_json::to_string(&line).expect("event line serializes");
     assert!(!text.contains('\n'), "one event is one JSON line");
     text.push('\n');
-    let parsed: serde_json::Value = serde_json::from_str(text.trim_end())
-        .expect("piped line parses back to the same event");
+    let parsed: serde_json::Value =
+        serde_json::from_str(text.trim_end()).expect("piped line parses back to the same event");
     assert_eq!(parsed["generation"], 2);
     assert_eq!(parsed["revision"], 3);
 }
@@ -97,7 +100,9 @@ fn streamed_line_conforms_to_the_published_schema() {
         .join("docs/schemas/graph-event.v1.schema.json");
     let schema_text = std::fs::read_to_string(&schema_path).expect("schema file exists");
     let schema: serde_json::Value = serde_json::from_str(&schema_text).expect("schema parses");
-    let required = schema["required"].as_array().expect("schema lists required fields");
+    let required = schema["required"]
+        .as_array()
+        .expect("schema lists required fields");
     let names: Vec<&str> = required.iter().filter_map(|name| name.as_str()).collect();
     for field in [
         "protocol",
@@ -111,7 +116,10 @@ fn streamed_line_conforms_to_the_published_schema() {
     ] {
         assert!(names.contains(&field), "schema requires {field}");
     }
-    assert_eq!(schema["properties"]["protocol"]["const"], "execute.graph-event/1");
+    assert_eq!(
+        schema["properties"]["protocol"]["const"],
+        "execute.graph-event/1"
+    );
     let line = graph_event_line("ticks", 1, 1, &sample_envelope());
     let object = line.as_object().expect("event line is an object");
     for field in &names {
@@ -358,7 +366,9 @@ fn oversize_event_line_is_rejected_before_unbounded_allocation() {
     let error = graph_event_line_json("ticks", 1, 1, &event, 64)
         .expect_err("a 300-byte payload cannot fit a 64-byte line");
     assert!(
-        error.to_string().contains("exceeds stream limit of 64 bytes"),
+        error
+            .to_string()
+            .contains("exceeds stream limit of 64 bytes"),
         "unexpected bound error: {error:#}"
     );
     // Every payload admitted by `emit` still fits its derived bound: the
@@ -551,7 +561,9 @@ fn validate_graph_event_line(
         .and_then(|required| required.as_array())
         .ok_or_else(|| "schema lists no required fields".to_owned())?;
     for field in required {
-        let name = field.as_str().ok_or_else(|| "required entry is not a string".to_owned())?;
+        let name = field
+            .as_str()
+            .ok_or_else(|| "required entry is not a string".to_owned())?;
         if !object.contains_key(name) {
             return Err(format!("event line misses required field {name:?}"));
         }
@@ -595,9 +607,13 @@ fn validate_graph_event_line(
         .as_array()
         .ok_or_else(|| "event sensitivity is not an array".to_owned())?;
     for label in sensitivity {
-        let name = label.as_str().ok_or_else(|| "sensitivity label is not a string".to_owned())?;
+        let name = label
+            .as_str()
+            .ok_or_else(|| "sensitivity label is not a string".to_owned())?;
         if !allowed.contains(&name) {
-            return Err(format!("sensitivity label {name:?} is outside the schema enum"));
+            return Err(format!(
+                "sensitivity label {name:?} is outside the schema enum"
+            ));
         }
     }
     fn matches_bytes(payload: &serde_json::Value) -> bool {
@@ -620,8 +636,16 @@ fn validate_graph_event_line(
                 && object.contains_key("value")
         })
     }
-    let variants = [&matches_bytes as &dyn Fn(&serde_json::Value) -> bool, &matches_value];
-    if variants.iter().filter(|match_one| match_one(&line["payload"])).count() != 1 {
+    let variants = [
+        &matches_bytes as &dyn Fn(&serde_json::Value) -> bool,
+        &matches_value,
+    ];
+    if variants
+        .iter()
+        .filter(|match_one| match_one(&line["payload"]))
+        .count()
+        != 1
+    {
         return Err("event payload matches no schema variant exactly once".to_owned());
     }
     Ok(())
@@ -634,7 +658,10 @@ fn emitted_lines_validate_against_the_full_schema() {
     // value, a bytes payload, a string with characters JSON must escape, and
     // a nested record mixing lists, strings, and nulls.
     let nested = Value::Record(BTreeMap::from([
-        ("items".into(), Value::List(vec![Value::Integer(1), Value::Null])),
+        (
+            "items".into(),
+            Value::List(vec![Value::Integer(1), Value::Null]),
+        ),
         (
             "note".into(),
             Value::String("line\nfeed \"quoted\" \\ backslash".into()),
@@ -653,8 +680,7 @@ fn emitted_lines_validate_against_the_full_schema() {
         let text = serde_json::to_string(&line).expect("event line serializes");
         let reparsed: serde_json::Value =
             serde_json::from_str(&text).expect("piped line parses back");
-        validate_graph_event_line(&schema, &reparsed)
-            .expect("the piped rendering validates too");
+        validate_graph_event_line(&schema, &reparsed).expect("the piped rendering validates too");
         assert!(!text.contains('\n'), "one event is one JSON line");
     }
 }
@@ -746,7 +772,9 @@ fn large_string_and_nested_value_payloads_fit_the_derived_bound() {
     let error = graph_event_line_json("ticks", 1, 1, &string_event, 64)
         .expect_err("a large string cannot fit a 64-byte line");
     assert!(
-        error.to_string().contains("exceeds stream limit of 64 bytes"),
+        error
+            .to_string()
+            .contains("exceeds stream limit of 64 bytes"),
         "unexpected bound error: {error:#}"
     );
 }
@@ -857,10 +885,7 @@ fn streaming_holds_flat_rss_past_one_million_events() {
     .expect("streaming session starts");
     let mut seen = 0usize;
     loop {
-        match session
-            .recv_output()
-            .expect("streaming holds nothing back")
-        {
+        match session.recv_output().expect("streaming holds nothing back") {
             Some(event) => {
                 assert_eq!(
                     event.payload,

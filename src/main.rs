@@ -1268,9 +1268,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     Some(_) => bail!("--events accepts document or jsonl"),
                     None => graph.has_persistent_nodes(),
                 };
-                if stream_events
-                    && (args.command == "resume" || args.checkpoint_dir.is_some())
-                {
+                if stream_events && (args.command == "resume" || args.checkpoint_dir.is_some()) {
                     bail!(
                         "--events jsonl cannot be combined with --checkpoint or resume; stream persistent graphs with plain `run`"
                     );
@@ -3738,7 +3736,9 @@ mod graph_stream_tests {
             match session.recv_output() {
                 Err(error) => {
                     assert!(
-                        error.to_string().contains("stream-test worker failure marker"),
+                        error
+                            .to_string()
+                            .contains("stream-test worker failure marker"),
                         "the worker failure must surface before the close: {error:#}"
                     );
                     break;
@@ -3754,7 +3754,9 @@ mod graph_stream_tests {
         }
         let error = stream_write_error(&mut session, broken_pipe());
         assert!(
-            error.to_string().contains("stream-test worker failure marker"),
+            error
+                .to_string()
+                .contains("stream-test worker failure marker"),
             "unexpected write-error decision: {error:#}"
         );
         assert_ne!(
@@ -3791,7 +3793,10 @@ mod graph_stream_tests {
     fn run_arguments(directory: &std::path::Path, extra: &[&str]) -> Vec<String> {
         let mut arguments = vec![
             "run".to_owned(),
-            directory.join("graph.program").to_string_lossy().into_owned(),
+            directory
+                .join("graph.program")
+                .to_string_lossy()
+                .into_owned(),
         ];
         arguments.extend(extra.iter().map(|item| item.to_string()));
         arguments
@@ -3835,8 +3840,11 @@ mod graph_stream_tests {
     #[test]
     fn implicit_streaming_ignores_finite_graphs_and_programs() {
         let directory = tempfile::tempdir().unwrap();
-        std::fs::write(directory.path().join("graph.program"), "graph empty\nend graph\n")
-            .unwrap();
+        std::fs::write(
+            directory.path().join("graph.program"),
+            "graph empty\nend graph\n",
+        )
+        .unwrap();
         assert!(
             !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
             "a graph without persistent nodes keeps the closing document"
@@ -3856,10 +3864,7 @@ mod graph_stream_tests {
     fn implicit_streaming_leaves_unreadable_or_unknown_sources_to_the_normal_path() {
         let directory = tempfile::tempdir().unwrap();
         assert!(
-            !implicit_graph_stream(
-                &run_arguments(directory.path(), &[]),
-                &empty_registry()
-            ),
+            !implicit_graph_stream(&run_arguments(directory.path(), &[]), &empty_registry()),
             "a missing file still reports its own diagnostic"
         );
         // `text.concat` needs the real manifests; the empty registry cannot
@@ -3878,8 +3883,8 @@ mod graph_stream_tests {
         registry.manifests().expect("default manifests parse");
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("graph.program"), FINITE_GRAPH).unwrap();
-        let plan =
-            flow::graph::parse(FINITE_GRAPH, &registry).expect("finite graph parses with manifests");
+        let plan = flow::graph::parse(FINITE_GRAPH, &registry)
+            .expect("finite graph parses with manifests");
         assert!(
             !plan.has_persistent_nodes(),
             "the applet graph must stay on the document path"
@@ -3940,5 +3945,4 @@ mod graph_stream_tests {
             "an unloadable custom registry still declines to the client"
         );
     }
-
 }

@@ -329,8 +329,7 @@ fn implicit_persistent_graph_streams_on_the_client() {
             .read_line(&mut line)
             .expect("implicit stream emits ticks");
         assert!(count > 0, "implicit stream ended before two ticks");
-        let event: Value =
-            serde_json::from_str(&line).expect("one JSON line per terminal event");
+        let event: Value = serde_json::from_str(&line).expect("one JSON line per terminal event");
         assert_eq!(event["protocol"], "execute.graph-event/1");
         assert_eq!(event["graph"], "ticks");
     }
@@ -347,8 +346,7 @@ fn implicit_persistent_graph_streams_on_the_client() {
         output
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("graph event streams run on the client"),
+        String::from_utf8_lossy(&output.stderr).contains("graph event streams run on the client"),
         "implicit stream must fall back to the client: {:?}",
         output
     );

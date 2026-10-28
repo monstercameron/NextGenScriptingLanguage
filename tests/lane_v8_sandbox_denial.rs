@@ -15,6 +15,7 @@
 mod private_answers;
 
 use std::fs;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -376,8 +377,10 @@ fn untrusted_native_with_policy_is_refused_without_os_confinement() {
     let directory = tempfile::tempdir().unwrap();
     let program = directory.path().join("workflow.program");
     fs::write(&program, "run fixture.native\n").unwrap();
+    let manifests = directory.path().join("manifests");
+    fs::create_dir(&manifests).unwrap();
     fs::write(
-        directory.path().join("fixture.json"),
+        manifests.join("fixture.json"),
         serde_json::json!({
             "name": "fixture.native",
             "binary": env!("CARGO_BIN_EXE_execute"),
@@ -398,7 +401,7 @@ fn untrusted_native_with_policy_is_refused_without_os_confinement() {
         .args(["run", "--execution-mode", "untrusted"])
         .arg(&program)
         .arg("--manifest-dir")
-        .arg(directory.path())
+        .arg(&manifests)
         .arg("--capability-policy")
         .arg(&policy)
         .output()

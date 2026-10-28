@@ -50,6 +50,32 @@ original version labels.
   4.37 ms) and marginally on a 100-spawn loop (63.86 against 67.07 ms). The workflow also
   compares `opt-level = "s"`, static musl and musl `min`-profile builds. Optimisation is
   ongoing. See [the numbers and method](docs/production-readiness.md#performance-against-bash-and-dash).
+- Operational instruction gate on shared runners. `tools/bash_compare.py` reports a deterministic
+  bootstrap 95% confidence interval for every median wall time; the wall-time
+  comparison runs counter-free so counting never perturbs its medians or budget.
+  The `Execute vs bash` workflow installs valgrind, builds two distinct binaries
+  on the same runner (the baseline at the base revision and the candidate at the
+  head revision), and measures the eight gated
+  CPU-bound scenarios once per build, back-to-back, pinned to cachegrind
+  `I refs` (no PMU required), both with the head-revision tool so a base
+  predating newer flags still gates and both reports share one tool hash
+  (`--source-revision` stamps each report with its built revision); each
+  focused report records the backend plus counter diagnostics
+  (`perf_event_paranoid`, probe outcomes), the measurement-tool hash, and the
+  `valgrind --version` provider string, and CI prints real
+  per-scenario counts with coverage. `tools/check_instruction_regression.py`
+  defines the +2% gate for CPU-bound rows: CI runs it fail-closed with
+  `--fail-closed --require-provenance` on the baseline-versus-candidate pair, then runs a canary
+  proving the wired gate fails a synthetic +3% regression on the measured candidate.
+  The canary proves the wiring is live but is not itself a regression gate.
+  Revisions come from `tools/resolve_gate_revisions.py` (pull-request base/head;
+  push before/sha with a HEAD~1 fallback; dispatch inputs or HEAD~1 versus HEAD).
+  An inconclusive canary or incomplete pair fails the job; a missing backend
+  against a recorded one is rejected as incomparable units, as are a differing
+  tool hash or valgrind version. Measurement budgets
+  match the former same-binary pair; cachegrind overhead against the shared
+  10-minute step timeout, static musl behavior, and the doubled per-variant
+  build cost are still unverified on Linux CI.
 - Twenty more Omarchy v4.0.4 scripts are ported under `examples/omarchy-ports/<script>/`
   with the Bash original, the port and a `case.json`. `tools/port_compare.py` runs both in
   sandboxes with logging fake binaries and compares status, stdout, stderr, the

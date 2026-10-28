@@ -737,9 +737,8 @@ impl PtyDrain {
                 .spawn(move || {
                     let mut chunk = [0u8; 4096];
                     while !stop.load(Ordering::SeqCst) {
-                        // SAFETY: chunk is a live buffer of its length; the
-                        // reader is the nonblocking dup owned by this thread.
                         let read =
+                            // SAFETY: chunk is live and reader is the owned nonblocking dup.
                             unsafe { libc::read(reader, chunk.as_mut_ptr().cast(), chunk.len()) };
                         if read > 0 {
                             if let Ok(mut output) = output.lock() {

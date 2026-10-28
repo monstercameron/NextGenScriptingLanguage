@@ -188,7 +188,6 @@ struct Completion {
     launched_processes: usize,
 }
 
-
 /// Register declared-secret environment values before any task launches, so a
 /// fail-fast sibling cannot present output before the secret-owning task
 /// registers its mask. Manifest-set secrets are captured per applet via their
@@ -384,7 +383,10 @@ pub(super) fn run_group(
     let max_output_bytes = options.max_output_bytes;
     let secret_redactor = crate::security::secret_redactor(registry);
     {
-        let applet_names = prepared.iter().map(|task| task.applet.clone()).collect::<Vec<_>>();
+        let applet_names = prepared
+            .iter()
+            .map(|task| task.applet.clone())
+            .collect::<Vec<_>>();
         pre_register_task_group_secrets(registry, &applet_names, &environment)?;
     }
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
@@ -907,7 +909,10 @@ pub(super) fn run_each(
 
     let secret_redactor = crate::security::secret_redactor(registry);
     {
-        let applet_names = prepared.iter().map(|task| task.applet.clone()).collect::<Vec<_>>();
+        let applet_names = prepared
+            .iter()
+            .map(|task| task.applet.clone())
+            .collect::<Vec<_>>();
         pre_register_task_group_secrets(registry, &applet_names, &environment)?;
         if sink.is_some() && prepared.iter().any(|task| task.sensitive) {
             bail!("checkpoint refused for parallel for each with secret task output");

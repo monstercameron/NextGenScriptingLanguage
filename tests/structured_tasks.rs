@@ -1118,7 +1118,24 @@ fn join_fail_fast_still_redacts_secret_when_secret_task_never_launches() -> Resu
             "environment": {"set": {"FLOW_SENTINEL": std::str::from_utf8(secret)?}}
         }
     });
-    let registry = flow::manifest::Registry::from_sources(&[source.to_string()])?;
+    let failing = serde_json::json!({
+        "name": "fail.fast",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf 'order-secret-sentinel-411'; exit 9"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[
+        source.to_string(),
+        failing.to_string(),
+    ])?;
     registry.set_host_state(flow::security::DataFlowPolicy::from_json(
         br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
     )?);
@@ -1128,7 +1145,7 @@ fn join_fail_fast_still_redacts_secret_when_secret_task_never_launches() -> Resu
         ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
     };
     let program = flow::parser::parse(
-        "parallel at most 1 as results\n  run \"sh\" with arguments [\"-c\", \"printf 'order-secret-sentinel-411'; exit 9\"] as failing\n  run secret.echo as secret_task\n",
+        "parallel at most 1 as results\n  run fail.fast as failing\n  run secret.echo as secret_task\n",
     )?;
     let error = match flow::runtime::run(&program, &registry, &options) {
         Err(error) => error,
@@ -1138,7 +1155,10 @@ fn join_fail_fast_still_redacts_secret_when_secret_task_never_launches() -> Resu
         .downcast_ref::<flow::runtime::tasks::TaskGroupFailure>()
         .expect("join failure keeps typed partial results");
     assert_eq!(failure.failed_task, "failing");
-    assert!(!failure.uncertain, "no sibling ran, so no uncertainty may be reported");
+    assert!(
+        !failure.uncertain,
+        "no sibling ran, so no uncertainty may be reported"
+    );
     let bytes = serde_json::to_vec(&failure.partial_results)?;
     assert!(
         !bytes.windows(secret.len()).any(|window| window == secret),
@@ -1167,7 +1187,24 @@ fn race_limit_one_redacts_secret_winner_output() -> Result<()> {
             "environment": {"set": {"FLOW_SENTINEL": std::str::from_utf8(secret)?}}
         }
     });
-    let registry = flow::manifest::Registry::from_sources(&[source.to_string()])?;
+    let slow = serde_json::json!({
+        "name": "slow.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf other"}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"}
+        }
+    });
+    let registry = flow::manifest::Registry::from_sources(&[
+        source.to_string(),
+        slow.to_string(),
+    ])?;
     registry.set_host_state(flow::security::DataFlowPolicy::from_json(
         br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
     )?);
@@ -1177,11 +1214,14 @@ fn race_limit_one_redacts_secret_winner_output() -> Result<()> {
         ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
     };
     let program = flow::parser::parse(
-        "race at most 1 as result\n  run secret.echo as winner_task\n  run \"sh\" with arguments [\"-c\", \"printf other\"] as slow\nthen encode result as json\n",
+        "race at most 1 as result\n  run secret.echo as winner_task\n  run slow.echo as slow\nthen encode result as json\n",
     )?;
     let result = flow::runtime::run(&program, &registry, &options)?;
     assert!(
-        !result.output.windows(secret.len()).any(|window| window == secret),
+        !result
+            .output
+            .windows(secret.len())
+            .any(|window| window == secret),
         "race JSON must not carry the raw secret"
     );
     let value: serde_json::Value = serde_json::from_slice(&result.output)?;
@@ -1213,7 +1253,11 @@ fn join_typed_json_value_redacts_secret_before_secret_task_launches() -> Result<
             "environment": {"set": {"FLOW_SENTINEL": std::str::from_utf8(secret)?}}
         }
     });
-    let registry = flow::manifest::Registry::from_sources(&[source.to_string()])?;
+    let json_parse = include_str!("../manifests/core.json_parse.json");
+    let registry = flow::manifest::Registry::from_sources(&[
+        source.to_string(),
+        json_parse.to_string(),
+    ])?;
     registry.set_host_state(flow::security::DataFlowPolicy::from_json(
         br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
     )?);
@@ -1227,7 +1271,10 @@ fn join_typed_json_value_redacts_secret_before_secret_task_launches() -> Result<
     )?;
     let result = flow::runtime::run(&program, &registry, &options)?;
     assert!(
-        !result.output.windows(secret.len()).any(|window| window == secret),
+        !result
+            .output
+            .windows(secret.len())
+            .any(|window| window == secret),
         "typed join JSON must not carry the raw secret"
     );
     let value: serde_json::Value = serde_json::from_slice(&result.output)?;
@@ -1277,10 +1324,17 @@ fn parallel_for_each_with_secret_refuses_checkpoint_and_keeps_journal_clean() ->
     };
     let error = match flow::runtime::run_checkpointed(&program, &registry, &options, &checkpoint) {
         Err(error) => error,
-        Ok(_) => return Err(anyhow!("secret parallel for each must refuse checkpointing")),
+        Ok(_) => {
+            return Err(anyhow!(
+                "secret parallel for each must refuse checkpointing"
+            ))
+        }
     };
     assert!(
-        !format!("{error:#}").as_bytes().windows(secret.len()).any(|w| w == secret),
+        !format!("{error:#}")
+            .as_bytes()
+            .windows(secret.len())
+            .any(|w| w == secret),
         "checkpoint refusal must not echo the raw secret"
     );
     let dir = temp.path().join("ck");

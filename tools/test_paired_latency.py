@@ -20,20 +20,89 @@ from compare_latency import (  # noqa: E402
 
 
 class PairedLatencyTests(unittest.TestCase):
-    def test_workflow_pairs_only_failed_main_pushes_with_current_manifests(self) -> None:
+    def test_workflow_measures_latency_after_size_failure_and_pairs_pushes_and_prs(self) -> None:
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("id: linux_latency", workflow)
+        self.assertIn("id: paired_latency", workflow)
+        # The latency gate must still collect samples when the size gate fails.
+        measure = workflow.split("id: linux_latency", 1)[1]
+        measure = measure.split("Save Linux latency samples", 1)[0]
+        self.assertIn("if: success() || failure()", measure)
+        self.assertIn("--require-rss", measure)
+        self.assertIn("--json-out target/linux-latency-samples.json", measure)
         self.assertIn(
-            "if: failure() && steps.linux_latency.outcome == 'failure' && github.event_name == 'push'",
+            "if: failure() && steps.linux_latency.outcome == 'failure'"
+            " && ((github.event_name == 'push'",
             workflow,
         )
-        self.assertIn("BASE_SHA: ${{ github.event.before }}", workflow)
-        self.assertIn('--manifest-dir "$GITHUB_WORKSPACE/manifests"', workflow)
-        self.assertIn("--require-rss", workflow)
+        self.assertIn("|| github.event_name == 'pull_request')", workflow)
+        self.assertIn(
+            "github.event.before != '0000000000000000000000000000000000000000'",
+            workflow,
+        )
+        self.assertIn(
+            "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}", workflow
+        )
+        self.assertIn('if [[ "$EVENT_NAME" == "pull_request" ]]; then', workflow)
+        self.assertIn('--baseline-manifest-dir', workflow)
+        self.assertIn('--candidate-manifest-dir', workflow)
+        self.assertIn('baseline_manifests="$parent_worktree/manifests"', workflow)
+        self.assertIn('candidate_manifests="$GITHUB_WORKSPACE/manifests"', workflow)
         self.assertIn("continue-on-error: true", workflow)
-        self.assertIn("id: paired_latency", workflow)
         self.assertIn("path: target/paired-latency.json", workflow)
+
+    def test_paired_latency_stays_diagnostic_and_fail_closed(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        paired = workflow.split("id: paired_latency", 1)[1]
+        paired = paired.split("Save paired latency samples", 1)[0]
+        self.assertIn("invalid base revision", paired)
+        self.assertIn('=~ ^[0-9a-f]{40}$', paired)
+        self.assertIn("tools/compare_latency.py", paired)
+        self.assertNotIn("tools/check_latency.py", paired)
+        self.assertNotIn("linux-latency-budget.json", paired)
+        self.assertIn("without", workflow)
+        self.assertIn("moving the absolute ceiling", workflow)
+
+    def test_binary_dependent_steps_guard_missing_executable(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for marker in (
+            "Compare Omarchy ports with their Bash originals",
+            "id: linux_latency",
+            "id: paired_latency",
+            "Measure hot-path benchmarks",
+        ):
+            section = workflow.split(marker, 1)[1].split("- name:", 1)[0]
+            self.assertIn("[[ ! -x target/release/execute ]]", section)
+            self.assertIn("is missing", section)
+            self.assertIn("preserve the original failure", section)
+            self.assertIn("exit 0", section)
+
+    def test_paired_latency_compares_each_revision_with_its_own_manifests(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        paired = workflow.split("id: paired_latency", 1)[1]
+        paired = paired.split("Save paired latency samples", 1)[0]
+        self.assertIn('baseline_manifests="$parent_worktree/manifests"', paired)
+        self.assertIn('candidate_manifests="$GITHUB_WORKSPACE/manifests"', paired)
+        self.assertIn("--baseline-manifest-dir", paired)
+        self.assertIn("--candidate-manifest-dir", paired)
+        self.assertIn('if [[ ! -d "$baseline_manifests" ]]; then', paired)
+        self.assertIn("falling back to candidate manifests", paired)
+        self.assertNotIn('--manifest-dir "$GITHUB_WORKSPACE/manifests"', paired)
+
+    def test_linux_budget_artifacts_avoid_rerun_collisions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for name in (
+            "linux-latency-samples-",
+            "linux-latency-paired-",
+            "linux-binary-size-paired-",
+        ):
+            self.assertIn(name + "${{ github.run_id }}-${{ github.run_attempt }}", workflow)
+        self.assertEqual(workflow.count("overwrite: true"), 3)
 
     def test_historical_anchor_workflow_is_manual_and_does_not_change_budgets(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -72,6 +141,8 @@ class PairedLatencyTests(unittest.TestCase):
         self.assertNotIn("tools/check_latency.py", workflow)
         self.assertIn("diagnostic only", workflow)
         self.assertEqual(budgets["one_line_median_ms"], 5)
+        # #518: the ten-step ceiling stays at the committed 8 ms cap until
+        # retained-sample regeneration lands; the anchor workflow must not change it.
         self.assertEqual(budgets["ten_step_median_ms"], 8)
 
     def test_same_binary_can_be_paired_with_separate_argument_sets(self) -> None:

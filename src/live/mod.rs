@@ -27,7 +27,7 @@ use std::sync::{
     Arc, Condvar, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub fn cli(
     arguments: &[String],
@@ -77,14 +77,7 @@ pub fn host_run(
     default_manifests: PathBuf,
     path: fn(&str) -> Result<PathBuf>,
 ) -> Result<i32> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let socket = std::env::temp_dir().join(format!(
-        "execute-control-{}-{nanos}.sock",
-        std::process::id()
-    ));
+    let socket = control_endpoint_path()?;
     let mut args = vec![
         "serve".to_owned(),
         run.file.to_string_lossy().into_owned(),
@@ -135,12 +128,421 @@ pub fn host_run(
         .unwrap_or(1))
 }
 
+/// General client slots. One handler thread serves each admitted connection, and
+/// a `wait` client may hold its slot for up to 10 s. Priority traffic uses a
+/// free general slot first; the reserve below only engages when all of these
+/// are held.
+const MAX_CLIENTS: usize = 16;
+/// Reserve handlers past [`MAX_CLIENTS`] so priority traffic is still served
+/// while every general slot holds a long poll. A reserve slot is claimed only
+/// after the accept loop has buffered a full priority request and (when a
+/// policy is configured) pre-authorized it for that operation, so slow,
+/// partial, or unauthenticated senders can never occupy it; anything else
+/// fails fast with `busy`.
+const PRIORITY_SPARE: usize = 2;
+/// Burst-tolerant flood control for non-priority admissions; see
+/// [`state::FloodBudget`]. A fresh server admits [`state::FLOOD_BURST`]
+/// back-to-back non-priority requests — enough for a legitimate burst such as
+/// eight workers driving a thousand CRUD operations — then refills
+/// [`state::SUSTAINED_ACCEPTS_PER_SECOND`] admissions per second. Past the
+/// burst, a sustained same-user flood sheds with `busy` before costing a
+/// thread (Unix) or reaching policy/state work, while the reserve-eligible
+/// priority fast path never spends the budget. Slot exhaustion still sheds
+/// first: only an admitted general-lane request spends a token.
+/// Accept-loop classification window (Unix): the first newline-terminated
+/// request line must arrive within these bytes for the reserve lane to consider
+/// it. Genuine requests are far smaller; a larger head is general-lane bulk.
+const CLASSIFY_CAP: usize = 8192;
+/// Bounded pre-admission queue (Unix): accepted connections that have not yet
+/// delivered a full request line wait here without a thread and without holding
+/// any client slot, so slow or partial same-UID senders cannot starve control.
+/// Past this many, the oldest still-incomplete connection is closed to make
+/// room. Enforced on Unix; reported in the schema on every platform.
+const PENDING_MAX: usize = 64;
+
+#[cfg(unix)]
+fn euid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    crate::platform::unix_ffi::effective_uid()
+}
+
+/// The per-user directory that owns `run --control` endpoints. It persists like
+/// the daemon's per-user directory; each endpoint inside it is removed on exit.
+#[cfg(unix)]
+fn control_dir_name() -> String {
+    format!("execute-live-{}", euid())
+}
+/// The per-user directory that owns `run --control` endpoints.
+#[cfg(not(unix))]
+fn control_dir_name() -> String {
+    "execute-live".to_owned()
+}
+
+/// A fresh endpoint for one `run --control`: a randomized name inside the
+/// private per-user directory, so neither the path nor its parent is a shared
+/// foothold. Binding still creates the socket exclusively and never replaces an
+/// existing path.
+fn control_endpoint_path() -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(control_dir_name());
+    ensure_private_dir(&dir)?;
+    for _ in 0..16 {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).context("randomizing the control socket name")?;
+        let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let socket = dir.join(format!("control-{}-{name}.sock", std::process::id()));
+        // Never reuse a planted path: binding creates the socket exclusively, and
+        // a link at a candidate name is skipped here rather than followed.
+        if fs::symlink_metadata(&socket).is_err() {
+            return Ok(socket);
+        }
+    }
+    bail!("could not pick a unique control socket name")
+}
+
+/// Create `dir` private to this user when missing, then refuse anything that is
+/// not a caller-owned directory with no group/other permission bits.
+fn ensure_private_dir(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        match fs::DirBuilder::new().mode(0o700).create(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", dir.display()));
+            }
+        }
+        check_private_dir(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        match fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", dir.display()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Refuse a socket parent that is not a real directory owned by this user and
+/// private to it. Links, group/world-readable directories and other users'
+/// directories are all refused.
+#[cfg(unix)]
+fn check_private_dir(dir: &Path) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(dir).with_context(|| format!("reading {}", dir.display()))?;
+    if !metadata.is_dir() {
+        bail!("{} is not a directory", dir.display());
+    }
+    if metadata.uid() != euid() || metadata.mode() & 0o077 != 0 {
+        bail!(
+            "{} must be owned by you and private (mode 0700)",
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// Refuse to bind a socket whose parent directory is not private to this user.
+/// A shared parent lets another user pre-create the path to make the run fail,
+/// so the predictable-name foothold is closed by refusing it outright.
+#[cfg(unix)]
+fn check_socket_parent(socket: &Path) -> Result<()> {
+    let parent = socket
+        .parent()
+        .with_context(|| format!("socket path {} has no directory", socket.display()))?;
+    // A bare file name binds in the working directory, which gets the same check.
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let metadata = fs::symlink_metadata(parent).with_context(|| {
+        format!(
+            "refusing to bind {}: its directory {} must be private and owned by you (mode 0700)",
+            socket.display(),
+            parent.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        bail!(
+            "refusing to bind {}: {} is not a directory",
+            socket.display(),
+            parent.display()
+        );
+    }
+    if metadata.uid() != euid() || metadata.mode() & 0o077 != 0 {
+        bail!(
+            "refusing to bind {}: {} must be owned by you and private (mode 0700)",
+            socket.display(),
+            parent.display()
+        );
+    }
+    Ok(())
+}
+
+/// Priority traffic that a constrained lane still serves: inspection reads and
+/// the stop the operator relies on. Every other request fails fast with `busy`
+/// instead of starving behind long polls or a connection flood.
+fn is_priority_request(op: &str, action: Option<&str>) -> bool {
+    op == "read" || (op == "control" && action == Some("stop"))
+}
+
+/// Whether raw request bytes carry priority traffic. Best effort: malformed
+/// bytes are not priority; the handler still answers them with the usual
+/// `invalid_request` when they are admitted through the general lane.
+#[cfg(unix)]
+fn is_priority_bytes(line: &[u8]) -> bool {
+    let value: Json = match serde_json::from_slice(line) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let op = value.get("op").and_then(Json::as_str).unwrap_or_default();
+    is_priority_request(op, value.get("action").and_then(Json::as_str))
+}
+
+/// Whether raw priority bytes may claim a reserve slot. When no agent policy
+/// is configured the socket stays same-user trusted, so every well-formed
+/// priority claim without an `auth` field stays reserve-eligible and `stop`
+/// availability is unchanged; a no-policy claim carrying `auth` is demoted
+/// because the handler rejects any `auth` without a policy. When a policy is
+/// configured, only a request already authorized for its priority operation
+/// (`read`, or `control stop`) is reserve-eligible: an unauthenticated,
+/// under-permissioned, or malformed-`auth` fake-priority frame is demoted to
+/// the general lane, where it spends the flood budget and sheds with `busy`
+/// instead of occupying a reserve slot. Preclassification also mirrors the
+/// handler's pre-state field checks (allowed keys, `if_revision` shape, and
+/// request types) so an authorized-but-invalid `read`/`stop` the handler
+/// would reject is demoted rather than occupying a reserve slot. This bounds
+/// unauthenticated reserve pressure without adding a priority rate limit
+/// that could shed a genuine `stop`. Admission still never bypasses
+/// authentication: the handler re-authorizes every admitted request before
+/// touching state, and this predicate never grants access on its own.
+#[cfg(unix)]
+fn reserve_eligible(line: &[u8], policy: Option<&AgentAuthPolicy>) -> bool {
+    let value: Json = match serde_json::from_slice(line) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let op = value.get("op").and_then(Json::as_str).unwrap_or_default();
+    let action = value.get("action").and_then(Json::as_str);
+    if !is_priority_request(op, action) {
+        return false;
+    }
+    if !priority_shape_valid(&value, op, action) {
+        return false;
+    }
+    let Some(policy) = policy else {
+        // Mirrors `handle_request`: without a policy any `auth` field is
+        // rejected, so it must not claim the reserve.
+        return value.get("auth").is_none();
+    };
+    // Mirrors the handler's strict `auth` parse: malformed `auth`
+    // (missing/extra fields, wrong types) fails the request there, so it is
+    // demoted here rather than occupying a reserve slot. A missing `auth`
+    // stays `None` so `authorize` fails closed below, exactly as in the
+    // handler.
+    let auth = match value.get("auth").cloned() {
+        None => None,
+        Some(auth_value) => match serde_json::from_value::<RequestAuth>(auth_value) {
+            Ok(auth) => Some(auth),
+            Err(_) => return false,
+        },
+    };
+    policy.authorize(auth.as_ref(), op, action).is_ok()
+}
+
+/// Pre-state shape check for priority preclassification. Mirrors the
+/// `handle_request` checks that run before live state is touched, for the
+/// priority operations only: the per-operation allowed-field list, the
+/// `if_revision` nonnegative-integer shape, and the `Request` type shapes
+/// (e.g. `path` must be a string). The `auth` field is validated separately
+/// by the caller and ignored here, matching the handler removing it before
+/// its allowed-field check. State-dependent checks (`if_revision` freshness,
+/// path existence, revision conflicts) are intentionally not mirrored: a
+/// well-formed `read`/`stop` that later fails on state still needed its
+/// reserve slot to reach the handler.
+#[cfg(unix)]
+fn priority_shape_valid(value: &Json, op: &str, action: Option<&str>) -> bool {
+    let allowed: &[&str] = match (op, action) {
+        ("read", _) => &["op", "path"],
+        ("control", Some("stop")) => &["op", "action", "value", "if_revision"],
+        _ => return false,
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    for key in object.keys() {
+        if key == "auth" {
+            continue;
+        }
+        if !allowed.contains(&key.as_str()) {
+            return false;
+        }
+    }
+    if value
+        .get("if_revision")
+        .is_some_and(|revision| revision.as_u64().is_none())
+    {
+        return false;
+    }
+    // Catch the type errors the handler's `Request` parse would reject
+    // (for example a numeric `path`), after the allowed-field check above
+    // which is stricter than the `Request` struct itself.
+    let mut shaped = value.clone();
+    if let Some(object) = shaped.as_object_mut() {
+        object.remove("auth");
+    }
+    serde_json::from_value::<Request>(shaped).is_ok()
+}
+
+/// Where one fully-buffered connection goes. Pure so the reserve-exhausted
+/// `busy` path stays covered by deterministic unit tests: holding two
+/// reserve slots with fast `read`/`stop` handlers is inherently racy, so an
+/// integration test cannot pin the third-priority `busy` without sleeps.
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Admit {
+    General,
+    Priority,
+    Shed,
+}
+
+/// Decide the lane from exact slot counts. Priority claims use a free
+/// general slot first; the reserve engages only while all general slots are
+/// held. `flood_admits` is the already-computed flood-budget verdict for
+/// this connection: callers spend a token only for a general-lane,
+/// non-priority admission, never for reserve-eligible priority or for a
+/// connection that sheds on full slots.
+#[cfg(unix)]
+fn decide_lane(
+    general_used: usize,
+    priority_used: usize,
+    reserve_eligible: bool,
+    flood_admits: bool,
+) -> Admit {
+    if reserve_eligible {
+        if general_used < MAX_CLIENTS {
+            Admit::General
+        } else if priority_used < PRIORITY_SPARE {
+            Admit::Priority
+        } else {
+            Admit::Shed
+        }
+    } else if general_used < MAX_CLIENTS && flood_admits {
+        Admit::General
+    } else {
+        Admit::Shed
+    }
+}
+
+/// Admission lane for one handler thread. Unix classifies each connection in
+/// the accept loop before spawning, so every spawned Unix handler runs
+/// [`Gate::Open`]; the gate stays as a backstop. Windows constrains post-accept
+/// like before.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    Open,
+    PriorityOnly,
+}
+
+/// Spend one flood-budget token for a general-lane admission. Failing closed:
+/// a poisoned budget sheds instead of admitting. Reserve-eligible priority
+/// never calls this; demoted fake-priority frames do, like any other
+/// general-lane traffic. Partial connections that never deliver a request
+/// never reach it.
+fn admit_non_priority(shared: &Shared) -> bool {
+    shared
+        .flood
+        .lock()
+        .map(|mut budget| budget.try_admit(Instant::now()))
+        .unwrap_or(false)
+}
+
+/// An accepted connection that has not delivered a full request line yet. It
+/// holds no thread and no client slot: only a small buffer and a deadline, so
+/// a slow or partial same-UID sender costs almost nothing while it stalls.
+#[cfg(unix)]
+struct PendingConn {
+    stream: UnixStream,
+    buf: Vec<u8>,
+    accepted_at: Instant,
+}
+
+/// Spawn one admitted handler and release its lane slot when it exits.
+#[cfg(unix)]
+fn spawn_slot(
+    clients: &mut Vec<thread::JoinHandle<()>>,
+    shared: &Arc<Shared>,
+    slot: Arc<AtomicUsize>,
+    stream: UnixStream,
+    request: Vec<u8>,
+) {
+    slot.fetch_add(1, Ordering::Relaxed);
+    let control = shared.clone();
+    clients.push(thread::spawn(move || {
+        handle(stream, &control, Gate::Open, request);
+        slot.fetch_sub(1, Ordering::Relaxed);
+    }));
+}
+
+/// Best-effort `busy` reply for shed load, written inline in the accept loop so
+/// shedding never costs a handler thread. The pending streams are already
+/// non-blocking, so this loops `write` until the frame is complete or the
+/// peer backpressures (`WouldBlock`), then drops the connection either way:
+/// a flowing peer gets the retryable `busy` frame, while a backpressured or
+/// stalled peer costs the accept loop no poll budget and no stall. Never
+/// block or poll here: a same-UID peer that connects but never reads must
+/// not delay admission of a `stop`. Honest edge: if the peer's buffer fills
+/// mid-frame, the connection still closes after a truncated prefix, so the
+/// client can observe EOF or a JSON parse failure instead of `busy` under
+/// saturation; clients should treat those as retryable exactly like `busy`.
+#[cfg(unix)]
+fn shed_busy(stream: UnixStream) {
+    let response = json!({"ok":false,"error":{"code":"busy","message":"the server is saturated; retry, or stop and read remain available"}});
+    let mut bytes = serde_json::to_vec(&response).unwrap_or_default();
+    bytes.push(b'\n');
+    let mut stream = stream;
+    // Non-blocking by construction (the caller set non-blocking before
+    // buffering). Short frame, so one write usually suffices; loop only
+    // while progress is made, never blocking or polling.
+    let mut written = 0;
+    while written < bytes.len() {
+        match stream.write(&bytes[written..]) {
+            Ok(0) | Err(_) => break,
+            Ok(count) => written += count,
+        }
+    }
+}
+
+/// Take one newline-terminated request out of bytes the accept loop already
+/// buffered, or read the tail under the same absolute budget the direct path
+/// always had. The protocol is one request per connection, so bytes past the
+/// first newline are ignored, exactly like the old read-until-newline path.
+fn read_request_bytes(stream: &mut UnixStream, prefix: Vec<u8>) -> Result<Vec<u8>> {
+    if let Some(end) = prefix.iter().position(|&b| b == b'\n') {
+        return Ok(prefix[..=end].to_vec());
+    }
+    let mut bytes = prefix;
+    let remaining = MAX_MESSAGE.saturating_sub(bytes.len());
+    let tail = transport::read_message(stream, remaining, transport::IO_TIMEOUT)?;
+    bytes.extend_from_slice(&tail);
+    Ok(bytes)
+}
+
 fn error_response(error: &anyhow::Error) -> Json {
     let code = error
         .downcast_ref::<ApiError>()
         .map_or("invalid_request", |error| error.code);
     json!({"ok":false,"error":{"code":code,"message":format!("{error:#}")}})
 }
+/// `concurrent_clients` is a deprecated alias for `general_clients` (both are
+/// [`MAX_CLIENTS`]): it stays so strict schema readers written before the
+/// reserve/flood keys still validate. New readers should use
+/// `general_clients` + `priority_spare`.
 fn schema() -> Json {
     json!({"ok":true,"protocol":"execute.live/1","execute_version":env!("CARGO_PKG_VERSION"),"commands":{
         "serve":"execute live serve FILE --socket PATH [--paused] [--breakpoints LINES] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR | --manifest-catalog FILE] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
@@ -163,7 +565,7 @@ fn schema() -> Json {
         "authorization":{"mode":"same_user_trusted_without_policy","opt_in":"serve --agent-policy FILE requires every request to carry an authorized --agent ID --token-file FILE credential; policy stores token hashes; credentials are not persisted or echoed","boundary":"same-UID clients remain inside the existing OS ownership boundary; bearer-token scopes are cooperative client authorization and do not isolate a hostile same-UID process that can read private token files","permissions":["read","edit","control","input","stop"]},
         "capability_policy_scope":"--capability-policy grants applet capabilities only; use --data-flow-policy to enforce remote-origin and persistence data-flow grants",
         "semantics":{"revision":"monotonic; if_revision protects atomic writes against concurrent edits and execution","create":"requires absent object key; arrays insert at index or -","update":"requires existing path","delete":"requires existing path; required document fields cannot be removed","patch":"atomic RFC 6902 add/replace/remove/test operations; all changes validate before commit","breakpoint":"control breakpoint LINE... pauses before those source lines; with no lines it clears them; a paused run shows /runtime/debug (line and bindings)","continue":"while paused at a breakpoint, run to the next breakpoint; otherwise refused","step":"while paused at a breakpoint, run one statement and pause before the next; otherwise run one native node","pause":"finish the current native group, then pause; streams pause at their next emitted record","cancel":"cancel/reap the active native group; retry explicitly acknowledges possibly incomplete effects","source":"in-memory replacement only; source file is not rewritten; changing the native listener source/cwd restarts its producer and may replay input; handler-only edits preserve it","reset":"reset cursor/cwd/input and local result bindings; preserves external bindings and user metadata; does not undo effects","restart":"reset and run; may repeat effects","completed":"the control server remains alive for inspection and edits until stop","stream":"native argv is fixed for the lifetime of a stream; cancel and wait before editing/restarting its pipeline","ui":"actual renderer state under /ui/programs/NAME/widgets/ID; edit text, items/selection, table rows, bars, chart series and focus; component input changes invoke .program handlers; event dispatch supports press/submit/choose/open; source replacement changes layout and widget identities","durability":"ephemeral live state; separate from durable checkpoints; completed effects are never rolled back"},
-        "limits":{"request_bytes":MAX_MESSAGE,"state_bytes":MAX_STATE,"inbox_records":MAX_QUEUE,"event_history":64,"concurrent_clients":16,"wait_timeout_ms":10000,"request_read_timeout_ms":2000,"response_write_timeout_ms":2000,"client_response_timeout_ms":12000},
+        "limits":{"request_bytes":MAX_MESSAGE,"state_bytes":MAX_STATE,"inbox_records":MAX_QUEUE,"event_history":64,"concurrent_clients":MAX_CLIENTS,"general_clients":MAX_CLIENTS,"priority_spare":PRIORITY_SPARE,"pending_connections":PENDING_MAX,"priority_classify_bytes":CLASSIFY_CAP,"pending_timeout_ms":transport::IO_TIMEOUT.as_millis(),"burst_accepts":FLOOD_BURST,"sustained_accepts_per_second":SUSTAINED_ACCEPTS_PER_SECOND,"priority_requests":["read","control stop"],"wait_timeout_ms":10000,"request_read_timeout_ms":2000,"response_write_timeout_ms":2000,"client_response_timeout_ms":12000},
         "supported":["finite","interval","calendar","stdin listener via send/inbox","native applet listener","persistent native stream","interactive TUI","persistent headless TUI"]})
 }
 
@@ -583,6 +985,7 @@ fn dispatch(
             initial_input,
             headless: opts.headless,
             run_mode: mode == Mode::Run,
+            flood: Mutex::new(FloodBudget::new()),
         });
         let options = RunOptions {
             cache_directory: opts
@@ -779,6 +1182,8 @@ impl Drop for SignalGuard {
     }
 }
 fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) -> Result<Json> {
+    #[cfg(unix)]
+    check_socket_parent(socket)?;
     let listener = UnixListener::bind(socket)
         .context("could not bind socket; an existing path is never replaced")?;
     #[cfg(unix)]
@@ -822,7 +1227,16 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     let mut run_end: Option<RunEnd> = None;
     let control = shared.clone();
     let worker = thread::spawn(move || worker::run(control, options));
+    #[cfg(windows)]
     let active = Arc::new(AtomicUsize::new(0));
+    // Unix lane accounting is exact because only this loop admits: general
+    // slots serve anything, reserve slots serve fully-read priority requests.
+    #[cfg(unix)]
+    let general = Arc::new(AtomicUsize::new(0));
+    #[cfg(unix)]
+    let priority = Arc::new(AtomicUsize::new(0));
+    #[cfg(unix)]
+    let mut pending: VecDeque<PendingConn> = VecDeque::new();
     let mut clients = Vec::new();
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
@@ -846,28 +1260,239 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => return Err(error.into()),
                 };
-                if ready == 0 {
-                    continue;
+                // Only the accept drain depends on listener readiness: it runs
+                // here, where `ready` is in scope, while the pending sweep in
+                // the block below runs on every tick, including poll timeouts,
+                // so bytes that arrive after the accept drain are still picked
+                // up promptly.
+                if ready != 0 {
+                    loop {
+                        let (stream, _) = match listener.accept() {
+                            Ok(stream) => stream,
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(e) => return Err(e.into()),
+                        };
+                        // Owner check and non-blocking mode before any buffering: a
+                        // foreign peer is dropped without costing a slot or a
+                        // flood token, and the sweep below relies on WouldBlock
+                        // reads. Accepts are ungated here: the sweep spends a
+                        // budget token only once a full non-priority request is
+                        // buffered, so partial senders never spend it.
+                        if stream.set_nonblocking(true).is_err() || !peer_is_owner(&stream) {
+                            continue;
+                        }
+                        pending.push_back(PendingConn {
+                            stream,
+                            buf: Vec::new(),
+                            accepted_at: Instant::now(),
+                        });
+                    }
                 }
             }
             #[cfg(windows)]
             thread::sleep(Duration::from_millis(10));
-            let (stream, _) = match listener.accept() {
-                Ok(stream) => stream,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(e) => return Err(e.into()),
-            };
-            if active.load(Ordering::Relaxed) >= 16 {
-                drop(stream);
-                continue;
+            #[cfg(windows)]
+            {
+                let (stream, _) = match listener.accept() {
+                    Ok(stream) => stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                    Err(e) => return Err(e.into()),
+                };
+                // Past the hard cap the connection is closed without a `busy`
+                // frame. This is a deliberate Windows best-effort limit, not
+                // parity with Unix: named pipes have no non-blocking shed
+                // path, so a reply here would either block this accept loop
+                // on the write or spawn an unbounded number of short shed
+                // threads under flood. Within the cap, priority and flood
+                // sheds still answer `busy` from the handler (see below);
+                // a dropped over-cap client observes EOF and should retry.
+                // See docs/live-control.md for the Windows contract.
+                if active.load(Ordering::Relaxed) >= MAX_CLIENTS + PRIORITY_SPARE {
+                    drop(stream);
+                    continue;
+                }
+                // Past the general slots a handler answers only priority
+                // traffic (read, stop) so held long polls cannot starve
+                // control. The flood budget is checked in the handler after
+                // parsing (before policy/state work): Unix already gated
+                // pre-admission, and Windows has no pre-admission classifier.
+                let constrained = active.fetch_add(1, Ordering::Relaxed) + 1 > MAX_CLIENTS;
+                let count = active.clone();
+                let control = shared.clone();
+                clients.push(thread::spawn(move || {
+                    handle(
+                        stream,
+                        &control,
+                        if constrained {
+                            Gate::PriorityOnly
+                        } else {
+                            Gate::Open
+                        },
+                        Vec::new(),
+                    );
+                    count.fetch_sub(1, Ordering::Relaxed);
+                }));
             }
-            active.fetch_add(1, Ordering::Relaxed);
-            let count = active.clone();
-            let control = shared.clone();
-            clients.push(thread::spawn(move || {
-                handle(stream, &control);
-                count.fetch_sub(1, Ordering::Relaxed);
-            }));
+            #[cfg(unix)]
+            {
+                // This sweep runs on every tick, including poll timeouts: no
+                // thread spawns and no slot is claimed before a full request
+                // line is buffered and classified, so slow or partial same-UID
+                // senders cannot hold the reserve lane, and bytes that arrive
+                // after the accept drain are still picked up promptly.
+                // Drain every pending connection until it would block.
+                // Connections that delivered a full request line are decided
+                // immediately, so bounding the queue below only ever evicts
+                // still-incomplete (likely slow-loris) holders, never a ready
+                // stop or read. Draining (instead of one chunk per tick) keeps
+                // legitimate large requests near the direct-path wire speed;
+                // growth past CLASSIFY_CAP is routed as bulk in this same
+                // pass, so one fast sender cannot inflate pending memory.
+                // Admission below is slot-based first, then burst-tolerant:
+                // reserve-eligible priority never spends the flood budget,
+                // partial senders never reach it, and a benign burst within
+                // the budget is admitted while slots are free. Only a
+                // sustained flood past the burst sheds with `busy` — inline,
+                // without a thread. The policy is fetched once per sweep; it
+                // is immutable after startup, and the per-connection check is
+                // a hash comparison, so the accept loop never touches state
+                // or policy I/O.
+                let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
+                let policy = agent_policy.as_ref().as_ref();
+                let mut index = 0;
+                while index < pending.len() {
+                    let closed = {
+                        let conn = &mut pending[index];
+                        let mut closed = false;
+                        let mut stalled = false;
+                        while !closed
+                            && !stalled
+                            && conn.buf.len() <= CLASSIFY_CAP.saturating_add(2048)
+                        {
+                            let mut chunk = [0u8; 2048];
+                            match conn.stream.read(&mut chunk) {
+                                Ok(0) => closed = true,
+                                Ok(count) => {
+                                    conn.buf.extend_from_slice(&chunk[..count]);
+                                    if conn.buf.contains(&b'\n') {
+                                        break;
+                                    }
+                                }
+                                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                                    continue;
+                                }
+                                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                    stalled = true;
+                                }
+                                Err(_) => closed = true,
+                            }
+                        }
+                        closed
+                    };
+                    if closed {
+                        pending.remove(index);
+                        continue;
+                    }
+                    let line_end = pending[index].buf.iter().position(|&b| b == b'\n');
+                    let oversize = line_end.is_none() && pending[index].buf.len() > CLASSIFY_CAP;
+                    let expired = line_end.is_none()
+                        && !oversize
+                        && pending[index].accepted_at.elapsed() > transport::IO_TIMEOUT;
+                    if line_end.is_none() && !oversize && !expired {
+                        index += 1;
+                        continue;
+                    }
+                    let Some(mut conn) = pending.remove(index) else {
+                        continue;
+                    };
+                    if expired {
+                        // A partial older than the request read budget: silent
+                        // close. It never held a slot, spawned a thread, or
+                        // touched policy state.
+                        continue;
+                    }
+                    let line_end = conn.buf.iter().position(|&b| b == b'\n');
+                    // Priority window plus authorization gate: only a
+                    // newline-terminated line within CLASSIFY_CAP whose
+                    // priority operation is already authorized (or any
+                    // well-formed priority claim when no policy is
+                    // configured) is considered for the reserve lane. An
+                    // oversize-without-newline head joins the general lane,
+                    // where the handler applies the full 1 MiB limit to the
+                    // remainder. A large-but-valid `read`/`stop` whose first
+                    // newline falls past 8 KiB therefore loses reserve
+                    // priority but is still served whenever a general slot
+                    // is free; document this window, do not widen the
+                    // accept-loop buffer to chase it. Demoted
+                    // fake-priority frames spend the flood budget like any
+                    // other general-lane traffic, so unauthenticated senders
+                    // cannot occupy reserve slots however fast they connect.
+                    let eligible = line_end.is_some_and(|end| {
+                        let line = &conn.buf[..=end];
+                        is_priority_bytes(line) && reserve_eligible(line, policy)
+                    });
+                    let request = match line_end {
+                        Some(end) => conn.buf[..=end].to_vec(),
+                        None => std::mem::take(&mut conn.buf),
+                    };
+                    let general_used = general.load(Ordering::Relaxed);
+                    let priority_used = priority.load(Ordering::Relaxed);
+                    // Spend a flood token only for a general-lane admission
+                    // decision on demoted/non-priority traffic; reserve
+                    // decisions and full-lane sheds never touch the budget.
+                    let admit = if eligible {
+                        decide_lane(general_used, priority_used, true, false)
+                    } else if general_used < MAX_CLIENTS {
+                        decide_lane(
+                            general_used,
+                            priority_used,
+                            false,
+                            admit_non_priority(&shared),
+                        )
+                    } else {
+                        Admit::Shed
+                    };
+                    match admit {
+                        Admit::General => {
+                            spawn_slot(
+                                &mut clients,
+                                &shared,
+                                general.clone(),
+                                conn.stream,
+                                request,
+                            );
+                        }
+                        Admit::Priority => {
+                            spawn_slot(
+                                &mut clients,
+                                &shared,
+                                priority.clone(),
+                                conn.stream,
+                                request,
+                            );
+                        }
+                        Admit::Shed => {
+                            // Reserve exhausted while every general slot is
+                            // held, or the general lane is full/past-burst:
+                            // answer `busy` inline (non-blocking writes,
+                            // never a thread) so the client can retry
+                            // instead of seeing EOF. Only concurrent
+                            // authorized priority handlers can hold the
+                            // reserve; partial senders never hold a slot
+                            // because buffering and authorization precede
+                            // admission, and demoted fake-priority frames
+                            // shed here without ever reaching the reserve.
+                            shed_busy(conn.stream);
+                        }
+                    }
+                }
+                // Bound pre-admission memory: the oldest still-incomplete
+                // connection is the likeliest slow-loris holder, so it yields
+                // to the newcomer.
+                while pending.len() > PENDING_MAX {
+                    pending.pop_front();
+                }
+            }
             let mut i = 0;
             while i < clients.len() {
                 if clients[i].is_finished() {
@@ -952,16 +1577,16 @@ fn run_outcome(shared: &Shared) -> Option<RunEnd> {
         _ => None,
     }
 }
-fn handle(mut stream: UnixStream, shared: &Shared) {
+fn handle(mut stream: UnixStream, shared: &Shared, gate: Gate, prefix: Vec<u8>) {
     if stream.set_nonblocking(false).is_err() || !peer_is_owner(&stream) {
         return;
     }
     let result = (|| -> Result<Json> {
-        let bytes = transport::read_message(&mut stream, MAX_MESSAGE, transport::IO_TIMEOUT)?;
+        let bytes = read_request_bytes(&mut stream, prefix)?;
         if bytes.len() > MAX_MESSAGE {
             bail!("request exceeds 1 MiB");
         }
-        let mut value: Json = serde_json::from_slice(&bytes)?;
+        let value: Json = serde_json::from_slice(&bytes)?;
         if matches!(
             value.get("op").and_then(Json::as_str),
             Some("create" | "update" | "send" | "event")
@@ -978,86 +1603,41 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
             .get("action")
             .and_then(Json::as_str)
             .map(str::to_owned);
+        // A constrained lane (past the general client slots) answers only
+        // priority traffic. The shed happens before policy work so held long
+        // polls cannot spend server time or starve control. On Unix the
+        // accept loop already admits only priority traffic to a constrained
+        // lane, so this stays as a backstop.
+        if gate == Gate::PriorityOnly && !is_priority_request(&op, action.as_deref()) {
+            return Err(ApiError {
+                code: "busy",
+                message: "the server is saturated; retry, or stop and read remain available".into(),
+            }
+            .into());
+        }
+        // Windows has no pre-admission classifier, so the flood budget Unix
+        // enforces before spawning is enforced here instead: after parsing but
+        // before authentication and state work. Priority-shaped traffic never
+        // spends the budget, so read and stop stay on the fast path however
+        // fast peers connect. Windows has no pre-admission authorization
+        // gate, so this shape check (unlike the Unix reserve gate) still
+        // admits fake-priority frames to a handler thread; the handler
+        // re-authorizes them before touching state.
+        #[cfg(windows)]
+        if !is_priority_request(&op, action.as_deref()) && !admit_non_priority(shared) {
+            return Err(ApiError {
+                code: "busy",
+                message: "the server is saturated; retry, or stop and read remain available".into(),
+            }
+            .into());
+        }
         let auth = value
             .get("auth")
             .cloned()
             .map(serde_json::from_value::<RequestAuth>)
             .transpose()
             .context("auth must contain an agent and token")?;
-        let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
-        if let Some(policy) = agent_policy.as_ref() {
-            let required = auth::required_permission(&op, action.as_deref()).ok();
-            let authorization = policy.authorize(auth.as_ref(), &op, action.as_deref());
-            if let Some(required) = required {
-                let (permission, risk) = match required {
-                    auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
-                    auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
-                    auth::AgentPermission::Control => {
-                        ("control", crate::security::PolicyRisk::High)
-                    }
-                    auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
-                    auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
-                };
-                let (outcome, reason) = if authorization.is_ok() {
-                    (
-                        crate::security::PolicyDecisionOutcome::Approved,
-                        crate::security::PolicyDecisionReason::PolicyMatched,
-                    )
-                } else {
-                    (
-                        crate::security::PolicyDecisionOutcome::Denied,
-                        crate::security::PolicyDecisionReason::MissingGrant,
-                    )
-                };
-                let subject = auth
-                    .as_ref()
-                    .map_or("unknown", |credential| credential.agent.as_str());
-                crate::security::record_policy_decision(
-                    &shared.registry,
-                    subject,
-                    &format!("live.{permission}"),
-                    None,
-                    risk,
-                    outcome,
-                    reason,
-                );
-            }
-            authorization
-                .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
-        } else if auth.is_some() {
-            bail!("live agent credentials require serve --agent-policy");
-        }
-        value
-            .as_object_mut()
-            .context("request must be an object")?
-            .remove("auth");
-        let allowed: &[&str] = match op.as_str() {
-            "read" => &["op", "path"],
-            "create" | "update" => &["op", "path", "value", "if_revision"],
-            "delete" => &["op", "path", "if_revision"],
-            "patch" => &["op", "operations", "if_revision"],
-            "control" => &["op", "action", "value", "if_revision"],
-            "send" | "event" => &["op", "value", "if_revision"],
-            "wait" => &["op", "path", "after", "timeout_ms"],
-            _ => bail!("unknown operation"),
-        };
-        for key in value
-            .as_object()
-            .context("request must be an object")?
-            .keys()
-        {
-            if !allowed.contains(&key.as_str()) {
-                bail!("unexpected field {key} for {op}");
-            }
-        }
-        if value
-            .get("if_revision")
-            .is_some_and(|revision| revision.as_u64().is_none())
-        {
-            bail!("if_revision must be a nonnegative integer");
-        }
-        let request: Request = serde_json::from_value(value)?;
-        state::request(shared, request)
+        handle_request(op, action, auth, value, shared)
     })();
     let response = result.unwrap_or_else(|error| {
         let mut response = error_response(&error);
@@ -1069,6 +1649,438 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
     if let Ok(mut bytes) = serde_json::to_vec(&response) {
         bytes.push(b'\n');
         let _ = transport::write_message(&mut stream, &bytes, transport::IO_TIMEOUT);
+    }
+}
+
+/// Authorize and apply one parsed request. Split from `handle` so every lane
+/// shares the same policy and validation: lane admission never bypasses
+/// authentication, it only decides scheduling.
+fn handle_request(
+    op: String,
+    action: Option<String>,
+    auth: Option<RequestAuth>,
+    mut value: Json,
+    shared: &Shared,
+) -> Result<Json> {
+    let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
+    if let Some(policy) = agent_policy.as_ref() {
+        let required = auth::required_permission(&op, action.as_deref()).ok();
+        let authorization = policy.authorize(auth.as_ref(), &op, action.as_deref());
+        if let Some(required) = required {
+            let (permission, risk) = match required {
+                auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
+                auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
+                auth::AgentPermission::Control => ("control", crate::security::PolicyRisk::High),
+                auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
+                auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
+            };
+            let (outcome, reason) = if authorization.is_ok() {
+                (
+                    crate::security::PolicyDecisionOutcome::Approved,
+                    crate::security::PolicyDecisionReason::PolicyMatched,
+                )
+            } else {
+                (
+                    crate::security::PolicyDecisionOutcome::Denied,
+                    crate::security::PolicyDecisionReason::MissingGrant,
+                )
+            };
+            let subject = auth
+                .as_ref()
+                .map_or("unknown", |credential| credential.agent.as_str());
+            crate::security::record_policy_decision(
+                &shared.registry,
+                subject,
+                &format!("live.{permission}"),
+                None,
+                risk,
+                outcome,
+                reason,
+            );
+        }
+        authorization.map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+    } else if auth.is_some() {
+        bail!("live agent credentials require serve --agent-policy");
+    }
+    value
+        .as_object_mut()
+        .context("request must be an object")?
+        .remove("auth");
+    let allowed: &[&str] = match op.as_str() {
+        "read" => &["op", "path"],
+        "create" | "update" => &["op", "path", "value", "if_revision"],
+        "delete" => &["op", "path", "if_revision"],
+        "patch" => &["op", "operations", "if_revision"],
+        "control" => &["op", "action", "value", "if_revision"],
+        "send" | "event" => &["op", "value", "if_revision"],
+        "wait" => &["op", "path", "after", "timeout_ms"],
+        _ => bail!("unknown operation"),
+    };
+    for key in value
+        .as_object()
+        .context("request must be an object")?
+        .keys()
+    {
+        if !allowed.contains(&key.as_str()) {
+            bail!("unexpected field {key} for {op}");
+        }
+    }
+    if value
+        .get("if_revision")
+        .is_some_and(|revision| revision.as_u64().is_none())
+    {
+        bail!("if_revision must be a nonnegative integer");
+    }
+    let request: Request = serde_json::from_value(value)?;
+    state::request(shared, request)
+}
+
+#[cfg(all(test, unix))]
+mod admission_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn token_hash(token: &str) -> String {
+        let digest = Sha256::digest(token.as_bytes());
+        let mut output = String::with_capacity(64);
+        for byte in digest {
+            use std::fmt::Write as _;
+            write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        output
+    }
+
+    fn policy(reader_token: &str, operator_token: &str) -> AgentAuthPolicy {
+        let document = serde_json::json!({
+            "version": 1,
+            "agents": {
+                "reader": {
+                    "token_sha256": token_hash(reader_token),
+                    "permissions": ["read"],
+                },
+                "operator": {
+                    "token_sha256": token_hash(operator_token),
+                    "permissions": ["stop"],
+                },
+            },
+        });
+        AgentAuthPolicy::from_json(document.to_string().as_bytes()).expect("test policy parses")
+    }
+
+    fn line(value: serde_json::Value) -> Vec<u8> {
+        value.to_string().into_bytes()
+    }
+
+    #[test]
+    fn reserve_stays_open_without_policy_so_stop_availability_is_unchanged() {
+        assert!(reserve_eligible(
+            &line(serde_json::json!({"op": "read"})),
+            None
+        ));
+        assert!(reserve_eligible(
+            &line(serde_json::json!({"op": "control", "action": "stop"})),
+            None,
+        ));
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({"op": "wait"})),
+            None
+        ));
+        assert!(!reserve_eligible(b"not json", None));
+    }
+
+    #[test]
+    fn reserve_demotes_no_policy_claims_carrying_auth() {
+        // Mirrors `handle_request`: without a policy any `auth` field is
+        // rejected, so it must not claim a reserve slot either.
+        for auth in [
+            serde_json::json!({"agent": "any", "token": "t".repeat(32)}),
+            serde_json::json!({"agent": "any"}),
+            serde_json::json!({"agent": "any", "token": "t".repeat(32), "extra": 1}),
+            serde_json::json!(null),
+            serde_json::json!("bearer"),
+        ] {
+            assert!(
+                !reserve_eligible(
+                    &line(serde_json::json!({"op": "read", "auth": auth.clone()})),
+                    None
+                ),
+                "no-policy read with auth must not claim reserve: {auth}",
+            );
+            assert!(
+                !reserve_eligible(
+                    &line(serde_json::json!({
+                        "op": "control",
+                        "action": "stop",
+                        "auth": auth.clone(),
+                    })),
+                    None
+                ),
+                "no-policy stop with auth must not claim reserve: {auth}",
+            );
+        }
+        // Without `auth` the trusted same-user fast path is unchanged.
+        assert!(reserve_eligible(
+            &line(serde_json::json!({"op": "read", "path": "/bindings"})),
+            None
+        ));
+        assert!(reserve_eligible(
+            &line(serde_json::json!({
+                "op": "control",
+                "action": "stop",
+                "if_revision": 7,
+            })),
+            None
+        ));
+    }
+
+    #[test]
+    fn reserve_demotes_unauthenticated_and_under_permissioned_priority() {
+        let reader_token = "r".repeat(32);
+        let operator_token = "o".repeat(32);
+        let policy = policy(&reader_token, &operator_token);
+        let some = Some(&policy);
+        // No credential at all: demoted even though the shape claims priority.
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({"op": "read"})),
+            some
+        ));
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({"op": "control", "action": "stop"})),
+            some,
+        ));
+        // Correctly authorized priority: still reserve-eligible.
+        assert!(reserve_eligible(
+            &line(serde_json::json!({
+                "op": "read",
+                "auth": {"agent": "reader", "token": reader_token},
+            })),
+            some,
+        ));
+        assert!(reserve_eligible(
+            &line(serde_json::json!({
+                "op": "control",
+                "action": "stop",
+                "auth": {"agent": "operator", "token": operator_token},
+            })),
+            some,
+        ));
+        // Wrong permission for the operation: demoted, never reserve.
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({
+                "op": "control",
+                "action": "stop",
+                "auth": {"agent": "reader", "token": reader_token},
+            })),
+            some,
+        ));
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({
+                "op": "read",
+                "auth": {"agent": "operator", "token": operator_token},
+            })),
+            some,
+        ));
+        // Wrong token and malformed auth: demoted.
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({
+                "op": "read",
+                "auth": {"agent": "reader", "token": "x".repeat(32)},
+            })),
+            some,
+        ));
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({"op": "read", "auth": {"agent": "reader"}})),
+            some,
+        ));
+        // Non-priority stays non-eligible even with a valid credential.
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({
+                "op": "wait",
+                "auth": {"agent": "reader", "token": reader_token},
+            })),
+            some,
+        ));
+    }
+
+    #[test]
+    fn reserve_demotes_malformed_auth_shapes() {
+        let reader_token = "r".repeat(32);
+        let operator_token = "o".repeat(32);
+        let policy = policy(&reader_token, &operator_token);
+        let some = Some(&policy);
+        // Every malformed `auth` below fails the handler's strict parse with
+        // `invalid_request`, so none may claim a reserve slot. Valid shapes
+        // with wrong credentials stay demoted via `authorize` instead.
+        for auth in [
+            serde_json::json!({"agent": "reader"}),
+            serde_json::json!({"token": reader_token.clone()}),
+            serde_json::json!({}),
+            serde_json::json!({"agent": "reader", "token": reader_token.clone(), "extra": 1}),
+            serde_json::json!({"agent": "reader", "token": 7}),
+            serde_json::json!({"agent": 7, "token": reader_token.clone()}),
+            serde_json::json!({"agent": "", "token": reader_token.clone()}),
+            serde_json::json!(null),
+            serde_json::json!("bearer"),
+            serde_json::json!(["reader", reader_token.clone()]),
+        ] {
+            assert!(
+                !reserve_eligible(
+                    &line(serde_json::json!({"op": "read", "auth": auth.clone()})),
+                    some
+                ),
+                "malformed read auth must not claim reserve: {auth}",
+            );
+            assert!(
+                !reserve_eligible(
+                    &line(serde_json::json!({
+                        "op": "control",
+                        "action": "stop",
+                        "auth": auth.clone(),
+                    })),
+                    some
+                ),
+                "malformed stop auth must not claim reserve: {auth}",
+            );
+        }
+        // Wrong Bearer [REDACTED] well-formed auth is demoted by authorization, not parsing.
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({
+                "op": "control",
+                "action": "stop",
+                "auth": {"agent": "operator", "token": "x".repeat(32)},
+            })),
+            some,
+        ));
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({
+                "op": "read",
+                "auth": {"agent": "unknown", "token": reader_token},
+            })),
+            some,
+        ));
+    }
+
+    #[test]
+    fn reserve_mirrors_handler_field_validation_for_priority() {
+        let reader_token = "r".repeat(32);
+        let operator_token = "o".repeat(32);
+        let policy = policy(&reader_token, &operator_token);
+        let some = Some(&policy);
+        let reader = serde_json::json!({"agent": "reader", "token": reader_token});
+        let operator = serde_json::json!({"agent": "operator", "token": operator_token});
+        // Extra fields the handler rejects with `unexpected field` are
+        // demoted even when authorized, so they cannot occupy the reserve.
+        for message in [
+            serde_json::json!({"op": "read", "auth": reader.clone(), "value": 1}),
+            serde_json::json!({"op": "read", "auth": reader.clone(), "if_revision": 1}),
+            serde_json::json!({"op": "read", "auth": reader.clone(), "after": 1}),
+            serde_json::json!({"op": "read", "auth": reader.clone(), "timeout_ms": 1}),
+            serde_json::json!({"op": "read", "auth": reader.clone(), "operations": []}),
+            serde_json::json!({"op": "read", "auth": reader.clone(), "action": "stop"}),
+            serde_json::json!({"op": "read", "auth": reader.clone(), "foo": 1}),
+            serde_json::json!({"op": "control", "action": "stop", "auth": operator.clone(), "path": "/x"}),
+            serde_json::json!({"op": "control", "action": "stop", "auth": operator.clone(), "after": 1}),
+            serde_json::json!({"op": "control", "action": "stop", "auth": operator.clone(), "foo": 1}),
+        ] {
+            assert!(
+                !reserve_eligible(&line(message.clone()), some),
+                "authorized-but-invalid priority must not claim reserve: {message}",
+            );
+        }
+        // `if_revision` must be a nonnegative integer, exactly as the handler
+        // requires; a well-formed revision still keeps reserve eligibility
+        // because freshness is state-dependent.
+        for bad in [
+            serde_json::json!("7"),
+            serde_json::json!(7.5),
+            serde_json::json!(-1),
+            serde_json::json!(null),
+        ] {
+            assert!(
+                !reserve_eligible(
+                    &line(serde_json::json!({
+                        "op": "control",
+                        "action": "stop",
+                        "auth": operator.clone(),
+                        "if_revision": bad.clone(),
+                    })),
+                    some
+                ),
+                "stop with non-u64 if_revision must not claim reserve: {bad}",
+            );
+        }
+        assert!(reserve_eligible(
+            &line(serde_json::json!({
+                "op": "control",
+                "action": "stop",
+                "auth": operator.clone(),
+                "if_revision": 7,
+            })),
+            some,
+        ));
+        // Type errors the handler's `Request` parse rejects are demoted too.
+        // An explicit null `path` deserializes like an absent one, so it stays
+        // eligible exactly as the handler accepts it.
+        assert!(!reserve_eligible(
+            &line(serde_json::json!({"op": "read", "auth": reader.clone(), "path": 7})),
+            some,
+        ));
+        assert!(reserve_eligible(
+            &line(serde_json::json!({"op": "read", "auth": reader.clone(), "path": null})),
+            some,
+        ));
+        // Well-formed priority with allowed fields stays eligible.
+        assert!(reserve_eligible(
+            &line(serde_json::json!({"op": "read", "auth": reader.clone(), "path": "/bindings"})),
+            some,
+        ));
+        assert!(reserve_eligible(
+            &line(serde_json::json!({
+                "op": "control",
+                "action": "stop",
+                "auth": operator.clone(),
+                "value": {"note": 1},
+            })),
+            some,
+        ));
+    }
+
+    #[test]
+    fn decide_lane_prefers_general_then_reserve_then_sheds() {
+        // Priority claims use a free general slot first, with no flood cost.
+        assert_eq!(decide_lane(0, 0, true, false), Admit::General);
+        assert_eq!(decide_lane(MAX_CLIENTS - 1, 0, true, false), Admit::General);
+        // Every general slot held: the two-slot reserve engages, still with
+        // no flood cost, so a genuine `stop` never sheds on the flood budget.
+        assert_eq!(decide_lane(MAX_CLIENTS, 0, true, false), Admit::Priority);
+        assert_eq!(
+            decide_lane(MAX_CLIENTS, PRIORITY_SPARE - 1, true, false),
+            Admit::Priority
+        );
+        // Reserve exhausted while every general slot is held: the deterministic
+        // gate for the inline `busy` reply (previously covered only by the
+        // general-lane shed tests).
+        assert_eq!(
+            decide_lane(MAX_CLIENTS, PRIORITY_SPARE, true, false),
+            Admit::Shed
+        );
+        assert_eq!(
+            decide_lane(MAX_CLIENTS, PRIORITY_SPARE, true, true),
+            Admit::Shed
+        );
+    }
+
+    #[test]
+    fn decide_lane_never_admits_demoted_priority_to_the_reserve() {
+        // Demoted fake-priority follows the general lane: admitted within the
+        // flood budget while a slot is free, shed past the burst or when full.
+        assert_eq!(decide_lane(0, 0, false, true), Admit::General);
+        assert_eq!(decide_lane(0, 0, false, false), Admit::Shed);
+        assert_eq!(decide_lane(MAX_CLIENTS, 0, false, true), Admit::Shed);
+        assert_eq!(
+            decide_lane(MAX_CLIENTS, PRIORITY_SPARE, false, true),
+            Admit::Shed
+        );
     }
 }
 

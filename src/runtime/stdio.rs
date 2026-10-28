@@ -1936,6 +1936,7 @@ mod tests {
                 // are this isolated child's own descriptors (its inherited
                 // stdio is null), which is the point of the test.
                 assert_ne!(unsafe { libc::dup2(writer_fd, 1) }, -1);
+                // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                 assert_ne!(unsafe { libc::dup2(writer_fd, 2) }, -1);
                 crate::github_actions::set_enabled(true);
                 crate::github_actions::reset_terminal_state();
@@ -1984,6 +1985,7 @@ mod tests {
                 // SAFETY: fds 1 and 2 are the dup2 copies above; closing them
                 // lets the reader observe EOF. No terminal writes follow.
                 assert_eq!(unsafe { libc::close(1) }, 0);
+                // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                 assert_eq!(unsafe { libc::close(2) }, 0);
                 let bytes = reader_thread.join().expect("sink reader panicked");
 
@@ -2024,6 +2026,7 @@ mod tests {
     /// the late bytes land.
     #[cfg(unix)]
     #[test]
+    #[allow(clippy::unnecessary_cast)]
     fn hardened_cancel_on_full_pipe_returns_without_releasing_the_sink_early() {
         run_isolated_test(
             "runtime::stdio::tests::hardened_cancel_on_full_pipe_returns_without_releasing_the_sink_early",
@@ -2039,6 +2042,7 @@ mod tests {
                 assert_ne!(original, -1);
                 // SAFETY: fd stays open; F_SETFL takes flags by value.
                 assert_eq!(
+                    // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                     unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) },
                     0
                 );
@@ -2145,6 +2149,7 @@ mod tests {
     /// the real pool, and real cancellation.
     #[cfg(unix)]
     #[test]
+    #[allow(clippy::unnecessary_cast)]
     fn hardened_cancel_wedge_single_flight_orders_cross_fd() {
         run_isolated_test(
             "runtime::stdio::tests::hardened_cancel_wedge_single_flight_orders_cross_fd",
@@ -2162,6 +2167,7 @@ mod tests {
                 assert_ne!(original, -1);
                 // SAFETY: fd_a stays open; F_SETFL takes flags by value.
                 assert_eq!(
+                    // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                     unsafe { libc::fcntl(fd_a, libc::F_SETFL, original | libc::O_NONBLOCK) },
                     0
                 );
@@ -2183,6 +2189,7 @@ mod tests {
                 // SAFETY: targets 1 and 2 are this isolated child's own
                 // descriptors (its inherited stdio is null).
                 assert_ne!(unsafe { libc::dup2(fd_a, 1) }, -1);
+                // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                 assert_ne!(unsafe { libc::dup2(fd_b, 2) }, -1);
                 crate::github_actions::set_enabled(true);
                 crate::github_actions::reset_terminal_state();
@@ -2275,6 +2282,7 @@ mod tests {
                 // SAFETY: fds 1 and 2 are the dup2 copies above; no terminal
                 // writes follow.
                 assert_eq!(unsafe { libc::close(1) }, 0);
+                // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                 assert_eq!(unsafe { libc::close(2) }, 0);
                 let pipe_b = reader_thread_b.join().expect("pipe B reader panicked");
                 assert_eq!(pipe_b, b"probe-after-wedge");
@@ -2316,6 +2324,7 @@ mod tests {
     /// late bytes, the mask, and the final land in order.
     #[cfg(unix)]
     #[test]
+    #[allow(clippy::unnecessary_cast)]
     fn hardened_direct_cancel_and_reset_stay_bounded_while_worker_in_flight() {
         run_isolated_test(
             "runtime::stdio::tests::hardened_direct_cancel_and_reset_stay_bounded_while_worker_in_flight",
@@ -2331,6 +2340,7 @@ mod tests {
                 assert_ne!(original, -1);
                 // SAFETY: fd stays open; F_SETFL takes flags by value.
                 assert_eq!(
+                    // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                     unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) },
                     0
                 );
@@ -2511,6 +2521,7 @@ mod tests {
                 assert_ne!(original, -1);
                 // SAFETY: fd stays open; F_SETFL takes flags by value.
                 assert_eq!(
+                    // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                     unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) },
                     0
                 );
@@ -2532,6 +2543,7 @@ mod tests {
                 // SAFETY: targets 1 and 2 are this isolated child's own
                 // descriptors (its inherited stdio is null).
                 assert_ne!(unsafe { libc::dup2(fd, 1) }, -1);
+                // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                 assert_ne!(unsafe { libc::dup2(fd, 2) }, -1);
                 crate::github_actions::set_enabled(true);
                 crate::github_actions::reset_terminal_state();
@@ -2616,6 +2628,7 @@ mod tests {
                 // SAFETY: fds 1 and 2 are the dup2 copies above; no
                 // terminal writes follow.
                 assert_eq!(unsafe { libc::close(1) }, 0);
+                // SAFETY: the descriptor is open and owned by this isolated test child, as noted above.
                 assert_eq!(unsafe { libc::close(2) }, 0);
                 let mut late = Vec::new();
                 reader.read_to_end(&mut late).unwrap();

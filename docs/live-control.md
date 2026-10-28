@@ -293,11 +293,46 @@ Unix permission/UID details below apply to macOS and Linux.
 The socket is mode 0600; macOS/Linux peer credentials must match the server's
 user. The pending source candidate also verifies the server peer UID in the CLI
 before transmitting a request. This prevents sending values to a socket owned
-by another user; same-user processes remain inside the trust boundary. Prefer a
-private directory for socket paths. Installed 0.8.0 performs the server-side check
-only. Limits are 1 MiB/request,
-8 MiB/editable state, 64 KiB/source, 128 queued records, 16 simultaneous clients,
-64 retained events, and 10 seconds per long poll. Live node/record output defaults
+by another user; same-user processes remain inside the trust boundary. On Unix
+the socket's parent directory must be owned by you and private (mode 0700):
+`serve` refuses any other parent, and `run --control` hosts its endpoint under
+a private per-user directory with a randomized name. Installed 0.8.0 only
+recommended a private directory. Limits are 1 MiB/request,
+8 MiB/editable state, 64 KiB/source, 128 queued records, 16 simultaneous clients
+(`live schema` limits keep the deprecated `concurrent_clients` field as an alias
+for `general_clients`, both 16; new readers should use `general_clients` +
+`priority_spare`)
+plus a 2-slot reserve so `control stop` and `read` are still served while every
+general slot holds a long poll (other requests past the slot limit fail fast
+with `busy`; reserve-exhausted priority also answers `busy` on Unix so callers
+retry instead of seeing EOF, and sheds use non-blocking writes that never
+stall admission — a saturated client may still observe EOF or a truncated
+`busy` prefix instead of the full frame. The CLI performs a single attempt
+and does not auto-retry: callers should retry `busy`, EOF, and
+truncated/unparseable responses exactly like `busy`. `read` and
+`control stop` are safe to retry; for mutations an EOF/truncated response is
+ambiguous (a shed connection never ran the handler, but a response-write
+failure after the handler ran looks the same), so retry mutations only with
+`if_revision` or after a confirming `read`), a burst-tolerant flood budget admitting 2048 back-to-back
+non-priority requests and refilling 64 per second (a sustained flood past the
+burst sheds with `busy`; reserve-eligible priority never spends the budget),
+a bounded 64-connection pre-admission queue on Unix so partial senders hold no
+thread or slot, a documented 8 KiB priority-classification window (only a
+newline-terminated request line within the first 8 KiB is considered for the
+reserve; a larger-but-valid `read`/`stop` still joins the general lane and is
+served whenever a general slot is free), an authorization gate on the reserve
+(when `--agent-policy` is configured, only a request already authorized for
+`read` or `control stop` may claim a reserve slot; unauthenticated,
+under-permissioned, or malformed-`auth` fake-priority frames are demoted to
+the general lane and spend the flood budget there, so they cannot monopolize
+the reserve — with no policy the socket stays same-user trusted and every
+well-formed priority claim without an `auth` field stays reserve-eligible (a
+no-policy claim carrying `auth` is demoted because the handler rejects any
+`auth` without a policy), preserving `stop` availability; preclassification
+additionally mirrors the handler's pre-state field checks so an
+authorized-but-invalid `read`/`stop` with extra fields, a bad `if_revision`,
+or wrong field types is demoted rather than occupying a reserve slot), 64 retained events,
+and 10 seconds per long poll. Live node/record output defaults
 to 256 KiB and can be raised to 1 MiB with `--max-output-bytes`. Native groups
 support `--command-timeout-ms`. Established connections have absolute two-second
 budgets for request reads and
@@ -309,6 +344,31 @@ transport deadlines. Expired incomplete requests do not mutate state; a peer
 still sending may observe connection closure instead of an error frame. Each
 socket connection carries one
 newline-terminated JSON request and one JSON response, then closes.
+
+Windows is best-effort and does not claim Unix parity. Named pipes have no
+pre-admission classifier: every accepted connection spawns a handler thread
+that holds its slot through the 2-second request read, so up to 18 slow or
+partial same-user senders can delay `stop` until their reads time out (the
+server self-heals as each read expires; no slot is held past the timeout).
+The flood budget is enforced post-parse but pre-auth/state, so sustained
+floods still shed with `busy` within the 18-connection cap at the cost of
+thread churn rather than no thread at all. Past the hard 18-connection cap
+Windows closes the connection without a `busy` frame (the client sees EOF and
+should retry); a reply there would block the accept loop or spawn unbounded
+shed threads. Lane admission never bypasses authentication on either
+platform: classification only schedules, and every admitted request still
+passes the agent policy before touching state. Windows has no pre-admission
+authorization gate: a constrained-lane handler still answers `busy` to
+non-priority shapes after parsing, but a fake-priority frame costs a handler
+thread and its slot until the handler rejects it, so the Unix demotion bound
+above does not apply there. The saturation tests in
+`tests/live.rs` run on Unix only, so Windows thread/slot behavior has no
+automated coverage; Windows acceptance is the documented behavior above, not
+a test gate. The new deterministic gates are unit tests over the Unix lane
+decision and reserve-eligibility predicate in `src/live/mod.rs`, which need
+no timing; the reserve-exhausted `busy` path is covered there rather than by
+a timing-sensitive integration test because fast `read`/`stop` handlers
+cannot deterministically hold both reserve slots.
 
 The pending source candidate enforces the document budget when a stream installs
 its next record and when a listener promotes an inbox record into its input and

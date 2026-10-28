@@ -418,8 +418,10 @@ fn streamed_payload_variants_match_the_schema_bytes_and_value_shapes() {
 fn streaming_is_not_bound_by_the_collection_cap() {
     // The closing-document path refuses more than `max_collected_events`
     // outputs; the streaming path must deliver them all without collecting.
-    let mut options = GraphRunOptions::default();
-    options.max_collected_events = 8;
+    let options = GraphRunOptions {
+        max_collected_events: 8,
+        ..Default::default()
+    };
     let mut session = GraphSession::start(
         terminal_plan("uncapped"),
         Arc::new(EmitManyExecutor { count: 32 }),
@@ -427,21 +429,16 @@ fn streaming_is_not_bound_by_the_collection_cap() {
     )
     .expect("streaming session starts");
     let mut seen = 0;
-    loop {
-        match session
-            .recv_output()
-            .expect("streaming stays below no collection cap")
-        {
-            Some(event) => {
-                assert_eq!(
-                    event.payload,
-                    PortValue::Value(Value::Integer(seen as i64)),
-                    "streamed events arrive in emission order"
-                );
-                seen += 1;
-            }
-            None => break,
-        }
+    while let Some(event) = session
+        .recv_output()
+        .expect("streaming stays below no collection cap")
+    {
+        assert_eq!(
+            event.payload,
+            PortValue::Value(Value::Integer(seen as i64)),
+            "streamed events arrive in emission order"
+        );
+        seen += 1;
     }
     assert_eq!(seen, 32, "every emitted event streams, cap or no cap");
     session
@@ -878,8 +875,10 @@ fn streaming_outlives_the_old_collection_cap() {
     // streaming path holds nothing and must flow past that point with a tiny
     // collection cap configured. Each event is small, so this stays fast
     // while proving the old limit no longer applies to a live stream.
-    let mut options = GraphRunOptions::default();
-    options.max_collected_events = 8;
+    let options = GraphRunOptions {
+        max_collected_events: 8,
+        ..Default::default()
+    };
     let mut session = GraphSession::start(
         terminal_plan("sustained"),
         Arc::new(EmitManyExecutor { count: 100_001 }),
@@ -887,21 +886,16 @@ fn streaming_outlives_the_old_collection_cap() {
     )
     .expect("streaming session starts");
     let mut seen = 0;
-    loop {
-        match session
-            .recv_output()
-            .expect("streaming stays below no collection cap")
-        {
-            Some(event) => {
-                assert_eq!(
-                    event.payload,
-                    PortValue::Value(Value::Integer(seen as i64)),
-                    "streamed events arrive in emission order"
-                );
-                seen += 1;
-            }
-            None => break,
-        }
+    while let Some(event) = session
+        .recv_output()
+        .expect("streaming stays below no collection cap")
+    {
+        assert_eq!(
+            event.payload,
+            PortValue::Value(Value::Integer(seen as i64)),
+            "streamed events arrive in emission order"
+        );
+        seen += 1;
     }
     assert_eq!(seen, 100_001, "every event streams past the old cap");
     session
@@ -935,8 +929,10 @@ fn streaming_holds_flat_rss_past_one_million_events() {
     // events must flow past the old 100,000-event cap with flat memory. A
     // collected document for this stream would retain every envelope (well
     // over 100 MB); stream growth must stay well below that.
-    let mut options = GraphRunOptions::default();
-    options.max_collected_events = 8;
+    let options = GraphRunOptions {
+        max_collected_events: 8,
+        ..Default::default()
+    };
     let before = rss_bytes();
     let mut session = GraphSession::start(
         terminal_plan("million"),
@@ -945,18 +941,13 @@ fn streaming_holds_flat_rss_past_one_million_events() {
     )
     .expect("streaming session starts");
     let mut seen = 0usize;
-    loop {
-        match session.recv_output().expect("streaming holds nothing back") {
-            Some(event) => {
-                assert_eq!(
-                    event.payload,
-                    PortValue::Value(Value::Integer(seen as i64)),
-                    "streamed events arrive in emission order"
-                );
-                seen += 1;
-            }
-            None => break,
-        }
+    while let Some(event) = session.recv_output().expect("streaming holds nothing back") {
+        assert_eq!(
+            event.payload,
+            PortValue::Value(Value::Integer(seen as i64)),
+            "streamed events arrive in emission order"
+        );
+        seen += 1;
     }
     assert_eq!(seen, 1_000_000, "every event streams past the old cap");
     session

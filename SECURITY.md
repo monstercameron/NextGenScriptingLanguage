@@ -325,7 +325,15 @@ without a finite-step scope report null step/line. Actual supervisor restart
 and daemon-parent survival after an aborted forwarded run require Unix CI.
 
 The executable hash check narrows replacement risk but does not pin an inode
-through `exec`; a replacement race can remain between hashing and launch. The
+through `exec`; a replacement race can remain between hashing and launch. A
+`run --confirm` review additionally pins every reviewed executable: the hashes
+from the confirmed fingerprint are installed on the run, and each native
+launch re-hashes its resolved executable against that map immediately before
+its command is built, refusing on any mismatch or on an executable the review
+never saw. This closes the review-to-launch gap down to the residual
+hash-to-`exec` window on every platform; no platform closes that last window,
+because no spawn path executes from a held descriptor (`fexecve`/`execveat`
+is not implemented, and macOS offers neither). The
 macOS profile uses Apple's undocumented, deprecated `sandbox-exec` interface.
 The sandbox applies to the launched applet and descendants that inherit it; a
 descendant that deliberately detaches may outlive its parent, so parent
@@ -368,7 +376,16 @@ via the open handle),
 but a replacement between the final check and use remains a race — the gate
 narrows check-then-use races without eliminating them, and a replacement
 between helper or executable verification and `exec` in particular cannot be
-pinned from userspace. A same-user process can rewrite what it owns (as with
+pinned from userspace. A `run --confirm` run narrows that executable race
+further: every reviewed executable is re-hashed at each launch through the
+single command-construction check (direct commands, manifest commands, and
+background-job launches at both prepare and spawn time, including persistent
+workers), and any mismatch or unreviewed executable refuses the run. The
+remaining window is the re-hash-to-`exec` interval on all platforms — Linux,
+macOS, and Windows narrow it but none eliminates it. Still path-based and
+outside the confirmed binding: the remote-DNS resolver helper, the workflow
+worker re-exec used for supervision, and the `execute model` CLI helper, which
+keep only the existing verify-before-resolve gate. A same-user process can rewrite what it owns (as with
 the cache key). POSIX `system.posix_acl_access` ACLs fail closed on Linux;
 NFSv4, RichACL and macOS ACLs are not probed and would pass the mode check
 undetected, and other Unix systems do not expose ACLs to this gate at all.

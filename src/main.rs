@@ -1872,6 +1872,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     "plan changed since --what-if: confirmed {expected}, current {fingerprint}; review again with --what-if"
                 );
             }
+            // Bind the reviewed bytes to the bytes each spawn launches: every
+            // native launch re-hashes against this map before its command is
+            // built, so a binary swapped after this check cannot run.
+            let confirmed = flow::capabilities::confirmed_executables_from_settings(&settings)?;
+            registry.set_host_state(Some(confirmed));
         }
     }
     #[cfg(not(feature = "agent-advisory"))]

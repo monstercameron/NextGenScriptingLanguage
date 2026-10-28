@@ -952,6 +952,7 @@ fn open_regular_manifest(path: &Path, nofollow: bool) -> std::io::Result<fs::Fil
 /// with a growth check. The descriptor re-check narrows the race between the
 /// path-side trust verification and this read, but a replacement after the
 /// final byte is still read remains possible; see SECURITY.md.
+#[cfg(not(target_arch = "wasm32"))]
 fn read_trusted_manifest_file(path: &Path, label: &str) -> Result<String> {
     let file = open_regular_manifest(path, true)
         .with_context(|| format!("reading {label} {}", path.display()))?;
@@ -1182,6 +1183,7 @@ impl Registry {
     /// passes the same gate before anything is read. Every entry is verified
     /// before it is read, and the read re-verifies the opened descriptor, but
     /// a replacement after the final check remains a race; see SECURITY.md.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load(path: &Path) -> Result<Self> {
         // Each entry records whether it is a plain file. Directory symlinks
         // are resolved through canonicalization and verified at their target;
@@ -1286,12 +1288,23 @@ impl Registry {
         })
     }
 
+    /// Fail closed on wasm: without host ownership/permission checks,
+    /// file-backed manifest loading is refused.
+    #[cfg(target_arch = "wasm32")]
+    pub fn load(path: &Path) -> Result<Self> {
+        bail!(
+            "trusted manifest loading is unavailable on wasm: host ownership and permission checks have no browser equivalent, refusing {}",
+            path.display()
+        );
+    }
+
     /// Load one explicit, versioned catalog file containing an ordered array
     /// of manifest objects. Every entry receives the catalog's canonical path
     /// as its origin, and its parent directory is the module root. The whole
     /// envelope's JSON syntax is parsed first; semantic manifest validation
     /// then runs in array order. A later syntax error therefore takes
     /// precedence over an earlier semantic manifest error.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_catalog(path: &Path) -> Result<Self> {
         // An explicit catalog path may name a symlink alias, like a single
         // manifest file: it is resolved first and the canonical catalog and
@@ -1351,6 +1364,16 @@ impl Registry {
         Ok(Self {
             data: Arc::new(data),
         })
+    }
+
+    /// Fail closed on wasm: without host ownership/permission checks,
+    /// file-backed manifest loading is refused.
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_catalog(path: &Path) -> Result<Self> {
+        bail!(
+            "trusted manifest catalog loading is unavailable on wasm: host ownership and permission checks have no browser equivalent, refusing {}",
+            path.display()
+        );
     }
 
     /// Parse embedded manifests with the same schema and duplicate checks as files.
@@ -1443,6 +1466,7 @@ impl Registry {
         Self::from_bundled_canonical(root, index)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn from_bundled_canonical(
         root: PathBuf,
         index: &'static bundled_manifests::BundledIndex,
@@ -1468,6 +1492,19 @@ impl Registry {
                 ..RegistryData::default()
             }),
         })
+    }
+
+    /// Fail closed on wasm: without host ownership/permission checks,
+    /// bundled-root trust cannot be established.
+    #[cfg(target_arch = "wasm32")]
+    fn from_bundled_canonical(
+        root: PathBuf,
+        _index: &'static bundled_manifests::BundledIndex,
+    ) -> Result<Self> {
+        bail!(
+            "trusted bundled manifest loading is unavailable on wasm: host ownership and permission checks have no browser equivalent, refusing {}",
+            root.display()
+        );
     }
 
     /// Load the default manifest directory. When it holds the bundled file names (and,

@@ -1413,7 +1413,7 @@ pub(crate) enum TrustedInputKind {
 /// NFSv4, RichACL and macOS ACLs are not probed here. Other Unix systems do
 /// not expose ACLs here and remain documented as best-effort (see
 /// SECURITY.md). Windows inputs must not be reparse points, must be owned by
-/// the current user, SYSTEM or Administrators, and must grant no write access
+/// the current user, SYSTEM, Administrators or TrustedInstaller, and must grant no write access
 /// to any other principal; an unreadable ACL fails closed. A private-DACL
 /// demand is deliberately not made: installed trees stay readable by every
 /// local runner, so read grants to others are allowed and only write grants
@@ -1765,19 +1765,48 @@ fn has_posix_extended_acl_fd(file: &File) -> bool {
 /// it here would refuse every ancestor that lets another principal read, such
 /// as `C:\Users` on a shared host. `GENERIC_READ` and `GENERIC_EXECUTE` are
 /// likewise absent because they map to read-only rights.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const TRUSTED_WINDOWS_WRITE_MASK: u32 =
     0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
 
 /// Whether an allow-ACE access mask grants write-level rights under
 /// [`TRUSTED_WINDOWS_WRITE_MASK`]. Pure mask logic with no platform calls, so
 /// the gate's read/write boundary is pinned by unit tests on every host.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn windows_allow_ace_grants_write(mask: u32) -> bool {
     mask & TRUSTED_WINDOWS_WRITE_MASK != 0
 }
 
+/// String form of the well-known `NT AUTHORITY\SYSTEM` principal.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_SYSTEM_SID: &str = "S-1-5-18";
+/// String form of the well-known `BUILTIN\Administrators` group.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+/// String form of the well-known `NT SERVICE\TrustedInstaller` principal: the
+/// OS-installer identity that owns system locations such as the drive root
+/// (`C:\`) on factory Windows installs. It holds the same standing as
+/// SYSTEM/Administrators in the trusted-input gate.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID: &str =
+    "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+/// Whether an owner SID (string form) is trusted for the Windows trusted-input
+/// gate: the current user, SYSTEM, Administrators, or TrustedInstaller. Pure
+/// string logic with no platform calls, so the owner boundary is pinned by
+/// unit tests on every host. Comparison is ASCII case-insensitive because SID
+/// string form is canonically upper-case but never guaranteed by a producer.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_owner_sid_is_trusted(owner_sid: &str, current_user_sid: &str) -> bool {
+    (!current_user_sid.is_empty() && owner_sid.eq_ignore_ascii_case(current_user_sid))
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_SYSTEM_SID)
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_ADMINISTRATORS_SID)
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID)
+}
+
 /// Windows writability gate for trusted inputs. The path must be owned by the
-/// current user, SYSTEM or Administrators, and no other principal may hold an
-/// allow ACE granting write-level access. Read grants to others are allowed
+/// current user, SYSTEM, Administrators or TrustedInstaller, and no other principal
+/// may hold an allow ACE granting write-level access. Read grants to others are allowed
 /// so shared installs keep working; only writes fail closed. A missing DACL
 /// (full access to everyone) or an unreadable ACL fails closed and names the
 /// path. Deny and audit ACEs grant nothing and are ignored.
@@ -1841,8 +1870,10 @@ pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Resu
 }
 
 /// Shared DACL inspection behind [`verify_trusted_windows_acl`]: owner must
-/// be the current user, SYSTEM or Administrators, and no allow ACE may grant
-/// write-level rights to anyone else.
+/// be the current user, SYSTEM, Administrators or TrustedInstaller, and no
+/// allow ACE may grant write-level rights to anyone else (TrustedInstaller
+/// holds the same standing as SYSTEM/Administrators as an ACE trustee, so a
+/// write grant it holds on a system ancestor does not fail the gate).
 #[cfg(windows)]
 fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Result<()> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -1955,16 +1986,28 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
         };
         let system_sid = well_known(windows_sys::Win32::Security::WinLocalSystemSid)?;
         let admins_sid = well_known(windows_sys::Win32::Security::WinBuiltinAdministratorsSid)?;
+        // Stringify the owner and current-user SIDs so the acceptance decision
+        // runs through the pure [`windows_owner_sid_is_trusted`] predicate
+        // and the refusal names the actual owner. Conversion failures fail
+        // closed: the input is refused rather than trusted.
+        let owner_string =
+            trusted_windows_sid_to_string(owner).context("reading trusted Windows owner SID")?;
+        // SAFETY: user.User.Sid is non-null (checked above) and lives in the token buffer.
+        let user_string = trusted_windows_sid_to_string(user.User.Sid)
+            .context("reading trusted Windows user SID")?;
+        // Keep the pointer comparison as a second opinion alongside the string
+        // predicate: either route trusting the owner accepts the input.
         // SAFETY: owner is non-null in the live descriptor; the other SIDs are
         // live in the token and local buffers.
-        let owner_trusted = unsafe {
-            EqualSid(owner, user.User.Sid) != 0
-                || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
-                || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
-        };
+        let owner_trusted = windows_owner_sid_is_trusted(&owner_string, &user_string)
+            || unsafe {
+                EqualSid(owner, user.User.Sid) != 0
+                    || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
+                    || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
+            };
         if !owner_trusted {
             bail!(
-                "{label} {} must be owned by the current user, SYSTEM or Administrators",
+                "{label} {} must be owned by the current user, SYSTEM, Administrators or TrustedInstaller (owner {owner_string})",
                 path.display()
             );
         }
@@ -2053,6 +2096,15 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
                     || EqualSid(ace_sid, system_sid.as_ptr().cast_mut().cast()) != 0
                     || EqualSid(ace_sid, admins_sid.as_ptr().cast_mut().cast()) != 0
             };
+            // TrustedInstaller holds the same standing as SYSTEM/Administrators
+            // as an ACE trustee: a write grant it holds on a system ancestor
+            // (such as the drive root) does not fail the gate. The string
+            // conversion is a fallback checked only when the pointer
+            // comparison above refused; an unreadable SID stays refused.
+            let sid_trusted = sid_trusted
+                || trusted_windows_sid_to_string(ace_sid).is_ok_and(|ace_string| {
+                    ace_string.eq_ignore_ascii_case(TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID)
+                });
             if !sid_trusted {
                 bail!(
                     "{label} {} grants Windows write access to another principal; refusing",
@@ -2067,6 +2119,41 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
         unsafe { LocalFree(descriptor) };
     }
     result
+}
+
+/// Stringify a live SID pointer via `ConvertSidToStringSidW` so the gate can
+/// run its pure string predicate and name the SID in diagnostics. The caller
+/// keeps the SID alive; the returned string is owned. Any conversion failure
+/// is an error so callers fail closed.
+#[cfg(windows)]
+fn trusted_windows_sid_to_string(sid: *mut std::ffi::c_void) -> Result<String> {
+    use std::os::windows::ffi::OsStringExt;
+    if sid.is_null() {
+        bail!("Windows SID is null; refusing");
+    }
+    let mut text: *mut u16 = std::ptr::null_mut();
+    // SAFETY: sid is a live SID owned by the caller; text is a writable
+    // out-slot, and the API allocates the returned string for LocalFree.
+    let status = unsafe {
+        windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW(sid, &mut text)
+    };
+    if status == 0 || text.is_null() {
+        return Err(std::io::Error::last_os_error()).context("converting Windows SID to string");
+    }
+    let mut length = 0usize;
+    // SAFETY: ConvertSidToStringSidW returned a NUL-terminated LocalAlloc string.
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    // SAFETY: the counted UTF-16 units precede the validated terminator, and
+    // `text` stays live until LocalFree below.
+    let units = unsafe { std::slice::from_raw_parts(text, length) };
+    let value = std::ffi::OsString::from_wide(units)
+        .to_string_lossy()
+        .into_owned();
+    // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
+    unsafe { windows_sys::Win32::Foundation::LocalFree(text.cast()) };
+    Ok(value)
 }
 
 pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {
@@ -3044,5 +3131,46 @@ mod tests {
                 "write-level right {write:#x} must fail closed beside reads"
             );
         }
+    }
+
+    /// The Windows owner gate must accept the current user, SYSTEM,
+    /// Administrators and TrustedInstaller while refusing anyone else, on
+    /// every host: this is pure string logic with no platform calls.
+    /// Regression cover for the factory-install drive root (`C:\`), which is
+    /// owned by `NT SERVICE\TrustedInstaller` rather than the runner: the
+    /// ancestor walk refused the root and `check --json` degraded to
+    /// `check_failed` for every manifest load.
+    #[test]
+    fn windows_trusted_owner_sid_accepts_platform_principals() {
+        const CURRENT_USER: &str = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+        const OTHER_USER: &str = "S-1-5-21-9999999999-8888888888-7777777777-1002";
+        const BUILTIN_USERS: &str = "S-1-5-32-545";
+        assert!(windows_owner_sid_is_trusted(CURRENT_USER, CURRENT_USER));
+        for trusted in [
+            TRUSTED_WINDOWS_SYSTEM_SID,
+            TRUSTED_WINDOWS_ADMINISTRATORS_SID,
+            TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID,
+        ] {
+            assert!(
+                windows_owner_sid_is_trusted(trusted, CURRENT_USER),
+                "{trusted} must stay trusted"
+            );
+        }
+        assert!(
+            !windows_owner_sid_is_trusted(OTHER_USER, CURRENT_USER),
+            "a random user SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted(BUILTIN_USERS, CURRENT_USER),
+            "the Users-group SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted("", CURRENT_USER),
+            "an empty owner SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted(CURRENT_USER, ""),
+            "an empty current-user SID must not self-trust"
+        );
     }
 }

@@ -106,7 +106,7 @@ Every workflow is in `.github/workflows/`, and every action is pinned by commit 
 | `security.yml` | Push, pull request, weekly | `cargo audit` and `cargo deny`, gitleaks over the history, a refusal of tracked env files, CodeQL (advisory), dependency review. |
 | `fuzz.yml` | Push and pull request (replay); nightly (fuzzing) | Replays seeds and saved crashes; nightly runs each of eleven libFuzzer targets for 20 minutes. |
 | `sanitizers.yml` | Nightly | Miri on the pure modules, AddressSanitizer and ThreadSanitizer on library unit tests. |
-| `crash-consistency.yml` | Nightly | Random kills and injected checkpoint write failures, then resume, plus journal and parser property tests. |
+| `crash-consistency.yml` | Nightly | Random kills and injected checkpoint write failures, then resume, plus journal and parser property tests and the randomized crash-injection shape suite (`tests/crash_injection.rs`; short budget runs per push via `make check` and the Windows release list). |
 | `soak.yml` | Nightly | One-hour service, live-controlled service and graph runs that assert flat memory, descriptors and threads (`tools/soak.py`). |
 | `flaky.yml` | Nightly | Runs the full suite 20 times per OS with `cargo nextest` and no retries, then lists each test that failed as `flaky` (some runs) or `failing` (every run). |
 | `platforms.yml` | Weekly | Minimum supported Rust (1.89.0), Linux arm64 library tests, and a static musl build on Alpine. |

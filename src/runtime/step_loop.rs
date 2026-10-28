@@ -410,6 +410,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 state = resumed.state;
                 state.bindings.remove(STDOUT_ELIGIBILITY);
             }
+            // A parallel group in flight at the kill is refused here, at
+            // restore time, before its node is re-begun or any element (or
+            // any other step of the resumed run) can launch. The group step
+            // re-verifies when it executes under `--retry-uncertain`.
+            checkpoint::elements::group_resume_gate(journal, program, index, &state.bindings)?;
             cwd = enter_directory(registry, &state.cwd, &cwd)?;
             bindings = state.bindings;
             data = Input::Bytes(state.output);

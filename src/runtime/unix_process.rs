@@ -31,8 +31,13 @@ fn signal_group(pid: u32, signal: libc::c_int) {
 /// Polite signal for escalation: SIGINT when the run was interrupted by SIGINT
 /// so a Ctrl-C reaches the child's own group (the terminal never delivers it
 /// there), otherwise SIGTERM. Timeouts always use SIGTERM.
-fn escalation_signal() -> libc::c_int {
-    match crate::platform::cancel_exit_code() {
+///
+/// Takes the interrupting run's own exit code, never the process-global
+/// fallback, so overlapping runs cannot cross-poison each other's choice: one
+/// run's SIGINT never turns another run's timeout into SIGINT, and a stale
+/// global SIGINT never leaks into a fresh run's timeout (issue #525).
+fn escalation_signal_for(cancel: Option<i32>) -> libc::c_int {
+    match cancel {
         Some(130) => libc::SIGINT,
         _ => libc::SIGTERM,
     }
@@ -54,8 +59,15 @@ fn group_exited(pid: u32) -> bool {
 /// their leader is an unreaped zombie or running (see `signal_group`), and
 /// nothing here reaps; the `Children` drop owns the final wait. Bounded by
 /// `grace` plus a poll slice plus the drop's own bound.
-fn escalate_unreaped_for_abort(children: &Children, grace: std::time::Duration) {
-    let first = escalation_signal();
+///
+/// The polite signal comes from this run's own `Signals` slot (SIGINT only
+/// when this run recorded SIGINT), never from the process-global fallback, so
+/// simultaneous runs keep their own escalation choice. Cleanup scopes share
+/// the run's slot, so a double interrupt during cleanup keeps the SIGINT
+/// escalation.
+fn escalate_unreaped_for_abort(children: &Children, signals: &Signals) {
+    let first = escalation_signal_for(signals.cancel_exit_code());
+    let grace = signals.kill_grace;
     // Snapshot the groups that are still owned: signalling the whole set first
     // keeps one slow ignorer from delaying the polite signal to the rest.
     let live: Vec<u32> = children
@@ -798,15 +810,68 @@ mod escalation_tests {
     fn polite_signal_follows_sigint_only() {
         // No interrupt (including after a clear): the polite signal is
         // SIGTERM, so timeouts never inherit an older run's SIGINT.
+        assert_eq!(escalation_signal_for(None), libc::SIGTERM);
+        assert_eq!(
+            escalation_signal_for(Some(crate::platform::exit_code_for_signal(libc::SIGTERM))),
+            libc::SIGTERM
+        );
+        assert_eq!(
+            escalation_signal_for(Some(crate::platform::exit_code_for_signal(libc::SIGINT))),
+            libc::SIGINT
+        );
+        // Only SIGINT (exit 130) escalates as SIGINT; other interrupts and
+        // timeouts stay SIGTERM.
+        assert_eq!(escalation_signal_for(Some(143)), libc::SIGTERM);
+        assert_eq!(escalation_signal_for(Some(129)), libc::SIGTERM);
+    }
+
+    #[test]
+    fn simultaneous_runs_keep_their_own_escalation_choice() {
+        // Cross-run poisoning regression (issue #525): escalation reads the
+        // interrupting run's own slot, never the process-global fallback, so
+        // two simultaneous slots keep distinct choices while the fallback says
+        // the opposite. Uses synthetic per-slot records (no real delivery),
+        // serialized through the global-fallback lock.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::platform::clear_cancel_signal();
-        assert_eq!(escalation_signal(), libc::SIGTERM);
+        let interrupted = Signals::with_cancellation_and_deadline(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false,
+            None,
+        )
+        .unwrap();
+        let timed_out = Signals::with_cancellation_and_deadline(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false,
+            None,
+        )
+        .unwrap();
+        interrupted.record_cancel_signal(libc::SIGINT);
+        // The global fallback disagrees with both slots here: it must not
+        // move either run's escalation.
         crate::platform::record_cancel_signal(libc::SIGTERM);
-        assert_eq!(escalation_signal(), libc::SIGTERM);
+        assert_eq!(
+            escalation_signal_for(interrupted.cancel_exit_code()),
+            libc::SIGINT
+        );
+        assert_eq!(
+            escalation_signal_for(timed_out.cancel_exit_code()),
+            libc::SIGTERM
+        );
+        // Reverse poisoning: a stale global SIGINT must not turn the other
+        // run's timeout into SIGINT.
         crate::platform::record_cancel_signal(libc::SIGINT);
-        assert_eq!(escalation_signal(), libc::SIGINT);
-        // A stale SIGINT must not survive into the next run (issue #525).
+        assert_eq!(
+            escalation_signal_for(interrupted.cancel_exit_code()),
+            libc::SIGINT
+        );
+        assert_eq!(
+            escalation_signal_for(timed_out.cancel_exit_code()),
+            libc::SIGTERM
+        );
         crate::platform::clear_cancel_signal();
-        assert_eq!(escalation_signal(), libc::SIGTERM);
     }
 
     #[test]

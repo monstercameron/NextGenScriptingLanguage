@@ -896,12 +896,13 @@ impl Signals {
 
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
         // A fresh per-run slot starts at zero, so a new signal-owned run can
-        // neither inherit nor erase another run's recorded interrupt. The
-        // process-wide fallback is cleared too, so a SIGINT that cancelled
-        // one in-process run (tests, daemon, library reuse) cannot poison
-        // the next run's global view and escalation choice: a plain timeout
-        // would otherwise send SIGINT instead of SIGTERM (see issue #525).
-        // Handlers installed below re-record any new interrupt in both slots.
+        // neither inherit nor erase another run's recorded interrupt.
+        // Escalation reads only that slot, so overlapping runs keep their own
+        // SIGINT-vs-SIGTERM choice. The process-wide fallback is cleared too,
+        // so a SIGINT that cancelled one in-process run (tests, daemon,
+        // library reuse) cannot poison the next run's CLI fallback report
+        // (see issue #525). Handlers installed below re-record any new
+        // interrupt in both slots.
         crate::platform::clear_cancel_signal();
         let cleanup_cancel = Arc::new(AtomicBool::new(false));
         let cancel_signal = Arc::new(AtomicI32::new(0));

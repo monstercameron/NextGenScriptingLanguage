@@ -87,12 +87,12 @@ pub(crate) fn record_cancel_signal(signal: i32) {
 
 /// Clear the recorded interrupt at the start of a fresh run. The signal number
 /// is process-global, so without this a SIGINT that cancelled one in-process
-/// run (tests, daemon, library reuse) would still be visible to the next run
-/// and poison its escalation choice: a plain timeout would send SIGINT instead
-/// of SIGTERM (see issue #525). Per-run truth lives on each `Signals`' own
-/// slot; the process-wide fallback keeps the last signal so the CLI entry
-/// point can report it after its run is gone. Tests use this too, serialized
-/// through `CANCEL_SIGNAL_TEST_LOCK`.
+/// run (tests, daemon, library reuse) would still be visible to the next run's
+/// CLI fallback report (see issue #525). Escalation never reads this fallback:
+/// per-run truth lives on each `Signals`' own slot, and the process-wide
+/// fallback only keeps the last signal so the CLI entry point can report it
+/// after its run is gone. Tests use this too, serialized through
+/// `CANCEL_SIGNAL_TEST_LOCK`.
 pub(crate) fn clear_cancel_signal() {
     CANCEL_SIGNAL.store(0, std::sync::atomic::Ordering::SeqCst);
 }

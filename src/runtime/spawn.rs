@@ -344,9 +344,9 @@ pub(super) fn check_native_abort(
 ) -> Result<()> {
     if signals.is_cancelled() {
         #[cfg(unix)]
-        escalate_unreaped_for_abort(children, signals.kill_grace);
+        escalate_unreaped_for_abort(children, signals);
         #[cfg(windows)]
-        windows_escalate_unreaped_for_abort(children, signals.kill_grace);
+        windows_escalate_unreaped_for_abort(children, signals);
         let message = if signals
             .job_cancelled
             .as_ref()
@@ -371,9 +371,9 @@ pub(super) fn check_native_abort(
         .is_some_and(|deadline| Instant::now() >= deadline)
     {
         #[cfg(unix)]
-        escalate_unreaped_for_abort(children, signals.kill_grace);
+        escalate_unreaped_for_abort(children, signals);
         #[cfg(windows)]
-        windows_escalate_unreaped_for_abort(children, signals.kill_grace);
+        windows_escalate_unreaped_for_abort(children, signals);
         return Err(native_execution_failure(
             execution_result::ExecutionKind::Timeout,
             "command pipeline timed out; external effects may be incomplete",

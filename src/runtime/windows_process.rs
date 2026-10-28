@@ -98,10 +98,13 @@ mod child_exited_tests {
 /// Never blocks longer than `grace` plus a poll slice no matter how many
 /// groups are still running, so cancellation and timeout paths stay bounded
 /// with no leaks.
-fn windows_escalate_unreaped_for_abort(
-    children: &Children,
-    grace: std::time::Duration,
-) {
+///
+/// Takes the run's own `Signals` for the grace, keeping the Unix/Windows call
+/// shape symmetric. The break itself is signal-agnostic on Windows, so the
+/// run's cancel slot is intentionally not read here: no process-global signal
+/// number can poison another run's abort.
+fn windows_escalate_unreaped_for_abort(children: &Children, signals: &Signals) {
+    let grace = signals.kill_grace;
     // Signal the whole owned set first so one slow ignorer cannot delay the
     // polite signal to the rest. The pid comes from a live `Child` whose
     // handle is still open, which keeps Windows from recycling it; a group

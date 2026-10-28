@@ -84,6 +84,42 @@ class FeatureMatrixTests(unittest.TestCase):
         self.assertIn("--features full,test-fixtures", command)
         self.assertIn("--test lane_o_handoff", command)
 
+    def test_windows_native_optional_feature_tests_are_gated(self) -> None:
+        source = (ROOT / "tests/windows_native.rs").read_text(encoding="utf-8")
+        self.assertRegex(
+            source,
+            r'(?s)#\[test\]\s*#\[cfg\(all\(feature\s*=\s*"screens",\s*feature\s*=\s*"model"\)\)\]\s*fn\s+headless_widgets_and_bundled_model_helper_are_native',
+        )
+        self.assertRegex(
+            source,
+            r'(?s)#\[test\]\s*#\[cfg\(feature\s*=\s*"live"\)\]\s*fn\s+owner_checked_named_pipe_supports_live_crud_execution_and_shutdown',
+        )
+
+    def test_full_feature_windows_ci_still_executes_gated_native_tests(self) -> None:
+        windows = self.workflow.split("  windows:\n", maxsplit=1)[1]
+        command = next(
+            line for line in windows.splitlines()
+            if "cargo test --locked --target ${{ matrix.target }}" in line
+            and "--test windows_native" in line
+        )
+        self.assertIn("--features full,test-fixtures", command)
+        manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        section = re.search(
+            r'(?m)^\[\[test\]\]\s*$\s*^name\s*=\s*"windows_native"\s*$\s*^required-features\s*=\s*\[(.*?)\]',
+            manifest,
+        )
+        self.assertIsNotNone(section)
+        self.assertEqual(set(re.findall(r'"([^"]+)"', section.group(1))), {"test-fixtures"})
+        matrix_commands = [
+            line.strip()
+            for line in self.workflow.splitlines()
+            if line.strip().startswith("cargo test --locked")
+            and "--features test-fixtures --lib --tests" in line
+        ]
+        self.assertEqual(len(matrix_commands), 2)
+        for matrix_command in matrix_commands:
+            self.assertNotIn("full", matrix_command)
+
     def test_fixture_is_test_only_and_built_for_ci(self) -> None:
         manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
         full = re.search(r'(?m)^full\s*=\s*\[(.*?)\]', manifest)

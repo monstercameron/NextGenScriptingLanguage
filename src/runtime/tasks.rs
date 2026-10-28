@@ -843,7 +843,7 @@ pub(super) fn run_each(
             parameters: BTreeMap::new(),
             uncertain_on_error: manifest.uncertain_on_failure,
             native_command: manifest.execution_backend() == AppletBackend::Command,
-            sensitive: call.marks_sensitive_output(),
+            sensitive: call.sensitive_binding,
         });
         calls.push(call);
     }
@@ -1236,7 +1236,7 @@ fn each_value(
             let mut value = each_task_value(record, secret_redactor);
             if let Value::Record(fields) = &mut value {
                 fields.insert("index".into(), Value::Integer(index as i64));
-                fields.insert("item".into(), item);
+                fields.insert("item".into(), redact_value(secret_redactor, &item));
             }
             value
         })
@@ -1421,7 +1421,7 @@ fn group_value(
     mode: TaskGroupMode,
     records: &[TaskRecord],
     winner: Option<usize>,
-    _secret_redactor: &crate::security::SecretRedactor,
+    secret_redactor: &crate::security::SecretRedactor,
 ) -> Value {
     let mut group = std::collections::BTreeMap::from([
         (
@@ -1433,7 +1433,12 @@ fn group_value(
         ),
         (
             "tasks".into(),
-            Value::List(records.iter().map(task_value_raw).collect()),
+            Value::List(
+                records
+                    .iter()
+                    .map(|record| task_value(record, secret_redactor, false))
+                    .collect(),
+            ),
         ),
     ]);
     if let Some(index) = winner {
@@ -1502,40 +1507,6 @@ fn task_value(
     Value::Record(fields)
 }
 
-/// Preserve true values in the language binding. Observer and error paths use
-/// `task_value`, which redacts serialized presentations; the enclosing group
-/// binding is itself withheld when any member is sensitive.
-fn task_value_raw(record: &TaskRecord) -> Value {
-    let mut fields = std::collections::BTreeMap::from([
-        ("id".into(), Value::String(record.id.clone())),
-        ("state".into(), Value::String(record.state.as_str().into())),
-        ("uncertain".into(), Value::Bool(record.uncertain)),
-        (
-            "launched_processes".into(),
-            Value::Integer(i64::try_from(record.launched_processes).unwrap_or(i64::MAX)),
-        ),
-    ]);
-    if let Some(error) = &record.error {
-        fields.insert("error".into(), Value::String(error.clone()));
-    }
-    if let Some(result) = &record.invocation {
-        fields.insert("status".into(), Value::Integer(i64::from(result.status)));
-        fields.insert("outcome".into(), Value::String(result.outcome.name.clone()));
-        fields.insert(
-            "outcome_kind".into(),
-            Value::String(result.outcome.kind.as_str().into()),
-        );
-        fields.insert("output_encoding".into(), Value::String("u8_array".into()));
-        fields.insert("output".into(), byte_array(&result.output));
-        fields.insert("stderr_encoding".into(), Value::String("u8_array".into()));
-        fields.insert("stderr".into(), byte_array(&result.stderr));
-        if let Some(value) = &result.value {
-            fields.insert("value".into(), value.clone());
-        }
-    }
-    Value::Record(fields)
-}
-
 fn each_task_value(
     record: &mut TaskRecord,
     secret_redactor: &crate::security::SecretRedactor,
@@ -1562,7 +1533,8 @@ fn each_task_value(
             "outcome_kind".into(),
             Value::String(result.outcome.kind.as_str().into()),
         );
-        let (output_encoding, output) = match String::from_utf8(result.output) {
+        let redacted_output = secret_redactor.redact_bytes(&result.output);
+        let (output_encoding, output) = match String::from_utf8(redacted_output) {
             Ok(text) => ("utf8", Value::String(text)),
             Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()))),
         };
@@ -1582,7 +1554,7 @@ fn each_task_value(
         );
         fields.insert("stderr".into(), stderr);
         if let Some(value) = result.value.take() {
-            fields.insert("value".into(), value);
+            fields.insert("value".into(), redact_value(secret_redactor, &value));
         }
     }
     Value::Record(fields)

@@ -889,6 +889,95 @@ fn task_group_json_redacts_declared_secret_stderr_but_api_keeps_raw_bytes() -> R
 
 #[cfg(unix)]
 #[test]
+fn task_group_json_redacts_declared_secret_stdout_but_api_keeps_raw_bytes() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let secret = b"task-json-stdout-secret-sentinel";
+    let source = serde_json::json!({
+        "name": "secret.echo",
+        "binary": "/bin/sh",
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": "printf '%s' \"$FLOW_SENTINEL\"; printf '%s' \"$FLOW_SENTINEL\" >&2"}
+        ],
+        "stdio": {"stderr": "capture"},
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "environment": {"set": {"FLOW_SENTINEL": std::str::from_utf8(secret)?}}
+        }
+    });
+    let make_registry = || -> Result<flow::manifest::Registry> {
+        let registry = flow::manifest::Registry::from_sources(&[source.to_string()])?;
+        registry.set_host_state(flow::security::DataFlowPolicy::from_json(
+            br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
+        )?);
+        Ok(registry)
+    };
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 4096,
+        command_timeout: Some(Duration::from_secs(5)),
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
+    };
+
+    // The backend/API keeps exact stdout bytes; only task-record presentation
+    // is redacted.
+    let api_result = flow::runtime::invoke_applet(
+        &make_registry()?,
+        "secret.echo",
+        Default::default(),
+        Vec::new(),
+        &options,
+        Arc::new(AtomicBool::new(false)),
+    )?;
+    assert_eq!(api_result.output, secret);
+
+    let registry = make_registry()?;
+    let program = flow::parser::parse(
+        "parallel at most 1 as results\n  run secret.echo as echoed\nthen encode results as json\n",
+    )?;
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    assert!(!result
+        .output
+        .windows(secret.len())
+        .any(|window| window == secret));
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    let task = &value["tasks"][0];
+    assert_eq!(task["output"], serde_json::json!([91, 82, 69, 68, 65, 67, 84, 69, 68, 93]));
+    let stderr = task["stderr"]
+        .as_array()
+        .ok_or_else(|| anyhow!("task stderr should be encoded as a byte array"))?;
+    let stderr_bytes = stderr
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|byte| u8::try_from(byte).ok())
+                .ok_or_else(|| anyhow!("task stderr byte is outside u8 range"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(stderr_bytes, b"[REDACTED]");
+
+    // V3 element records redact stdout and stderr before encoding, while
+    // leaving the backend's raw API unchanged.
+    let program = flow::parser::parse(
+        "parallel for each item in [\"one\"] at most 1 as results\n  run secret.echo\nthen encode results as json\n",
+    )?;
+    let result = flow::runtime::run(&program, &make_registry()?, &options)?;
+    assert!(!result
+        .output
+        .windows(secret.len())
+        .any(|window| window == secret));
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    let element = &value["items"][0];
+    assert_eq!(element["output"], "[REDACTED]");
+    assert_eq!(element["stderr"], "[REDACTED]");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn parallel_each_bounds_one_byte_secret_redaction_expansion() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let source = serde_json::json!({

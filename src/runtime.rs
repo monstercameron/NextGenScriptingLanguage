@@ -1664,8 +1664,12 @@ pub fn bundled_model_applet() -> Result<PathBuf> {
 /// hash enforced when a `.sha256` sidecar is present), then a
 /// version/identity handshake runs the helper's existing `--version`
 /// contract and requires an exact match with this build's version, so a
-/// replaced helper is refused even in a plain `cargo build` tree that
-/// carries no recorded hash.
+/// replaced helper that does not mimic the version line is refused even in
+/// a plain `cargo build` tree that carries no recorded hash. The handshake
+/// is not authentication — any binary printing the expected line passes —
+/// and the hash/handshake bytes cannot be pinned through `exec` (see
+/// SECURITY.md); the ownership/writability gate above is what stops a
+/// cross-user replacement.
 fn bundled_helper(name: &str, missing: &'static str) -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
     let helper = executable.with_file_name(if cfg!(windows) {
@@ -1691,9 +1695,13 @@ fn bundled_helper(name: &str, missing: &'static str) -> Result<PathBuf> {
 
 /// Run `helper --version` and require the exact identity line this build
 /// expects. Both bundled helpers already answer `--version` with
-/// `<name> <CARGO_PKG_VERSION>`; a replacement binary (different content,
-/// hence a different hash) does not answer with this build's line and is
-/// refused before it can run any privileged operation.
+/// `<name> <CARGO_PKG_VERSION>`; a replacement binary that does not mimic
+/// that line is refused before it can run any privileged operation. This
+/// executes the candidate binary once (with `--version`, stdin null), so it
+/// runs only after the trusted-input gate has passed, and it authenticates
+/// nothing: any binary printing the expected line passes. It catches
+/// stale/mismatched helpers in trees without a recorded hash, not a
+/// same-directory attacker.
 fn verify_helper_version_handshake(helper: &Path, name: &str) -> Result<()> {
     let output = std::process::Command::new(helper)
         .arg("--version")

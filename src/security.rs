@@ -2393,8 +2393,15 @@ pub(crate) fn recorded_bundled_helper_sha256(path: &Path) -> Result<Option<Strin
 /// world-writable (a writable directory lets another local user replace the
 /// verified binary), a symlinked helper is refused, and when a hash was
 /// recorded at build time the helper's content must match it exactly. The
-/// caller separately runs the version/identity handshake, so a replaced
-/// helper is refused even in a plain `cargo build` tree with no sidecar.
+/// caller applies the stronger trusted-input gate first (ownership, full
+/// ancestor chain, hardlink/setuid, ACLs) and runs the version/identity
+/// handshake afterwards, so a replaced helper that does not mimic the
+/// version line is refused even in a plain `cargo build` tree with no
+/// sidecar. The sidecar ships in the same directory it protects, so a
+/// same-directory attacker who can replace the helper can also rewrite the
+/// sidecar: the recorded hash binds the packaged artifact against stale or
+/// mismatched helpers, not against that attacker. Hash and handshake bytes
+/// also cannot be pinned through `exec`; see SECURITY.md.
 pub(crate) fn verify_bundled_helper(path: &Path, expected_sha256: Option<&str>) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| anyhow!("reading bundled helper {}: {error}", path.display()))?;

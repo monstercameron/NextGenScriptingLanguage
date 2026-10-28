@@ -18,6 +18,8 @@ python3 tools/check_bash_ratio_regression.py BASELINE.json CANDIDATE.json
 
 This keeps the threshold fixed at 10% while avoiding invented or cross-platform
 measurements. The existing `tools/linux-latency-budget.json` thresholds also
-remain unchanged; the 8 ms ten-step cap still needs a measured fix and green
-Linux CI before #518 can close. Manifest-directory rows inherit the matching
+remain at their committed values pending `tools/regenerate_latency_budget.py`
+from retained Linux samples; no interim re-budget is in effect. Still
+needed before #518 can close: green Linux CI plus retained per-architecture
+ratio baselines. Manifest-directory rows inherit the matching
 existing budget so adding coverage does not loosen the gate.

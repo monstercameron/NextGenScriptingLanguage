@@ -9,7 +9,10 @@ child's peak resident set size. Python 3.9+, standard library only.
 """
 import argparse
 import functools
+import hashlib
 import json
+import os
+import platform
 import shutil
 import statistics
 import subprocess
@@ -130,6 +133,8 @@ def main(argv=None):
     )
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument("--json-out", type=Path, help="retain per-workload samples for budget regeneration")
+    parser.add_argument("--run-id", default=None, help="retained sample run id (defaults to GITHUB_RUN_ID or 'local')")
     args = parser.parse_args(argv)
 
     if not args.binary.is_file():
@@ -165,6 +170,45 @@ def main(argv=None):
                 "runs": len(samples),
                 "max_rss_kb": peak,
             }
+
+    if args.json_out is not None:
+        source_revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=Path.cwd(), capture_output=True,
+            text=True, check=False,
+        )
+        try:
+            binary_digest = hashlib.sha256(args.binary.read_bytes()).hexdigest()
+        except OSError:
+            binary_digest = None
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(
+            json.dumps(
+                {
+                    "metadata": {
+                        "source_revision": source_revision.stdout.strip() if source_revision.returncode == 0 else None,
+                        "run_id": args.run_id or os.environ.get("GITHUB_RUN_ID", "local"),
+                        "platform": platform.platform(),
+                        "machine": platform.machine(),
+                        "python": platform.python_version(),
+                        "binary_sha256": binary_digest,
+                        "manifest_dir": str(args.manifest_dir) if args.manifest_dir else None,
+                    },
+                    "results": {
+                        key: {
+                            "median_ms": measured["median_ms"],
+                            "p95_ms": measured["p95_ms"],
+                            "runs": measured["runs"],
+                            "max_rss_kb": measured["max_rss_kb"],
+                        }
+                        for key, measured in results.items()
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     failures = []
     if args.require_rss:

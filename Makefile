@@ -68,6 +68,7 @@ native-tool-contracts:
 # bundle (which fails cargo test by design until the coordinator regenerates
 # it) cannot mask a taxonomy regression.
 check: native-tool-contracts rust-check docs-check applet-boundaries-harness-check stress-evidence-harness-check
+	$(PYTHON) tests/test_regenerate_latency_budget.py
 	$(PYTHON) tests/staged_rust.py
 	$(PYTHON) tests/releases.py
 	$(PYTHON) -O tests/releases.py

@@ -42,6 +42,9 @@ fn run(dir: &Path, args: &[String], stdin: &[u8], offline: bool, envs: &[(&str, 
         .args(args)
         .current_dir(dir)
         .env_remove("EXECUTE_MODELS_OFFLINE")
+        // Hermetic live-loopback cases carry the explicit #448 grant; the
+        // grantless refusal is covered in tests/ssrf_guard.rs instead.
+        .env("EXECUTE_MODEL_ALLOW_LOOPBACK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

@@ -176,8 +176,13 @@ private destination, and only for remote applets; a broad empty-list grant
 does not. The model helper accepts no origin grants (dependency #375 keeps
 model endpoints outside `network_origins`, which `Command`-backend applets
 cannot declare): its endpoints stay restricted to HTTPS, or HTTP to loopback,
-with the same guard and loopback-only allowance, so a script-controlled
-`--endpoint` cannot reach metadata or private destinations.
+with the same guard. A script-controlled `--endpoint` therefore cannot reach
+metadata or private destinations, and live loopback endpoints additionally
+require the explicit `EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's
+environment — without it the request fails as configuration before any
+credential read or connection, so an unauthenticated local service is never
+reachable by default. Hermetic `--fixture` runs never open a socket and do
+not need the grant.
 
 `--execution-mode trusted|untrusted` selects native-child confinement. With no
 policy the default is `trusted`; a capability policy defaults to `untrusted`.

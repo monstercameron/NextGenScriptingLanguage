@@ -147,7 +147,15 @@ llm.ask with model "local-model" and instruction "Summarize." and endpoint "http
 Endpoint rules: HTTPS is required for remote hosts. Plain HTTP is accepted only
 for loopback hosts (`127.0.0.1`, `::1`, `localhost`). Userinfo, query strings,
 and fragments are rejected. Redirects are never followed. Proxy environment
-variables are ignored; the explicit endpoint is the only destination.
+variables are ignored; the explicit endpoint is the only destination. Live
+loopback endpoints additionally require `EXECUTE_MODEL_ALLOW_LOOPBACK` in the
+helper's environment (presence enables it); without it the request fails as
+configuration before any credential read or connection. Filtered child
+environments (`--clear-env`, `--env-allow`, or a capability-policy environment
+grant) must list the variable explicitly. Fixture runs never open a socket and
+do not need it. Model endpoints accept no `network_origins` grant: dependency
+#375 keeps them outside that policy, so this variable is the interim explicit
+grant until that work lands.
 
 Credential rule, which is the security boundary for provider keys:
 

@@ -20,8 +20,9 @@
 //! on its own: the literal check cannot see rebinding, and the resolver
 //! filter cannot produce a fail-fast refusal for a literal. Both layers
 //! preserve explicit policy grants (an origin listed in `network_origins`)
-//! and the explicit loopback-fixture mode (`allow_loopback_http_fixture`, or
-//! the model helper's loopback endpoints).
+//! and explicit loopback modes: `allow_loopback_http_fixture` for remote
+//! fixtures, and the model helper's `EXECUTE_MODEL_ALLOW_LOOPBACK` grant
+//! (hermetic fixture runs need no grant because they never open a socket).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -152,9 +153,10 @@ pub fn classify_host(host: &str) -> HostClass {
 /// Fail-closed check of one endpoint host before any resolution or socket
 /// use. `origin` is the endpoint's canonical origin, `granted_origins` the
 /// explicitly granted origins (empty when no policy grants this origin).
-/// `allow_loopback` is the explicit loopback-fixture mode for transports
-/// that support one; the model helper passes `true` because its HTTP
-/// endpoints are loopback-only by validation.
+/// `allow_loopback` is the explicit loopback mode for transports that support
+/// one (`allow_loopback_http_fixture` for remote fixtures, the
+/// `EXECUTE_MODEL_ALLOW_LOOPBACK` grant or hermetic fixture mode for the
+/// model helper).
 pub fn check_endpoint_host(
     host: &str,
     origin: &str,
@@ -320,15 +322,13 @@ mod tests {
 
         assert!(check_endpoint_host("localhost", "http://localhost:8080", false, &empty).is_err());
         assert!(check_endpoint_host("localhost", "http://localhost:8080", true, &empty).is_ok());
-        assert!(
-            check_endpoint_host(
-                "LOCALHOST.",
-                "http://localhost:8080",
-                false,
-                &BTreeSet::from(["http://localhost:8080".to_owned()])
-            )
-            .is_ok()
-        );
+        assert!(check_endpoint_host(
+            "LOCALHOST.",
+            "http://localhost:8080",
+            false,
+            &BTreeSet::from(["http://localhost:8080".to_owned()])
+        )
+        .is_ok());
         assert!(check_endpoint_host("127.0.0.1", "https://127.0.0.1", false, &empty).is_err());
         assert!(check_endpoint_host("127.0.0.1", "https://127.0.0.1", true, &empty).is_ok());
 
@@ -341,23 +341,19 @@ mod tests {
         assert!(check_resolved_addrs(empty, false, false).is_err());
         assert!(check_resolved_addrs(&[socket("93.184.216.34", 443)], false, false).is_ok());
         // DNS-rebinding shape: one public and one private address.
-        assert!(
-            check_resolved_addrs(
-                &[socket("93.184.216.34", 443), socket("10.0.0.1", 443)],
-                false,
-                false
-            )
-            .is_err()
-        );
+        assert!(check_resolved_addrs(
+            &[socket("93.184.216.34", 443), socket("10.0.0.1", 443)],
+            false,
+            false
+        )
+        .is_err());
         // Order does not matter: a tainted tail is still refused.
-        assert!(
-            check_resolved_addrs(
-                &[socket("10.0.0.1", 443), socket("93.184.216.34", 443)],
-                false,
-                false
-            )
-            .is_err()
-        );
+        assert!(check_resolved_addrs(
+            &[socket("10.0.0.1", 443), socket("93.184.216.34", 443)],
+            false,
+            false
+        )
+        .is_err());
         assert!(check_resolved_addrs(&[socket("10.0.0.1", 443)], false, false).is_err());
         // An explicit grant preserves the destination.
         assert!(check_resolved_addrs(&[socket("10.0.0.1", 443)], false, true).is_ok());
@@ -366,14 +362,12 @@ mod tests {
         assert!(check_resolved_addrs(&[socket("127.0.0.1", 80)], false, false).is_err());
         assert!(check_resolved_addrs(&[socket("::1", 443)], true, false).is_ok());
         // Metadata over a rebinding name is refused even with loopback allowed.
-        assert!(
-            check_resolved_addrs(
-                &[socket("127.0.0.1", 80), socket("169.254.169.254", 80)],
-                true,
-                false
-            )
-            .is_err()
-        );
+        assert!(check_resolved_addrs(
+            &[socket("127.0.0.1", 80), socket("169.254.169.254", 80)],
+            true,
+            false
+        )
+        .is_err());
     }
 
     #[test]

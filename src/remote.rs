@@ -11,8 +11,8 @@ use crate::contracts::{
     AppletContract, Outcome, OutcomeKind, OutputType, PortDelivery, RemoteAuthSource,
     RemoteEndpointConfig, ValueSchema,
 };
-use crate::ssrf;
 pub use crate::contracts::{EffectCertainty, RemoteError, RemoteErrorKind};
+use crate::ssrf;
 mod transport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -2202,13 +2202,14 @@ impl Resolver for InterruptibleSystemResolver {
         // Pin the resolved set before the transport connects: any blocked
         // address refuses the whole set, which stops DNS rebinding even when
         // the hostname looked benign at check time.
-        ssrf::check_resolved_addrs(&addrs, self.allow_loopback, self.granted_origin)
-            .map_err(|_| {
+        ssrf::check_resolved_addrs(&addrs, self.allow_loopback, self.granted_origin).map_err(
+            |_| {
                 ureq::Error::Io(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "blocked non-public network destination",
                 ))
-            })?;
+            },
+        )?;
         if addrs.is_empty() {
             Err(ureq::Error::HostNotFound)
         } else {

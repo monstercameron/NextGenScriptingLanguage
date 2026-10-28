@@ -7,7 +7,6 @@
 use crate::model_schema::{parse_unique_json, validate_schema_definition, DuplicateJsonKey};
 use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
-use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,6 +15,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::time::Duration;
+use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use url::{Host, Url};
 
 const DEFAULT_MAX_BYTES: usize = 1024 * 1024;
@@ -222,7 +222,11 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
     let endpoint = endpoint_for(&options).map_err(|_| failure(FailureClass::Configuration))?;
     validate_endpoint(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
     let parsed = Url::parse(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
-    check_endpoint_ssrf(&parsed).map_err(|_| failure(FailureClass::Configuration))?;
+    // Hermetic fixture runs never open a socket, so loopback endpoints stay
+    // usable there without the live-loopback grant below.
+    let allow_loopback = options.fixture.is_some() || model_loopback_allowed();
+    check_endpoint_ssrf(&parsed, allow_loopback)
+        .map_err(|_| failure(FailureClass::Configuration))?;
     let transport = if options.fixture.is_some() {
         "fixture"
     } else if parsed.scheme() == "https" {
@@ -302,7 +306,8 @@ Options: --provider jev|openai --model NAME --question TEXT --instruction TEXT\n
 Jev defaults to jev-latest. OpenAI requires --model. Fixture mode never reads\n\
 credentials or contacts a network service. OpenAI output is capped at 512\n\
 tokens unless --max-tokens overrides it. Values beginning with -- cannot be\n\
-used as labels or levels. Set EXECUTE_MODELS_OFFLINE to reject live requests.\n\
+used as labels or levels. Set EXECUTE_MODELS_OFFLINE to reject live requests.
+Set EXECUTE_MODEL_ALLOW_LOOPBACK to allow live loopback endpoints.\n\
 Default provider keys go only to the provider default host. A custom endpoint\n\
 gets a key only from --api-key-env NAME; otherwise it gets none. No automatic\n\
 retries are\n\
@@ -1046,16 +1051,33 @@ fn is_loopback(host: Host<&str>) -> bool {
     }
 }
 
+/// Explicit opt-in for live loopback model endpoints.
+///
+/// A script-controlled `--endpoint` can otherwise reach any unauthenticated
+/// local HTTP/HTTPS service, so production loopback requests require
+/// `EXECUTE_MODEL_ALLOW_LOOPBACK` in the helper's environment (presence
+/// enables it, mirroring `EXECUTE_MODELS_OFFLINE`). Filtered child
+/// environments must list the variable explicitly. Hermetic `--fixture` runs
+/// never open a socket and do not need it.
+///
+/// Model endpoints have no `network_origins` grant yet: dependency #375 keeps
+/// them outside `network_origins`, which `Command`-backend applets cannot
+/// declare, so this variable is the interim explicit grant until that policy
+/// work lands.
+fn model_loopback_allowed() -> bool {
+    std::env::var_os("EXECUTE_MODEL_ALLOW_LOOPBACK").is_some()
+}
+
 /// Refuse non-public endpoint hosts by name, before any credential is read
 /// or socket opened. Hostnames that look benign pass here and are pinned
 /// again by the resolver in [`post_json`], which stops DNS rebinding.
 ///
-/// Model endpoints have no `network_origins` grant yet (see #375), so only
-/// the explicit loopback allowance applies: the HTTP form is already
-/// restricted to loopback by [`validate_endpoint`], and HTTPS loopback covers
-/// local TLS servers. Fixture mode never reaches the network and is always
-/// allowed.
-fn check_endpoint_ssrf(parsed: &Url) -> Result<()> {
+/// `allow_loopback` is the explicit grant from [`model_loopback_allowed`]
+/// (or hermetic fixture mode, which never reaches the network): the HTTP form
+/// is already restricted to loopback by [`validate_endpoint`], and HTTPS
+/// loopback covers local TLS servers. Fixture mode with a non-public,
+/// non-loopback endpoint is still refused.
+fn check_endpoint_ssrf(parsed: &Url, allow_loopback: bool) -> Result<()> {
     let host = match parsed.host() {
         Some(Host::Ipv4(address)) => address.to_string(),
         Some(Host::Ipv6(address)) => address.to_string(),
@@ -1063,7 +1085,7 @@ fn check_endpoint_ssrf(parsed: &Url) -> Result<()> {
         None => bail!("endpoint must name a host"),
     };
     let origin = model_origin(parsed);
-    ssrf::check_endpoint_host(&host, &origin, true, &Default::default())
+    ssrf::check_endpoint_host(&host, &origin, allow_loopback, &Default::default())
         .map_err(|denied| anyhow!("{denied}"))
 }
 
@@ -1080,10 +1102,13 @@ fn model_origin(parsed: &Url) -> String {
 }
 
 /// Resolver that pins the endpoint against DNS rebinding: every resolved
-/// address must be publicly routable (loopback excepted), otherwise the whole
-/// set is refused before the transport connects.
+/// address must be publicly routable (loopback excepted only under the
+/// explicit [`model_loopback_allowed`] grant), otherwise the whole set is
+/// refused before the transport connects. The default is fail-closed.
 #[derive(Debug, Default)]
-struct SsrfSystemResolver;
+struct SsrfSystemResolver {
+    allow_loopback: bool,
+}
 
 impl Resolver for SsrfSystemResolver {
     fn resolve(
@@ -1092,9 +1117,9 @@ impl Resolver for SsrfSystemResolver {
         config: &ureq::config::Config,
         timeout: ureq::unversioned::transport::NextTimeout,
     ) -> Result<ResolvedSocketAddrs, ureq::Error> {
-        let addrs =
-            ureq::unversioned::resolver::DefaultResolver::default().resolve(uri, config, timeout)?;
-        ssrf::check_resolved_addrs(&addrs, true, false)
+        let addrs = ureq::unversioned::resolver::DefaultResolver::default()
+            .resolve(uri, config, timeout)?;
+        ssrf::check_resolved_addrs(&addrs, self.allow_loopback, false)
             .map_err(|_| ureq::Error::HostNotFound)?;
         Ok(addrs)
     }
@@ -1309,7 +1334,11 @@ fn post_json(
 ) -> Result<Value> {
     validate_endpoint(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
     let parsed = Url::parse(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
-    check_endpoint_ssrf(&parsed).map_err(|_| failure(FailureClass::Configuration))?;
+    // Defense in depth: `run` checks the same gate, but `post_json` rechecks
+    // so a live request can never bypass the explicit loopback grant.
+    let allow_loopback = model_loopback_allowed();
+    check_endpoint_ssrf(&parsed, allow_loopback)
+        .map_err(|_| failure(FailureClass::Configuration))?;
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(timeout_ms)))
         .http_status_as_error(false)
@@ -1327,7 +1356,7 @@ fn post_json(
     let agent = ureq::Agent::with_parts(
         config,
         ureq::unversioned::transport::DefaultConnector::new(),
-        SsrfSystemResolver,
+        SsrfSystemResolver { allow_loopback },
     );
     let request = agent
         .post(endpoint)

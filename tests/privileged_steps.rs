@@ -403,8 +403,9 @@ fn the_launch_check_classifies_the_manifest_name_and_the_resolved_path() {
             "{names:?} {resolved:?}: {error:#}"
         );
     }
-    // A file whose own name is not listed is still refused when its resolved path is an
-    // elevator: a renamed copy of an elevator is an elevator.
+    // A file whose own name is not listed is still refused when its resolved path
+    // keeps a listed file name (for example a symlink or same-named alias).
+    // A renamed copy with an unlisted file name is not recognised.
     let renamed = directory.path().join("pkexec");
     fs::write(&renamed, b"").unwrap();
     let error =
@@ -415,6 +416,244 @@ fn the_launch_check_classifies_the_manifest_name_and_the_resolved_path() {
     );
     flow::capabilities::check_privileged_launch(&registry, &["printf"], Path::new("printf"))
         .expect("a standard executable is not refused");
+}
+
+fn explain_json_plan(work: &Path, source: &str) -> serde_json::Value {
+    let program = work.join("probe.program");
+    fs::write(&program, source).unwrap();
+    let output = execute(work, &["explain", "probe.program", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    serde_json::from_slice(&output.stdout).expect("explain --json output")
+}
+
+fn privileged_flag(plan: &serde_json::Value, binary: &str) -> bool {
+    plan["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["binary"] == binary)
+        .unwrap_or_else(|| panic!("missing row for {binary}: {plan}"))["privileged"]
+        == true
+}
+
+fn check_denies(work: &Path, source: &str, policy: &Path) {
+    let program = work.join("probe.program");
+    fs::write(&program, source).unwrap();
+    let output = execute(
+        work,
+        &[
+            "check",
+            "probe.program",
+            "--capability-policy",
+            policy.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+    assert!(
+        text(&output.stderr).contains("denies privileged steps"),
+        "{}",
+        text(&output.stderr)
+    );
+}
+
+#[test]
+fn container_escape_launchers_are_privileged_and_denied() {
+    let work = tempfile::tempdir().unwrap();
+    let policy = policy_file(
+        work.path(),
+        r#"{"version":1,"applets":{},"deny_privileged":true}"#,
+    );
+    for name in [
+        "flatpak-spawn",
+        "host-spawn",
+        "distrobox-host-exec",
+        "toolbox",
+        "docker",
+        "podman",
+        "kubectl",
+    ] {
+        let plan = explain_json_plan(work.path(), &format!("run \"{name}\"\n"));
+        assert!(privileged_flag(&plan, name), "{name}: {plan}");
+        check_denies(work.path(), &format!("run \"{name}\"\n"), &policy);
+    }
+}
+
+#[test]
+fn schedulers_are_privileged_and_denied() {
+    let work = tempfile::tempdir().unwrap();
+    let policy = policy_file(
+        work.path(),
+        r#"{"version":1,"applets":{},"deny_privileged":true}"#,
+    );
+    for name in ["at", "batch", "crontab"] {
+        let plan = explain_json_plan(work.path(), &format!("run \"{name}\"\n"));
+        assert!(privileged_flag(&plan, name), "{name}: {plan}");
+        check_denies(work.path(), &format!("run \"{name}\"\n"), &policy);
+    }
+}
+
+#[test]
+fn dbus_launchers_are_privileged_and_denied() {
+    let work = tempfile::tempdir().unwrap();
+    let policy = policy_file(
+        work.path(),
+        r#"{"version":1,"applets":{},"deny_privileged":true}"#,
+    );
+    for name in ["dbus-send", "gdbus", "busctl"] {
+        let plan = explain_json_plan(work.path(), &format!("run \"{name}\"\n"));
+        assert!(privileged_flag(&plan, name), "{name}: {plan}");
+        check_denies(work.path(), &format!("run \"{name}\"\n"), &policy);
+    }
+}
+
+#[test]
+fn desktop_launchers_are_privileged_and_denied() {
+    let work = tempfile::tempdir().unwrap();
+    let policy = policy_file(
+        work.path(),
+        r#"{"version":1,"applets":{},"deny_privileged":true}"#,
+    );
+    for name in ["xdg-open", "gio"] {
+        let plan = explain_json_plan(work.path(), &format!("run \"{name}\"\n"));
+        assert!(privileged_flag(&plan, name), "{name}: {plan}");
+        check_denies(work.path(), &format!("run \"{name}\"\n"), &policy);
+    }
+}
+
+#[test]
+fn absolute_paths_and_case_variants_stay_privileged_and_denied() {
+    let work = tempfile::tempdir().unwrap();
+    let policy = policy_file(
+        work.path(),
+        r#"{"version":1,"applets":{},"deny_privileged":true}"#,
+    );
+    for binary in [
+        "/usr/bin/docker",
+        "/bin/at",
+        "/usr/bin/dbus-send",
+        "/usr/bin/gio",
+        "/usr/bin/flatpak-spawn",
+        "DOCKER.EXE",
+    ] {
+        let plan = explain_json_plan(work.path(), &format!("run \"{binary}\"\n"));
+        assert!(privileged_flag(&plan, binary), "{binary}: {plan}");
+        check_denies(work.path(), &format!("run \"{binary}\"\n"), &policy);
+    }
+}
+
+#[test]
+fn argument_dependent_host_escape_calls_are_still_privileged_and_denied() {
+    let work = tempfile::tempdir().unwrap();
+    let policy = policy_file(
+        work.path(),
+        r#"{"version":1,"applets":{},"deny_privileged":true}"#,
+    );
+    for (binary, source) in [
+        (
+            "flatpak-spawn",
+            "run \"flatpak-spawn\" with arguments [\"--host\", \"sh\", \"-c\", \"id\"]\n",
+        ),
+        (
+            "gio",
+            "run \"gio\" with arguments [\"open\", \"evil.desktop\"]\n",
+        ),
+        (
+            "busctl",
+            "run \"busctl\" with arguments [\"call\", \"org.freedesktop.systemd1\", \"/org/freedesktop/systemd1\", \"org.freedesktop.systemd1.Manager\", \"StartTransientUnit\"]\n",
+        ),
+        ("at", "run \"at\" with arguments [\"now\"]\n"),
+    ] {
+        let plan = explain_json_plan(work.path(), source);
+        assert!(privileged_flag(&plan, binary), "{source}: {plan}");
+        check_denies(work.path(), source, &policy);
+    }
+}
+
+#[test]
+fn launch_check_denies_new_families_by_resolved_path_alias() {
+    let registry = deny_all_privileged_registry(&[manifest("plain.run", "printf", &["x"])]);
+    let directory = tempfile::tempdir().unwrap();
+    for name in [
+        "docker",
+        "at",
+        "dbus-send",
+        "gio",
+        "flatpak-spawn",
+        "xdg-open",
+        "busctl",
+        "crontab",
+    ] {
+        let resolved = directory.path().join(name);
+        fs::write(&resolved, b"").unwrap();
+        let error = flow::capabilities::check_privileged_launch(&registry, &["tool"], &resolved)
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("denies privileged steps"),
+            "{name}: {error:#}"
+        );
+    }
+}
+
+#[cfg(feature = "agent-advisory")]
+#[test]
+fn policy_header_without_privileged_denies_new_launchers() {
+    let work = tempfile::tempdir().unwrap();
+    let source = "# execute-policy: allow undeclared\nrun \"docker\"\n";
+    let program = work.path().join("probe.program");
+    fs::write(&program, source).unwrap();
+    let output = execute(
+        work.path(),
+        &[
+            "explain",
+            "probe.program",
+            "--json",
+            "--allow",
+            "privileged",
+            "--allow",
+            "undeclared",
+            "--policy-header",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+    let verdict: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        verdict["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|violation| {
+                violation["category"] == "privileged" && violation["binary"] == "docker"
+            }),
+        "{verdict}"
+    );
+}
+
+#[cfg(not(feature = "agent-advisory"))]
+#[test]
+fn policy_header_without_agent_advisory_fails_closed() {
+    let work = tempfile::tempdir().unwrap();
+    fs::write(
+        work.path().join("probe.program"),
+        "# execute-policy: allow undeclared\nrun \"docker\"\n",
+    )
+    .unwrap();
+    let output = execute(
+        work.path(),
+        &[
+            "explain",
+            "probe.program",
+            "--json",
+            "--allow",
+            "privileged",
+            "--policy-header",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        text(&output.stderr).contains("agent-advisory"),
+        "{}",
+        text(&output.stderr)
+    );
 }
 
 #[test]

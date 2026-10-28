@@ -59,6 +59,7 @@ pub mod security;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "tooling")]
 pub mod service_deployment;
+pub mod ssrf;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stream;
 mod structured;

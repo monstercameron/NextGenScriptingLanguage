@@ -10,9 +10,11 @@
 //! streaming bypasses the collection cap (past the old 100,000-event
 //! failure point), the rule that a tick is visible within milliseconds
 //! while its producer still runs and an early close reports cancellation
-//! instead of EOF, and the rule that queued events are delivered before a
-//! mid-stream or end-of-stream worker failure surfaces instead of a clean
-//! end of stream.
+//! instead of EOF, the rule that a real production-executor timer surfaces
+//! its second tick within one interval plus the 50 ms visibility bound when
+//! the first tick anchors the schedule, and the rule that queued events are
+//! delivered before a mid-stream or end-of-stream worker failure surfaces
+//! instead of a clean end of stream.
 
 #![cfg(feature = "graph")]
 
@@ -22,9 +24,10 @@ use flow::contracts::{OutputType, ValueSchema};
 use flow::graph::{
     graph_event_line, graph_event_line_json, stream_event_byte_limit, EventEnvelope, GraphContext,
     GraphExecutor, GraphNode, GraphNodeKind, GraphPlan, GraphRunOptions, GraphSession, NodeIo,
-    PortRef, PortSchema, PortValue,
+    PortRef, PortSchema, PortValue, RuntimeGraphExecutor,
 };
 use flow::manifest::Registry;
+use flow::runtime::RunOptions;
 use flow::security::SensitivitySet;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -804,6 +807,64 @@ fn first_tick_arrives_with_millisecond_latency() {
     assert!(
         elapsed < Duration::from_millis(50),
         "tick took {elapsed:?}, expected visibility within 50 ms"
+    );
+    session.cancel();
+    session
+        .cancel_and_join()
+        .expect("cancellation fallout is not a worker failure");
+}
+
+#[test]
+fn real_timer_second_tick_lands_within_50ms_of_its_schedule() {
+    // Issue #558 acceptance on the production path: a real `Timer` node
+    // (`every 10 milliseconds`) driven by the production executor, not a
+    // synthetic emitter measured from session start. The tick counter is
+    // the defensible timestamp: tick 1 anchors the schedule, so tick 2 is
+    // due exactly one 10 ms interval later and only the inter-tick gap is
+    // bounded. The first tick is warm-up that absorbs worker startup and
+    // thread-spawn jitter; the bound then pins tick-to-visibility delay.
+    let registry = Registry::from_sources(&[] as &[&str]).expect("empty registry parses");
+    let cwd = std::env::current_dir().expect("test working directory resolves");
+    let executor = Arc::new(RuntimeGraphExecutor::new(registry, RunOptions::new(cwd)));
+    let mut session = GraphSession::start(timer_plan(), executor, GraphRunOptions::default())
+        .expect("real timer session starts");
+    let first = session
+        .recv_output()
+        .expect("receive works")
+        .expect("first real tick arrives");
+    assert_eq!(
+        first.port,
+        PortRef::new("ticker", "tick"),
+        "the tick arrives on the real timer event port"
+    );
+    assert_eq!(
+        first.payload,
+        PortValue::Value(Value::Integer(1)),
+        "the first real tick carries counter 1"
+    );
+    let first_arrival = Instant::now();
+    let second = session
+        .recv_output()
+        .expect("receive works")
+        .expect("second real tick arrives");
+    let second_arrival = Instant::now();
+    assert_eq!(
+        second.port,
+        PortRef::new("ticker", "tick"),
+        "the second tick arrives on the same timer event port"
+    );
+    assert_eq!(
+        second.payload,
+        PortValue::Value(Value::Integer(2)),
+        "consecutive counters prove the gap spans exactly one interval"
+    );
+    let gap = second_arrival.duration_since(first_arrival);
+    let visibility_slack = gap
+        .checked_sub(Duration::from_millis(10))
+        .unwrap_or_default();
+    assert!(
+        visibility_slack < Duration::from_millis(50),
+        "second tick took {gap:?} after the first; expected one 10 ms interval plus the 50 ms #558 visibility bound"
     );
     session.cancel();
     session

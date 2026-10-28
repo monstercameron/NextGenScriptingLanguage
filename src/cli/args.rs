@@ -52,6 +52,10 @@ pub(crate) struct Args {
     pub(crate) command_timeout: Option<std::time::Duration>,
     pub(crate) drain_timeout: Option<std::time::Duration>,
     pub(crate) total_timeout: Option<std::time::Duration>,
+    /// `run --kill-grace-ms N`: polite-signal grace before SIGKILL on
+    /// cancellation or timeout (issue #525). `None` selects
+    /// `DEFAULT_KILL_GRACE`; zero requests an immediate SIGKILL.
+    pub(crate) kill_grace: Option<std::time::Duration>,
     pub(crate) max_record_bytes: usize,
     pub(crate) max_record_bytes_set: bool,
     pub(crate) record_dir: Option<PathBuf>,

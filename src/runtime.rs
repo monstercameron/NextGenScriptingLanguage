@@ -137,7 +137,16 @@ pub struct RunOptions {
     pub command_timeout: Option<Duration>,
     /// Maximum lifetime of the full runtime operation, including scheduler waits.
     pub total_timeout: Option<Duration>,
+    /// Grace between the polite group signal (SIGTERM, or SIGINT when the run
+    /// was interrupted by SIGINT) and the final SIGKILL. Bounds every
+    /// cancellation and timeout path so a trapping child can clean up while an
+    /// ignoring child is still reaped. Issue #525; per-command tuning stays
+    /// with #310.
+    pub kill_grace: Duration,
 }
+
+/// Grace before SIGKILL when a cancel or timeout escalates a process group.
+pub const DEFAULT_KILL_GRACE: Duration = Duration::from_secs(2);
 
 impl RunOptions {
     /// Options for a run in `working_directory` with no inputs, cache, trace or
@@ -153,6 +162,7 @@ impl RunOptions {
             loop_budget_scope: LoopBudgetScope::PerLoop,
             command_timeout: None,
             total_timeout: None,
+            kill_grace: DEFAULT_KILL_GRACE,
         }
     }
 }
@@ -596,6 +606,7 @@ fn configured_inputs<'a>(
         loop_budget_scope: options.loop_budget_scope,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        kill_grace: options.kill_grace,
         ..RunOptions::new(options.working_directory.clone())
     };
     preflight_inputs_with_loop_limit(
@@ -745,6 +756,10 @@ pub(crate) struct Signals {
     /// Stops this run's drain watchdog when the run's signals are dropped.
     drain_stop: Option<Arc<AtomicBool>>,
     registrations: Vec<signal_hook::SigId>,
+    /// True once this run installed its process-wide handler set and counted
+    /// itself in `platform::live_signal_owners`. Only owners release the count
+    /// on drop; scoped clones share the slot but never own handlers.
+    owns_signal_handlers: bool,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
     graph_service_cancellation: bool,
@@ -769,6 +784,10 @@ pub(crate) struct Signals {
     job_stage_results: Option<Arc<Mutex<Vec<Option<execution_result::StageResult>>>>>,
     job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
     output_writers: Arc<stdio::OutputWriterPool>,
+    /// Bounded grace between the polite group signal and SIGKILL on
+    /// cancellation or timeout (issue #525). Copied from `RunOptions` for
+    /// the run and its bounded group scopes.
+    pub(crate) kill_grace: Duration,
     #[cfg(test)]
     job_panic_before_ack: Option<Arc<JobAckPanicProbe>>,
 }
@@ -882,6 +901,15 @@ impl Signals {
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
         // A fresh per-run slot starts at zero, so a new signal-owned run can
         // neither inherit nor erase another run's recorded interrupt.
+        // Escalation reads only that slot, so overlapping runs keep their own
+        // SIGINT-vs-SIGTERM choice. The process-wide fallback is cleared for
+        // a sequential run only (no live owners), so a SIGINT that cancelled
+        // one in-process run (tests, daemon, library reuse) cannot poison the
+        // next run's CLI fallback report, while an overlapping register never
+        // erases the live run's pending report (see issue #525, B1). The clear
+        // happens just before installing handlers so a failed install can
+        // restore the fallback (B2); handlers re-record any new interrupt in
+        // both slots.
         let cleanup_cancel = Arc::new(AtomicBool::new(false));
         let cancel_signal = Arc::new(AtomicI32::new(0));
         let mut guard = Self {
@@ -891,6 +919,7 @@ impl Signals {
             cancel_signal: Arc::clone(&cancel_signal),
             drain_stop: None,
             registrations: Vec::with_capacity(3),
+            owns_signal_handlers: false,
             capture_diagnostics: false,
             deadline,
             graph_service_cancellation: false,
@@ -913,6 +942,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
+            kill_grace: DEFAULT_KILL_GRACE,
             #[cfg(test)]
             job_panic_before_ack: None,
         };
@@ -934,13 +964,24 @@ impl Signals {
             None => None,
         };
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations = crate::platform::signals(
+        let cleared = crate::platform::clear_for_new_owner();
+        match crate::platform::signals(
             guard.cancelled.clone(),
             armed,
             Some(signal_wake),
             Arc::clone(&guard.cleanup_cancel),
             Arc::clone(&guard.cancel_signal),
-        )?;
+        ) {
+            Ok(registrations) => {
+                guard.registrations = registrations;
+                crate::platform::note_signal_owner_installed();
+                guard.owns_signal_handlers = true;
+            }
+            Err(error) => {
+                crate::platform::restore_after_failed_install(cleared);
+                return Err(error);
+            }
+        }
         Ok(guard)
     }
 
@@ -952,16 +993,30 @@ impl Signals {
         // interrupt, so this run can neither inherit nor erase another run's.
         // The caller can set this flag directly without notifying the signal
         // wake, so native supervisors retain the bounded cancellation check.
+        // Like `register`, this installs fresh handlers, so it owns fresh
+        // signal state too (issue #525). The fallback clear is guarded by the
+        // live-owner count and restored on install failure (B1/B2).
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
         let signal_wake = Arc::new(crate::tasks::CancellationWake::new()?);
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations = crate::platform::signals(
+        let cleared = crate::platform::clear_for_new_owner();
+        match crate::platform::signals(
             guard.cancelled.clone(),
             None,
             Some(signal_wake),
             Arc::clone(&guard.cleanup_cancel),
             Arc::clone(&guard.cancel_signal),
-        )?;
+        ) {
+            Ok(registrations) => {
+                guard.registrations = registrations;
+                crate::platform::note_signal_owner_installed();
+                guard.owns_signal_handlers = true;
+            }
+            Err(error) => {
+                crate::platform::restore_after_failed_install(cleared);
+                return Err(error);
+            }
+        }
         Ok(guard)
     }
 
@@ -982,6 +1037,7 @@ impl Signals {
             cancel_signal: Arc::new(AtomicI32::new(0)),
             drain_stop: None,
             registrations: Vec::new(),
+            owns_signal_handlers: false,
             capture_diagnostics,
             deadline,
             graph_service_cancellation: false,
@@ -1004,6 +1060,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
+            kill_grace: DEFAULT_KILL_GRACE,
             #[cfg(test)]
             job_panic_before_ack: None,
         })
@@ -1025,6 +1082,7 @@ impl Signals {
             cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
+            owns_signal_handlers: false,
             capture_diagnostics: self.capture_diagnostics,
             deadline,
             graph_service_cancellation: self.graph_service_cancellation,
@@ -1047,6 +1105,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
+            kill_grace: self.kill_grace,
             #[cfg(test)]
             job_panic_before_ack: None,
         }
@@ -1068,6 +1127,7 @@ impl Signals {
             cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
+            owns_signal_handlers: false,
             capture_diagnostics: self.capture_diagnostics,
             deadline: self.deadline,
             graph_service_cancellation: self.graph_service_cancellation,
@@ -1098,6 +1158,7 @@ impl Signals {
             job_stage_results: self.job_stage_results.clone(),
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
+            kill_grace: self.kill_grace,
             #[cfg(test)]
             job_panic_before_ack: self.job_panic_before_ack.clone(),
         })
@@ -1488,10 +1549,30 @@ impl Drop for Signals {
         for registration in &self.registrations {
             signal_hook::low_level::unregister(*registration);
         }
+        if self.owns_signal_handlers {
+            crate::platform::note_signal_owner_released();
+        }
         if let Some(stop) = &self.drain_stop {
             stop.store(true, Ordering::SeqCst);
         }
     }
+}
+
+/// Clear a stale process-wide interrupt before a graph run installs its
+/// global-only cancellation handler (B5). Guarded by the live-owner count:
+/// a sequential stale record is dropped so a previous finite run's SIGINT
+/// cannot poison the graph's CLI fallback report, while a live overlapping
+/// signal-owning run keeps its pending report. Returns the cleared value so
+/// a failed handler install can restore it; `None` means nothing cleared.
+pub fn clear_stale_interrupt_for_graph() -> Option<i32> {
+    crate::platform::clear_for_new_owner()
+}
+
+/// Restore the fallback after a failed graph handler install (B5/B2). Only
+/// restores when the fallback is still cleared, so a fresh concurrent record
+/// is never overwritten.
+pub fn restore_stale_interrupt_after_failed_graph_install(cleared: Option<i32>) {
+    crate::platform::restore_after_failed_install(cleared);
 }
 
 /// The budget an interrupt drain gets before it cancels, unless the caller sets one.
@@ -2661,11 +2742,12 @@ pub fn run_with_drain_timeout(
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
-    let signals = if has_interrupt_handler(program) {
+    let mut signals = if has_interrupt_handler(program) {
         Signals::register_with_drain(deadline, drain_timeout)?
     } else {
         Signals::register_with_deadline(deadline)?
     };
+    signals.kill_grace = options.kill_grace;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
@@ -6362,6 +6444,81 @@ mod drain_tests {
         assert_eq!(second.cancel_exit_code(), Some(143));
         assert_eq!(first.drain_exit_status(), 130);
         assert_eq!(second.drain_exit_status(), 143);
+    }
+
+    #[test]
+    fn second_overlapping_register_preserves_the_live_fallback_report() {
+        // B1 end to end through real handler installation: the first live
+        // owner records a fallback SIGINT, and the second overlapping register
+        // must not erase that pending CLI report, while its own slot stays
+        // clean. Per-run escalation still reads only slots, so this guards the
+        // fallback without weakening either guarantee. Deterministic: synthetic
+        // fallback records only, serialized through the fallback lock.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        // The live run is interrupted: slot truth plus the CLI fallback.
+        first.record_cancel_signal(2);
+        crate::platform::record_cancel_signal(2);
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        // The overlapping register must keep that pending report.
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::platform::cancel_exit_code(),
+            Some(130),
+            "an overlapping register must not erase the live run's fallback report"
+        );
+        assert_eq!(second.cancel_exit_code(), None);
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        drop(first);
+        drop(second);
+    }
+
+    #[test]
+    fn sequential_register_drops_stale_fallback_for_graph_scope() {
+        // B5 sequential side: a stale fallback from a previous run is dropped
+        // for the next scope (finite register or graph start), so a timed-out
+        // run never inherits a previous SIGINT through the CLI fallback.
+        // Deterministic: synthetic records only, serialized through the lock.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        crate::platform::record_cancel_signal(2);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        let cleared = clear_stale_interrupt_for_graph();
+        assert_eq!(cleared, Some(2));
+        assert_eq!(crate::platform::cancel_exit_code(), None);
+        restore_stale_interrupt_after_failed_graph_install(cleared);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        let cleared_again = clear_stale_interrupt_for_graph();
+        assert_eq!(cleared_again, Some(2));
+        assert_eq!(crate::platform::cancel_exit_code(), None);
     }
 
     #[test]

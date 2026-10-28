@@ -170,15 +170,26 @@ fn register_cancellation_signal(
     let reported = signal_hook::consts::SIGINT;
     #[cfg(not(windows))]
     let reported = signal;
+    // Drop a sequential stale record before installing the global-only handler,
+    // so a previous finite run's interrupt cannot poison this graph run's CLI
+    // fallback report (B5). Guarded by live signal owners: an overlapping
+    // signal-owning run keeps its pending report. Restored when this install
+    // fails so the fallback the graph never started with survives (B2).
+    let cleared = runtime::clear_stale_interrupt_for_graph();
     // SAFETY: the action only performs atomic stores, which are async-signal-safe.
-    unsafe {
+    let registered = unsafe {
         signal_hook::low_level::register(signal, move || {
             runtime::record_interrupt(reported);
             cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
         })
+    };
+    match registered {
+        Ok(id) => Ok(SignalRegistration(id)),
+        Err(error) => {
+            runtime::restore_stale_interrupt_after_failed_graph_install(cleared);
+            Err(error).context("registering graph cancellation handler")
+        }
     }
-    .map(SignalRegistration)
-    .context("registering graph cancellation handler")
 }
 
 fn main() {
@@ -1254,6 +1265,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     max_loop_iterations: args.max_loop_iterations,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
+                    kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
                     ..RunOptions::new(
                         cwd.clone()
                             .context("could not determine current directory")?,
@@ -1446,6 +1458,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             max_loop_iterations: args.max_loop_iterations,
             command_timeout: args.command_timeout,
             total_timeout: args.total_timeout,
+            kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
             ..RunOptions::new(cwd.clone())
         };
         return match args.command {
@@ -1630,6 +1643,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     max_loop_iterations: args.max_loop_iterations,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
+                    kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
                     ..RunOptions::new(cwd.clone())
                 };
                 let mut emit =
@@ -2014,6 +2028,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 max_loop_iterations: args.max_loop_iterations,
                 command_timeout: args.command_timeout,
                 total_timeout: args.total_timeout,
+                kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
                 ..RunOptions::new(cwd.clone())
             };
             if args.once {
@@ -2224,6 +2239,7 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
         (args.max_catch_up.is_some(), "--max-catch-up"),
         (args.calendar_dedup.is_some(), "--calendar-dedup"),
         (args.total_timeout.is_some(), "--total-timeout-ms"),
+        (args.kill_grace.is_some(), "--kill-grace-ms"),
         (args.retry_uncertain, "--retry-uncertain"),
         (args.max_record_bytes_set, "--max-record-bytes"),
         (args.record_dir.is_some(), "--record"),
@@ -3536,7 +3552,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

@@ -3,7 +3,10 @@ use anyhow::Result;
 use std::fs::{Metadata, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 
 pub(crate) mod sandbox;
 #[cfg(unix)]
@@ -85,12 +88,78 @@ pub(crate) fn record_cancel_signal(signal: i32) {
     CANCEL_SIGNAL.store(signal, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Clear the recorded interrupt signal. Only tests use this: production runs
-/// read their own slot, and the process-wide fallback keeps the last signal
-/// so the CLI entry point can report it after its run is gone.
-#[cfg(test)]
+/// Clear the recorded interrupt at the start of a fresh run. The signal number
+/// is process-global, so without this a SIGINT that cancelled one in-process
+/// run (tests, daemon, library reuse) would still be visible to the next run's
+/// CLI fallback report (see issue #525). Escalation never reads this fallback:
+/// per-run truth lives on each `Signals`' own slot, and the process-wide
+/// fallback only keeps the last signal so the CLI entry point can report it
+/// after its run is gone. Tests use this too, serialized through
+/// `CANCEL_SIGNAL_TEST_LOCK`.
 pub(crate) fn clear_cancel_signal() {
     CANCEL_SIGNAL.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Live signal-owning runs in this process. A run becomes an owner when its
+/// `platform::signals` handler set is installed and stops being one when its
+/// `Signals` is dropped. Runs without handlers (nested, service, job, worker)
+/// never own. Used only to guard the process-wide fallback: a second
+/// overlapping register must not erase the first run's pending CLI report
+/// (issue #525, B1), while a sequential run must still drop stale state.
+static SIGNAL_OWNERS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn live_signal_owners() -> usize {
+    SIGNAL_OWNERS.load(Ordering::SeqCst)
+}
+
+pub(crate) fn note_signal_owner_installed() {
+    SIGNAL_OWNERS.fetch_add(1, Ordering::SeqCst);
+}
+
+pub(crate) fn note_signal_owner_released() {
+    // Defensive saturation: `Drop` pairs with a successful install, but a
+    // duplicated or stray release must never underflow into a huge count that
+    // would pin the fallback uncleared forever.
+    let mut current = SIGNAL_OWNERS.load(Ordering::SeqCst);
+    loop {
+        if current == 0 {
+            return;
+        }
+        match SIGNAL_OWNERS.compare_exchange_weak(
+            current,
+            current.saturating_sub(1),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+/// Clear the fallback for a new signal-owning run, but only when no other
+/// owner is live. Returns the cleared value when this call cleared, so a
+/// failed install can restore it (B2). A live owner keeps its pending CLI
+/// report; a sequential run drops the previous run's stale signal.
+pub(crate) fn clear_for_new_owner() -> Option<i32> {
+    let previous = CANCEL_SIGNAL.load(Ordering::SeqCst);
+    if previous == 0 {
+        return None;
+    }
+    if live_signal_owners() != 0 {
+        return None;
+    }
+    clear_cancel_signal();
+    Some(previous)
+}
+
+/// Restore the fallback after a failed handler install, and only then: when
+/// the fallback is still cleared, so a concurrent handler's fresh record is
+/// never overwritten with stale state (B2).
+pub(crate) fn restore_after_failed_install(cleared: Option<i32>) {
+    if let Some(previous) = cleared {
+        let _ = CANCEL_SIGNAL.compare_exchange(0, previous, Ordering::SeqCst, Ordering::SeqCst);
+    }
 }
 
 /// Exit status for one recorded interrupt signal: 128 plus the signal number
@@ -242,6 +311,91 @@ mod cancel_signal_tests {
             clear_cancel_signal();
         } else {
             record_cancel_signal(previous);
+        }
+    }
+
+    #[test]
+    fn new_owner_clear_skips_a_live_owner_and_clears_sequential_stale() {
+        // B1: an overlapping register must not erase the live run's pending
+        // CLI fallback report; a sequential run must still drop stale state.
+        // Deterministic: no real signal delivery, only the fallback word and
+        // the owner count, serialized through the fallback lock.
+        let _serial = CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous_fallback = CANCEL_SIGNAL.load(std::sync::atomic::Ordering::SeqCst);
+        let previous_owners = SIGNAL_OWNERS.load(Ordering::SeqCst);
+        // Start from a known state: no live owners in this serialized test.
+        SIGNAL_OWNERS.store(0, Ordering::SeqCst);
+        CANCEL_SIGNAL.store(0, Ordering::SeqCst);
+        // Sequential stale: a previous run's SIGTERM is dropped for the next run.
+        record_cancel_signal(15);
+        let cleared = clear_for_new_owner();
+        assert_eq!(cleared, Some(15));
+        assert_eq!(cancel_exit_code(), None);
+        // Live owner: the first run records, the second register skips clearing.
+        record_cancel_signal(2);
+        note_signal_owner_installed();
+        assert_eq!(live_signal_owners(), 1);
+        let skipped = clear_for_new_owner();
+        assert_eq!(skipped, None);
+        assert_eq!(cancel_exit_code(), Some(130));
+        note_signal_owner_released();
+        assert_eq!(live_signal_owners(), 0);
+        // After the owner drains, the next sequential run clears again.
+        let cleared_again = clear_for_new_owner();
+        assert_eq!(cleared_again, Some(2));
+        assert_eq!(cancel_exit_code(), None);
+        // A stray release never underflows into a huge pinned count.
+        note_signal_owner_released();
+        assert_eq!(live_signal_owners(), 0);
+        // Restore entry state so a panicking assertion cannot leak fallback
+        // or owner state past the lock.
+        SIGNAL_OWNERS.store(previous_owners, Ordering::SeqCst);
+        if previous_fallback == 0 {
+            clear_cancel_signal();
+        } else {
+            record_cancel_signal(previous_fallback);
+        }
+    }
+
+    #[test]
+    fn failed_install_restores_only_a_cleared_fallback() {
+        // B2: a failed handler install after a clear must not destroy the
+        // fallback the run never started with; a fresh concurrent record must
+        // never be overwritten with stale state. Deterministic helper-level
+        // proof: no real `signal_hook` failure is injected.
+        let _serial = CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous_fallback = CANCEL_SIGNAL.load(std::sync::atomic::Ordering::SeqCst);
+        let previous_owners = SIGNAL_OWNERS.load(Ordering::SeqCst);
+        SIGNAL_OWNERS.store(0, Ordering::SeqCst);
+        CANCEL_SIGNAL.store(0, Ordering::SeqCst);
+        // Cleared then failed: the stale value comes back.
+        record_cancel_signal(15);
+        let cleared = clear_for_new_owner();
+        assert_eq!(cleared, Some(15));
+        assert_eq!(cancel_exit_code(), None);
+        restore_after_failed_install(cleared);
+        assert_eq!(cancel_exit_code(), Some(143));
+        // Cleared but a concurrent record landed first: keep the fresh one.
+        let cleared_again = clear_for_new_owner();
+        assert_eq!(cleared_again, Some(15));
+        record_cancel_signal(2);
+        restore_after_failed_install(cleared_again);
+        assert_eq!(cancel_exit_code(), Some(130));
+        // Skipped clear (live owner): restore is a no-op.
+        note_signal_owner_installed();
+        record_cancel_signal(15);
+        restore_after_failed_install(None);
+        assert_eq!(cancel_exit_code(), Some(143));
+        note_signal_owner_released();
+        SIGNAL_OWNERS.store(previous_owners, Ordering::SeqCst);
+        if previous_fallback == 0 {
+            clear_cancel_signal();
+        } else {
+            record_cancel_signal(previous_fallback);
         }
     }
 }

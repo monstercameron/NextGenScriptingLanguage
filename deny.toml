@@ -46,6 +46,8 @@ wildcards = "deny"
 highlight = "all"
 allow-wildcard-paths = true
 skip = [
+    { crate = "signal-hook@0.3.18", reason = "crossterm and signal-hook-mio still require 0.3 for terminal event handling" },
+    { crate = "signal-hook@0.4.5", reason = "execute directly uses 0.4; crossterm has not yet moved from 0.3" },
     { crate = "getrandom@0.2.17", reason = "ring 0.17 through rustls and ureq (the HTTP client); execute uses getrandom 0.4 directly" },
     { crate = "getrandom@0.4.3", reason = "execute's direct dependency (the per-user what-if key)" },
     { crate = "linux-raw-sys@0.4.15", reason = "rustix 0.38 through crossterm 0.28 (tui feature, via ratatui 0.29)" },

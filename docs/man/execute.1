@@ -250,7 +250,7 @@ and on argument errors.
 A program's explicit
 .B exit with status
 value is its exit status. A failing native command reports its own status. An
-interrupt exits with 130 after any drain.
+interrupt exits with 128 plus the interrupting signal (130 for SIGINT) after any drain. A drain that ends with no recorded signal reports 130.
 .SH FILES
 .TP
 .I /usr/share/execute/manifests

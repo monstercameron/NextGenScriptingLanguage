@@ -13,7 +13,8 @@ use anyhow::{anyhow, Result};
 #[cfg(windows)]
 use anyhow::{bail, Context};
 use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs::File;
@@ -122,10 +123,19 @@ impl SensitivitySet {
     }
 }
 
+/// Version of the data-flow policy document format. Parsing rejects anything
+/// else, so an installed (active) policy is always this version.
+pub const DATA_FLOW_POLICY_VERSION: u8 = 1;
+
 const MAX_POLICY_BYTES: usize = 64 * 1024;
 const MAX_ORIGINS: usize = 256;
 const MAX_TRUSTED_CACHE_APPLETS: usize = 1024;
 const MAX_DECISION_RECORDS: usize = 1024;
+/// How many policy decisions a run record keeps. The in-memory log above is the
+/// live window; the persisted audit is a bounded tail of it so `run.json` stays
+/// within its size limit. The total count is recorded alongside, so a truncated
+/// audit is explicit rather than silent.
+pub const MAX_PERSISTED_DECISIONS: usize = 256;
 const MAX_REDACTION_SECRETS: usize = 256;
 const MAX_REDACTION_SECRET_BYTES: usize = 256 * 1024;
 const MAX_REDACTION_SECRET_BYTES_EACH: usize = 64 * 1024;
@@ -179,7 +189,7 @@ struct RemoteSinkGrant {
 }
 
 /// Kinds of persistence that can retain applet data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PersistenceKind {
     Cache,
@@ -237,7 +247,7 @@ struct CachePurityGrant {
 /// active; its default behavior denies remote egress and non-public
 /// persistence. The inactive default preserves legacy behavior when the user
 /// did not opt into data-flow policy enforcement.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DataFlowPolicy {
     active: bool,
     remote_sinks: BTreeMap<String, BTreeSet<Sensitivity>>,
@@ -271,7 +281,37 @@ impl fmt::Debug for DataFlowPolicy {
     }
 }
 
+/// Lowercase hex encoding shared by the policy-audit digests and seals. A
+/// table lookup keeps every digest site on one implementation instead of
+/// each monomorphizing hex formatting; the output matches
+/// `format!("{byte:02x}")` exactly.
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(DIGITS[(byte >> 4) as usize] as char);
+        out.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 impl DataFlowPolicy {
+    /// Whether a policy was installed. The default preserves legacy behavior;
+    /// only a parsed policy constrains egress and persistence.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Canonical content digest of the parsed policy: the SHA-256 of its
+    /// canonical JSON encoding. Run records store this digest so a reviewer
+    /// can tell which policy produced an allow/deny log. A digest is one-way:
+    /// it names the policy without recording any origin, label, or other
+    /// policy content.
+    pub fn canonical_digest(&self) -> String {
+        let encoded = serde_json::to_vec(self).expect("a parsed data-flow policy is serializable");
+        hex_encode(Sha256::digest(encoded).as_slice())
+    }
+
     /// Load a bounded, owner-private policy file. The file contains only
     /// authorization labels and canonical origins, never credential values.
     pub fn load(path: &Path) -> Result<Self, PolicyError> {
@@ -984,6 +1024,17 @@ fn effective_labels(sensitivities: &SensitivitySet) -> BTreeSet<Sensitivity> {
 pub fn authorize_cache_purity(registry: &Registry, manifest: &Manifest) -> Result<(), PolicyError> {
     let policy = registry.host_state::<DataFlowPolicy>();
     if !policy.active {
+        // Without a data-flow policy every cache lookup is allowed, and the
+        // audit says so explicitly instead of staying silent about it.
+        record_policy_decision(
+            registry,
+            &manifest.name,
+            "cache.purity",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     }
 
@@ -1064,7 +1115,7 @@ fn reviewed_pure_in_process(manifest: &Manifest) -> bool {
 }
 
 /// Risk level recorded with one policy authorization result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyRisk {
     Low,
@@ -1073,7 +1124,7 @@ pub enum PolicyRisk {
 }
 
 /// Whether a policy-approved action was allowed to proceed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyDecisionOutcome {
     Approved,
@@ -1082,7 +1133,7 @@ pub enum PolicyDecisionOutcome {
 
 /// A bounded reason code for an approval or denial record. These are enums so
 /// callers cannot accidentally attach payload data, credentials, or paths.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyDecisionReason {
     PolicyMatched,
@@ -1104,7 +1155,8 @@ pub enum PolicyDecisionReason {
 
 /// One in-memory policy decision record. Scope contains only a canonical
 /// network origin; it never stores endpoint paths, request values or secrets.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+/// The same shape is persisted into run records, so it stays deserializable.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PolicyDecision {
     pub sequence: u64,
     pub subject: String,
@@ -1137,12 +1189,40 @@ impl DecisionRecorder {
             .records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The sequence is assigned under the queue lock, so a snapshot taken
+        // under the same lock always agrees with the lifetime total: every
+        // assigned sequence is already queued, and no assigned decision is
+        // still waiting for its number.
         decision.sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
         if records.len() == MAX_DECISION_RECORDS {
             records.pop_front();
         }
         records.push_back(decision.clone());
         decision
+    }
+
+    /// Snapshot the bounded window together with the lifetime total, under one
+    /// lock acquisition. Reading the two separately can observe a push in
+    /// between, so an audit built from separate reads can claim a total past
+    /// its own last sequence and fail its own contiguity check. This pair
+    /// never disagrees, even while other threads are recording.
+    pub fn snapshot_with_total(&self) -> (Vec<PolicyDecision>, u64) {
+        let records = self
+            .records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            records.iter().cloned().collect(),
+            self.sequence.load(Ordering::Relaxed),
+        )
+    }
+
+    /// How many decisions have ever been recorded through this recorder. The
+    /// snapshot above is a bounded window; this counter is the lifetime total,
+    /// so a persisted audit can state its truncation honestly even after the
+    /// window has dropped the prefix.
+    pub fn total(&self) -> u64 {
+        self.sequence.load(Ordering::Relaxed)
     }
 }
 
@@ -1172,6 +1252,23 @@ pub fn record_policy_decision(
 /// Read the current task's bounded decision log.
 pub fn policy_decisions(registry: &Registry) -> Vec<PolicyDecision> {
     registry.host_state::<DecisionRecorder>().snapshot()
+}
+
+/// Lifetime total of recorded policy decisions, including ones the bounded
+/// window has already dropped. A persisted audit reports this total next to
+/// the decisions it kept, so truncation is explicit rather than silent.
+pub fn policy_decision_total(registry: &Registry) -> u64 {
+    registry.host_state::<DecisionRecorder>().total()
+}
+
+/// The bounded decision window together with the lifetime total, read under
+/// one lock acquisition so the two cannot disagree. A persisted audit must be
+/// built from this pair, never from separate `policy_decisions` and
+/// `policy_decision_total` reads with pushes in between.
+pub fn policy_decisions_with_total(registry: &Registry) -> (Vec<PolicyDecision>, u64) {
+    registry
+        .host_state::<DecisionRecorder>()
+        .snapshot_with_total()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2687,7 +2784,15 @@ mod tests {
         let legacy = Registry::default();
         let external = legacy_cacheable_manifest();
         assert!(authorize_cache_purity(&legacy, &external).is_ok());
-        assert!(policy_decisions(&legacy).is_empty());
+        // Legacy mode stays permissive but records an explicit
+        // `NoPolicyConfigured` approval so the audit never goes silent.
+        let legacy_decisions = policy_decisions(&legacy);
+        assert_eq!(legacy_decisions.len(), 1);
+        assert_eq!(
+            legacy_decisions[0].reason,
+            PolicyDecisionReason::NoPolicyConfigured
+        );
+        assert_eq!(legacy_decisions[0].outcome, PolicyDecisionOutcome::Approved);
 
         let registry = Registry::default();
         registry.set_host_state(policy(r#"{"version":1}"#));
@@ -2695,10 +2800,19 @@ mod tests {
             authorize_cache_purity(&registry, &external),
             Err(PolicyError::CachePurityDenied)
         );
+        let decisions = policy_decisions(&registry);
+        assert_eq!(decisions.len(), 1);
         assert_eq!(
-            policy_decisions(&registry).last().unwrap().reason,
+            decisions.last().unwrap().reason,
             PolicyDecisionReason::CachePurityDenied
         );
+        assert_eq!(
+            decisions.last().unwrap().outcome,
+            PolicyDecisionOutcome::Denied
+        );
+        // Each registry owns its audit log: the denial above must not leak
+        // into the legacy registry's log and vice versa.
+        assert_eq!(policy_decisions(&legacy).len(), 1);
     }
 
     #[test]
@@ -2776,5 +2890,89 @@ mod tests {
         assert!(DataFlowPolicy::load(&path).is_ok());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(DataFlowPolicy::load(&path).is_err());
+    }
+
+    /// The joint snapshot/total read must stay consistent while other threads
+    /// are still recording. Separate reads can observe a push in between and
+    /// claim a total past the snapshot's last sequence; the joint read holds
+    /// one lock so the last sequence always equals the total and the window
+    /// stays contiguous.
+    #[test]
+    fn decision_snapshot_with_total_stays_consistent_under_concurrency() {
+        const WRITERS: usize = 8;
+        const PER_WRITER: usize = 200;
+        const READERS: usize = 2;
+        const READS_PER_READER: usize = 500;
+
+        fn assert_consistent(snapshot: &[PolicyDecision], total: u64) {
+            assert!(
+                snapshot.len() <= MAX_DECISION_RECORDS,
+                "window exceeded its bound: {}",
+                snapshot.len()
+            );
+            assert!(
+                snapshot.len() as u64 <= total,
+                "window {} runs past total {total}",
+                snapshot.len()
+            );
+            if snapshot.is_empty() {
+                assert_eq!(total, 0, "empty window must mean an empty log");
+                return;
+            }
+            assert_eq!(
+                snapshot.last().expect("non-empty window").sequence,
+                total,
+                "joint snapshot/total disagreed under concurrency"
+            );
+            assert_eq!(
+                snapshot.first().expect("non-empty window").sequence,
+                total - snapshot.len() as u64 + 1,
+                "window prefix was dropped without lifetime accounting"
+            );
+            for window in snapshot.windows(2) {
+                assert_eq!(
+                    window[1].sequence,
+                    window[0].sequence + 1,
+                    "concurrent snapshot left a sequence gap"
+                );
+            }
+        }
+
+        let registry = Registry::default();
+        std::thread::scope(|scope| {
+            for _ in 0..WRITERS {
+                scope.spawn(|| {
+                    for _ in 0..PER_WRITER {
+                        record_policy_decision(
+                            &registry,
+                            "audit.concurrent",
+                            "effect:text.transform",
+                            None,
+                            PolicyRisk::Low,
+                            PolicyDecisionOutcome::Approved,
+                            PolicyDecisionReason::PolicyMatched,
+                        );
+                    }
+                });
+            }
+            for _ in 0..READERS {
+                scope.spawn(|| {
+                    for _ in 0..READS_PER_READER {
+                        let (snapshot, total) = policy_decisions_with_total(&registry);
+                        assert_consistent(&snapshot, total);
+                    }
+                });
+            }
+        });
+
+        let expected = (WRITERS * PER_WRITER) as u64;
+        let (snapshot, total) = policy_decisions_with_total(&registry);
+        assert_eq!(total, expected, "every concurrent push must be counted");
+        assert_eq!(
+            snapshot.len(),
+            std::cmp::min(total as usize, MAX_DECISION_RECORDS),
+            "the bounded window must keep the newest decisions"
+        );
+        assert_consistent(&snapshot, total);
     }
 }

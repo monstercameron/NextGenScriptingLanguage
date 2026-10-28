@@ -1,8 +1,9 @@
 use flow::{
     capabilities::{
         authorize_environment_variable, authorize_host_path, effective_environment,
-        filter_environment, policy_fingerprint, preflight_with_cache_directory, AppletGrant,
-        CapabilityPolicy, ContractView, FilesystemGrant, HostAccess, HostGrant,
+        filter_environment, parse_child_environment_allowlist, policy_fingerprint,
+        preflight_with_cache_directory, AppletGrant, CapabilityPolicy, ContractView,
+        FilesystemGrant, HostAccess, HostGrant,
     },
     manifest::Registry,
 };
@@ -1026,4 +1027,154 @@ fn environment_entry_inputs_are_denied_by_the_shared_policy_preflight() {
     assert!(error
         .to_string()
         .contains("denies reading environment variable"));
+}
+
+// ---------------------------------------------------------------------------
+// Model loopback opt-in (#448): a program cannot grant
+// `EXECUTE_MODEL_ALLOW_LOOPBACK` to itself under a capability policy unless
+// the applet's `environment` grant lists it, and a filtered helper
+// environment drops the opt-in otherwise. These tests never mutate the
+// process environment: the self-grant uses a manifest overlay literal and
+// the propagation case filters an explicit snapshot, so parallel tests in
+// this binary cannot race on shared process state. `use environment`
+// (manifest overlay) and `and environment` (command overlay) share
+// `authorize_environment_override`, so the manifest path covers both.
+// ---------------------------------------------------------------------------
+
+/// A policy-mode program self-grant is denied without an `environment` grant
+/// and allowed with one; the host process environment is never modified.
+#[test]
+fn model_loopback_self_grant_requires_policy_environment_grant() {
+    const OPT_IN: &str = "EXECUTE_MODEL_ALLOW_LOOPBACK";
+    const CANARY: &str = "self-grant-canary-448";
+
+    let source = serde_json::json!({
+        "name": "fixture.model",
+        "binary": "/usr/bin/env",
+        "arguments": [],
+        "contract": {
+            "version": 1,
+            "environment": {
+                "set": {OPT_IN: CANARY},
+                "unset": []
+            }
+        }
+    })
+    .to_string();
+    let before = std::env::var_os(OPT_IN);
+
+    // Without the `environment` grant, the overlay self-grant is denied and
+    // the value is redacted from the diagnostic.
+    let denied_registry = Registry::from_sources(std::slice::from_ref(&source)).unwrap();
+    denied_registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("fixture.model".into(), grant(&["process.exec"]))]),
+    }));
+    let error = effective_environment(&denied_registry, "fixture.model").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("denies setting an environment variable"),
+        "{error:?}"
+    );
+    assert!(
+        !format!("{error:#}").contains(CANARY),
+        "denial must not log the value"
+    );
+
+    // With the grant, the same overlay literal is delivered to the child
+    // only; the host process environment is unchanged (read-only check).
+    let mut allowed_grant = grant(&["process.exec"]);
+    allowed_grant.environment.insert(OPT_IN.into());
+    let allowed_registry = Registry::from_sources(&[source]).unwrap();
+    allowed_registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("fixture.model".into(), allowed_grant)]),
+    }));
+    let environment = effective_environment(&allowed_registry, "fixture.model").unwrap();
+    assert_eq!(
+        environment
+            .iter()
+            .find(|(name, _)| name == std::ffi::OsStr::new(OPT_IN))
+            .map(|(_, value)| value.as_os_str()),
+        Some(std::ffi::OsStr::new(CANARY))
+    );
+    assert_eq!(std::env::var_os(OPT_IN), before, "host env must not change");
+}
+
+/// A filtered helper environment only forwards the loopback opt-in when it
+/// is explicitly granted, by policy or by host allowlist selection.
+#[test]
+fn model_loopback_grant_is_stripped_by_filtered_helper_environments() {
+    const OPT_IN: &str = "EXECUTE_MODEL_ALLOW_LOOPBACK";
+
+    fn snapshot() -> Vec<(OsString, OsString)> {
+        vec![
+            (OsString::from(OPT_IN), OsString::from("1")),
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+        ]
+    }
+
+    fn registry_with(environment: BTreeSet<String>) -> Registry {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("fixture");
+        std::fs::write(&binary, b"fixture").unwrap();
+        // Only the grant contents matter to `filter_environment`; the
+        // manifest binary path is never stat-ed on this path.
+        let registry = registry_with_applet("fixture.model", &binary);
+        let mut configured = grant(&[]);
+        configured.environment = environment;
+        registry.set_host_state(Some(CapabilityPolicy {
+            host: None,
+            version: 1,
+            deny_privileged: false,
+            allow_wrappers: Default::default(),
+            host_environment: Default::default(),
+            applets: BTreeMap::from([("fixture.model".into(), configured)]),
+        }));
+        registry
+    }
+
+    // Policy layer: without the grant the ambient opt-in is stripped even
+    // though it is present in the captured snapshot (fail-closed).
+    let stripped = registry_with(BTreeSet::from(["PATH".to_owned()]));
+    let filtered = filter_environment(&stripped, "fixture.model", snapshot())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        filtered,
+        vec![(OsString::from("PATH"), OsString::from("/usr/bin"))]
+    );
+    assert!(
+        authorize_environment_variable(&stripped, "fixture.model", OPT_IN).is_err(),
+        "policy must deny reading the ungranted opt-in"
+    );
+
+    // With the grant the same snapshot forwards the opt-in.
+    let forwarded = registry_with(BTreeSet::from(["PATH".to_owned(), OPT_IN.to_owned()]));
+    let filtered = filter_environment(&forwarded, "fixture.model", snapshot())
+        .unwrap()
+        .unwrap();
+    assert!(filtered.contains(&(OsString::from(OPT_IN), OsString::from("1"))));
+    authorize_environment_variable(&forwarded, "fixture.model", OPT_IN).unwrap();
+
+    // Host layer: `--clear-env` selects the empty allowlist (grant stripped),
+    // while `--env-allow` must name the variable explicitly to forward it.
+    assert!(parse_child_environment_allowlist("").unwrap().is_empty());
+    assert!(!parse_child_environment_allowlist("PATH")
+        .unwrap()
+        .contains(&OPT_IN.to_owned()));
+    assert!(
+        parse_child_environment_allowlist("PATH,EXECUTE_MODEL_ALLOW_LOOPBACK")
+            .unwrap()
+            .contains(&OPT_IN.to_owned())
+    );
 }

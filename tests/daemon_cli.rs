@@ -774,6 +774,148 @@ fn linux_daemon_declines_foreign_namespace_despite_client_acceptance() {
     }
 }
 
+/// Matching namespaces are not equivalent OS confinement (#446). A client in
+/// the daemon's own namespaces that tightens its confinement with `NoNewPrivs`
+/// plus an allow-all seccomp filter must still decline with only the client
+/// opt-in and forward once the daemon operator also opts in.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_daemon_declines_filtered_seccomp_despite_shared_namespaces() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // Same uid and same namespaces as the daemon: only the status confinement
+    // (NoNewPrivs plus a seccomp filter) differs, so the default socket works.
+    let spawn_daemon = |accept: bool| -> Daemon {
+        let mut command = daemon_command(runtime.path(), &["serve"]);
+        if accept {
+            command.env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1");
+        }
+        let mut daemon = Daemon(Some(command.spawn().expect("spawn daemon")));
+        let socket = default_socket_under(runtime.path());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !socket.exists() {
+            assert!(Instant::now() < deadline, "daemon did not start");
+            assert!(
+                daemon.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+                "daemon exited"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        daemon
+    };
+    let probe = Command::new("python3").arg("--version").output();
+    if !probe.as_ref().is_ok_and(|result| result.status.success()) {
+        let message = format!("python3 is unavailable: {probe:?}");
+        assert!(
+            std::env::var_os("EXECUTE_REQUIRE_NAMESPACE_TESTS").is_none(),
+            "{message}"
+        );
+        eprintln!("SKIP: {message}");
+        return;
+    }
+    // Install NoNewPrivs plus one allow-all seccomp filter, then exec the
+    // client. Namespaces stay shared; only the status confinement changes.
+    let loader = r#"
+import ctypes, os, sys
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+PR_SET_NO_NEW_PRIVS = 38
+PR_SET_SECCOMP = 22
+SECCOMP_MODE_FILTER = 2
+SECCOMP_RET_ALLOW = 0x7FFF0000
+BPF_RET = 0x06
+BPF_K = 0x00
+class SockFilter(ctypes.Structure):
+    _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte), ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint)]
+class SockFprog(ctypes.Structure):
+    _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.POINTER(SockFilter))]
+prog = (SockFilter * 1)(SockFilter(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ALLOW))
+fprog = SockFprog(1, prog)
+libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+libc.prctl.restype = ctypes.c_int
+if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+    sys.stderr.write("prctl(NO_NEW_PRIVS) failed\n")
+    sys.exit(10)
+if libc.prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ctypes.addressof(fprog)) != 0:
+    sys.stderr.write("prctl(SECCOMP) failed\n")
+    sys.exit(11)
+os.execv(sys.argv[1], sys.argv[1:])
+"#;
+    let program = work.path().join("seccomp.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    let execute = env!("CARGO_BIN_EXE_execute");
+    let filtered_run = || {
+        Command::new("python3")
+            .arg("-c")
+            .arg(loader)
+            .arg(execute)
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(manifests())
+            .arg("--daemon")
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+            .env("EXECUTE_DAEMON_TRACE", "1")
+            .current_dir(work.path())
+            .output()
+            .unwrap()
+    };
+    // Prove the loader actually tightens confinement: same program, but print
+    // /proc/self/status instead of execing the client.
+    let status_probe = Command::new("python3")
+        .arg("-c")
+        .arg(loader.replace(
+            "os.execv(sys.argv[1], sys.argv[1:])",
+            "print(open('/proc/self/status').read())",
+        ))
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&status_probe.stdout).into_owned();
+    if !status_probe.status.success()
+        || !(status.contains("NoNewPrivs:\t1") && status.contains("Seccomp:\t2"))
+    {
+        let message = format!("cannot install seccomp filter: {status_probe:?} {status}");
+        assert!(
+            std::env::var_os("EXECUTE_REQUIRE_NAMESPACE_TESTS").is_none(),
+            "{message}"
+        );
+        eprintln!("SKIP: {message}");
+        return;
+    }
+    let daemon = spawn_daemon(false);
+    let reply: Value = serde_json::from_slice(&daemon_output(runtime.path(), &["status"]).stdout)
+        .expect("daemon status JSON");
+    assert_eq!(reply["running"], true, "{reply}");
+    let output = filtered_run();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"out\n", "{stderr}");
+    assert!(
+        stderr.contains("client confinement cannot be preserved"),
+        "filtered client must decline with only client opt-in: {stderr}"
+    );
+    assert!(
+        !stderr.contains("client-started"),
+        "the daemon must not fork a filtered run without operator opt-in: {stderr}"
+    );
+    drop(daemon);
+    let _ = fs::remove_file(default_socket_under(runtime.path()));
+    let _daemon = spawn_daemon(true);
+    let output = filtered_run();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"out\n", "{stderr}");
+    assert!(
+        stderr.contains("client-started"),
+        "dual opt-in must forward a filtered context: {stderr}"
+    );
+    assert!(
+        !stderr.contains("client confinement cannot be preserved"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn a_socket_in_a_non_private_directory_is_never_contacted() {
     let runtime = tempfile::tempdir().unwrap();

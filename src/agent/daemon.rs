@@ -705,8 +705,9 @@ mod imp {
                     // Without explicit acceptance, refuse before preparing or forking. The
                     // acceptance flag arrives from the client, so a sandboxed peer could
                     // assert it; on Linux the daemon additionally compares kernel-attested
-                    // namespace identities and declines a foreign context unless this
-                    // daemon's operator accepted serving one.
+                    // confinement (namespaces, NoNewPrivs, seccomp state, capabilities,
+                    // groups, cgroups, LSM label) and declines a foreign or unprovable
+                    // context unless this daemon's operator accepted serving one.
                     let accepted = request["accept_daemon_context"] == true;
                     let shared = peer_confinement_matches(&stream);
                     if accepted && (shared || daemon_accepts_foreign_context()) {

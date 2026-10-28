@@ -147,6 +147,7 @@ The latest 64 transition events are retained; they are not a durable event log.
 | `reset` | Pause, return cursor/cwd/input to the initial context, restore script-assigned names from initial bindings (or clear them if unseeded); preserve other bindings, inbox, and metadata |
 | `restart` | Reset and run again; completed external effects may be repeated |
 | `restart-source` | Restart an owned native listener producer; input may be replayed |
+| `reload-agents` | Re-read the startup `--agent-policy` file so revocations and new grants (including `expires_at`) take effect without restarting; a broken file keeps the old policy and fails the request |
 | `stop` | Stop the whole managed instance and clean up its owned processes/socket |
 
 Pause is cooperative at a node boundary, not an arbitrary instruction freeze.

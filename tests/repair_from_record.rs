@@ -1225,7 +1225,7 @@ fn resume_from_record_refuses_a_prefix_step_with_missing_bytes() {
 /// `msys-2.0.dll` proves it is the MSYS build the portable assertions pin.
 #[cfg(windows)]
 fn msys_printf() -> Option<PathBuf> {
-    let candidates = ["ProgramFiles", "ProgramFiles(x86)"]
+    let mut candidates = ["ProgramFiles", "ProgramFiles(x86)"]
         .into_iter()
         .filter_map(std::env::var_os)
         .map(|root| Path::new(&root).join("Git/usr/bin/printf.exe"))

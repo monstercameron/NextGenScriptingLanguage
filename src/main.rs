@@ -3652,6 +3652,7 @@ mod graph_stream_tests {
     };
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     const TIMER_GRAPH: &str = "graph ticks\nevery 10 milliseconds as ticker\nend graph\n";
     const FINITE_GRAPH: &str =
@@ -3727,9 +3728,30 @@ mod graph_stream_tests {
             GraphRunOptions::default(),
         )
         .expect("failing session starts");
-        // The worker fails at startup, before any event line is written; a
-        // closed reader that lands afterwards must surface the failure, not a
-        // quiet pipe close.
+        // The worker fails asynchronously at startup, before any event line
+        // is written. Wait until that failure is observable instead of
+        // racing it: `recv_output` reports the recorded worker failure once
+        // the worker has finished, so a closed reader that lands afterwards
+        // deterministically surfaces the failure, not a quiet pipe close.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match session.recv_output() {
+                Err(error) => {
+                    assert!(
+                        error.to_string().contains("stream-test worker failure marker"),
+                        "the worker failure must surface before the close: {error:#}"
+                    );
+                    break;
+                }
+                Ok(_) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the startup worker failure never surfaced"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
         let error = stream_write_error(&mut session, broken_pipe());
         assert!(
             error.to_string().contains("stream-test worker failure marker"),
@@ -3865,6 +3887,57 @@ mod graph_stream_tests {
         assert!(
             !implicit_graph_stream(&run_arguments(directory.path(), &[]), &registry),
             "a finite applet graph runs on the daemon"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_detects_persistent_graphs_through_custom_manifests() {
+        // The preloaded registry cannot see a run's custom manifests, so
+        // detection reloads the requested registry. Point at the repository
+        // manifests so the custom registry parses exactly like the default.
+        let custom = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let manifest_dir = custom.to_string_lossy().into_owned();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        assert!(
+            implicit_graph_stream(
+                &run_arguments(directory.path(), &["--manifest-dir", manifest_dir.as_str()]),
+                &empty_registry()
+            ),
+            "a persistent graph with custom manifests still declines to the client"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_keeps_finite_graphs_on_the_daemon_with_custom_manifests() {
+        let custom = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let manifest_dir = custom.to_string_lossy().into_owned();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), FINITE_GRAPH).unwrap();
+        assert!(
+            !implicit_graph_stream(
+                &run_arguments(directory.path(), &["--manifest-dir", manifest_dir.as_str()]),
+                &empty_registry()
+            ),
+            "a finite applet graph keeps the document path under custom manifests"
+        );
+    }
+
+    #[test]
+    fn implicit_streaming_declines_when_custom_manifests_cannot_load() {
+        // An unloadable custom registry cannot prove the graph is finite, so
+        // detection declines and the client reports the real diagnostic
+        // instead of holding a daemon slot.
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("graph.program"), TIMER_GRAPH).unwrap();
+        let missing = directory.path().join("no-such-manifests");
+        let manifest_dir = missing.to_string_lossy().into_owned();
+        assert!(
+            implicit_graph_stream(
+                &run_arguments(directory.path(), &["--manifest-dir", manifest_dir.as_str()]),
+                &empty_registry()
+            ),
+            "an unloadable custom registry still declines to the client"
         );
     }
 

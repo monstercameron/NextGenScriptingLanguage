@@ -335,10 +335,17 @@ fn implicit_persistent_graph_streams_on_the_client() {
         assert_eq!(event["graph"], "ticks");
     }
     // The daemon declines the indefinite stream, so the client streams it
-    // directly; stopping here must not leave the run on the daemon.
+    // directly. Closing the reader is the stream's normal stop, exactly like
+    // `| head -n 3` on an explicit `--events jsonl` run: the client exits
+    // through the SIGPIPE convention instead of holding a daemon slot.
     drop(reader);
-    child.kill().expect("stream stops on request");
     let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(141),
+        "a closed reader exits through the SIGPIPE convention: {:?}",
+        output
+    );
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("graph event streams run on the client"),

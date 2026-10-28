@@ -170,6 +170,26 @@ fn resume_refuses_events_jsonl() {
 }
 
 #[test]
+fn resume_without_checkpoint_reports_its_own_requirement() {
+    // `resume` needs `--checkpoint` before any `--events` decision is
+    // reached: the parse gate fires first, so the events refusal must not
+    // mask the missing checkpoint.
+    let fixture = Fixture::new(TIMER_GRAPH);
+    let stderr = failed(
+        fixture
+            .command("resume")
+            .arg("--events")
+            .arg("jsonl")
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        stderr.contains("resume requires --checkpoint DIR"),
+        "unexpected refusal: {stderr}"
+    );
+}
+
+#[test]
 fn finite_graph_runs_refuse_record_and_answers() {
     // Graph runs never honour these finite-program options, so they are
     // refused on the document path too, not just on the event stream.

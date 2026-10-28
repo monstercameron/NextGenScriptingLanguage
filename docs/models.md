@@ -214,8 +214,9 @@ The helper emits sanitized error classes without provider response bodies,
 request values, paths, or credentials. The file must be a private regular
 file (owner-only permissions, no links): group-readable or symlinked files
 are rejected fail-closed. Under a capability policy the parent additionally
-authorizes the resolved `fixture`/`env_file` path against the applet's own
-filesystem grant before spawn.
+authorizes every resolved `path`-typed parameter (`fixture`, `env_file`)
+against the applet's own filesystem grant before spawn, after bindings
+resolve, including background jobs.
 
 Fixtures allow deterministic offline operation and validation without
 contacting a provider. A fixture checks the complete semantic request, including
@@ -223,7 +224,20 @@ input state and operation settings, before supplying a provider-native response;
 this exercises the same response validation as a live request. If `fixture` is
 present, the helper must open and validate that file. An empty, missing, or
 mismatched fixture is an error and never falls back to a live provider request.
-Links and non-regular files (such as FIFOs) are rejected without blocking.
+Final-component links and non-regular files (such as FIFOs) are rejected
+without blocking; fixture reads carry a size cap plus a 30-second slow-drip
+deadline, with the outer command timeout as the ultimate bound.
+
+Platform limitations (not secure on these paths, by design). Parent
+authorization canonicalizes at check time while the child pins only the final
+component at open time, so an ancestor directory renamed between the two can
+redirect either file; treat the parent check as advisory where a concurrent
+actor can rename above. `fixture` intentionally has no ownership check (replay
+data, not a credential); only `env_file` enforces owner-private checks.
+Windows fixture opens deny reparse points at open time; other non-Unix
+platforms have a final-component check-to-open window. A custom manifest that
+declares a file parameter as `string` instead of `path` escapes the generic
+parent authorization; declare file inputs as `path`.
 Omit `fixture` for live calls. The presence of `EXECUTE_MODELS_OFFLINE` in the
 process environment, even with an empty value, rejects every fixtureless call
 before reading input, credentials, or opening a connection. Fixture calls still

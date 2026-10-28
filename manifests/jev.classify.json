@@ -49,10 +49,10 @@
       "maximum": 300000
     },
     "env_file": {
-      "type": "string"
+      "type": "path"
     },
     "fixture": {
-      "type": "string"
+      "type": "path"
     }
   },
   "arguments": [

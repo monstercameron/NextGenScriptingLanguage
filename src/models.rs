@@ -13,7 +13,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use url::{Host, Url};
 
 const DEFAULT_MAX_BYTES: usize = 1024 * 1024;
@@ -960,12 +960,24 @@ fn provider_request(options: &Options, state: Option<&Value>) -> Result<Value> {
     }
 }
 
-/// Open a model file without following a link in its final component and
-/// without blocking on a FIFO. The parent authorizes the path against the
-/// applet grant before spawn; the child additionally refuses links and
-/// non-regular files here, so a path swapped after authorization fails closed.
-/// This mirrors the record no-follow reads: a FIFO opens but the regular-file
-/// check rejects it without waiting for a writer.
+/// Open a model fixture without following a link in its final component and
+/// without blocking on a FIFO on Unix.
+///
+/// The parent authorizes the path against the applet grant before spawn, but
+/// that check canonicalizes (follows) symlinks at check time while this open
+/// pins only the final component. An ancestor directory swapped between
+/// authorization and open is NOT pinned here: the opened file can differ from
+/// the authorized one. Parent authorization is therefore advisory against a
+/// concurrent writer in an ancestor; the child pin only guarantees the final
+/// component was not a link at open time. See the platform-limitation notes in
+/// `docs/models.md`: do not treat the parent check as a guarantee on paths a
+/// concurrent actor can rename above.
+///
+/// This mirrors the record no-follow reads: on Unix a FIFO opens (O_NONBLOCK)
+/// but the regular-file check rejects it without waiting for a writer.
+/// Fixture input intentionally has no ownership check: it is replay data, not
+/// a credential. Credential files go through `open_private_file` below, which
+/// enforces owner and private-mode checks.
 #[cfg(unix)]
 fn open_regular_no_follow(path: &str) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -984,7 +996,32 @@ fn open_regular_no_follow(path: &str) -> Result<File> {
     Ok(file)
 }
 
-#[cfg(not(unix))]
+/// Windows fixture open: deny reparse points at open time, like
+/// `open_private_file`. `symlink_metadata` alone would leave a
+/// check-to-open window for the final component; `FILE_FLAG_OPEN_REPARSE_POINT`
+/// makes the open itself refuse to traverse a link, and the metadata checks
+/// below confirm the opened handle is a non-reparse regular file. Ancestor
+/// swaps above the final component remain unpinned on every platform.
+#[cfg(windows)]
+fn open_regular_no_follow(path: &str) -> Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .context("opening model file")?;
+    let metadata = file.metadata().context("reading model file metadata")?;
+    if !metadata.is_file() || crate::platform::windows::is_reparse(&metadata) {
+        bail!("model file is not a regular file");
+    }
+    Ok(file)
+}
+
+/// Non-Unix, non-Windows fallback: no open flag can pin the final component,
+/// so a link check before open leaves a check-to-open window even for the
+/// final component. Documented as a platform limitation; fixtures on such
+/// platforms rely on the parent grant check and the regular-file check only.
+#[cfg(not(any(unix, windows)))]
 fn open_regular_no_follow(path: &str) -> Result<File> {
     if std::fs::symlink_metadata(path)
         .context("opening model file")?
@@ -1004,14 +1041,52 @@ fn open_regular_no_follow(path: &str) -> Result<File> {
     Ok(file)
 }
 
+/// Bounded read with a wall-clock deadline, matching the record/remote
+/// size-cap pattern plus a slow-drip bound. Regular files complete at once;
+/// a FUSE or special file that drips slowly as a regular file would otherwise
+/// rely only on the outer command timeout. Would-block is a fail-closed
+/// error, never a retry, so a FIFO that slips past the type check cannot spin.
+fn read_bounded(file: &mut File, limit: usize, what: &'static str) -> Result<Vec<u8>> {
+    const CHUNK: usize = 8192;
+    // Defense in depth: the outer command timeout remains the ultimate bound.
+    // This 30-second read budget only keeps a dripping fixture/env file from
+    // stalling the child past its own argv lifetime.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut bytes = Vec::new();
+    let mut chunk = vec![0u8; CHUNK];
+    loop {
+        if Instant::now() > deadline {
+            bail!("{what} read timed out");
+        }
+        if bytes.len() > limit {
+            break;
+        }
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                bytes.extend_from_slice(&chunk[..n]);
+                if bytes.len() > limit {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                bail!("{what} would block");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error).context(what),
+        }
+    }
+    if bytes.len() > limit {
+        bail!("{what} exceeds size limit");
+    }
+    Ok(bytes)
+}
+
 fn read_fixture(path: &str, expected: &Value, limit: usize) -> Result<Value> {
     let mut file = open_regular_no_follow(path)?;
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take((limit.saturating_mul(4).saturating_add(4096)) as u64)
-        .read_to_end(&mut bytes)
-        .context("reading fixture")?;
-    if bytes.len() > limit.saturating_mul(4).saturating_add(4096) {
+    let cap = limit.saturating_mul(4).saturating_add(4096);
+    let bytes = read_bounded(&mut file, cap, "reading fixture").context("reading fixture")?;
+    if bytes.len() > cap {
         bail!("fixture exceeds size limit");
     }
     let fixture = parse_unique_json(&bytes).context("parsing fixture")?;
@@ -1206,13 +1281,16 @@ fn select_credential(
 fn parse_env_file(path: &str, wanted: &[&str]) -> Result<BTreeMap<String, String>> {
     // Credentials demand the bearer-file checks (owner, private mode, no
     // reparse point): a group-readable or linked file fails closed here.
+    // Ancestor swaps between parent authorization and this open remain
+    // unpinned; see `open_regular_no_follow` and `docs/models.md`.
     let mut file = crate::security::open_private_file(std::path::Path::new(path))
         .context("opening explicit environment file")?;
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take((MAX_ENV_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .context("reading explicit environment file")?;
+    let bytes = read_bounded(
+        &mut file,
+        MAX_ENV_FILE_BYTES,
+        "reading explicit environment file",
+    )
+    .context("reading explicit environment file")?;
     if bytes.len() > MAX_ENV_FILE_BYTES {
         bail!("environment file exceeds size limit");
     }
@@ -2455,8 +2533,7 @@ mod unit_tests {
     fn fixture_fifo_is_rejected_without_waiting_for_a_writer() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("fixture.json");
-        let raw =
-            std::ffi::CString::new(path.to_str().expect("fixture path is UTF-8")).unwrap();
+        let raw = std::ffi::CString::new(path.to_str().expect("fixture path is UTF-8")).unwrap();
         // SAFETY: raw is a NUL-terminated path with no interior NUL; mkfifo
         // takes a path and a mode.
         assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
@@ -2640,8 +2717,7 @@ mod credential_policy_tests {
         let path = directory.path().join("group.env");
         std::fs::write(&path, "OPENAI_API_KEY=group-key\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
-        let error =
-            parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap_err();
+        let error = parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap_err();
         assert!(
             format!("{error:#}").contains("opening explicit environment file"),
             "unexpected error: {error:#}"
@@ -2673,7 +2749,10 @@ mod credential_policy_tests {
         std::fs::write(&path, "OPENAI_API_KEY=file-key\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let values = parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap();
-        assert_eq!(values.get("OPENAI_API_KEY").map(String::as_str), Some("file-key"));
+        assert_eq!(
+            values.get("OPENAI_API_KEY").map(String::as_str),
+            Some("file-key")
+        );
     }
 
     #[test]

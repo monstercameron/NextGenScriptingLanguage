@@ -8,10 +8,14 @@ The checkpoint journal is versioned, and `execute checkpoint status DIR [--json]
 reads it without taking the lock or running anything. Version 1 is the legacy
 format; version 2 kept completed nodes inline in `journal.json`; version 3 moved them to the
 append-only `completed.jsonl` log, so a persist no longer rewrites every earlier
-node; version 4 added `elements.jsonl`; **version 5** is the current version and
-adds the `graph` mode for [finite graphs](../graph.md#checkpoints), with its own
-`graph.jsonl`. A build reads and migrates older journals. A journal written by a
-newer build is refused by an older one. Program and graph journals refuse each other.
+node; version 4 added `elements.jsonl`; version 5 added the `graph` mode for
+[finite graphs](../graph.md#checkpoints), with its own `graph.jsonl`; **version 6**
+is the current version and marks the in-flight node's element kind (`for_each`
+or `parallel_for_each`) so `resolve` and resume scope element decisions without
+the program. A build reads program journals 1 through 6 (graph journals 5 and 6,
+whose bodies are identical); a missing marker is a pre-marking journal and
+fails closed where the kind matters. A journal written by a newer build is
+refused by an older one. Program and graph journals refuse each other.
 
 Input digests recorded for resume are a keyed HMAC under a per-user key,
 so a low-entropy input cannot be guessed from a journal. A journal written before the
@@ -29,15 +33,24 @@ complete; choose a separate directory for each execution.
 `execute checkpoint resolve` appends one JSON object per line to the append-only
 `resolutions.jsonl` beside the journal (version 1 records; unknown versions are
 refused). A record carries the node step id, an optional 0-based element index, the
-`committed` or `retry` decision, the reason, the actor name, Unix time, and, for
+`committed` or `retry` decision, the reason, the actor identity, Unix time, and, for
 `committed` only, the hex-encoded output, the bindings, and the element fingerprint
-captured from the element log's begin record. Reads are line-bounded; a torn final
-line refuses every resume and status until the operator removes it, and a duplicate
-node/element key does the same, so concurrent resolves for one item fail closed.
-Files are created 0600 and the log is fsynced on append. Status reports only the
+captured from the element log's begin record. The actor is `uid:<euid>` with the
+claimed login name as display-only text on Unix, so a spoofed `USER` cannot
+impersonate another user; older bare-name records still read. Resolve holds the
+checkpoint's exclusive lock across validation and append, so concurrent resolves
+for one item fail closed (one records, the other is refused as locked or
+duplicate) instead of both appending. Reads are line-bounded; a torn final line
+refuses every resume and status until the operator removes it, and a duplicate
+node/element key does the same. Element nodes take only per-element records; a
+node-level record authorizes nothing there. Parallel (`parallel for each`)
+elements resolve as `retry` only; `committed` is refused at resolve and at resume
+because the record cannot reproduce their value, stderr and outcome. Files are
+created 0600 and the log is fsynced on append. Status reports only the
 who/when/why view; output, bindings and fingerprints stay in the checkpoint as
 resume evidence. Run records (`show-run`) carry no checkpoint pointer and never
-reference this log.
+reference this log; there is no revoke tool, so refused records require manual
+line removal.
 
 The runtime rejects symlinks at the requested checkpoint
 and blob directory leaves, including a trailing `/` or `/.` on the requested

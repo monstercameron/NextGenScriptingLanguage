@@ -245,16 +245,18 @@ fn validate_record(record: &ResolutionRecord, max_output_bytes: usize) -> Result
     Ok(())
 }
 
-/// Append one validated resolution. The caller must hold no run lock; this
-/// function refuses when the checkpoint is locked by a running process.
-/// Concurrent resolves are serialized by this check only in the fail-closed
-/// sense: two resolves for the same node both pass validation, both append,
-/// and the log then refuses every resume with a duplicate record until the
-/// operator removes one. Resolve one item at a time.
-pub(crate) fn append_resolution(directory: &Path, record: &ResolutionRecord) -> Result<()> {
-    if crate::runtime::checkpoint::directory_lock_held(directory)? {
-        bail!("checkpoint is locked by a running process; stop it before resolving");
-    }
+/// Append one validated resolution while holding the checkpoint's exclusive
+/// lock. The `lock` guard proves the caller holds it across validation and
+/// append, so two concurrent resolves cannot both pass validation and append:
+/// the second either fails fast with `locked` while the first holds the lock
+/// or sees the first's record and is refused as a duplicate. A torn or
+/// duplicate log refuses every resume and status until the operator removes
+/// the damaged line; there is no revoke tool, so resolve one item at a time.
+pub(crate) fn append_resolution_locked(
+    directory: &Path,
+    record: &ResolutionRecord,
+    _lock: &crate::runtime::checkpoint::ResolveLock,
+) -> Result<()> {
     let existing = read_resolutions(directory, usize::MAX)?;
     if existing.len() >= MAX_RESOLUTIONS {
         bail!("checkpoint has too many resolutions");
@@ -289,6 +291,15 @@ pub(crate) fn append_resolution(directory: &Path, record: &ResolutionRecord) -> 
     Ok(())
 }
 
+/// Append one validated resolution, acquiring the checkpoint's exclusive lock
+/// for the read-check-append. Fails closed when a run or another resolve
+/// holds the lock. Callers that already hold the lock across wider validation
+/// (the `resolve` command) use `append_resolution_locked` instead.
+pub(crate) fn append_resolution(directory: &Path, record: &ResolutionRecord) -> Result<()> {
+    let lock = crate::runtime::checkpoint::acquire_resolve_lock(directory)?;
+    append_resolution_locked(directory, record, &lock)
+}
+
 /// Find the resolution for one node-level uncertain item.
 pub(crate) fn node_resolution<'a>(
     resolutions: &'a [ResolutionRecord],
@@ -310,17 +321,45 @@ pub(crate) fn element_resolution<'a>(
     })
 }
 
-/// Current operator name for a new resolution record.
+/// Current operator identity for a new resolution record. The id is never
+/// taken from the environment alone: on Unix it is the effective uid, which
+/// the process cannot spoof, with the claimed login name (if any) kept as
+/// display-only text in parentheses. Readers must treat the `uid:` prefix as
+/// authoritative and the parenthesized name as a hint. Older records holding
+/// a bare name still read; they are not re-trusted.
 pub(crate) fn current_actor() -> String {
-    for key in ["USER", "USERNAME", "LOGNAME"] {
-        if let Ok(name) = std::env::var(key) {
-            let name = name.trim().to_owned();
-            if !name.is_empty() {
-                return name.chars().take(128).collect();
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid takes no arguments, reads no memory, and cannot fail.
+        let uid = unsafe { libc::geteuid() };
+        let mut claimed = String::new();
+        for key in ["USER", "LOGNAME", "USERNAME"] {
+            if let Ok(name) = std::env::var(key) {
+                let name = name.trim().to_owned();
+                if !name.is_empty() {
+                    claimed = name.chars().take(64).collect();
+                    break;
+                }
             }
         }
+        if claimed.is_empty() {
+            format!("uid:{uid}")
+        } else {
+            format!("uid:{uid}({claimed})")
+        }
     }
-    "operator".to_owned()
+    #[cfg(not(unix))]
+    {
+        for key in ["USER", "USERNAME", "LOGNAME"] {
+            if let Ok(name) = std::env::var(key) {
+                let name = name.trim().to_owned();
+                if !name.is_empty() {
+                    return name.chars().take(128).collect();
+                }
+            }
+        }
+        "operator".to_owned()
+    }
 }
 
 /// Current Unix time in seconds for a new resolution record.
@@ -474,5 +513,76 @@ mod tests {
         assert_eq!(value, Value::String("hello".to_owned()));
         let (_, value) = parse_binding("count=3").unwrap();
         assert_eq!(value, Value::Integer(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn actor_identity_is_uid_based() {
+        let actor = current_actor();
+        assert!(
+            actor.starts_with("uid:"),
+            "actor must carry the effective uid, got {actor:?}"
+        );
+        assert!(actor.len() <= MAX_ID_BYTES);
+    }
+
+    #[test]
+    fn torn_final_line_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join(RESOLUTIONS_LOG),
+            b"{\"version\":1}\nnot-json-without-newline",
+        )
+        .unwrap();
+        let error = read_resolutions(directory.path(), 1024 * 1024).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("incomplete") || message.contains("malformed"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn committed_output_and_bindings_round_trip() {
+        let mut committed = record("node:1", None, ResolutionDecision::Committed);
+        committed.output = Some(hex_encode(b"AB"));
+        committed.bindings = Some(BTreeMap::from([(
+            "count".to_owned(),
+            Value::Integer(3),
+        )]));
+        validate_record(&committed, 1024).unwrap();
+        assert_eq!(committed.output_bytes(1024).unwrap(), b"AB");
+        let bindings = committed.bindings_map(1024).unwrap();
+        assert_eq!(bindings.get("count"), Some(&Value::Integer(3)));
+    }
+
+    #[test]
+    fn concurrent_duplicate_appends_fail_closed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let first = record("step:abc#1", Some(0), ResolutionDecision::Retry);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let path = path.clone();
+            let record = first.clone();
+            handles.push(std::thread::spawn(move || append_resolution(&path, &record)));
+        }
+        let mut ok = 0;
+        for handle in handles {
+            let result = handle.join().expect("resolve thread joins");
+            match result {
+                Ok(()) => ok += 1,
+                Err(error) => {
+                    let message = error.to_string();
+                    assert!(
+                        message.contains("already recorded") || message.contains("locked"),
+                        "unexpected concurrent error: {message}"
+                    );
+                }
+            }
+        }
+        assert_eq!(ok, 1, "exactly one concurrent resolve records");
+        let kept = read_resolutions(&path, 1024 * 1024).unwrap();
+        assert_eq!(kept.len(), 1);
     }
 }

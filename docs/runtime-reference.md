@@ -772,14 +772,17 @@ back to plain text. `retry` authorizes one node or element to run again and carr
 no output or bindings. Element indices (`--element N`) are 0-based, matching the
 `for each element N` refusal messages. A committed element must have begun, so its
 begin fingerprint can be captured and resume refuses a changed list entry; a retry
-may also name a later element that has not begun yet, authorizing its run. A
-node-level `retry` also authorizes every pending element of that node; a node-level
-`committed` is refused for `for each` nodes, which resolve per element. Every
-refusal fails closed: unknown or settled targets, locked checkpoints, graph journals,
-step-id mismatches, certain elements, duplicate records, and a torn resolutions log
-are all refused without running anything. Two concurrent resolves for the same item
-both append and the log then refuses every resume as duplicated until the operator
-removes one, so resolve one item at a time.
+may also name a later element that has not begun yet, authorizing its run.
+Element nodes take only per-element records; a node-level record authorizes
+nothing there. Parallel (`parallel for each`) elements resolve as `retry` only:
+`committed` is refused at resolve and at resume because it cannot reproduce
+their value, stderr and outcome. Every refusal fails closed: unknown or settled
+targets, locked checkpoints, graph journals, step-id mismatches, certain
+elements, duplicate records, and a torn resolutions log are all refused without
+running anything. Resolve holds the checkpoint lock across validation and
+append, so two concurrent resolves for the same item fail closed (one records,
+the other is refused as locked or duplicate) instead of both appending; there
+is no revoke tool, so resolve one item at a time.
 
 `checkpoint status --json` reports each recorded decision under `resolutions` (who,
 when and why; output, bindings and fingerprints stay in the checkpoint as resume
@@ -813,13 +816,14 @@ committed ones. Entries appended to the list after the committed ones run normal
 - An element that is not [retry-safe](language.md#retry-safety) writes a durable `begin` record
   first. If the run died inside such an element, only that element is uncertain, and
   `--retry-uncertain` reruns it. The rest of the loop is not retried.
-- A per-element `checkpoint resolve` decision covers one element: `committed`
-  supplies the output and bindings resume replays, `retry` authorizes that element
-  to run again. On the next resume a committed element is stored as that element's
-  commit, so repeating the resume never reruns it; a committed record past the
-  skipped prefix is refused instead of silently re-running an operator-verified
-  effect. Parallel committed elements replay as certain successes with empty
-  stderr and no value, so value-producing parallel groups should use `retry`.
+- A per-element `checkpoint resolve` decision covers one element: sequential
+  `committed` supplies the output and bindings resume replays, `retry`
+  authorizes that element to run again. On the next resume a committed element
+  is stored as that element's commit, so repeating the resume never reruns it;
+  a committed record past the skipped prefix is refused instead of silently
+  re-running an operator-verified effect. Parallel (`parallel for each`)
+  elements resolve as `retry` only; a `committed` record for one is refused at
+  resolve and at resume.
 - Nested loops, `repeat` and `while` keep whole-node behavior.
 
 ### Journal versions

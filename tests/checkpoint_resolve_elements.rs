@@ -207,15 +207,24 @@ fn killed_loop_resolves_committed_then_retry_and_names_the_next_element() {
         !committed_future_element.status.success(),
         "a committed decision for an element that has not begun carries no fingerprint"
     );
-    let element_on_plain_node = resolve(
+    let node_level_on_element_node = resolve(
         directory.path(),
         &checkpoint,
         &["--node", &step_id, "--as", "retry"],
     );
-    assert!(element_on_plain_node.status.success());
-    // A node-level retry authorizes the whole node; remove it again so the
-    // per-element flow below is what resume honors. The resolutions log is
-    // append-only, so this test uses a second checkpoint for the main flow.
+    assert!(
+        !node_level_on_element_node.status.success(),
+        "element nodes take only per-element records"
+    );
+    assert!(
+        String::from_utf8_lossy(&node_level_on_element_node.stderr)
+            .contains("not valid for for-each"),
+        "stderr: {}",
+        String::from_utf8_lossy(&node_level_on_element_node.stderr)
+    );
+    // The resolutions log is append-only and the negatives above recorded
+    // nothing, but this test uses a second checkpoint for the main flow so a
+    // regression in the negatives cannot pollute the committed/retry path.
     let directory = tempfile::tempdir().unwrap();
     setup_three_element_loop(directory.path());
     let checkpoint = directory.path().join("ck");
@@ -334,4 +343,129 @@ fn killed_loop_resolves_committed_then_retry_and_names_the_next_element() {
         String::from_utf8_lossy(&finished.stderr)
     );
     assert_eq!(log_lines(directory.path()), vec!["B", "C"]);
+
+    // Committed output and bindings are stored in the resolutions log as hex
+    // and JSON so resume replays exactly what the operator verified.
+    let log = fs::read_to_string(checkpoint.join("resolutions.jsonl")).unwrap();
+    let committed_line = log
+        .lines()
+        .find(|line| line.contains("\"element\":0") && line.contains("\"committed\""))
+        .expect("committed element 0 is recorded");
+    let stored: Value = serde_json::from_str(committed_line).unwrap();
+    let hex = stored["output"].as_str().expect("committed carries output");
+    assert_eq!(hex, "56455249464945440a", "VERIFIED\\n hex-encodes");
+    assert!(
+        stored["fingerprint"].as_str().is_some_and(|value| !value.is_empty()),
+        "committed elements carry the begin fingerprint"
+    );
+    assert!(
+        stored["actor"].as_str().is_some_and(|value| !value.is_empty()),
+        "resolutions record who decided"
+    );
+}
+
+/// A crafted parallel checkpoint refuses `committed`: the record cannot
+/// reproduce a parallel result's value, stderr and outcome, so only `retry`
+/// is valid there. The journal below is the smallest `resolve` accepts: a
+/// real directory, a journal with an in-flight parallel node, and no element
+/// log needed because the kind marker decides.
+#[test]
+fn parallel_elements_refuse_committed() {
+    let directory = tempfile::tempdir().unwrap();
+    let checkpoint = directory.path().join("ck");
+    fs::create_dir_all(&checkpoint).unwrap();
+    let journal = serde_json::json!({
+        "checksum": "x",
+        "data": {
+            "kind": "finite",
+            "identity": { "mode": "finite" },
+            "status": "failed",
+            "completed": [],
+            "in_flight": {
+                "line": 1,
+                "start": 0,
+                "end": 1,
+                "retry_safe": false,
+                "step_id": "step:parallel#1",
+                "element_kind": "parallel_for_each",
+            },
+            "error": "boom",
+        }
+    });
+    fs::write(
+        checkpoint.join("journal.json"),
+        serde_json::to_vec(&journal).unwrap(),
+    )
+    .unwrap();
+    fs::write(directory.path().join("out.bin"), "X").unwrap();
+    let step_id = "step:parallel#1";
+    let refused = resolve(
+        directory.path(),
+        &checkpoint,
+        &[
+            "--node",
+            step_id,
+            "--element",
+            "0",
+            "--as",
+            "committed",
+            "--output",
+            "out.bin",
+            "--accept-empty-bindings",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("parallel"),
+        "stderr: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    // Retry on the same parallel element passes validation (no begun element
+    // to authorize yet, so it records a future retry).
+    let retry = resolve(
+        directory.path(),
+        &checkpoint,
+        &["--node", step_id, "--element", "0", "--as", "retry"],
+    );
+    assert!(
+        retry.status.success(),
+        "parallel retry failed: {}",
+        String::from_utf8_lossy(&retry.stderr)
+    );
+}
+
+/// A torn resolutions log fails closed: both `resolve` and `status` refuse
+/// instead of deciding against a partial view.
+#[test]
+fn torn_resolutions_log_refuses_resolve_and_status() {
+    let directory = tempfile::tempdir().unwrap();
+    setup_three_element_loop(directory.path());
+    let checkpoint = directory.path().join("ck");
+    kill_during_first_element(directory.path(), "ck");
+    let summary = status_json(directory.path(), &checkpoint);
+    let step_id = summary["journal"]["in_flight"]["step_id"]
+        .as_str()
+        .expect("status reports the in-flight step id")
+        .to_owned();
+    fs::write(
+        checkpoint.join("resolutions.jsonl"),
+        b"{\"version\":1}\nnot-json-without-newline",
+    )
+    .unwrap();
+    // Status itself must fail on the torn log rather than report zero
+    // resolutions; run it directly to observe the refusal.
+    let text = checkpoint.to_string_lossy().into_owned();
+    let status = run(directory.path(), &["checkpoint", "status", &text, "--json"]);
+    assert!(!status.status.success());
+    assert!(
+        String::from_utf8_lossy(&status.stderr).contains("incomplete")
+            || String::from_utf8_lossy(&status.stdout).is_empty(),
+        "torn log must not read as empty"
+    );
+    let refused = resolve(
+        directory.path(),
+        &checkpoint,
+        &["--node", &step_id, "--element", "0", "--as", "retry"],
+    );
+    assert!(!refused.status.success());
 }

@@ -175,6 +175,7 @@ mod lane_v3_tests {
                 cwd_before: &cwd,
                 retry_safe: true,
                 step_id: None,
+                element_kind: None,
             })
             .unwrap();
         open_elements(&mut journal);
@@ -571,6 +572,9 @@ fn verify_commits(
 /// An element that may have started without committing blocks resume unless the
 /// operator explicitly allowed retrying uncertain work, either in bulk with
 /// `--retry-uncertain` or per element with a `checkpoint resolve` record (#536).
+/// A node-level record never covers an element node: each uncertain element
+/// needs its own record. A torn or duplicate resolutions log is reported as
+/// corrupt, never as a missing override.
 fn check_pending(journal: &Journal, pending: &[PendingElement]) -> Result<()> {
     if journal.retry_uncertain {
         return Ok(());
@@ -582,22 +586,10 @@ fn check_pending(journal: &Journal, pending: &[PendingElement]) -> Result<()> {
         .and_then(|node| node.step_id.clone());
     let resolutions = match &step_id {
         Some(_) => {
-            super::resolutions::read_resolutions(&journal.directory, journal.max_output_bytes)
-                .unwrap_or_default()
+            super::resolutions::read_resolutions(&journal.directory, journal.max_output_bytes)?
         }
         None => Vec::new(),
     };
-    let node_retry = match &step_id {
-        Some(id) => resolutions.iter().any(|record| {
-            record.node == *id
-                && record.element.is_none()
-                && record.decision == super::resolutions::ResolutionDecision::Retry
-        }),
-        None => false,
-    };
-    if node_retry {
-        return Ok(());
-    }
     for element in pending.iter().filter(|element| element.uncertain) {
         let allowed = match &step_id {
             Some(id) => {
@@ -615,9 +607,9 @@ fn check_pending(journal: &Journal, pending: &[PendingElement]) -> Result<()> {
     Ok(())
 }
 
-/// Whether one uncertain element may start during a resumed run: bulk retry,
-/// a node-level retry record, or its own per-element record (#536). Fresh runs
-/// never need the flag.
+/// Whether one uncertain element may start during a resumed run: bulk retry or
+/// its own per-element record (#536). A node-level record never covers an
+/// element node. Fresh runs never need the flag.
 fn element_may_start(
     journal: &Journal,
     resolutions: &[super::resolutions::ResolutionRecord],
@@ -630,13 +622,6 @@ fn element_may_start(
     let Some(id) = step_id else {
         return false;
     };
-    if resolutions.iter().any(|record| {
-        record.node == id
-            && record.element.is_none()
-            && record.decision == super::resolutions::ResolutionDecision::Retry
-    }) {
-        return true;
-    }
     super::resolutions::element_resolution(resolutions, id, index).is_some()
 }
 
@@ -889,52 +874,24 @@ pub(in crate::runtime) fn group_journal<'a>(
                 .context("checkpoint element log has no result for a parallel element")?;
             skip.insert(commit.index, outcome);
         }
-        // Pending parallel elements marked `committed` are skipped with the
-        // operator-supplied output. The synthesized result is a certain
-        // success with empty stderr and no value; value-producing groups
-        // should use `retry` instead (#536).
+        // A `committed` record for a parallel element is refused, never
+        // synthesized. A parallel result carries a value, stderr and outcome
+        // the resolution cannot faithfully reproduce (the old code invented a
+        // certain success with empty stderr and no value and dropped bindings
+        // after only a size check), so honoring it would silently change what
+        // later nodes read. Resolve parallel elements as `retry`.
         if let Some(id) = step_id.as_deref() {
-            for pending in replay.pending {
-                let Some(record) =
+            for pending in &replay.pending {
+                if let Some(record) =
                     super::resolutions::element_resolution(&resolutions, id, pending.index)
-                else {
-                    continue;
-                };
-                if record.decision != super::resolutions::ResolutionDecision::Committed {
-                    continue;
+                {
+                    if record.decision == super::resolutions::ResolutionDecision::Committed {
+                        bail!(
+                            "parallel for each element {} has a committed resolution; parallel elements resolve as retry",
+                            pending.index
+                        );
+                    }
                 }
-                let item = items.get(pending.index).context(
-                    "checkpoint resolution names a missing parallel element",
-                )?;
-                let expected = element_fingerprint(&node_fingerprint, pending.index, item)?;
-                if record.fingerprint.as_deref() != Some(expected.as_str()) {
-                    bail!(
-                        "for each list changed at element {}; use a fresh checkpoint",
-                        pending.index
-                    );
-                }
-                let output = record.output_bytes(journal.max_output_bytes)?;
-                // Enforce the run's binding bound even though parallel
-                // outcomes do not carry bindings forward.
-                let _ = record.bindings_map(journal.max_output_bytes)?;
-                skip.insert(
-                    pending.index,
-                    ElementOutcome {
-                        output,
-                        stderr: Vec::new(),
-                        status: 0,
-                        outcome: crate::contracts::Outcome {
-                            status: 0,
-                            name: "success".to_owned(),
-                            kind: crate::contracts::OutcomeKind::Success,
-                            effect_certainty:
-                                crate::contracts::EffectCertainty::KnownResponse,
-                        },
-                        value: None,
-                        uncertain: false,
-                        launched_processes: 0,
-                    },
-                );
             }
         }
     }
@@ -1509,6 +1466,7 @@ pub(crate) fn fuzz_replay_element_log(scratch: &Path, bytes: &[u8]) -> Result<()
         cwd_before: &cwd,
         retry_safe: true,
         step_id: None,
+        element_kind: None,
     })?;
     fs::write(options.directory.join(ELEMENT_LOG), bytes)?;
     journal.load_elements()

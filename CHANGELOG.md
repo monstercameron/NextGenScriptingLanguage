@@ -9,13 +9,17 @@ original version labels.
 
 - Uncertain nodes and `for each` elements can now be resolved per item.
   `execute checkpoint resolve DIR --node STEP_ID [--element N] --as committed|retry`
-  records one operator decision with who, when and why; `committed` replays the
-  supplied output and bindings at resume instead of rerunning the effect, `retry`
-  authorizes one item to run again without the bulk `--retry-uncertain` flag.
-  `checkpoint status --json` reports decisions under `resolutions` and
-  still-undecided items under `unresolved_uncertain`, using the same step ids and
-  0-based element indices. Run records and `show-run` have no checkpoint pointer
-  and do not show resolutions.
+  records one operator decision with who (`uid:<euid>` on Unix), when and why;
+  `committed` replays the supplied output and bindings at resume instead of
+  rerunning the effect, `retry` authorizes one item to run again without the
+  bulk `--retry-uncertain` flag. Element nodes take only per-element records;
+  parallel (`parallel for each`) elements resolve as `retry` only. Resolve holds
+  the checkpoint lock across validation and append, so concurrent resolves fail
+  closed. Journals are version 6 (in-flight element kind); versions 1-6 read,
+  graph journals 5-6 read. `checkpoint status --json` reports decisions under
+  `resolutions` and still-undecided items under `unresolved_uncertain`, using
+  the same step ids and 0-based element indices. Run records and `show-run`
+  have no checkpoint pointer and do not show resolutions.
 
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known

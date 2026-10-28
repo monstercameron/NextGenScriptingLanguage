@@ -66,6 +66,11 @@ fn status_cli(arguments: &[String]) -> Result<i32> {
 /// bulk `--retry-uncertain` flag. A committed element must have begun (its
 /// begin fingerprint is captured so resume refuses a changed list); a retry
 /// may also name a later element that has not begun yet, authorizing its run.
+/// Element nodes take only per-element records; a node-level record authorizes
+/// nothing there. Parallel (`parallel for each`) elements resolve as `retry`
+/// only: `committed` is refused because the resolution cannot reproduce their
+/// value, stderr and outcome. The checkpoint lock is held across validation
+/// and append, so concurrent resolves fail closed instead of double-recording.
 fn resolve_cli(arguments: &[String]) -> Result<i32> {
     let mut directory: Option<&str> = None;
     let mut node: Option<&str> = None;
@@ -196,9 +201,11 @@ fn resolve_uncertain(
         Ok(_) => bail!("checkpoint path must be a real directory"),
         Err(error) => return Err(error).context("reading checkpoint directory"),
     }
-    if crate::runtime::checkpoint::directory_lock_held(directory)? {
-        bail!("checkpoint is locked by a running process; stop it before resolving");
-    }
+    // Hold the checkpoint's exclusive lock across validation and append: one
+    // read-check-append runs at a time, and a resume holding the lock makes
+    // resolve fail instead of racing it. The guard is held to the end of this
+    // function.
+    let _resolve_lock = crate::runtime::checkpoint::acquire_resolve_lock(directory)?;
     let journal = read_journal_value(&directory.join("journal.json"))?;
     let data = journal
         .get("data")
@@ -233,10 +240,36 @@ fn resolve_uncertain(
         .get("identity")
         .ok_or_else(|| anyhow!("checkpoint journal has no identity"))?;
     let finite = identity.get("mode").and_then(Value::as_str) == Some("finite");
-    // Node-level records cover whole nodes, never `for each` elements; a
-    // node-level retry also authorizes every pending element of that node.
-    if element.is_none() && !retry_safe && committed && has_element_progress(directory)? {
-        bail!("node-level committed resolution is not valid for for-each nodes; resolve each element instead");
+    // Version 6 marks the in-flight node kind (`for_each` or
+    // `parallel_for_each`) so resolve can scope decisions without the program.
+    // Older journals fall back to the old element markers and the element
+    // log; a pre-marking loop killed before its first begin looks like a
+    // plain node there.
+    let element_kind = in_flight
+        .get("element_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let is_parallel = element_kind == "parallel_for_each";
+    let journal_marks_elements = !element_kind.is_empty()
+        || in_flight
+            .get("element_fingerprint")
+            .is_some_and(|value| !value.is_null())
+        || in_flight
+            .get("element_start")
+            .is_some_and(|value| !value.is_null());
+    let is_element_node =
+        journal_marks_elements || has_element_progress(directory)? || !pending.is_empty();
+    // Node-level records cover whole nodes, never `for each` elements. Each
+    // uncertain element needs its own record; a node-level record authorizes
+    // nothing on an element node however broad its wording.
+    if element.is_none() && is_element_node {
+        bail!("node-level resolutions are not valid for for-each nodes; resolve each element instead");
+    }
+    // A parallel result carries a value, stderr and outcome the resolution
+    // cannot faithfully reproduce, so `committed` is refused for parallel
+    // groups even per element. Resolve parallel elements as `retry`.
+    if committed && is_parallel {
+        bail!("parallel for each elements cannot resolve as committed; use retry");
     }
     if element.is_none() && retry_safe && pending_uncertain == 0 {
         bail!("node {node:?} is not uncertain and has no uncertain elements; nothing to resolve");
@@ -247,13 +280,8 @@ fn resolve_uncertain(
     // Per-element records name entries of a `for each` element log. Refuse them
     // for plain nodes, where a stray element index must not stand in for the
     // node-level decision resume enforces.
-    if element.is_some() {
-        let journal_marks_elements =
-            in_flight.get("element_fingerprint").is_some_and(|value| !value.is_null())
-                || in_flight.get("element_start").is_some_and(|value| !value.is_null());
-        if !journal_marks_elements && !has_element_progress(directory)? {
-            bail!("node {node:?} is not a for-each node; resolve it without --element");
-        }
+    if element.is_some() && !is_element_node {
+        bail!("node {node:?} is not a for-each node; resolve it without --element");
     }
     let fingerprint = match element {
         Some(wanted) => {
@@ -320,7 +348,7 @@ fn resolve_uncertain(
         },
         fingerprint,
     };
-    resolutions::append_resolution(directory, &record)?;
+    resolutions::append_resolution_locked(directory, &record, &_resolve_lock)?;
     let target = match element {
         Some(wanted) => format!("node {node:?} element {wanted}"),
         None => format!("node {node:?}"),
@@ -461,8 +489,14 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         .get("in_flight")
         .filter(|value| !value.is_null())
         .is_some_and(|node| {
-            node.get("element_fingerprint").is_some_and(|value| !value.is_null())
-                || node.get("element_start").is_some_and(|value| !value.is_null())
+            node.get("element_kind").is_some_and(|value| {
+                value.as_str().is_some_and(|kind| !kind.is_empty()) && !value.is_null()
+            }) || node
+                .get("element_fingerprint")
+                .is_some_and(|value| !value.is_null())
+                || node
+                    .get("element_start")
+                    .is_some_and(|value| !value.is_null())
         });
     let is_element_node =
         journal_marks_elements || directory.join("elements.jsonl").is_file();
@@ -481,18 +515,12 @@ pub fn summarize(directory: &Path) -> Result<Value> {
             record.get("node").and_then(Value::as_str) == Some(in_flight_step)
                 && record.get("element").is_none_or(Value::is_null)
         });
-    let node_retry_resolution = !in_flight_step.is_empty()
-        && resolutions.iter().any(|record| {
-            record.get("node").and_then(Value::as_str) == Some(in_flight_step)
-                && record.get("element").is_none_or(Value::is_null)
-                && record.get("decision").and_then(Value::as_str) == Some("retry")
-        });
+    // A node-level record never covers an element node: each uncertain
+    // element needs its own record, so unresolved elements are never hidden
+    // by a node-level retry.
     let unresolved_elements: Vec<Value> = pending_uncertain
         .iter()
         .filter(|index| {
-            if node_retry_resolution {
-                return false;
-            }
             !resolutions.iter().any(|record| {
                 record.get("node").and_then(Value::as_str) == Some(in_flight_step)
                     && record.get("element").and_then(Value::as_u64) == Some(**index)

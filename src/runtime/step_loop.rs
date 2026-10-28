@@ -618,6 +618,19 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 .as_ref()
                 .and_then(|ids| ids.get(index))
                 .cloned();
+            // Mark element nodes by kind so resolve and resume can scope
+            // decisions without the program: sequential loops replay committed
+            // output and bindings per element, parallel groups do not.
+            let element_kind = if tracks_elements {
+                match &step.kind {
+                    StepKind::TaskGroup { each: Some(_), .. } => {
+                        Some(checkpoint::ElementNodeKind::ParallelForEach)
+                    }
+                    _ => Some(checkpoint::ElementNodeKind::ForEach),
+                }
+            } else {
+                None
+            };
             journal.begin_node_record(checkpoint::NodeBegin {
                 fingerprint: &fingerprint,
                 start: index,
@@ -626,6 +639,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 cwd_before: &cwd,
                 retry_safe: tracks_elements || resume::retry_safe(program, index, end, registry)?,
                 step_id,
+                element_kind,
             })?;
         }
         let mut jump_to = None;

@@ -369,18 +369,22 @@ execute checkpoint resolve CKPT --node STEP_ID --element 1 --as retry \
 `committed` replays the supplied output (and bindings later nodes read) at resume
 instead of rerunning the effect; `retry` authorizes one node or element to run again
 without the bulk `--retry-uncertain` flag. Element indices are 0-based, matching the
-`for each element N` diagnostics. `checkpoint status --json` lists recorded decisions
-under `resolutions` and still-undecided items under `unresolved_uncertain`. A committed
-element is stored as that element's commit on the next resume, so repeating the resume
-never reruns it. Run records (`show-run`) do not carry a checkpoint pointer, so they
-do not display resolutions; read the checkpoint status for the recorded decisions.
+`for each element N` diagnostics. Element nodes take only per-element records, and
+parallel (`parallel for each`) elements resolve as `retry` only. `checkpoint status
+--json` lists recorded decisions under `resolutions` and still-undecided items under
+`unresolved_uncertain`. A committed element is stored as that element's commit on the
+next resume, so repeating the resume never reruns it. Run records (`show-run`) do not
+carry a checkpoint pointer, so they do not display resolutions; read the checkpoint
+status for the recorded decisions.
 
 Checkpoints do not make external effects transactional. An interrupted command
 with an uncertain outcome requires an explicit decision per uncertain item: a
 resolution, or `--retry-uncertain` for the whole run; completed nodes
 cannot be rewritten in place. Resolutions never authorize two runs of one effect:
-recording the same node or element twice is refused, and a torn resolutions log
-refuses every resume until the operator removes the damaged line. See [recovery contracts](runtime-reference.md#recover-after-a-failure),
+recording the same node or element twice is refused, concurrent resolves hold the
+checkpoint lock so one records and the other is refused as locked or duplicate,
+and a torn resolutions log refuses every resume until the operator removes the
+damaged line. See [recovery contracts](runtime-reference.md#recover-after-a-failure),
 [per-element checkpoints](runtime-reference.md#per-element-checkpoints) and
 [retry safety](language.md#retry-safety).
 

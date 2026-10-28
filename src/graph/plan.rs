@@ -1522,6 +1522,23 @@ impl GraphPlan {
         Ok(manifest.builtin.is_some() || manifest.cacheable_with_read_only_effects())
     }
 
+    /// Whether any node runs indefinitely (timer, listener, native stream,
+    /// program service, or renderer). Such graphs are long-lived services:
+    /// their terminal events should stream as they arrive instead of being
+    /// collected into one closing document.
+    pub fn has_persistent_nodes(&self) -> bool {
+        self.nodes.iter().any(|node| {
+            matches!(
+                &node.kind,
+                GraphNodeKind::ProgramService { .. }
+                    | GraphNodeKind::Timer { .. }
+                    | GraphNodeKind::Listener { .. }
+                    | GraphNodeKind::NativeStream { .. }
+                    | GraphNodeKind::Renderer { .. }
+            )
+        })
+    }
+
     pub fn output_terminals(&self) -> Vec<PortRef> {
         let bound = self
             .edges

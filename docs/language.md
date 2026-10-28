@@ -668,7 +668,9 @@ A top-level `on interrupt` block runs when an interrupt starts a drain. The
 first interrupt (SIGINT, SIGTERM, SIGQUIT or SIGHUP on Unix; Ctrl-C on Windows)
 stops admitting new work: a running command or `parallel for each` element
 finishes, the next statement boundary unwinds through the cleanup blocks, and
-the run ends with status 130 unless the interrupt's own status applies. A
+the run ends with status 128 plus the interrupting signal (130 for SIGINT,
+143 for SIGTERM, 129 for SIGHUP, 131 for SIGQUIT). A drain that ends with no
+recorded signal reports 130. A
 second interrupt cancels as before: running children are stopped and the
 `on interrupt` body is skipped. A `parallel for each` that is drained reports
 the elements it did not start as `not_started`; a `parallel` task group with

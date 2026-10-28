@@ -722,6 +722,7 @@ impl PtyDrain {
         let flags = unsafe { libc::fcntl(reader, libc::F_GETFL) };
         assert!(flags >= 0, "pty drain fcntl failed");
         assert_eq!(
+            // SAFETY: reader is the live duplicated descriptor and flags came from F_GETFL.
             unsafe { libc::fcntl(reader, libc::F_SETFL, flags | libc::O_NONBLOCK) },
             0,
             "pty drain nonblocking setup failed"
@@ -882,9 +883,9 @@ fn externally_reaped_child_surfaces_gone_without_burning_the_reap_budget() {
     // Reap the child behind the handle's back with a raw blocking waitpid,
     // exactly like an automatic reap: std never saw the exit, so the handle's
     // next `try_wait` reports ECHILD.
+    let mut status = 0;
     // SAFETY: pid is the live child this test spawned; the blocking wait
     // reaps it once and no other thread waits on it.
-    let mut status = 0;
     let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
     assert_eq!(reaped, pid, "reaping the probe child");
     assert!(watched.poll_exit().is_none());
@@ -932,9 +933,9 @@ fn gone_child_refuses_sigint_without_signalling_a_recycled_pid() {
         .unwrap();
     let pid = child.id() as libc::pid_t;
     let watched = WatchedChild::spawn(child);
+    let mut status = 0;
     // SAFETY: pid is the live child this test spawned; the blocking wait
     // reaps it once and no other thread waits on it.
-    let mut status = 0;
     let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
     assert_eq!(reaped, pid, "reaping the probe child");
     assert!(watched.poll_exit().is_none());

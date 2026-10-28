@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 fn fixture_registry() -> Registry {
     Registry::from_sources(&[serde_json::json!({
         "name": "fixture.count",
@@ -110,6 +113,9 @@ fn check_json_never_emits_a_diagnostic_without_a_published_code() {
     std::fs::write(&program, "read file\nrun \"unterminated\n").unwrap();
     let policy = work.path().join("policy.json");
     std::fs::write(&policy, r#"{"version":1,"applets":{}}"#).unwrap();
+    // A capability policy is a security-sensitive file: without a private ACL
+    // Windows refuses the load before any diagnostic runs.
+    private_answers::make_private(&policy);
     let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
 
     // One run with a static error, and one with a capability policy and no data-flow

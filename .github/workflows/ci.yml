@@ -78,7 +78,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           EXECUTE_REQUIRE_NAMESPACE_TESTS: "1"
-        run: cargo test --locked --test daemon_cli linux_namespace_clients_run_locally -- --nocapture
+        run: cargo test --locked --test daemon_cli linux_ -- --nocapture
   workflows:
     name: Release contracts and workflow lint
     runs-on: ubuntu-24.04

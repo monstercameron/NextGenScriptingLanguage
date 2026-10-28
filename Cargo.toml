@@ -215,6 +215,10 @@ name = "inherited_stdio_nonblocking"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "staged_helpers"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "agent_checkpoint_status"
 required-features = ["model", "agent-advisory"]
 

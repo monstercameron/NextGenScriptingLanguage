@@ -18,10 +18,17 @@ use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::thread;
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
 /// The `native-fixture` binary, built alongside the tests. Its `write` command prints
 /// its argument unchanged on every platform, which `printf` does not on Windows.
+/// Staged as a private single-link copy: the trusted-executable gate refuses the
+/// hardlinked `target/` original.
 fn native_fixture() -> String {
-    env!("CARGO_BIN_EXE_native-fixture").to_owned()
+    staged_helpers::native_fixture()
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn options(cwd: &Path) -> runtime::RunOptions {

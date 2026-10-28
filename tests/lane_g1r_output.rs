@@ -1,5 +1,8 @@
 use std::{fs, path::Path, process::Command};
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
 fn execute(
     directory: &Path,
     source: &str,
@@ -17,7 +20,9 @@ fn execute(
         manifests.join("core.text_concat.json"),
     )
     .unwrap();
-    let fixture = Path::new(env!("CARGO_BIN_EXE_native-fixture"));
+    // Staged as a private single-link copy: the trusted-executable gate refuses
+    // the hardlinked `target/` original.
+    let fixture = staged_helpers::native_fixture();
     fs::write(
         manifests.join("emit.json"),
         serde_json::json!({

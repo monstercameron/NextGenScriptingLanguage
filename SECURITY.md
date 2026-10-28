@@ -165,6 +165,20 @@ Remote endpoint authorization runs before discovery or invocation; redirects
 and environment proxies are disabled. A remote applet's bearer-file path is
 checked against that applet's own filesystem read grant.
 
+SSRF protection is fail-closed at two layers for host-managed remote applets
+and the model helper. Before any resolution or socket use, a non-public
+endpoint host (loopback, RFC1918, CGNAT including 100.100.100.200, link-local
+including 169.254.169.254, ULA, multicast, and IPv4-mapped IPv6 forms) is
+refused by name; at connect time the resolver pins the whole resolved address
+set, so a hostname that first resolves to a public address cannot rebind to a
+private one. Only an origin explicitly listed in `network_origins` preserves a
+private destination, and only for remote applets; a broad empty-list grant
+does not. The model helper accepts no origin grants (dependency #375 keeps
+model endpoints outside `network_origins`, which `Command`-backend applets
+cannot declare): its endpoints stay restricted to HTTPS, or HTTP to loopback,
+with the same guard and loopback-only allowance, so a script-controlled
+`--endpoint` cannot reach metadata or private destinations.
+
 `--execution-mode trusted|untrusted` selects native-child confinement. With no
 policy the default is `trusted`; a capability policy defaults to `untrusted`.
 Agent runners should always supply a policy and select `untrusted` explicitly.

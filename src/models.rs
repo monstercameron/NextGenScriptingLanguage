@@ -5,7 +5,9 @@
 //! kills an in-flight request with the rest of its process group.
 
 use crate::model_schema::{parse_unique_json, validate_schema_definition, DuplicateJsonKey};
+use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
+use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -220,6 +222,7 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
     let endpoint = endpoint_for(&options).map_err(|_| failure(FailureClass::Configuration))?;
     validate_endpoint(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
     let parsed = Url::parse(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    check_endpoint_ssrf(&parsed).map_err(|_| failure(FailureClass::Configuration))?;
     let transport = if options.fixture.is_some() {
         "fixture"
     } else if parsed.scheme() == "https" {
@@ -1043,6 +1046,60 @@ fn is_loopback(host: Host<&str>) -> bool {
     }
 }
 
+/// Refuse non-public endpoint hosts by name, before any credential is read
+/// or socket opened. Hostnames that look benign pass here and are pinned
+/// again by the resolver in [`post_json`], which stops DNS rebinding.
+///
+/// Model endpoints have no `network_origins` grant yet (see #375), so only
+/// the explicit loopback allowance applies: the HTTP form is already
+/// restricted to loopback by [`validate_endpoint`], and HTTPS loopback covers
+/// local TLS servers. Fixture mode never reaches the network and is always
+/// allowed.
+fn check_endpoint_ssrf(parsed: &Url) -> Result<()> {
+    let host = match parsed.host() {
+        Some(Host::Ipv4(address)) => address.to_string(),
+        Some(Host::Ipv6(address)) => address.to_string(),
+        Some(Host::Domain(name)) => name.to_string(),
+        None => bail!("endpoint must name a host"),
+    };
+    let origin = model_origin(parsed);
+    ssrf::check_endpoint_host(&host, &origin, true, &Default::default())
+        .map_err(|denied| anyhow!("{denied}"))
+}
+
+/// Canonical origin of a validated model endpoint for SSRF diagnostics.
+fn model_origin(parsed: &Url) -> String {
+    let host = parsed.host_str().unwrap_or_default();
+    let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
+    match parsed.port() {
+        Some(port) if port != default_port => {
+            format!("{}://{host}:{port}", parsed.scheme())
+        }
+        _ => format!("{}://{host}", parsed.scheme()),
+    }
+}
+
+/// Resolver that pins the endpoint against DNS rebinding: every resolved
+/// address must be publicly routable (loopback excepted), otherwise the whole
+/// set is refused before the transport connects.
+#[derive(Debug, Default)]
+struct SsrfSystemResolver;
+
+impl Resolver for SsrfSystemResolver {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let addrs =
+            ureq::unversioned::resolver::DefaultResolver::default().resolve(uri, config, timeout)?;
+        ssrf::check_resolved_addrs(&addrs, true, false)
+            .map_err(|_| ureq::Error::HostNotFound)?;
+        Ok(addrs)
+    }
+}
+
 /// Environment names that carry the provider's default key. They are never
 /// valid for `api_key_env`, and they reach a request only on the default host.
 const DEFAULT_CREDENTIAL_NAMES: [&str; 5] = [
@@ -1251,6 +1308,8 @@ fn post_json(
     max_bytes: usize,
 ) -> Result<Value> {
     validate_endpoint(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    let parsed = Url::parse(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    check_endpoint_ssrf(&parsed).map_err(|_| failure(FailureClass::Configuration))?;
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(timeout_ms)))
         .http_status_as_error(false)
@@ -1263,7 +1322,13 @@ fn post_json(
             .build(),
     );
     let config = config.build();
-    let agent: ureq::Agent = config.into();
+    // Pin the resolved addresses at connect time: the default resolver would
+    // use a rebinding hostname's private address as-is.
+    let agent = ureq::Agent::with_parts(
+        config,
+        ureq::unversioned::transport::DefaultConnector::new(),
+        SsrfSystemResolver,
+    );
     let request = agent
         .post(endpoint)
         .header("Accept", "application/json")

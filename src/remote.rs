@@ -11,6 +11,7 @@ use crate::contracts::{
     AppletContract, Outcome, OutcomeKind, OutputType, PortDelivery, RemoteAuthSource,
     RemoteEndpointConfig, ValueSchema,
 };
+use crate::ssrf;
 pub use crate::contracts::{EffectCertainty, RemoteError, RemoteErrorKind};
 mod transport;
 use serde::{Deserialize, Serialize};
@@ -783,6 +784,10 @@ pub struct RemoteClient {
     secret_redactor: Option<Arc<crate::security::SecretRedactor>>,
     resolver_helper: Option<Arc<PathBuf>>,
     process_observer: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    /// True only when the capability policy explicitly granted this endpoint's
+    /// origin. Preserves intentional private-destination grants; the default
+    /// denies non-public destinations even when the hostname looks benign.
+    ssrf_granted_origin: bool,
 }
 
 impl fmt::Debug for RemoteClient {
@@ -846,6 +851,7 @@ impl RemoteClient {
             secret_redactor: None,
             resolver_helper: None,
             process_observer: None,
+            ssrf_granted_origin: false,
         })
     }
 
@@ -870,6 +876,55 @@ impl RemoteClient {
         self
     }
 
+    /// Record that the capability policy explicitly granted this endpoint's
+    /// origin. Only an explicit grant preserves non-public destinations; the
+    /// default denies them at both the by-name check and the resolver.
+    pub fn with_ssrf_grant(mut self, granted: bool) -> Self {
+        self.ssrf_granted_origin = granted;
+        self
+    }
+
+    /// Refuse a non-public endpoint host by name, before any resolution or
+    /// socket use. Hostnames that merely look benign pass here and are
+    /// pinned again at the resolver, which stops DNS rebinding.
+    fn check_ssrf(&self) -> Result<(), RemoteError> {
+        let host = match self.base_url.host() {
+            Some(Host::Ipv4(address)) => address.to_string(),
+            Some(Host::Ipv6(address)) => address.to_string(),
+            Some(Host::Domain(name)) => name.to_string(),
+            None => {
+                return Err(RemoteError::new(
+                    RemoteErrorKind::InvalidConfiguration,
+                    EffectCertainty::NotStarted,
+                ));
+            }
+        };
+        let origin =
+            crate::capabilities::canonical_http_origin(&self.config.endpoint).map_err(|_| {
+                RemoteError::new(
+                    RemoteErrorKind::InvalidConfiguration,
+                    EffectCertainty::NotStarted,
+                )
+            })?;
+        let granted = if self.ssrf_granted_origin {
+            BTreeSet::from([origin.clone()])
+        } else {
+            BTreeSet::new()
+        };
+        ssrf::check_endpoint_host(
+            &host,
+            &origin,
+            self.config.allow_loopback_http_fixture,
+            &granted,
+        )
+        .map_err(|_| {
+            RemoteError::new(
+                RemoteErrorKind::InvalidConfiguration,
+                EffectCertainty::NotStarted,
+            )
+        })
+    }
+
     /// Fetch and validate one typed discovery descriptor. This is explicit;
     /// neither `new` nor a compatibility check performs network effects.
     pub fn discover(&self) -> Result<RemoteAppletDescriptor, RemoteError> {
@@ -881,6 +936,7 @@ impl RemoteClient {
         cancelled: &Arc<AtomicBool>,
     ) -> Result<RemoteAppletDescriptor, RemoteError> {
         check_cancel(cancelled, EffectCertainty::NotStarted)?;
+        self.check_ssrf()?;
         let url = self.route(DISCOVERY_PATH)?;
         let response = self.send_get(
             &url,
@@ -1045,6 +1101,7 @@ impl RemoteClient {
         cancelled: Arc<AtomicBool>,
     ) -> Result<RemoteEventStream, RemoteError> {
         descriptor.validate()?;
+        self.check_ssrf()?;
         let port = descriptor
             .events
             .iter()
@@ -1151,6 +1208,7 @@ impl RemoteClient {
     ) -> Result<RemoteResponse, RemoteError> {
         descriptor.validate()?;
         check_cancel(cancelled, EffectCertainty::NotStarted)?;
+        self.check_ssrf()?;
         if self.cached_descriptor().as_ref() != Some(descriptor) {
             return Err(RemoteError::new(
                 RemoteErrorKind::IncompatibleContract,
@@ -1262,6 +1320,8 @@ impl RemoteClient {
                 helper: self.resolver_helper.as_deref().cloned(),
                 cancelled,
                 process_observer: self.process_observer.clone(),
+                allow_loopback: self.config.allow_loopback_http_fixture,
+                granted_origin: self.ssrf_granted_origin,
             },
         )
     }
@@ -1302,6 +1362,8 @@ impl RemoteClient {
                 helper: self.resolver_helper.as_deref().cloned(),
                 cancelled: Arc::clone(cancelled),
                 process_observer: self.process_observer.clone(),
+                allow_loopback: self.config.allow_loopback_http_fixture,
+                granted_origin: self.ssrf_granted_origin,
             },
         );
         let mut request = agent.get(url.as_str()).header("Accept", accept);
@@ -2076,11 +2138,20 @@ fn map_ureq_error(
 /// DNS resolver supervised by the execute CLI process. A child is killed and
 /// reaped when the caller cancels or its total request budget expires, so DNS
 /// cannot leave a detached worker behind or block cancellation indefinitely.
+///
+/// The resolver also pins the endpoint against DNS rebinding: every resolved
+/// address is checked against the SSRF guard, and a set containing any
+/// non-public address is refused as a whole unless the endpoint's origin was
+/// explicitly granted. Hostname checks alone cannot stop rebinding, so this
+/// connect-time filter is the actual barrier; the by-name check only fails
+/// fast for literals.
 #[derive(Clone)]
 struct InterruptibleSystemResolver {
     helper: Option<PathBuf>,
     cancelled: Arc<AtomicBool>,
     process_observer: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    allow_loopback: bool,
+    granted_origin: bool,
 }
 
 impl std::fmt::Debug for InterruptibleSystemResolver {
@@ -2128,6 +2199,16 @@ impl Resolver for InterruptibleSystemResolver {
                 self.process_observer.as_deref(),
             )?;
         }
+        // Pin the resolved set before the transport connects: any blocked
+        // address refuses the whole set, which stops DNS rebinding even when
+        // the hostname looked benign at check time.
+        ssrf::check_resolved_addrs(&addrs, self.allow_loopback, self.granted_origin)
+            .map_err(|_| {
+                ureq::Error::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "blocked non-public network destination",
+                ))
+            })?;
         if addrs.is_empty() {
             Err(ureq::Error::HostNotFound)
         } else {

@@ -24,6 +24,7 @@ fn grant(capabilities: &[&str]) -> AppletGrant {
         network: false,
         network_origins: BTreeSet::new(),
         sandbox_required: false,
+        resource_limits: None,
     }
 }
 
@@ -109,6 +110,48 @@ fn policy_is_strictly_versioned_and_unknown_fields_fail_closed() {
         r#"{"version":1,"applets":{"fixture.read":{"capabilities":["network.connect"],"network":true,"network_origins":["https://user@example.test"]}}}"#
     )
     .is_err());
+}
+
+#[test]
+fn resource_limits_are_strict_optional_and_finite() {
+    // Unknown knobs fail closed.
+    assert!(CapabilityPolicy::from_json(
+        r#"{"version":1,"applets":{"a":{"capabilities":["process.exec"],"resource_limits":{"bogus":1}}}}"#
+    )
+    .is_err());
+    // Zero is not a finite bound.
+    for knob in [
+        "cpu_secs",
+        "address_space_mb",
+        "file_size_mb",
+        "max_processes",
+        "open_files",
+    ] {
+        let source = format!(
+            r#"{{"version":1,"applets":{{"a":{{"capabilities":["process.exec"],"resource_limits":{{"{knob}":0}}}}}}}}"#
+        );
+        assert!(
+            CapabilityPolicy::from_json(&source)
+                .unwrap_err()
+                .to_string()
+                .contains("must be at least 1"),
+            "{knob}"
+        );
+    }
+    // Byte-denominated bounds must fit the kernel counter.
+    assert!(
+        CapabilityPolicy::from_json(
+            r#"{"version":1,"applets":{"a":{"capabilities":["process.exec"],"resource_limits":{"address_space_mb":18446744073709551615}}}}"#
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("does not fit")
+    );
+    // Every knob accepts a finite value.
+    assert!(CapabilityPolicy::from_json(
+        r#"{"version":1,"applets":{"a":{"capabilities":["process.exec"],"resource_limits":{"cpu_secs":30,"address_space_mb":512,"file_size_mb":64,"max_processes":256,"open_files":128}}}}"#
+    )
+    .is_ok());
 }
 
 #[test]

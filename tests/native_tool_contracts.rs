@@ -199,6 +199,7 @@ fn policy_for(name: &str, capabilities: BTreeSet<String>) -> CapabilityPolicy {
                 network,
                 network_origins: BTreeSet::new(),
                 sandbox_required: false,
+                resource_limits: None,
             },
         )]),
         host: None,

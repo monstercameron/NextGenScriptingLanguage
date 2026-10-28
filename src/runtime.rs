@@ -2038,12 +2038,25 @@ fn scan_child_statuses(
                         stderr,
                     )
                 } else {
-                    execution_result::StageResult::signaled(
-                        calls[index].2,
-                        calls[index].1.name_for(calls[index].0),
-                        execution_result::exit_signal(status),
-                        stderr,
-                    )
+                    let signal = execution_result::exit_signal(status);
+                    let exhausted = signal.is_some_and(|signal| {
+                        execution_result::resource_limit_signal(signal).is_some()
+                    });
+                    if exhausted {
+                        execution_result::StageResult::resource_exhausted(
+                            calls[index].2,
+                            calls[index].1.name_for(calls[index].0),
+                            signal,
+                            stderr,
+                        )
+                    } else {
+                        execution_result::StageResult::signaled(
+                            calls[index].2,
+                            calls[index].1.name_for(calls[index].0),
+                            signal,
+                            stderr,
+                        )
+                    }
                 });
                 signals.record_job_stage_result(
                     index,
@@ -2068,14 +2081,26 @@ fn scan_child_statuses(
                 }
                 if !(implicit_success || status_kept) {
                     drain_diagnostic(managed, signals)?;
+                    let signal = execution_result::exit_signal(status);
+                    let bound = signal.and_then(execution_result::resource_limit_signal);
+                    let stderr_text = String::from_utf8_lossy(&managed.diagnostic)
+                        .trim()
+                        .to_owned();
+                    let diagnostic = match (signal, bound) {
+                        (Some(signal), Some(bound)) if stderr_text.is_empty() => format!(
+                            "exceeded the {bound} resource limit and was killed by signal {signal}"
+                        ),
+                        (Some(signal), Some(bound)) => format!(
+                            "exceeded the {bound} resource limit and was killed by signal {signal}: {stderr_text}"
+                        ),
+                        _ => stderr_text,
+                    };
                     return Err(CommandFailed {
                         line: calls[index].2,
                         operation: calls[index].1.name_for(calls[index].0).to_owned(),
                         status,
                         outcome: code.map(|code| calls[index].1.outcome_for(code)),
-                        diagnostic: String::from_utf8_lossy(&managed.diagnostic)
-                            .trim()
-                            .to_owned(),
+                        diagnostic,
                         stderr: captured_stage_stderr(calls[index].0, calls[index].1, signals)
                             .then(|| managed.diagnostic.clone()),
                         stdout: None,

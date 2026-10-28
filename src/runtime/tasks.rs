@@ -944,15 +944,27 @@ pub(super) fn run_each(
     // share one `Arc` per output variant instead of cloning the inputs per
     // element. A run with an outer deadline still builds a per-element copy
     // below so its timeout stays exact.
+    //
+    // Working directory is deliberately left non-canonical here. Each worker
+    // re-resolves it inside `invoke_call_with_context`, so a symlink swap or
+    // deletion after admission is observed per element instead of masked by a
+    // stale admission-time string (a TOCTOU/security regression a one-time
+    // canonicalization would introduce for this optimization).
+    //
+    // The capped variant is built only when a non-native element can use it;
+    // an all-native group would otherwise pay one extra input clone for an
+    // `Arc` that is never moved into a worker. This gate changes no value,
+    // only whether an unused clone happens.
+    let needs_capped = per_task_output_limit < options.max_output_bytes
+        && prepared.iter().any(|task| !task.native_command);
     let shared_options: Arc<RunOptions> = Arc::new(options.clone());
-    let shared_capped_options: Option<Arc<RunOptions>> =
-        if per_task_output_limit < options.max_output_bytes {
-            let mut capped = options.clone();
-            capped.max_output_bytes = per_task_output_limit;
-            Some(Arc::new(capped))
-        } else {
-            None
-        };
+    let shared_capped_options: Option<Arc<RunOptions>> = if needs_capped {
+        let mut capped = options.clone();
+        capped.max_output_bytes = per_task_output_limit;
+        Some(Arc::new(capped))
+    } else {
+        None
+    };
     let mut next = 0usize;
     let mut active = 0usize;
     let mut stopped: Option<(usize, String)> = None;
@@ -999,10 +1011,15 @@ pub(super) fn run_each(
             // Share the run inputs through `Arc`: without an outer deadline
             // the options are identical for every element of a backend kind,
             // so move a refcount bump of a prebuilt variant into the worker
-            // instead of copying the input map per element. Native stdout and
-            // retained stderr share the incremental group budget, so a native
-            // element can use the available budget while other backends retain
-            // their conservative per-worker cap.
+            // instead of copying the input map per element. With an outer
+            // deadline each admission snapshots its own remaining time into a
+            // per-element copy, preserving the exact admission-time timeout
+            // (`total_timeout = min(T, outer - admission_now)`); sharing the
+            // unchanged `T` and relying on the worker-start re-stamp would
+            // shift every element deadline later by its spawn delay. Native
+            // stdout and retained stderr share the incremental group budget,
+            // so a native element can use the available budget while other
+            // backends retain their conservative per-worker cap.
             let element_options: Arc<RunOptions> = if let Some(deadline) = outer_deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 let mut owned = (*shared_options).clone();
@@ -1042,7 +1059,7 @@ pub(super) fn run_each(
                             direct,
                             parameters,
                             input: Vec::new(),
-                            options: &*element_options,
+                            options: &element_options,
                         },
                         token.cancellation_flag(),
                         context,

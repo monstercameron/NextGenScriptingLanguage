@@ -380,6 +380,7 @@ fn execute_group_with_sink(
         cancel_signal: Arc::clone(&signals.cancel_signal),
         drain_stop: None,
         registrations: Vec::new(),
+        owns_signal_handlers: false,
         capture_diagnostics: signals.capture_diagnostics,
         graph_service_cancellation: signals.graph_service_cancellation,
         background_jobs_allowed: signals.background_jobs_allowed,

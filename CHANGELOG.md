@@ -21,6 +21,16 @@ original version labels.
   the same step ids and 0-based element indices. Run records and `show-run`
   have no checkpoint pointer and do not show resolutions.
 
+- `env.load` can mark loaded values secret with `secret true` or
+  `secret ["NAME", ...]`; marked values are redacted from records, traces and
+  diagnostics and refuse `--checkpoint` before effects. Checkpoint
+  documentation now states the refusal instead of HMAC storage.
+
+- On Windows, `hand over to` now runs the replacement program in a job object
+  that ends it if the interpreter process is killed, and the wait observes
+  cancellation and the workflow deadline instead of blocking unconditionally.
+  The exit code is still propagated unchanged.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

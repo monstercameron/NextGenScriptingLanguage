@@ -5419,8 +5419,7 @@ mod opt_manifest_binary_path_tests {
         let error = format!(
             "{:#}",
             binary_path_from_path(binary, &cwd, &path)
-                .err()
-                .expect("untrusted first PATH hit must fail")
+                .expect_err("untrusted first PATH hit must fail")
         );
         assert!(
             error.contains("untrusted") && error.contains(binary),

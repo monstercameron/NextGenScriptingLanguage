@@ -2654,6 +2654,42 @@ pub(super) fn authorize_checkpoint_persistence(
     Ok(())
 }
 
+/// Whether an Unknown-only static floor may defer to the per-element
+/// checkpoint gates instead of refusing up front. Loop-item references
+/// over-approximate the floor as Unknown even for Public literal lists, so
+/// that floor alone is a possible false positive. Deferral is available only
+/// when the program has a `for each`/`parallel for each` loop whose gates
+/// will compare the actual element bytes and inputs against the declared
+/// secrets registered before any element runs, and only when no Secret label
+/// contributes: a Secret floor still fails before any effect, and non-loop
+/// programs keep the upfront denial.
+pub(super) fn defer_unknown_checkpoint_denial(
+    registry: &Registry,
+    sensitivities: &crate::security::SensitivitySet,
+    has_loop: bool,
+) -> bool {
+    use crate::contracts::Sensitivity;
+    has_loop
+        && !sensitivities.contains(&Sensitivity::Secret)
+        && sensitivities.contains(&Sensitivity::Unknown)
+        && !crate::security::declared_secret_applets(registry).is_empty()
+}
+
+/// Whether any step is a `for each`/`parallel for each` loop whose elements
+/// get their own checkpoint gates.
+pub(super) fn program_has_for_each(program: &Program) -> bool {
+    program.steps.iter().any(|step| {
+        matches!(
+            &step.kind,
+            crate::ast::StepKind::TaskGroup { each: Some(_), .. }
+                | crate::ast::StepKind::Loop {
+                    kind: crate::ast::LoopKind::ForEach { .. },
+                    ..
+                }
+        )
+    })
+}
+
 const VERSIONED_CACHE_MAGIC: &[u8] = b"FLOW-CONTRACT-CACHE\0\x01";
 
 fn read_cached_output(
@@ -6443,6 +6479,7 @@ mod drain_tests {
         struct Recorder {
             begins: Vec<usize>,
             commits: Vec<usize>,
+            uncertain: Vec<usize>,
         }
         impl GroupSink for Recorder {
             fn begin(&mut self, index: usize) -> Result<()> {
@@ -6451,6 +6488,10 @@ mod drain_tests {
             }
             fn commit(&mut self, index: usize, _outcome: &ElementOutcome) -> Result<()> {
                 self.commits.push(index);
+                Ok(())
+            }
+            fn mark_uncertain(&mut self, index: usize) -> Result<()> {
+                self.uncertain.push(index);
                 Ok(())
             }
         }
@@ -6532,6 +6573,8 @@ mod drain_tests {
         let mut commits = recorder.commits.clone();
         commits.sort_unstable();
         assert_eq!(commits, vec![1, 2]);
+        // Nothing secret ran, so no post-effect refusal marked an element uncertain.
+        assert!(recorder.uncertain.is_empty());
         let value = crate::structured::to_json(&result.value).unwrap();
         let items = value["items"].as_array().unwrap();
         assert_eq!(items[0]["output_encoding"], "utf8");

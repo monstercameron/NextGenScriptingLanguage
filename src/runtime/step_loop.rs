@@ -774,12 +774,6 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                     if let Some(journal) = journal.as_deref_mut() {
                         if checkpoint::elements::for_each_element_due(journal, program, header) {
-                            // The same persistence gate as a node: an element's state reaches
-                            // the journal only if the checkpoint policy allows it.
-                            authorize_checkpoint_persistence(
-                                registry,
-                                &signals.sensitivity_floor(),
-                            )?;
                             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                                 options.max_output_bytes,
                                 signals,
@@ -788,6 +782,94 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             let mut element_bindings = bindings.clone();
                             element_bindings
                                 .insert(STDOUT_ELIGIBILITY.to_owned(), Value::Bool(program_stdout));
+                            // The static floor misses loop bodies, so a secret produced
+                            // or held inside the loop would otherwise persist raw
+                            // (hex-encoded output, cleartext binding blobs). Refuse
+                            // exactly what the reports would redact, before any
+                            // binding blob is stored. Provenance covers what no
+                            // byte check can recognize: an element holding a
+                            // sensitive binding may derive its output through an
+                            // arbitrary transform, so withhold it even with no
+                            // byte match. This only names encodings the byte
+                            // check implements (exact, base64, hex); other
+                            // transforms are withheld by provenance, not identified.
+                            //
+                            // Declared manifest secrets are static values: register
+                            // every one before checking, so a literal item
+                            // duplicating a declared secret is recognized even
+                            // when the secret-owning applet never runs in this
+                            // loop. Registration alone launches nothing. A
+                            // registration failure after the element ran is
+                            // still an uncertain effect: mark it so resume
+                            // does not silently repeat the element.
+                            {
+                                let mut seen = std::collections::BTreeSet::new();
+                                if let Err(error) = tasks::pre_register_declared_manifest_secrets(
+                                    registry, &mut seen,
+                                ) {
+                                    checkpoint::elements::for_each_element_mark_uncertain(
+                                        journal,
+                                        &loop_frames,
+                                        header,
+                                    )?;
+                                    bail!(
+                                        "line {}: could not track declared secrets before checkpoint ({error:#}); it may contain an uncertain side effect, pass --retry-uncertain to retry",
+                                        step.line
+                                    );
+                                }
+                            }
+                            {
+                                let redactor = crate::security::secret_redactor(registry);
+                                let secret_output =
+                                    redactor.redact_bytes(&bytes) != bytes.as_slice();
+                                let secret_bindings = element_bindings.values().any(|value| {
+                                    tasks::value_contains_registered_secret(&redactor, value)
+                                });
+                                let sensitive_provenance = element_bindings
+                                    .keys()
+                                    .any(|name| sensitive_bindings.contains(name));
+                                if secret_output || secret_bindings || sensitive_provenance {
+                                    // The element already ran: leave an uncertain
+                                    // marker so resume requires `--retry-uncertain`,
+                                    // and say so.
+                                    checkpoint::elements::for_each_element_mark_uncertain(
+                                        journal,
+                                        &loop_frames,
+                                        header,
+                                    )?;
+                                    bail!(
+                                        "line {}: sequential for each element with secret output cannot be checkpointed; it may contain an uncertain side effect, pass --retry-uncertain to retry",
+                                        step.line
+                                    );
+                                }
+                            }
+                            // The secret check wins so its uncertain marker and retry
+                            // flag survive; the generic floor still applies to
+                            // non-secret Unknown/Secret state before any binding
+                            // blob is stored, except under the Unknown-only
+                            // deferral, where the secret check above is the
+                            // gate. This also runs after the element, so it
+                            // marks uncertain too.
+                            if !defer_unknown_checkpoint_denial(
+                                registry,
+                                &signals.sensitivity_floor(),
+                                true,
+                            ) {
+                                if let Err(error) = authorize_checkpoint_persistence(
+                                    registry,
+                                    &signals.sensitivity_floor(),
+                                ) {
+                                    checkpoint::elements::for_each_element_mark_uncertain(
+                                        journal,
+                                        &loop_frames,
+                                        header,
+                                    )?;
+                                    bail!(
+                                        "line {}: checkpoint persistence is denied by policy ({error:#}); it may contain an uncertain side effect, pass --retry-uncertain to retry",
+                                        step.line
+                                    );
+                                }
+                            }
                             checkpoint::elements::for_each_element_commit(
                                 journal,
                                 &loop_frames,
@@ -1411,10 +1493,21 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         config,
                                         registry,
                                         bindings: &bindings,
+                                        // Provenance: withholding must cover secret-derived
+                                        // inputs even when the output transform defeats
+                                        // every byte check, so the template's own
+                                        // sensitive references count alongside the items.
                                         sensitive_items: value_references_sensitive(
                                             &each.values,
                                             &sensitive_bindings,
-                                        ),
+                                        ) || tasks.iter().any(|task| {
+                                            task.parameters.values().any(|value| {
+                                                value_references_sensitive(
+                                                    value,
+                                                    &sensitive_bindings,
+                                                )
+                                            })
+                                        }),
                                         sensitive_environment: workflow_environment_sensitive,
                                         options,
                                         cancelled: Arc::clone(&signals.cancelled),
@@ -1436,10 +1529,21 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         config,
                                         registry,
                                         bindings: &bindings,
+                                        // Provenance: withholding must cover secret-derived
+                                        // inputs even when the output transform defeats
+                                        // every byte check, so the template's own
+                                        // sensitive references count alongside the items.
                                         sensitive_items: value_references_sensitive(
                                             &each.values,
                                             &sensitive_bindings,
-                                        ),
+                                        ) || tasks.iter().any(|task| {
+                                            task.parameters.values().any(|value| {
+                                                value_references_sensitive(
+                                                    value,
+                                                    &sensitive_bindings,
+                                                )
+                                            })
+                                        }),
                                         sensitive_environment: workflow_environment_sensitive,
                                         options,
                                         cancelled: Arc::clone(&signals.cancelled),
@@ -2814,12 +2918,42 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         }) {
             journal_end = None;
             journal_uncertain = false;
-            authorize_checkpoint_persistence(registry, &signals.sensitivity_floor())?;
+            // The static floor is workflow-wide, so under the Unknown-only
+            // deferral it would refuse a node (for example the Public step
+            // before the loop) for a loop reference that has not persisted
+            // anything yet. Gate the commit on the bytes and bindings this
+            // node actually persists instead: refuse, before any blob is
+            // stored, when they carry a registered secret or a sensitive
+            // provenance name. Outside the deferral the floor still refuses
+            // before the node's output is even materialized.
+            let floor = signals.sensitivity_floor();
+            let defer_unknown =
+                defer_unknown_checkpoint_denial(registry, &floor, program_has_for_each(program));
+            if !defer_unknown {
+                authorize_checkpoint_persistence(registry, &floor)?;
+            }
             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                 options.max_output_bytes,
                 signals,
                 options.command_timeout,
             )?;
+            if defer_unknown {
+                let mut seen = std::collections::BTreeSet::new();
+                tasks::pre_register_declared_manifest_secrets(registry, &mut seen)?;
+                let redactor = crate::security::secret_redactor(registry);
+                let secret_output = redactor.redact_bytes(&bytes) != bytes.as_slice();
+                let secret_bindings = bindings
+                    .values()
+                    .any(|value| tasks::value_contains_registered_secret(&redactor, value));
+                let sensitive_provenance = bindings
+                    .keys()
+                    .any(|name| sensitive_bindings.contains(name));
+                if secret_output || secret_bindings || sensitive_provenance {
+                    bail!(
+                        "checkpoint persistence is denied by policy: node output contains a registered secret"
+                    );
+                }
+            }
             journal.complete_node_parts(
                 &cwd,
                 &bytes,

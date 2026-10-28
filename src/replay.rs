@@ -308,7 +308,7 @@ impl PrefixReplayer {
         let prefix = record
             .steps
             .iter()
-            .position(|step| crate::record::step_failed(step))
+            .position(crate::record::step_failed)
             .unwrap_or(record.steps.len());
         Ok(Self {
             record,

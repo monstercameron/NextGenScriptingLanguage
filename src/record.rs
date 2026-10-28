@@ -1476,6 +1476,7 @@ mod tests {
         for (path, byte) in [(&first, b"A"), (&second, b"B")] {
             let mut file = fs::OpenOptions::new()
                 .create(true)
+                .truncate(true)
                 .write(true)
                 .open(path)
                 .unwrap();

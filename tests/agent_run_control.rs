@@ -506,7 +506,7 @@ fn run_control_endpoint_uses_a_private_randomized_directory() {
             assert!(!metadata.file_type().is_symlink());
             assert!(metadata.is_dir());
             assert_eq!(
-                metadata.mode() & 0o777,
+                metadata.permissions().mode() & 0o777,
                 0o700,
                 "the endpoint directory is private: {parent:?}"
             );

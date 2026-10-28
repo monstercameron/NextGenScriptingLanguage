@@ -787,6 +787,39 @@ pub(crate) fn lock(file: &File) -> Result<()> {
     Ok(())
 }
 
+/// Current process user as an `S-...` SID string. The SID comes from the
+/// process token, which the process cannot spoof, so it is authoritative in
+/// the same way the effective uid is on Unix. Callers keep any `USER` name as
+/// display-only text.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn current_user_sid_text() -> Result<String> {
+    // SAFETY: GetCurrentProcess returns the current-process pseudo-handle, which is always
+    // valid and needs no closing. user_sid only queries that process's token.
+    let sid = user_sid(unsafe { GetCurrentProcess() })?;
+    let mut text = std::ptr::null_mut();
+    // SAFETY: `sid` is the valid SID copied by user_sid and is still alive during the call.
+    // On success `text` is a LocalAlloc'd, NUL-terminated string that is freed below; the
+    // failure case is the `== 0` branch.
+    if unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast(), &mut text) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("encoding user SID");
+    }
+    let mut length = 0;
+    // SAFETY: `text` is the non-null NUL-terminated string from ConvertSidToStringSidW, so
+    // every index before the terminator is inside its allocation.
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    // SAFETY: the `length` units before the terminator lie inside the string allocation, and
+    // the slice is copied into an owned String before LocalFree runs below.
+    let sid_text = String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) })?;
+    // SAFETY: `text` came from ConvertSidToStringSidW, which allocates it with LocalAlloc, so
+    // LocalFree is its matching release. It is freed once and not read afterwards.
+    unsafe {
+        LocalFree(text.cast());
+    }
+    Ok(sid_text)
+}
+
 /// One bounded reader for an inherited console, file or pipe. Shutdown cancels
 /// this exact worker; no thread is detached or allowed to fill a queue.
 pub(crate) struct Pump {

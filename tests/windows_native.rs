@@ -591,3 +591,448 @@ fn captured_stderr_flood_cannot_starve_native_deadlines() {
         "stderr monopolized the supervisor"
     );
 }
+
+#[test]
+fn redirected_stdout_preserves_invalid_utf8_bytes_exactly() {
+    let folder = tempfile::tempdir().unwrap();
+    let output = invoke(folder.path(), &native(&["invalid-utf8"]), &[]);
+    ok(&output);
+    assert_eq!(output.stdout, [0xFF, 0x41]);
+}
+
+/// Pseudo-console session whose Drop always tears down the console and stops
+/// the child, so a failed assertion can never leak a running process into
+/// later tests.
+struct ConptySession {
+    process: std::os::windows::io::OwnedHandle,
+    hpc: Option<windows_sys::Win32::System::Console::HPCON>,
+}
+
+impl Drop for ConptySession {
+    fn drop(&mut self) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::Console::ClosePseudoConsole;
+        use windows_sys::Win32::System::Threading::TerminateProcess;
+        // SAFETY: the process handle is live and owned; terminating an
+        // already-exited process fails harmlessly, and ClosePseudoConsole runs
+        // at most once via the Option take below and here.
+        unsafe {
+            TerminateProcess(self.process.as_raw_handle() as HANDLE, 1);
+            if let Some(hpc) = self.hpc.take() {
+                ClosePseudoConsole(hpc);
+            }
+        }
+    }
+}
+
+fn quote_conpty_arg(arg: &str) -> String {
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut slashes = 0usize;
+    for ch in arg.chars() {
+        if ch == '\\' {
+            slashes += 1;
+        } else {
+            if ch == '"' {
+                quoted.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
+            } else {
+                quoted.extend(std::iter::repeat_n('\\', slashes));
+            }
+            slashes = 0;
+            quoted.push(ch);
+        }
+    }
+    quoted.extend(std::iter::repeat_n('\\', slashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+/// Spawn `exe` with `args` attached to a real Windows pseudo-console, capture
+/// the terminal (VT) byte stream until the child exits, and return it with the
+/// child's exit code. Every wait is bounded: a hung child is terminated and an
+/// unreadable screen fails instead of hanging the suite.
+fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u32) {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::{FALSE, HANDLE, TRUE, WAIT_OBJECT_0},
+        Security::SECURITY_ATTRIBUTES,
+        System::{
+            Console::{ClosePseudoConsole, CreatePseudoConsole, COORD, HPCON},
+            Pipes::CreatePipe,
+            Threading::{
+                CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
+                InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute,
+                WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+                LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW, STARTUPINFOW,
+            },
+        },
+    };
+
+    // The ConPTY host pipe ends must never be inherited by the child, so
+    // they are created non-inheritable here; that attribute (not the
+    // CreateProcessW flag below) is what keeps the host ends out of the
+    // child's handle table. CreateProcessW itself still uses bInheritHandles
+    // TRUE, matching the canonical ConPTY reference (Rich Turner, "Meet the
+    // Windows pseudo console", Aug 2018); native CI showed the session
+    // attaches either way (conhost titles the screen with the child image)
+    // yet the child keeps the parent's redirected cargo-test pipes as stdio
+    // in both cases, so the inherit flag never controlled routing.
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: FALSE,
+    };
+    let mut in_read: HANDLE = std::ptr::null_mut();
+    let mut in_write: HANDLE = std::ptr::null_mut();
+    let mut out_read: HANDLE = std::ptr::null_mut();
+    let mut out_write: HANDLE = std::ptr::null_mut();
+    // SAFETY: CreatePipe writes two valid handles on success; the attribute
+    // struct above outlives the call, and a zero nSize takes the default
+    // buffer. The output is checked before use.
+    let in_pipe = unsafe { CreatePipe(&mut in_read, &mut in_write, &attributes, 0) };
+    // SAFETY: same contract as the input pipe above.
+    let out_pipe = unsafe { CreatePipe(&mut out_read, &mut out_write, &attributes, 0) };
+    assert!(
+        in_pipe != FALSE && out_pipe != FALSE,
+        "ConPTY pipe setup failed: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: both CreatePipe calls succeeded, so every handle is valid and
+    // uniquely owned here.
+    let (in_read, in_write, out_read, out_write) = unsafe {
+        (
+            OwnedHandle::from_raw_handle(in_read),
+            OwnedHandle::from_raw_handle(in_write),
+            OwnedHandle::from_raw_handle(out_read),
+            OwnedHandle::from_raw_handle(out_write),
+        )
+    };
+
+    let mut hpc: HPCON = 0;
+    // SAFETY: both pipe handles are valid; the size is a real 80x30 grid and
+    // flags are zero. The console holds its own references, and the two
+    // passed ends are closed after CreateProcess returns (see below), per the
+    // ConPTY contract.
+    let hr = unsafe {
+        CreatePseudoConsole(
+            COORD { X: 80, Y: 30 },
+            in_read.as_raw_handle() as HANDLE,
+            out_write.as_raw_handle() as HANDLE,
+            0,
+            &mut hpc,
+        )
+    };
+    assert_eq!(hr, 0, "CreatePseudoConsole failed: HRESULT {hr:#X}");
+
+    let mut attr_size: usize = 0;
+    // SAFETY: a null list with a live size out-pointer is the documented size
+    // query; failure with ERROR_INSUFFICIENT_BUFFER is expected here.
+    unsafe {
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    assert!(attr_size > 0, "ConPTY attribute list size query failed");
+    // 8-byte storage: the attribute list holds pointers, so a byte Vec
+    // does not guarantee its alignment (ARM64 validates it strictly); the
+    // buffer still covers at least the queried byte size.
+    let mut attr_storage = vec![0u64; attr_size.div_ceil(std::mem::size_of::<u64>())];
+    let attr_list = attr_storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+    // SAFETY: the storage covers at least the queried size and outlives
+    // process creation; one attribute slot is requested.
+    let attr_init = unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
+    assert!(
+        attr_init != FALSE,
+        "ConPTY attribute list init failed: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: the list is initialized and hpc is a live console. Per the
+    // ConPTY contract, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE takes the HPCON
+    // value itself (hpc cast to PVOID) with sizeof(HPCON), not the address of
+    // the HPCON variable; passing &hpc yields an invalid console and the
+    // child fails init with 0xC0000142 and an empty screen.
+    let attr_updated = unsafe {
+        UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+            hpc as *const std::ffi::c_void,
+            std::mem::size_of::<HPCON>(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    };
+    assert!(
+        attr_updated != FALSE,
+        "ConPTY attribute update failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    // Native CI refuted the "defaults to the console buffer" assumption:
+    // without STARTF_USESTDHANDLES the parent's redirected cargo-test pipes
+    // propagate as the ConPTY child's stdio (GetStdHandle type=PIPE,
+    // console=false, WriteConsoleW failing, WriteFile marker landing in the
+    // cargo output) even though the session is attached. Only explicit
+    // console handles route to the screen, so the direct child below is the
+    // fixture bootstrap, which re-spawns the real target with CONIN$/CONOUT$
+    // stdio plus a HANDLE_LIST containing exactly those three console
+    // handles. The zeros here just keep this hop free of inherited stdio.
+    let startup = STARTUPINFOEXW {
+        StartupInfo: STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+            dwFlags: 0,
+            hStdInput: std::ptr::null_mut(),
+            hStdOutput: std::ptr::null_mut(),
+            hStdError: std::ptr::null_mut(),
+            ..Default::default()
+        },
+        lpAttributeList: attr_list,
+    };
+    // The direct child is the fixture bootstrap, not the target: the
+    // bootstrap is already inside the pseudo-console session, so it can open
+    // CONIN$/CONOUT$ and re-spawn the real target with genuine console stdio
+    // (STARTF_USESTDHANDLES plus an exact three-handle HANDLE_LIST, so no
+    // other handle leaks across). It exits with the target's code, keeping
+    // the status contract below transparent.
+    let bootstrap = fixture();
+    let text = std::iter::once(bootstrap.as_str())
+        .chain(["conpty-bootstrap", exe])
+        .chain(args.iter().copied())
+        .map(quote_conpty_arg)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut command: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut info = PROCESS_INFORMATION::default();
+    // SAFETY: the command buffer is a live nul-terminated mutable UTF-16
+    // buffer; startup carries the pseudo-console attribute; environment and
+    // directory are inherited. bInheritHandles is TRUE per the canonical
+    // ConPTY reference; the host pipe ends stay host-only because they were
+    // created non-inheritable, and the target's own stdio routing is
+    // established by the bootstrap's HANDLE_LIST hop, not this flag.
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            TRUE,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup.StartupInfo as *const STARTUPINFOW,
+            &mut info,
+        )
+    };
+    // The attribute list and its storage must stay alive through the launch;
+    // both are released once the child exists. Only the two pipe ends handed
+    // to CreatePseudoConsole (in_read, out_write) are released here, once the
+    // child is connected. The communication ends (in_write for input,
+    // out_read for the screen) stay open for the whole session: per the
+    // ConPTY contract the host uses the input write end to talk to the
+    // console, and closing it at startup tears the input channel down while
+    // the child is still attaching, which surfaces as a control-event exit
+    // (STATUS_CONTROL_C_EXIT) with only conhost VT sequences on screen.
+    // Capture the launch error before any cleanup Win32 call (list delete,
+    // handle closes, console close) overwrites the thread's last error.
+    let create_error = std::io::Error::last_os_error();
+    // SAFETY: the attribute list was initialized above and is deleted exactly
+    // once here on every path past initialization.
+    unsafe {
+        DeleteProcThreadAttributeList(attr_list);
+    }
+    drop(attr_storage);
+    drop(in_read);
+    drop(out_write);
+    // in_write intentionally stays alive until teardown below.
+    if created == FALSE {
+        let error = create_error;
+        // SAFETY: the console is live and has no owner yet on this path, so it
+        // is closed exactly once here.
+        unsafe {
+            ClosePseudoConsole(hpc);
+        }
+        panic!("ConPTY process launch failed for {exe}: {error}");
+    }
+    // SAFETY: CreateProcessW succeeded, so the process handle is valid and
+    // uniquely owned here.
+    let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess) };
+    // SAFETY: same successful launch owns the primary thread handle; the
+    // thread runs independently, so its handle closes at once.
+    let thread = unsafe { OwnedHandle::from_raw_handle(info.hThread) };
+    drop(thread);
+    let mut session = ConptySession {
+        process,
+        hpc: Some(hpc),
+    };
+
+    let out_file = std::fs::File::from(out_read);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // Progress counter for the bounded quiet wait before teardown: conhost
+    // forwards client frames to the output pipe asynchronously, so the
+    // harness must observe pipe quiet rather than assume the wait above
+    // means every frame has arrived.
+    let screen_len = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let screen_len_reader = std::sync::Arc::clone(&screen_len);
+    std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut file = out_file;
+        let mut screen = Vec::new();
+        let mut chunk = [0u8; 8192];
+        while screen.len() < 65536 {
+            match file.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    screen.extend_from_slice(&chunk[..read]);
+                    screen_len_reader.store(screen.len(), std::sync::atomic::Ordering::Relaxed);
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = sender.send(screen);
+    });
+
+    // SAFETY: the process handle is live and owned; the wait is bounded.
+    let wait = unsafe {
+        WaitForSingleObject(
+            session.process.as_raw_handle() as HANDLE,
+            timeout.as_millis().min(u32::MAX as u128) as u32,
+        )
+    };
+    if wait != WAIT_OBJECT_0 {
+        // SAFETY: the handle is live; terminating a hung child keeps the suite bounded.
+        unsafe {
+            TerminateProcess(session.process.as_raw_handle() as HANDLE, 1);
+        }
+        panic!("ConPTY child did not exit within {timeout:?}");
+    }
+    let mut status = 0u32;
+    let exited =
+        // SAFETY: the process handle and exit-code pointer are live; the result is checked.
+        unsafe { GetExitCodeProcess(session.process.as_raw_handle() as HANDLE, &mut status) };
+    assert!(
+        exited != FALSE,
+        "ConPTY exit code query failed: {}",
+        std::io::Error::last_os_error()
+    );
+    // Bounded quiet period before teardown: conhost forwards client frames to
+    // the output pipe asynchronously, so a frame written just before the
+    // child exits may still be in flight when the wait above returns. Closing
+    // the session first would discard that final frame and leave only the
+    // early VT setup on screen. Poll for pipe quiet while the reader keeps
+    // draining; EOF still arrives only from ClosePseudoConsole below, so the
+    // reader can never deadlock this wait, and the budget forces progress
+    // even if conhost keeps emitting (e.g. cursor updates).
+    let quiet_start = Instant::now();
+    let mut last_len = screen_len.load(std::sync::atomic::Ordering::Relaxed);
+    let mut last_change = Instant::now();
+    while last_change.elapsed() < Duration::from_millis(400)
+        && quiet_start.elapsed() < Duration::from_secs(8)
+    {
+        std::thread::sleep(Duration::from_millis(25));
+        let len = screen_len.load(std::sync::atomic::Ordering::Relaxed);
+        if len != last_len {
+            last_len = len;
+            last_change = Instant::now();
+        }
+    }
+    if let Some(hpc) = session.hpc.take() {
+        // SAFETY: the console is live and closed exactly once here; Drop sees None.
+        unsafe {
+            ClosePseudoConsole(hpc);
+        }
+    }
+    // The session is over: closing the input write end now releases the last
+    // host reference to the input channel. It must outlive the child, so it
+    // is dropped here rather than right after CreateProcess.
+    drop(in_write);
+    let screen = receiver
+        .recv_timeout(Duration::from_secs(15))
+        .expect("ConPTY screen reader did not finish");
+    (screen, status)
+}
+
+#[test]
+fn conpty_console_replaces_invalid_utf8_with_replacement_char() {
+    let folder = tempfile::tempdir().unwrap();
+    let script = folder.path().join("invalid-utf8.program");
+    std::fs::write(&script, native(&["invalid-utf8"])).unwrap();
+    let (screen, status) = run_under_conpty(
+        env!("CARGO_BIN_EXE_execute"),
+        &[script.to_str().expect("temp script path is UTF-8")],
+        Duration::from_secs(30),
+    );
+    assert_eq!(
+        status,
+        0,
+        "program emitting 0xFF 0x41 must exit 0 under ConPTY: {}",
+        String::from_utf8_lossy(&screen)
+    );
+    assert!(
+        screen
+            .windows(4)
+            .any(|window| window == [0xEF, 0xBF, 0xBD, 0x41]),
+        "ConPTY screen must show U+FFFD followed by A, got: {}",
+        String::from_utf8_lossy(&screen)
+    );
+}
+
+/// Lines the in-console probe reported on the captured screen, or a marker
+/// when the report itself never arrived (a routing finding in its own right).
+fn probe_report_lines(screen: &[u8]) -> String {
+    let text = String::from_utf8_lossy(screen);
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("PROBE-REPORT"))
+        .collect();
+    if lines.is_empty() {
+        return "<no PROBE-REPORT bytes on screen>".to_owned();
+    }
+    lines.join("\n")
+}
+
+/// Measures ConPTY child stdio routing from inside the session: the fixture
+/// probe reports its inherited handle types, console-mode status and which
+/// write path reaches the screen. A WriteConsoleW marker must be present,
+/// proving the child stdout is a console; the report lines pin down the rest.
+#[test]
+fn conpty_child_stdio_is_a_console_and_write_console_reaches_screen() {
+    let (screen, status) = run_under_conpty(&fixture(), &["conpty-probe"], Duration::from_secs(30));
+    let text = String::from_utf8_lossy(&screen);
+    assert_eq!(
+        status,
+        0,
+        "ConPTY probe child must exit 0; screen ({} bytes):\n{}",
+        screen.len(),
+        text
+    );
+    // The in-console report must show the target stdout as a console handle,
+    // not an inherited cargo-test pipe: this pins the bootstrap's explicit
+    // console-handle contract after the native probe measured type=PIPE
+    // console=false on the direct child.
+    let report = probe_report_lines(&screen);
+    assert!(
+        report
+            .lines()
+            .any(|line| line.contains("stdout") && line.contains("console=true")),
+        "ConPTY child stdout must report console=true from inside the session.\n\
+         Measured child routing (from screen):\n{report}\n\
+         Full screen ({} bytes):\n{}",
+        screen.len(),
+        text
+    );
+    let file_marker = screen
+        .windows(b"CONPTY-PROBE-FILE-OK".len())
+        .any(|window| window == b"CONPTY-PROBE-FILE-OK");
+    assert!(
+        screen
+            .windows(b"CONPTY-PROBE-CONSOLE-OK".len())
+            .any(|window| window == b"CONPTY-PROBE-CONSOLE-OK"),
+        "ConPTY child stdout must be a console: WriteConsoleW bytes never reached the screen.\n\
+         Measured child routing (from screen):\n{}\n\
+         WriteFile marker on screen: {file_marker}\n\
+         Full screen ({} bytes):\n{}",
+        probe_report_lines(&screen),
+        screen.len(),
+        text
+    );
+}

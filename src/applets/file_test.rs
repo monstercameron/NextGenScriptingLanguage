@@ -14,7 +14,7 @@
 //! `.cmd` extension. Windows ACLs are not evaluated.
 
 use super::filesystem::resolve_path;
-use super::{invalid, io_error, required_string, AppletError};
+use super::{invalid, io_error, required_string, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
 use std::fs::{self, Metadata};
 use std::io;
@@ -31,7 +31,14 @@ const KINDS: &[&str] = &[
     "empty",
 ];
 
-pub(super) fn test(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn test(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    // A single stat cannot be interrupted once issued; this entry check keeps
+    // an already-exceeded budget from starting the syscalls below.
+    context.checkpoint()?;
     let kind = required_string(args, "kind")?;
     if !KINDS.contains(&kind) {
         return Err(invalid(format!(
@@ -44,6 +51,8 @@ pub(super) fn test(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Apple
         return Err(invalid("args.path must be nonempty and contain no NUL"));
     }
     let path = resolve_path(text, cwd);
+    // Recheck between the stat and any follow-up probe so a budget that
+    // expired during the first syscall surfaces before the second one starts.
     let answer = match kind {
         "symlink" => lookup(&path, false)?.is_some_and(|metadata| metadata.is_symlink()),
         "exists" => lookup(&path, true)?.is_some(),
@@ -52,14 +61,21 @@ pub(super) fn test(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Apple
         "empty" => match lookup(&path, true)? {
             None => false,
             Some(metadata) if metadata.is_file() => metadata.len() == 0,
-            Some(metadata) if metadata.is_dir() => directory_is_empty(&path)?,
+            Some(metadata) if metadata.is_dir() => {
+                context.checkpoint()?;
+                directory_is_empty(&path)?
+            }
             Some(_) => false,
         },
         _ => match lookup(&path, true)? {
             None => false,
-            Some(metadata) => permission_check(kind, &path, &metadata)?,
+            Some(metadata) => {
+                context.checkpoint()?;
+                permission_check(kind, &path, &metadata)?
+            }
         },
     };
+    context.checkpoint()?;
     Ok(Value::Bool(answer))
 }
 
@@ -160,7 +176,11 @@ mod tests {
 
     fn check(kind: &str, path: &Path) -> Result<Value, AppletError> {
         let args = json!({"kind": kind, "path": path.to_str().unwrap()});
-        test(args.as_object().unwrap(), Path::new("/"))
+        test(
+            args.as_object().unwrap(),
+            Path::new("/"),
+            &ExecutionContext::unrestricted(),
+        )
     }
 
     #[test]

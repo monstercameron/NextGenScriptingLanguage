@@ -93,6 +93,8 @@ fn the_demo_passes_the_gate_when_approved_and_declared() {
         .arg("--policy-header")
         .args([
             "--allow",
+            "reads",
+            "--allow",
             "writes",
             "--allow",
             "process",

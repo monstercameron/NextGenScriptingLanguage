@@ -1,6 +1,6 @@
 {
   "name": "sort",
-  "description": "Sorts lines from standard input according to the selected sort flags.",
+  "description": "Sorts lines from standard input according to the selected sort flags. Flag operands can name input files and -o names an output file, so file arguments read and write files.",
   "binary": "sort",
   "accepts_stdin": true,
   "parameters": {
@@ -18,5 +18,25 @@
         }
       ]
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.read",
+      "filesystem.write"
+    ]
+  }
 }

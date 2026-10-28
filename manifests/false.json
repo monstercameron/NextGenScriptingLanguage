@@ -5,5 +5,20 @@
     "fail"
   ],
   "binary": "false",
-  "arguments": []
+  "arguments": [],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec"
+    ],
+    "effects": []
+  }
 }

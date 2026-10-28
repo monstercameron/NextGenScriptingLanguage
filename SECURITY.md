@@ -121,6 +121,16 @@ responsibility. Failure diagnostics omit credentials, request/response bodies
 and endpoint details. Local fixture tests do not establish provider safety,
 model accuracy or resistance to prompt injection.
 
+Model file inputs (`fixture`, `env_file`) are declared as `path` parameters
+so a capability policy authorizes them against the applet's own filesystem
+grant after bindings resolve, including background jobs. The child pins only
+the final path component at open time; a concurrent ancestor rename between
+the parent check and the child open can redirect the file and is not stopped
+on any platform. Fixture files have no ownership check by design (replay
+data); only `env_file` requires an owner-private file. Non-Unix platforms
+without an atomic no-follow open retain a final-component check-to-open
+window. These paths are documented as advisory, not proven secure.
+
 ## Applet contracts and optional capability policy
 
 Current source adds version-1 applet contracts and a separate opt-in policy.

@@ -5035,7 +5035,8 @@ mod opt_manifest_binary_path_tests {
     use tempfile::tempdir;
 
     fn opt_manifest_legacy_binary_path(binary: &str, cwd: &Path, path: &OsStr) -> Result<PathBuf> {
-        // This preserves the original candidate construction as a parity oracle.
+        // Parity oracle for the hardened lookup: relative and empty PATH
+        // entries are ignored so a working-directory shadow can never win.
         // Empty PATH is a refusal rather than an implicit current-directory lookup.
         if path.is_empty() {
             bail!("executable {binary:?} not found in PATH");
@@ -5052,8 +5053,9 @@ mod opt_manifest_binary_path_tests {
             Ok(candidate)
         } else {
             std::env::split_paths(path)
+                .filter(|entry| !entry.as_os_str().is_empty() && entry.is_absolute())
                 .find_map(|entry| {
-                    let candidate = cwd.join(entry).join(binary);
+                    let candidate = entry.join(binary);
                     let metadata = fs::metadata(&candidate).ok()?;
                     (metadata.is_file() && crate::platform::executable(&metadata))
                         .then_some(candidate)
@@ -5143,6 +5145,14 @@ mod opt_manifest_binary_path_tests {
                 assert!(binary_path_from_path(binary, &cwd, &path).is_err());
                 continue;
             }
+            // Relative entries are ignored so a cwd-planted shadow can never
+            // win; the fixture below proves the shadow is refused, not run.
+            if !entry.is_absolute() {
+                opt_manifest_write_file(&candidate, 0o755).unwrap();
+                opt_manifest_assert_path_parity(binary, &cwd, &path);
+                assert!(binary_path_from_path(binary, &cwd, &path).is_err());
+                continue;
+            }
             opt_manifest_write_file(&candidate, 0o755).unwrap();
             opt_manifest_assert_path_parity(binary, &cwd, &path);
             let selected = binary_path_from_path(binary, &cwd, &path).unwrap();
@@ -5173,7 +5183,10 @@ mod opt_manifest_binary_path_tests {
         fs::create_dir_all(&cwd).unwrap();
         let binary = "probe";
 
-        let missing_path = opt_manifest_join_path(&[PathBuf::from("absent")]);
+        // Only absolute entries participate; a relative entry can never
+        // redirect the lookup into the working directory.
+        let missing = cwd.join("absent");
+        let missing_path = opt_manifest_join_path(std::slice::from_ref(&missing));
         opt_manifest_assert_path_parity(binary, &cwd, &missing_path);
         assert_eq!(
             binary_path_from_path(binary, &cwd, &missing_path)
@@ -5182,8 +5195,21 @@ mod opt_manifest_binary_path_tests {
             "executable \"probe\" not found in PATH"
         );
 
-        let non_executable = PathBuf::from("no-execute");
-        opt_manifest_write_file(&cwd.join(&non_executable).join(binary), 0o644).unwrap();
+        // A cwd-planted shadow behind a relative entry is refused, not run.
+        let shadow_entry = PathBuf::from("late-hit");
+        opt_manifest_write_file(&cwd.join(&shadow_entry).join(binary), 0o755).unwrap();
+        let shadow_path = opt_manifest_join_path(std::slice::from_ref(&shadow_entry));
+        opt_manifest_assert_path_parity(binary, &cwd, &shadow_path);
+        assert_eq!(
+            binary_path_from_path(binary, &cwd, &shadow_path)
+                .unwrap_err()
+                .to_string(),
+            "executable \"probe\" not found in PATH"
+        );
+        fs::remove_file(cwd.join(&shadow_entry).join(binary)).unwrap();
+
+        let non_executable = cwd.join("no-execute");
+        opt_manifest_write_file(&non_executable.join(binary), 0o644).unwrap();
         let non_executable_path = opt_manifest_join_path(std::slice::from_ref(&non_executable));
         opt_manifest_assert_path_parity(binary, &cwd, &non_executable_path);
         assert_eq!(
@@ -5195,12 +5221,12 @@ mod opt_manifest_binary_path_tests {
 
         let mut entries = Vec::with_capacity(65);
         for index in 0..64 {
-            let entry = PathBuf::from(format!("miss-{index:02}"));
-            fs::create_dir_all(cwd.join(&entry)).unwrap();
+            let entry = cwd.join(format!("miss-{index:02}"));
+            fs::create_dir_all(&entry).unwrap();
             entries.push(entry);
         }
-        let late_hit = PathBuf::from("late-hit");
-        let expected = cwd.join(&late_hit).join(binary);
+        let late_hit = cwd.join("late-hit");
+        let expected = late_hit.join(binary);
         opt_manifest_write_file(&expected, 0o755).unwrap();
         entries.push(late_hit);
         let late_path = opt_manifest_join_path(&entries);
@@ -5264,19 +5290,19 @@ mod opt_manifest_binary_path_tests {
         let cwd = root.path().join("work");
         fs::create_dir_all(&cwd)?;
 
-        let single_entry = PathBuf::from("single");
-        let single_candidate = cwd.join(&single_entry).join("probe");
+        let single_entry = cwd.join("single");
+        let single_candidate = single_entry.join("probe");
         opt_manifest_write_file(&single_candidate, 0o755)?;
         let single_path = opt_manifest_join_path(std::slice::from_ref(&single_entry));
 
         let mut late_entries = Vec::with_capacity(65);
         for index in 0..64 {
-            let entry = PathBuf::from(format!("miss-{index:02}"));
-            fs::create_dir_all(cwd.join(&entry))?;
+            let entry = cwd.join(format!("miss-{index:02}"));
+            fs::create_dir_all(&entry)?;
             late_entries.push(entry);
         }
-        let late_entry = PathBuf::from("late-hit");
-        opt_manifest_write_file(&cwd.join(&late_entry).join("probe"), 0o755)?;
+        let late_entry = cwd.join("late-hit");
+        opt_manifest_write_file(&late_entry.join("probe"), 0o755)?;
         late_entries.push(late_entry);
         let late_path = opt_manifest_join_path(&late_entries);
 
@@ -6346,15 +6372,26 @@ mod lane_v2_path_tests {
     fn lane_v2_path_cache_invalidates_path_and_cwd() {
         let root = tempfile::tempdir().unwrap();
         let mut cache = LaunchPathCache::default();
+        let path_one = root.path().join("path-one");
+        let path_two = root.path().join("path-two");
         for (cwd, path) in [
-            (root.path().join("one"), OsStr::new("relative")),
-            (root.path().join("two"), OsStr::new("relative")),
-            (root.path().join("two"), OsStr::new("changed")),
-            (root.path().join("two").join("."), OsStr::new("changed")),
+            (root.path().join("one"), path_one.as_os_str()),
+            (root.path().join("two"), path_one.as_os_str()),
+            (root.path().join("two"), path_two.as_os_str()),
+            (
+                root.path().join("two").join("."),
+                path_two.as_os_str(),
+            ),
         ] {
             assert!(cache.lookup("absent", &cwd, path).is_err());
-            assert_eq!(cache.entries[0].as_os_str(), cwd.join(path).as_os_str());
+            assert_eq!(cache.entries[0].as_os_str(), path);
         }
+        // Relative entries are dropped so a cwd shadow can never win; the
+        // cache still records the (empty) parse under the current key.
+        let cwd = root.path().join("two");
+        let relative = OsStr::new("relative");
+        assert!(cache.lookup("absent", &cwd, relative).is_err());
+        assert!(cache.entries.is_empty());
     }
 
     #[cfg(unix)]
@@ -6382,17 +6419,15 @@ mod lane_v2_path_tests {
         use std::os::windows::ffi::OsStringExt;
         let root = tempfile::tempdir().unwrap();
         let entry = OsString::from_wide(&[b'x' as u16, 0xd800, b'y' as u16]);
+        // Keep the non-Unicode bytes in an absolute entry: relative entries
+        // are dropped so a cwd shadow can never win.
+        let absolute = root.path().join(&entry);
+        let path = absolute.as_os_str().to_os_string();
         let mut cache = LaunchPathCache::default();
-        assert!(cache.lookup("absent", root.path(), &entry).is_err());
-        assert_eq!(
-            cache.entries[0].as_os_str(),
-            root.path().join(&entry).as_os_str()
-        );
-        assert!(cache.lookup("absent", root.path(), &entry).is_err());
-        assert_eq!(
-            cache.entries[0].as_os_str(),
-            root.path().join(&entry).as_os_str()
-        );
+        assert!(cache.lookup("absent", root.path(), &path).is_err());
+        assert_eq!(cache.entries[0].as_os_str(), absolute.as_os_str());
+        assert!(cache.lookup("absent", root.path(), &path).is_err());
+        assert_eq!(cache.entries[0].as_os_str(), absolute.as_os_str());
     }
 
     #[test]

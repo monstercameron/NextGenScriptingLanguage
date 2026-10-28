@@ -389,13 +389,16 @@ fn intervals_listeners_and_stream_cutoff_use_native_children() {
     ok(&output);
     assert_eq!(output.stdout, b"ONE\nTWO\n");
 }
+#[cfg(feature = "live")]
 struct Server(Child);
+#[cfg(feature = "live")]
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
 }
+#[cfg(feature = "live")]
 fn live(socket: &Path, args: &[&str]) -> serde_json::Value {
     let result = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("live")

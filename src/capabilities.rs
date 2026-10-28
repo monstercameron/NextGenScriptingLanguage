@@ -13,6 +13,7 @@ use crate::manifest::Registry;
 use crate::security::{
     record_policy_decision, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk,
 };
+use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::Deserializer;
@@ -2252,7 +2253,7 @@ pub fn authorize_network_endpoint(
         bail!("remote endpoint must not contain a fragment");
     }
     let origin = canonical_http_origin(endpoint)?;
-    let allowed = grant.network_origins.is_empty() || grant.network_origins.contains(&origin);
+    let allowed = network_origin_is_granted(grant, &origin);
     record_policy_decision(
         registry,
         applet_name,
@@ -2272,6 +2273,34 @@ pub fn authorize_network_endpoint(
     );
     if !allowed {
         bail!("capability policy denies the remote endpoint origin");
+    }
+    // Fail fast on non-public literal hosts even though the transport pins
+    // the resolved set again at connect time. Only an explicitly listed
+    // origin preserves a private destination; a broad empty-list grant does
+    // not. Hostnames that look benign pass here and are pinned at the
+    // resolver, which stops DNS rebinding.
+    let granted = if grant.network_origins.contains(&origin) {
+        BTreeSet::from([origin.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    let allow_loopback = contract
+        .remote
+        .as_ref()
+        .is_some_and(|remote| remote.allow_loopback_http_fixture);
+    if let Err(denied) =
+        ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, allow_loopback, &granted)
+    {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            Some(&origin),
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("capability policy refuses non-public remote endpoint host: {denied}");
     }
     Ok(())
 }
@@ -2754,6 +2783,8 @@ fn validate_digest(value: &str) -> Result<()> {
 
 struct ParsedHttpUrl {
     origin: String,
+    /// Unbracketed, lowercased host spelling (IPv6 without brackets).
+    host: String,
     path: String,
     query: bool,
     fragment: bool,
@@ -2773,6 +2804,35 @@ pub(crate) fn canonical_http_policy_origin(value: &str) -> Result<String> {
         bail!("HTTP(S) origin must not contain a path, query, or fragment");
     }
     Ok(parsed.origin)
+}
+
+/// Whether the endpoint origin passes the grant's origin allowlist. An empty
+/// list allows broad access for metadata-policy checks; only a listed origin
+/// counts as an explicit grant for SSRF purposes.
+pub(crate) fn network_origin_is_granted(grant: &AppletGrant, origin: &str) -> bool {
+    grant.network_origins.is_empty() || grant.network_origins.contains(origin)
+}
+
+/// True only when the capability policy explicitly lists this endpoint's
+/// origin in `network_origins`. A broad empty-list grant and an absent policy
+/// do not preserve non-public destinations; only a listed origin reaches the
+/// transport as an explicit SSRF grant.
+#[cfg(feature = "remote")]
+pub(crate) fn remote_origin_is_explicitly_granted(
+    registry: &Registry,
+    applet_name: &str,
+    endpoint: &str,
+) -> bool {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        return false;
+    };
+    let Some(grant) = policy.applets.get(applet_name) else {
+        return false;
+    };
+    canonical_http_origin(endpoint)
+        .map(|origin| grant.network_origins.contains(&origin))
+        .unwrap_or(false)
 }
 
 fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
@@ -2852,7 +2912,11 @@ fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
         (host.to_ascii_lowercase(), port, false)
     };
     let default_port = if scheme == "https" { 443 } else { 80 };
-    let rendered_host = if is_ipv6 { format!("[{host}]") } else { host };
+    let rendered_host = if is_ipv6 {
+        format!("[{host}]")
+    } else {
+        host.clone()
+    };
     let origin = match port {
         Some(port) if port != default_port => format!("{scheme}://{rendered_host}:{port}"),
         _ => format!("{scheme}://{rendered_host}"),
@@ -2864,6 +2928,7 @@ fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
     let path = before_fragment.split('?').next().unwrap_or_default();
     Ok(ParsedHttpUrl {
         origin,
+        host,
         path: if path.is_empty() {
             "/".to_owned()
         } else {

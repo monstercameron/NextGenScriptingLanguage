@@ -3657,7 +3657,12 @@ fn execute_remote_applet(
     let client = RemoteClient::new_with_credential_base(client_config, credential_base)?
         .with_secret_redactor(crate::security::secret_redactor(registry))
         .with_resolver_helper(std::env::current_exe()?)
-        .with_process_observer(signals.process_launch_callback());
+        .with_process_observer(signals.process_launch_callback())
+        .with_ssrf_grant(crate::capabilities::remote_origin_is_explicitly_granted(
+            registry,
+            &manifest.name,
+            &endpoint.endpoint,
+        ));
     if let Some(path) = client.descriptor_cache_path() {
         crate::capabilities::authorize_applet_host_path(
             registry,

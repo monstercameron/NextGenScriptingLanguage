@@ -760,6 +760,7 @@ pub(crate) fn lock(file: &File) -> Result<()> {
 /// process token, which the process cannot spoof, so it is authoritative in
 /// the same way the effective uid is on Unix. Callers keep any `USER` name as
 /// display-only text.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 pub(crate) fn current_user_sid_text() -> Result<String> {
     // SAFETY: GetCurrentProcess returns the current-process pseudo-handle, which is always
     // valid and needs no closing. user_sid only queries that process's token.

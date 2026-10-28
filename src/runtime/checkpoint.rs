@@ -2020,6 +2020,7 @@ pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
 /// of racing it. The concurrency test covers `append_resolution`; the
 /// `checkpoint resolve` CLI path holds this same guard across its wider
 /// validation in `agent::checkpoint::resolve_uncertain`.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 pub(crate) struct ResolveLock {
     _file: File,
 }
@@ -2030,7 +2031,7 @@ pub(crate) struct ResolveLock {
 /// so two resolves serialize even on a checkpoint no process currently holds;
 /// status never creates it (it probes only), so `lock_file_present` plus
 /// `lock_held` tells a live resume apart from an idle checkpoint.
-#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
     let path = directory.join("lock");
     let mut options = fs::OpenOptions::new();
@@ -2090,14 +2091,6 @@ pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
         }
     }
     Ok(ResolveLock { _file: file })
-}
-
-/// Resolutions need the agent-advisory lock probe; without it there is no
-/// mutual exclusion to hold, so resolve refuses rather than appending
-/// unlocked.
-#[cfg(not(all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
-pub(crate) fn acquire_resolve_lock(_directory: &Path) -> Result<ResolveLock> {
-    bail!("checkpoint resolutions require the agent-advisory feature");
 }
 
 /// Assemble `{"checksum":…,"data":…}` exactly as `JournalEnvelopeRef` serializes

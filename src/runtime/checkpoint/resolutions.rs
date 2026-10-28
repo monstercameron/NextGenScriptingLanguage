@@ -14,6 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 use std::io::Write;
 use std::path::Path;
 
@@ -51,6 +52,7 @@ pub(crate) enum ResolutionDecision {
 }
 
 impl ResolutionDecision {
+    #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Committed => "committed",
@@ -126,6 +128,7 @@ impl ResolutionRecord {
     /// The `checkpoint status --json` view of this record: who decided what,
     /// when and why. Output, bindings and fingerprints stay in the checkpoint;
     /// they are evidence for resume, not status display.
+    #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
     pub(crate) fn status_value(&self) -> serde_json::Value {
         serde_json::json!({
             "node": self.node,
@@ -273,6 +276,7 @@ fn validate_record(record: &ResolutionRecord, max_output_bytes: usize) -> Result
 /// or sees the first's record and is refused as a duplicate. A torn or
 /// duplicate log refuses every resume and status until the operator removes
 /// the damaged line; there is no revoke tool, so resolve one item at a time.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 pub(crate) fn append_resolution_locked(
     directory: &Path,
     record: &ResolutionRecord,
@@ -354,6 +358,7 @@ pub(crate) fn element_resolution<'a>(
 /// plaintext shown by status: never paste secrets into it. Committed output
 /// and bindings may hold secrets; they stay in the 0600 checkpoint and are
 /// never printed by status or resolve.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 pub(crate) fn current_actor() -> String {
     #[cfg(unix)]
     {
@@ -422,6 +427,7 @@ pub(crate) fn current_actor() -> String {
 }
 
 /// Current Unix time in seconds for a new resolution record.
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
 pub(crate) fn current_time_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -430,6 +436,7 @@ pub(crate) fn current_time_secs() -> u64 {
 }
 
 /// Hex-encode bytes for a committed resolution's output.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes
@@ -456,6 +463,7 @@ fn hex_decode(text: &str) -> Result<Vec<u8>> {
 
 /// Parse one `--binding NAME=VALUE` argument. VALUE is JSON when it parses as
 /// JSON, otherwise plain text.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 pub(crate) fn parse_binding(argument: &str) -> Result<(String, Value)> {
     let (name, value) = argument
         .split_once('=')
@@ -469,6 +477,7 @@ pub(crate) fn parse_binding(argument: &str) -> Result<(String, Value)> {
     Ok((name.to_owned(), value))
 }
 
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
 fn json_to_value(json: &serde_json::Value) -> Value {
     match json {
         serde_json::Value::Null => Value::Null,
@@ -492,6 +501,7 @@ fn json_to_value(json: &serde_json::Value) -> Value {
 }
 
 /// Read output bytes for `--output FILE`, bounded by the output limit.
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
 pub(crate) fn read_output_file(path: &Path, max_output_bytes: usize) -> Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading --output {}", path.display()))?;

@@ -6,6 +6,9 @@ use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::tempdir;
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 fn execute_in(args: &[&str], directory: &Path, temp: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(args)
@@ -419,6 +422,9 @@ fn a_policy_without_the_temporary_directory_refuses_scopes_before_any_effect() {
     fs::write(stale.join("owner"), "4000000000").unwrap();
     let policy = directory.path().join("policy.json");
     fs::write(&policy, r#"{"version":1,"applets":{}}"#).unwrap();
+    // A capability policy is security-sensitive: without a private ACL Windows
+    // refuses the load before the temporary-directory grant is checked.
+    private_answers::make_private(&policy);
     let program = write_program(
         directory.path(),
         "with temporary file as scratch\n  exit with status 0\n",

@@ -308,7 +308,7 @@ fn killed_loop_resolves_committed_then_retry_and_names_the_next_element() {
         &["resume", "outer.program", "--checkpoint", &checkpoint_text],
     );
     assert!(!resumed.status.success());
-    let stderr = String::from_utf8_lossy(resumed.stderr).into_owned();
+    let stderr = String::from_utf8_lossy(&resumed.stderr).into_owned();
     assert!(
         stderr.contains("element 2"),
         "resume must name element 2, stderr: {stderr}"
@@ -355,11 +355,15 @@ fn killed_loop_resolves_committed_then_retry_and_names_the_next_element() {
     let hex = stored["output"].as_str().expect("committed carries output");
     assert_eq!(hex, "56455249464945440a", "VERIFIED\\n hex-encodes");
     assert!(
-        stored["fingerprint"].as_str().is_some_and(|value| !value.is_empty()),
+        stored["fingerprint"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
         "committed elements carry the begin fingerprint"
     );
     assert!(
-        stored["actor"].as_str().is_some_and(|value| !value.is_empty()),
+        stored["actor"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
         "resolutions record who decided"
     );
 }

@@ -100,10 +100,10 @@ fn resolve_cli(arguments: &[String]) -> Result<i32> {
                     .get(index)
                     .map(String::as_str)
                     .ok_or_else(|| anyhow!("--element requires an index; {USAGE}"))?;
-                element = Some(
-                    text.parse::<usize>()
-                        .map_err(|_| anyhow!("--element requires a non-negative index; {USAGE}"))?,
-                );
+                element =
+                    Some(text.parse::<usize>().map_err(|_| {
+                        anyhow!("--element requires a non-negative index; {USAGE}")
+                    })?);
             }
             "--as" => {
                 index += 1;
@@ -163,7 +163,10 @@ fn resolve_cli(arguments: &[String]) -> Result<i32> {
         _ => bail!("--as requires committed or retry; {USAGE}"),
     };
     if !committed
-        && (output.is_some() || !bindings.is_empty() || accept_empty_output || accept_empty_bindings)
+        && (output.is_some()
+            || !bindings.is_empty()
+            || accept_empty_output
+            || accept_empty_bindings)
     {
         bail!("a retry resolution carries no output or bindings; {USAGE}");
     }
@@ -226,7 +229,9 @@ fn resolve_uncertain(
         bail!("checkpoint predates step ids; use a fresh checkpoint");
     }
     if in_flight_step != node {
-        bail!("checkpoint has no unfinished node {node:?}; the unfinished node is {in_flight_step:?}");
+        bail!(
+            "checkpoint has no unfinished node {node:?}; the unfinished node is {in_flight_step:?}"
+        );
     }
     let retry_safe = in_flight
         .get("retry_safe")
@@ -263,7 +268,9 @@ fn resolve_uncertain(
     // uncertain element needs its own record; a node-level record authorizes
     // nothing on an element node however broad its wording.
     if element.is_none() && is_element_node {
-        bail!("node-level resolutions are not valid for for-each nodes; resolve each element instead");
+        bail!(
+            "node-level resolutions are not valid for for-each nodes; resolve each element instead"
+        );
     }
     // A parallel result carries a value, stderr and outcome the resolution
     // cannot faithfully reproduce, so `committed` is refused for parallel
@@ -406,8 +413,9 @@ fn committed_element_index(directory: &Path, wanted: usize) -> Result<bool> {
     let mut committed = std::collections::BTreeSet::<u64>::new();
     loop {
         line.clear();
-        let read = crate::runtime::checkpoint::read_bounded_line(&mut reader, &mut line, max_element_line)
-            .context("reading checkpoint element log")?;
+        let read =
+            crate::runtime::checkpoint::read_bounded_line(&mut reader, &mut line, max_element_line)
+                .context("reading checkpoint element log")?;
         if read == 0 {
             break;
         }
@@ -498,8 +506,7 @@ pub fn summarize(directory: &Path) -> Result<Value> {
                     .get("element_start")
                     .is_some_and(|value| !value.is_null())
         });
-    let is_element_node =
-        journal_marks_elements || directory.join("elements.jsonl").is_file();
+    let is_element_node = journal_marks_elements || directory.join("elements.jsonl").is_file();
     let in_flight_step = in_flight
         .as_ref()
         .and_then(|node| node.get("step_id"))
@@ -526,9 +533,7 @@ pub fn summarize(directory: &Path) -> Result<Value> {
                     && record.get("element").and_then(Value::as_u64) == Some(**index)
             })
         })
-        .map(|index| {
-            json!({ "node": in_flight_step, "element": index })
-        })
+        .map(|index| json!({ "node": in_flight_step, "element": index }))
         .collect();
     // The element log belongs to the in-flight node. A pending `for each` element
     // whose body may have started needs the same override as an uncertain node,
@@ -547,9 +552,9 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         && in_flight.is_some()
         && !unresolved_elements.is_empty();
     let node_blocks = !matches!(status, "completed" | "idle")
-        && in_flight.as_ref().is_some_and(|node| {
-            node.get("retry_safe").and_then(Value::as_bool) == Some(false)
-        })
+        && in_flight
+            .as_ref()
+            .is_some_and(|node| node.get("retry_safe").and_then(Value::as_bool) == Some(false))
         && !node_has_resolution
         && (!is_element_node || !element_allows_resume);
     let resume_action = if lock_held {
@@ -680,10 +685,7 @@ fn pending_elements(directory: &Path) -> Result<Vec<PendingElement>> {
 fn read_status_resolutions(directory: &Path) -> Result<Vec<Value>> {
     let bound = crate::runtime::RunOptions::new(std::path::PathBuf::new()).max_output_bytes;
     let records = resolutions::read_resolutions(directory, bound)?;
-    Ok(records
-        .iter()
-        .map(|record| record.status_value())
-        .collect())
+    Ok(records.iter().map(|record| record.status_value()).collect())
 }
 
 /// The status of a graph checkpoint (journal mode `graph`): committed nodes and the
@@ -887,7 +889,10 @@ fn render_text(summary: &Value) -> String {
                 "  node={} element={index}\n",
                 item["node"].as_str().unwrap_or("?")
             )),
-            None => text.push_str(&format!("  node={}\n", item["node"].as_str().unwrap_or("?"))),
+            None => text.push_str(&format!(
+                "  node={}\n",
+                item["node"].as_str().unwrap_or("?")
+            )),
         }
     }
     text

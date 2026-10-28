@@ -96,9 +96,7 @@ impl ResolutionRecord {
         let hex = self.output.as_deref().unwrap_or("");
         let bytes = hex_decode(hex).context("checkpoint resolution output is malformed")?;
         if bytes.len() > max_output_bytes {
-            bail!(
-                "checkpoint resolution output exceeds maximum of {max_output_bytes} bytes"
-            );
+            bail!("checkpoint resolution output exceeds maximum of {max_output_bytes} bytes");
         }
         Ok(bytes)
     }
@@ -286,8 +284,7 @@ pub(crate) fn append_resolution_locked(
     crate::runtime::checkpoint::restrict_file(&file)?;
     file.write_all(&line)
         .context("appending checkpoint resolution")?;
-    file.sync_all()
-        .context("syncing checkpoint resolution")?;
+    file.sync_all().context("syncing checkpoint resolution")?;
     Ok(())
 }
 
@@ -295,6 +292,7 @@ pub(crate) fn append_resolution_locked(
 /// for the read-check-append. Fails closed when a run or another resolve
 /// holds the lock. Callers that already hold the lock across wider validation
 /// (the `resolve` command) use `append_resolution_locked` instead.
+#[cfg(test)]
 pub(crate) fn append_resolution(directory: &Path, record: &ResolutionRecord) -> Result<()> {
     let lock = crate::runtime::checkpoint::acquire_resolve_lock(directory)?;
     append_resolution_locked(directory, record, &lock)
@@ -453,7 +451,11 @@ pub(crate) fn read_output_file(path: &Path, max_output_bytes: usize) -> Result<V
 mod tests {
     use super::*;
 
-    fn record(node: &str, element: Option<usize>, decision: ResolutionDecision) -> ResolutionRecord {
+    fn record(
+        node: &str,
+        element: Option<usize>,
+        decision: ResolutionDecision,
+    ) -> ResolutionRecord {
         ResolutionRecord {
             version: RESOLUTION_VERSION,
             node: node.to_owned(),
@@ -546,10 +548,7 @@ mod tests {
     fn committed_output_and_bindings_round_trip() {
         let mut committed = record("node:1", None, ResolutionDecision::Committed);
         committed.output = Some(hex_encode(b"AB"));
-        committed.bindings = Some(BTreeMap::from([(
-            "count".to_owned(),
-            Value::Integer(3),
-        )]));
+        committed.bindings = Some(BTreeMap::from([("count".to_owned(), Value::Integer(3))]));
         validate_record(&committed, 1024).unwrap();
         assert_eq!(committed.output_bytes(1024).unwrap(), b"AB");
         let bindings = committed.bindings_map(1024).unwrap();
@@ -565,7 +564,9 @@ mod tests {
         for _ in 0..8 {
             let path = path.clone();
             let record = first.clone();
-            handles.push(std::thread::spawn(move || append_resolution(&path, &record)));
+            handles.push(std::thread::spawn(move || {
+                append_resolution(&path, &record)
+            }));
         }
         let mut ok = 0;
         for handle in handles {

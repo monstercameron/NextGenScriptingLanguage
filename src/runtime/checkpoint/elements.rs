@@ -690,9 +690,13 @@ pub(in crate::runtime) fn for_each_resume(
                 pending.insert(position, element);
                 break;
             }
-            let expected = element_fingerprint(&node_fingerprint, next, items.get(next).context(
-                "checkpoint resolution names a missing for each element",
-            )?)?;
+            let expected = element_fingerprint(
+                &node_fingerprint,
+                next,
+                items
+                    .get(next)
+                    .context("checkpoint resolution names a missing for each element")?,
+            )?;
             if record.fingerprint.as_deref() != Some(expected.as_str()) {
                 bail!("for each list changed at element {next}; use a fresh checkpoint");
             }

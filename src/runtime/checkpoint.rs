@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) mod elements;
-pub(crate) mod resolutions;
 #[cfg(feature = "graph")]
 pub(crate) mod graph;
+pub(crate) mod resolutions;
 
 /// The `kind` a graph run's journal body carries. It lives here rather than in the graph
 /// module so a build without graph support still recognizes and refuses a graph checkpoint.
@@ -1039,8 +1039,7 @@ impl Journal {
         let Some(step_id) = node.step_id.as_deref() else {
             return Ok(false);
         };
-        let resolutions =
-            resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        let resolutions = resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
         Ok(resolutions::node_resolution(&resolutions, step_id).is_some())
     }
 
@@ -1062,8 +1061,7 @@ impl Journal {
         let Some(step_id) = node.step_id.as_deref() else {
             return Ok(false);
         };
-        let resolutions =
-            resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        let resolutions = resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
         Ok(resolutions
             .iter()
             .any(|record| record.node == step_id && record.element.is_some()))
@@ -1086,8 +1084,7 @@ impl Journal {
         let Some(step_id) = step_id else {
             return Ok(false);
         };
-        let resolutions =
-            resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
+        let resolutions = resolutions::read_resolutions(&self.directory, self.max_output_bytes)?;
         let Some(record) = resolutions
             .iter()
             .find(|record| {
@@ -1848,7 +1845,7 @@ fn lock_directory(directory: &Path, #[cfg(unix)] pinned_directory: &File) -> Res
 /// pre-marking loop killed before its first begin looks like a plain node and
 /// its elements resolve as retry (explicit future authorization) rather than
 /// by node-level records. Fails closed on a damaged element log.
-pub(crate) fn in_flight_is_element_node(journal: &Journal) -> Result<bool> {
+pub(super) fn in_flight_is_element_node(journal: &Journal) -> Result<bool> {
     if journal
         .data
         .in_flight

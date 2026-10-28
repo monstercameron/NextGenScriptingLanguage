@@ -1065,7 +1065,7 @@ fn model_loopback_self_grant_requires_policy_environment_grant() {
 
     // Without the `environment` grant, the overlay self-grant is denied and
     // the value is redacted from the diagnostic.
-    let denied_registry = Registry::from_sources(&[source.clone()]).unwrap();
+    let denied_registry = Registry::from_sources(std::slice::from_ref(&source)).unwrap();
     denied_registry.set_host_state(Some(CapabilityPolicy {
         host: None,
         version: 1,
@@ -1076,7 +1076,9 @@ fn model_loopback_self_grant_requires_policy_environment_grant() {
     }));
     let error = effective_environment(&denied_registry, "fixture.model").unwrap_err();
     assert!(
-        error.to_string().contains("denies setting an environment variable"),
+        error
+            .to_string()
+            .contains("denies setting an environment variable"),
         "{error:?}"
     );
     assert!(
@@ -1105,11 +1107,7 @@ fn model_loopback_self_grant_requires_policy_environment_grant() {
             .map(|(_, value)| value.as_os_str()),
         Some(std::ffi::OsStr::new(CANARY))
     );
-    assert_eq!(
-        std::env::var_os(OPT_IN),
-        before,
-        "host env must not change"
-    );
+    assert_eq!(std::env::var_os(OPT_IN), before, "host env must not change");
 }
 
 /// A filtered helper environment only forwards the loopback opt-in when it
@@ -1151,7 +1149,10 @@ fn model_loopback_grant_is_stripped_by_filtered_helper_environments() {
     let filtered = filter_environment(&stripped, "fixture.model", snapshot())
         .unwrap()
         .unwrap();
-    assert_eq!(filtered, vec![(OsString::from("PATH"), OsString::from("/usr/bin"))]);
+    assert_eq!(
+        filtered,
+        vec![(OsString::from("PATH"), OsString::from("/usr/bin"))]
+    );
     assert!(
         authorize_environment_variable(&stripped, "fixture.model", OPT_IN).is_err(),
         "policy must deny reading the ungranted opt-in"
@@ -1168,11 +1169,9 @@ fn model_loopback_grant_is_stripped_by_filtered_helper_environments() {
     // Host layer: `--clear-env` selects the empty allowlist (grant stripped),
     // while `--env-allow` must name the variable explicitly to forward it.
     assert!(parse_child_environment_allowlist("").unwrap().is_empty());
-    assert!(
-        !parse_child_environment_allowlist("PATH")
-            .unwrap()
-            .contains(&OPT_IN.to_owned())
-    );
+    assert!(!parse_child_environment_allowlist("PATH")
+        .unwrap()
+        .contains(&OPT_IN.to_owned()));
     assert!(
         parse_child_environment_allowlist("PATH,EXECUTE_MODEL_ALLOW_LOOPBACK")
             .unwrap()

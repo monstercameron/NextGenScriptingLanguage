@@ -10,17 +10,7 @@ version = 2
 yanked = "deny"
 unmaintained = "all"
 unsound = "all"
-ignore = [
-    # ratatui 0.29 (the optional `tui` feature, shipped in `full`) pulls paste 1.0.15, a
-    # proc-macro used at build time only. Track: upgrade ratatui when its API migration lands.
-    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained, build-time proc-macro through ratatui 0.29 (tui feature)" },
-    # The same ratatui 0.29 pulls lru 0.12.5 for its layout cache (LruCache::get_or_insert
-    # and resize). ratatui never calls iter_mut. resize shrinks through the internal
-    # pop_lru, not the public pop(); whether that path shares the advisory's unsafe code is
-    # not verified here. Accepted until ratatui is upgraded past lru 0.12.
-    { id = "RUSTSEC-2026-0002", reason = "lru IterMut Stacked Borrows, through ratatui 0.29 layout cache; ratatui never calls iter_mut" },
-    { id = "RUSTSEC-2026-0253", reason = "lru pop() panic safety, through ratatui 0.29 layout cache; resize uses pop_lru (shared path not verified); accepted until ratatui upgrade" },
-]
+ignore = []
 
 [licenses]
 version = 2
@@ -46,23 +36,13 @@ wildcards = "deny"
 highlight = "all"
 allow-wildcard-paths = true
 skip = [
-    # Temporary until the paired crossterm upgrade in PR #99 is merged.
-    { crate = "crossterm@0.28.1", reason = "execute direct dependency pending PR #99" },
-    { crate = "crossterm@0.29.0", reason = "ratatui 0.30 backend pending PR #99" },
     { crate = "signal-hook@0.3.18", reason = "crossterm and signal-hook-mio still require 0.3 for terminal event handling" },
     { crate = "signal-hook@0.4.5", reason = "execute directly uses 0.4; crossterm has not yet moved from 0.3" },
     { crate = "getrandom@0.2.17", reason = "ring 0.17 through rustls and ureq (the HTTP client); execute uses getrandom 0.4 directly" },
     { crate = "getrandom@0.4.3", reason = "execute's direct dependency (the per-user what-if key)" },
-    { crate = "linux-raw-sys@0.4.15", reason = "rustix 0.38 through crossterm 0.28 (tui feature, via ratatui 0.29)" },
-    { crate = "linux-raw-sys@0.12.1", reason = "rustix 1.x (tempfile, native-tls and signal-hook)" },
-    { crate = "rustix@0.38.44", reason = "crossterm 0.28 (tui feature, via ratatui 0.29); accepted until ratatui is upgraded" },
-    { crate = "rustix@1.1.5", reason = "the current major, used by tempfile, native-tls and signal-hook" },
     { crate = "syn@2.0.119", reason = "strum_macros through ratatui 0.29 (tui feature); accepted until ratatui is upgraded" },
     { crate = "syn@3.0.9", reason = "darling and instability through ratatui 0.29 (tui feature); accepted until ratatui is upgraded" },
-    { crate = "unicode-width@0.1.14", reason = "unicode-truncate through ratatui 0.29 (tui feature)" },
-    { crate = "unicode-width@0.2.0", reason = "execute's optional tui dependency (text width); ratatui 0.29 uses both" },
     { crate = "windows-sys@0.52.0", reason = "ring 0.17 on Windows through rustls and ureq" },
-    { crate = "windows-sys@0.59.0", reason = "rustix 0.38 on Windows through crossterm 0.28 (tui feature)" },
     { crate = "windows-sys@0.61.2", reason = "execute's direct Windows dependency (Win32 APIs)" },
 ]
 

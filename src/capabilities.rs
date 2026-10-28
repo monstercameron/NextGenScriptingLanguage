@@ -2670,10 +2670,7 @@ pub fn authorize_model_endpoint(
     // The request body plus any explicit credential travels to this origin, so
     // the data-flow policy must authorize the sink for the call's labels.
     crate::security::authorize_data_flow_set(registry, applet_name, endpoint, sensitivities)?;
-    Ok(grant
-        .network_origins
-        .contains(&origin)
-        .then_some(origin))
+    Ok(grant.network_origins.contains(&origin).then_some(origin))
 }
 
 /// Authorize the resolved custom `endpoint` parameter of an `@execute-model`

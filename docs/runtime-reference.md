@@ -774,22 +774,40 @@ no output or bindings. Element indices (`--element N`) are 0-based, matching the
 begin fingerprint can be captured and resume refuses a changed list entry; a retry
 may also name a later element that has not begun yet, authorizing its run.
 Element nodes take only per-element records; a node-level record authorizes
-nothing there. Parallel (`parallel for each`) elements resolve as `retry` only:
-`committed` is refused at resolve and at resume because it cannot reproduce
-their value, stderr and outcome. Every refusal fails closed: unknown or settled
-targets, locked checkpoints, graph journals, step-id mismatches, certain
-elements, duplicate records, and a torn resolutions log are all refused without
-running anything. Resolve holds the checkpoint lock across validation and
-append, so two concurrent resolves for the same item fail closed (one records,
-the other is refused as locked or duplicate) instead of both appending; there
-is no revoke tool, so resolve one item at a time.
+nothing there. A checkpoint that predates the version 6 element marker cannot
+tell a plain node from a loop killed before its first begin, so node-level
+records are refused there; `resolve` names this pre-marking case and resume
+re-checks it against the program, and the safe path is `--retry-uncertain` or a
+fresh checkpoint until the element log proves the node. Parallel
+(`parallel for each`) elements resolve as `retry` only: `committed` is refused
+at resolve and at resume because it cannot reproduce their value, stderr and
+outcome. Every refusal fails closed: unknown or settled targets, locked
+checkpoints, graph journals, step-id mismatches, certain elements, duplicate
+records, and a torn resolutions log are all refused without running anything.
+The running program holds the checkpoint `lock` for the whole resume, `resolve`
+holds the same lock across validation and append, and `status` probes it without
+creating it, so a resume in progress makes `resolve` fail with `locked` and
+status reports `locked`. Two concurrent resolves for the same item fail closed
+(one records, the other is refused as locked or duplicate) instead of both
+appending; there is no revoke tool, so resolve one item at a time.
 
-`checkpoint status --json` reports each recorded decision under `resolutions` (who,
-when and why; output, bindings and fingerprints stay in the checkpoint as resume
-evidence) and every begun-but-uncommitted uncertain item under
-`unresolved_uncertain`, with the same ids `resolve` takes. An element the loop has
-not reached yet is not listed; it is gated when its begin runs and names its index.
-Run records and `show-run` have no checkpoint pointer and do not show resolutions.
+`checkpoint status --json` reports each recorded decision under `resolutions`
+(who, when and why; output, bindings and fingerprints stay in the checkpoint as
+resume evidence) and every begun-but-uncommitted uncertain item under
+`unresolved_uncertain`, with the same ids `resolve` takes. The actor is
+`uid:<euid>` on Unix with the login name as a display-only hint, the
+process-token `sid:S-...` on Windows the same way, and `unverified:<name>`
+elsewhere; older bare-name records still read. The reason is operator-supplied
+plaintext shown by status, and committed output and bindings may hold secrets:
+keep secrets out of the reason, and read output and bindings only from the 0600
+checkpoint, never from status. A torn or duplicate resolutions log reports how
+many valid records precede the damage and which line is damaged; remove only
+that line (or the torn trailing bytes) with an owner-controlled editor, keep the
+file 0600, and re-run `resolve` one item at a time. Status wraps those failures
+with the checkpoint status, in-flight step, and lock state so the refusal is not
+blind. An element the loop has not reached yet is not listed; it is gated when
+its begin runs and names its index. Run records and `show-run` have no
+checkpoint pointer and do not show resolutions.
 
 Services discard unreferenced checkpoint blobs after each successful handler.
 The pure-result cache has its own lifecycle.

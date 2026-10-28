@@ -33,24 +33,36 @@ complete; choose a separate directory for each execution.
 `execute checkpoint resolve` appends one JSON object per line to the append-only
 `resolutions.jsonl` beside the journal (version 1 records; unknown versions are
 refused). A record carries the node step id, an optional 0-based element index, the
-`committed` or `retry` decision, the reason, the actor identity, Unix time, and, for
-`committed` only, the hex-encoded output, the bindings, and the element fingerprint
-captured from the element log's begin record. The actor is `uid:<euid>` with the
-claimed login name as display-only text on Unix, so a spoofed `USER` cannot
-impersonate another user; older bare-name records still read. Resolve holds the
-checkpoint's exclusive lock across validation and append, so concurrent resolves
-for one item fail closed (one records, the other is refused as locked or
-duplicate) instead of both appending. Reads are line-bounded; a torn final line
-refuses every resume and status until the operator removes it, and a duplicate
-node/element key does the same. Element nodes take only per-element records; a
-node-level record authorizes nothing there. Parallel (`parallel for each`)
-elements resolve as `retry` only; `committed` is refused at resolve and at resume
-because the record cannot reproduce their value, stderr and outcome. Files are
-created 0600 and the log is fsynced on append. Status reports only the
-who/when/why view; output, bindings and fingerprints stay in the checkpoint as
-resume evidence. Run records (`show-run`) carry no checkpoint pointer and never
-reference this log; there is no revoke tool, so refused records require manual
-line removal.
+`committed` or `retry` decision, the plaintext reason, the actor identity, Unix
+time, and, for `committed` only, the hex-encoded output, the bindings, and the
+element fingerprint captured from the element log's begin record. The actor is
+`uid:<euid>` with the claimed login name as display-only text on Unix, the
+process-token `sid:S-...` with the environment name the same way on Windows, and
+`unverified:<name>` elsewhere, so a spoofed `USER` cannot impersonate another
+user; older bare-name records still read. The reason is operator-supplied
+plaintext shown by status, so it must never carry secrets; committed output and
+bindings may hold secrets and stay in the 0600 checkpoint as resume evidence,
+never printed by status or resolve. The running program holds the checkpoint's
+exclusive `lock` for the whole resume and resolve holds the same lock across
+validation and append, so concurrent resolves for one item fail closed (one
+records, the other is refused as locked or duplicate) instead of both appending,
+and a resume in progress makes resolve fail with `locked`. Status probes the
+lock without creating it. Reads are line-bounded; a torn final line, a malformed
+line, or a duplicate node/element key refuses every resume and status until the
+operator removes only the damaged line or the torn trailing bytes. The error
+names how many valid records precede the damage and which line is damaged, and
+status wraps it with the checkpoint status, in-flight step, and lock state.
+Element nodes take only per-element records; a node-level record authorizes
+nothing there, and a checkpoint that predates the version 6 element marker
+refuses node-level records because a plain node cannot be told from a loop
+killed before its first begin. Parallel (`parallel for each`) elements resolve
+as `retry` only; `committed` is refused at resolve and at resume because the
+record cannot reproduce their value, stderr and outcome. Files are created 0600
+and the log is fsynced on append. Status reports only the who/when/why view;
+output, bindings and fingerprints stay in the checkpoint as resume evidence.
+Run records (`show-run`) carry no checkpoint pointer and never reference this
+log; there is no revoke tool, so refused records require manual line removal
+with an owner-controlled editor while keeping the file 0600.
 
 The runtime rejects symlinks at the requested checkpoint
 and blob directory leaves, including a trailing `/` or `/.` on the requested

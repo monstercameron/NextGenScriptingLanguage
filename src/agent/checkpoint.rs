@@ -204,10 +204,14 @@ fn resolve_uncertain(
         Ok(_) => bail!("checkpoint path must be a real directory"),
         Err(error) => return Err(error).context("reading checkpoint directory"),
     }
-    // Hold the checkpoint's exclusive lock across validation and append: one
-    // read-check-append runs at a time, and a resume holding the lock makes
-    // resolve fail instead of racing it. The guard is held to the end of this
-    // function.
+    // Lock end-to-end: the running program holds this same `lock` file from
+    // `Journal::open` until the journal drops (flock EX|NB on Unix, LockFileEx
+    // on Windows), so a resume in progress makes this acquire fail with
+    // `locked` instead of racing validation. Status probes the same file
+    // without creating it and reports `locked`; resolve creates it when
+    // absent so two concurrent resolves serialize on one read-check-append.
+    // The guard is held to the end of this function, across journal reads,
+    // element-log reads, and the resolutions append.
     let _resolve_lock = crate::runtime::checkpoint::acquire_resolve_lock(directory)?;
     let journal = read_journal_value(&directory.join("journal.json"))?;
     let data = journal
@@ -247,9 +251,18 @@ fn resolve_uncertain(
     let finite = identity.get("mode").and_then(Value::as_str) == Some("finite");
     // Version 6 marks the in-flight node kind (`for_each` or
     // `parallel_for_each`) so resolve can scope decisions without the program.
-    // Older journals fall back to the old element markers and the element
-    // log; a pre-marking loop killed before its first begin looks like a
-    // plain node there.
+    // A journal without the marker predates it: a loop killed before its
+    // first begin then looks exactly like a plain node (no marker, no element
+    // log, no pending entries). Accepting a node-level record there is
+    // unsafe: resume re-begins the node with the marker and the record would
+    // authorize nothing (retry) or skip the whole loop (committed). Fail
+    // closed: node-level records need the version 6 journal that proves the
+    // node is plain; older journals resolve per element when the log proves
+    // it, and otherwise use the bulk `--retry-uncertain` flag or a fresh
+    // checkpoint. Resume enforces the same rule program-aware, so a
+    // hand-written node-level record for a loop is refused instead of
+    // silently skipping it.
+    let journal_version = data.get("version").and_then(Value::as_u64).unwrap_or(0);
     let element_kind = in_flight
         .get("element_kind")
         .and_then(Value::as_str)
@@ -262,14 +275,20 @@ fn resolve_uncertain(
         || in_flight
             .get("element_start")
             .is_some_and(|value| !value.is_null());
-    let is_element_node =
-        journal_marks_elements || has_element_progress(directory)? || !pending.is_empty();
+    let has_progress = has_element_progress(directory)?;
+    let is_element_node = journal_marks_elements || has_progress || !pending.is_empty();
+    let pre_marking = journal_version < 6 && element_kind.is_empty();
     // Node-level records cover whole nodes, never `for each` elements. Each
     // uncertain element needs its own record; a node-level record authorizes
     // nothing on an element node however broad its wording.
     if element.is_none() && is_element_node {
         bail!(
             "node-level resolutions are not valid for for-each nodes; resolve each element instead"
+        );
+    }
+    if element.is_none() && pre_marking && !has_progress && pending.is_empty() {
+        bail!(
+            "checkpoint predates element markers, so a plain node cannot be told from a for-each loop killed before its first begin; node-level resolutions are refused here, use --retry-uncertain or a fresh checkpoint"
         );
     }
     // A parallel result carries a value, stderr and outcome the resolution
@@ -286,10 +305,24 @@ fn resolve_uncertain(
     }
     // Per-element records name entries of a `for each` element log. Refuse them
     // for plain nodes, where a stray element index must not stand in for the
-    // node-level decision resume enforces.
+    // node-level decision resume enforces. On a pre-marking journal the same
+    // refusal covers a loop killed before its first begin: only a future
+    // retry is meaningful there, and without the marker the loop cannot be
+    // told from a plain node, so the bulk `--retry-uncertain` flag is the
+    // safe path until the element log proves the node.
     if element.is_some() && !is_element_node {
+        if pre_marking {
+            bail!("node {node:?} shows no element marker or element log, so it cannot be told from a plain node on this older checkpoint; use --retry-uncertain or a fresh checkpoint");
+        }
         bail!("node {node:?} is not a for-each node; resolve it without --element");
     }
+    // A retry carries no output, bindings, or fingerprint: it authorizes one
+    // more run of the named element, and the element log's own begin record
+    // remains the source of truth for what started. Only a committed element
+    // pins its begin fingerprint, so resume can refuse a changed list entry
+    // instead of replaying verified output against the wrong item. The match
+    // below still validates the target (certain, already-committed, or
+    // never-begun committed) before recording the retry with no fingerprint.
     let fingerprint = match element {
         Some(wanted) => {
             let began = pending
@@ -299,6 +332,7 @@ fn resolve_uncertain(
                 Some(item) if !item.uncertain => {
                     bail!("for each element {wanted} is certain; only uncertain elements need resolution");
                 }
+                Some(_) if !committed => None,
                 Some(item) => Some(item.fingerprint.clone()),
                 None if committed => {
                     bail!("for each element {wanted} has not begun; only retry can authorize an element that has not begun");
@@ -411,6 +445,7 @@ fn committed_element_index(directory: &Path, wanted: usize) -> Result<bool> {
     let mut reader = std::io::BufReader::new(file);
     let mut line = Vec::new();
     let mut committed = std::collections::BTreeSet::<u64>::new();
+    let mut line_number = 0usize;
     loop {
         line.clear();
         let read =
@@ -419,15 +454,17 @@ fn committed_element_index(directory: &Path, wanted: usize) -> Result<bool> {
         if read == 0 {
             break;
         }
+        line_number += 1;
         if line.last() != Some(&b'\n') {
-            bail!("checkpoint element log has an incomplete line");
+            bail!("checkpoint element log has an incomplete line {line_number}; remove only the torn trailing bytes");
         }
         line.pop();
         if line.is_empty() {
             continue;
         }
-        let value: Value = serde_json::from_slice(&line)
-            .context("checkpoint element log is malformed or corrupt")?;
+        let value: Value = serde_json::from_slice(&line).with_context(|| {
+            format!("checkpoint element log line {line_number} is malformed or corrupt; remove only that line")
+        })?;
         if value.get("kind").and_then(Value::as_str) == Some("commit") {
             if let Some(index) = value.get("index").and_then(Value::as_u64) {
                 committed.insert(index);
@@ -491,8 +528,22 @@ pub fn summarize(directory: &Path) -> Result<Value> {
     let (blob_count, blob_bytes) = blob_totals(&directory.join("blobs"))?;
     // Issue #536: per-node resolutions recorded with `checkpoint resolve`.
     // Output and bindings stay in the checkpoint; status shows who, when and
-    // why. Unresolved uncertain items keep their existing refusal.
-    let resolutions = read_status_resolutions(directory)?;
+    // why. Unresolved uncertain items keep their existing refusal. A torn or
+    // duplicate resolutions log still fails closed, but the error names the
+    // journal it blocks (status, in-flight step, lock) so recovery is not
+    // blind; remove only the damaged line, keep the file 0600, re-run
+    // resolve one item at a time. There is no revoke tool.
+    let in_flight_step_for_error = in_flight
+        .as_ref()
+        .and_then(|node| node.get("step_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let resolutions = read_status_resolutions(directory).map_err(|error| {
+        anyhow!(
+            "checkpoint {status} with in-flight step {in_flight_step_for_error:?} (locked={lock_held}): {error:#}"
+        )
+    })?;
     let journal_marks_elements = data
         .get("in_flight")
         .filter(|value| !value.is_null())
@@ -512,7 +563,12 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         .and_then(|node| node.get("step_id"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    let pending_uncertain: Vec<u64> = pending_elements(directory)?
+    let pending_uncertain: Vec<u64> = pending_elements(directory)
+        .map_err(|error| {
+            anyhow!(
+                "checkpoint {status} with in-flight step {in_flight_step_for_error:?} (locked={lock_held}): {error:#}"
+            )
+        })?
         .into_iter()
         .filter(|element| element.uncertain)
         .map(|element| element.index)
@@ -629,23 +685,33 @@ fn pending_elements(directory: &Path) -> Result<Vec<PendingElement>> {
     let mut reader = std::io::BufReader::new(file);
     let mut line = Vec::new();
     let mut pending = std::collections::BTreeMap::<u64, (String, bool)>::new();
+    let mut line_number = 0usize;
     loop {
         line.clear();
         let read =
             crate::runtime::checkpoint::read_bounded_line(&mut reader, &mut line, max_element_line)
-                .context("reading checkpoint element log")?;
+                .with_context(|| {
+                    format!(
+                        "reading checkpoint element log after {} pending entr(y/ies)",
+                        pending.len()
+                    )
+                })?;
         if read == 0 {
             break;
         }
+        line_number += 1;
         if line.last() != Some(&b'\n') {
-            bail!("checkpoint element log has an incomplete line");
+            bail!("checkpoint element log has an incomplete line {line_number} after {} pending entr(y/ies); remove only the torn trailing bytes", pending.len());
         }
         line.pop();
         if line.is_empty() {
             continue;
         }
-        let value: Value = serde_json::from_slice(&line)
-            .context("checkpoint element log is malformed or corrupt")?;
+        let value: Value = serde_json::from_slice(&line).with_context(|| {
+            format!(
+                "checkpoint element log line {line_number} is malformed or corrupt; remove only that line"
+            )
+        })?;
         let kind = value.get("kind").and_then(Value::as_str).unwrap_or("");
         let index = value
             .get("index")

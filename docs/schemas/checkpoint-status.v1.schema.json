@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://execute.invalid/schemas/checkpoint-status.v1.schema.json",
   "title": "Execute checkpoint status, protocol execute.checkpoint_status/1",
-  "description": "Read-only summary from `execute checkpoint status DIR --json`. The journal checksum is reported as present or missing and is never verified by this command. `resolutions` lists recorded operator decisions (who, when and why; output and bindings stay in the checkpoint) and `unresolved_uncertain` lists begun-but-uncommitted uncertain nodes and elements still awaiting a decision.",
+  "description": "Read-only summary from `execute checkpoint status DIR --json`. The journal checksum is reported as present or missing and is never verified by this command. `resolutions` lists recorded operator decisions (who, when and why; output, bindings and fingerprints stay in the 0600 checkpoint as resume evidence) and `unresolved_uncertain` lists begun-but-uncommitted uncertain nodes and elements still awaiting a decision. The actor is `uid:<euid>` on Unix, the process-token `sid:S-...` on Windows, or `unverified:<name>` elsewhere; the reason is operator-supplied plaintext and must never carry secrets.",
   "type": "object",
   "additionalProperties": false,
   "required": ["protocol", "directory", "journal", "blobs", "lock_file_present", "resume_action"],
@@ -98,8 +98,8 @@
           "node": { "type": "string" },
           "element": { "type": ["integer", "null"] },
           "decision": { "type": "string", "enum": ["committed", "retry"] },
-          "reason": { "type": "string" },
-          "actor": { "type": "string" },
+          "reason": { "type": "string", "description": "Operator-supplied plaintext shown by status; never carries secrets." },
+          "actor": { "type": "string", "description": "Who recorded the decision: uid:<euid> on Unix, process-token sid:S-... on Windows, or unverified:<name> elsewhere." },
           "at": { "type": "integer", "minimum": 0 }
         }
       }

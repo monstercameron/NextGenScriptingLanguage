@@ -949,10 +949,6 @@ impl Journal {
         self.data.identity.mode == "finite"
     }
 
-    fn in_flight_start(&self) -> Option<usize> {
-        self.data.in_flight.as_ref().map(|node| node.start)
-    }
-
     fn element_node_fingerprint(&self) -> Result<String> {
         self.data
             .in_flight

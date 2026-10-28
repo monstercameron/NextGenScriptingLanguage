@@ -140,7 +140,11 @@ impl ResolutionRecord {
 
 /// Read and validate every resolution in a checkpoint directory. A missing log
 /// means no resolutions. Each line is bounded; a torn final line from an
-/// interrupted append is refused rather than silently dropped.
+/// interrupted append is refused rather than silently dropped. Recovery is
+/// manual on purpose (there is no revoke tool): remove only the damaged
+/// trailing bytes or the duplicate line with an owner-controlled editor, keep
+/// the file 0600, and re-run resolve one item at a time. The error names how
+/// many valid records precede the damage so the operator is not blind.
 pub(crate) fn read_resolutions(
     directory: &Path,
     max_output_bytes: usize,
@@ -157,6 +161,7 @@ pub(crate) fn read_resolutions(
     let mut reader = std::io::BufReader::new(file);
     let mut line = Vec::new();
     let mut records = Vec::new();
+    let mut line_number = 0usize;
     loop {
         line.clear();
         let read = crate::runtime::checkpoint::read_bounded_line(
@@ -164,20 +169,35 @@ pub(crate) fn read_resolutions(
             &mut line,
             MAX_RESOLUTION_LINE,
         )
-        .context("reading checkpoint resolutions")?;
+        .with_context(|| {
+            format!(
+                "reading checkpoint resolutions after {} valid record(s)",
+                records.len()
+            )
+        })?;
         if read == 0 {
             break;
         }
+        line_number += 1;
         if line.last() != Some(&b'\n') {
-            bail!("checkpoint resolutions has an incomplete line");
+            bail!(
+                "checkpoint resolutions has an incomplete line {} after {} valid record(s); remove only the torn trailing bytes and re-run resolve",
+                line_number,
+                records.len()
+            );
         }
         line.pop();
         if line.is_empty() {
             continue;
         }
-        let record: ResolutionRecord = serde_json::from_slice(&line)
-            .context("checkpoint resolutions is malformed or corrupt")?;
-        validate_record(&record, max_output_bytes)?;
+        let record: ResolutionRecord = serde_json::from_slice(&line).with_context(|| {
+            format!(
+                "checkpoint resolutions line {line_number} is malformed or corrupt after {} valid record(s); remove only that line and re-run resolve",
+                records.len()
+            )
+        })?;
+        validate_record(&record, max_output_bytes)
+            .with_context(|| format!("checkpoint resolutions line {line_number} is invalid"))?;
         records.push(record);
         if records.len() > MAX_RESOLUTIONS {
             bail!("checkpoint has too many resolutions");
@@ -186,7 +206,10 @@ pub(crate) fn read_resolutions(
     let mut seen = std::collections::BTreeSet::new();
     for record in &records {
         if !seen.insert(record.key()) {
-            bail!("checkpoint has a duplicate resolution for its node");
+            let (node, element) = record.key();
+            bail!(
+                "checkpoint has a duplicate resolution for node {node:?} element {element:?}; remove only the duplicate line and re-run resolve"
+            );
         }
     }
     Ok(records)
@@ -322,9 +345,15 @@ pub(crate) fn element_resolution<'a>(
 /// Current operator identity for a new resolution record. The id is never
 /// taken from the environment alone: on Unix it is the effective uid, which
 /// the process cannot spoof, with the claimed login name (if any) kept as
-/// display-only text in parentheses. Readers must treat the `uid:` prefix as
-/// authoritative and the parenthesized name as a hint. Older records holding
-/// a bare name still read; they are not re-trusted.
+/// display-only text in parentheses; on Windows it is the process token SID
+/// (`sid:S-...`), with the claimed name kept the same way. Any other platform
+/// prefixes the environment name with `unverified:`, and older bare-name
+/// records still read but are not re-trusted. Readers must treat the `uid:`
+/// and `sid:` prefixes as authoritative, the parenthesized name as a hint,
+/// and anything else as unverified. The reason text is operator-supplied
+/// plaintext shown by status: never paste secrets into it. Committed output
+/// and bindings may hold secrets; they stay in the 0600 checkpoint and are
+/// never printed by status or resolve.
 pub(crate) fn current_actor() -> String {
     #[cfg(unix)]
     {
@@ -346,17 +375,49 @@ pub(crate) fn current_actor() -> String {
             format!("uid:{uid}({claimed})")
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let mut claimed = String::new();
+        for key in ["USERNAME", "USER", "LOGNAME"] {
+            if let Ok(name) = std::env::var(key) {
+                let name = name.trim().to_owned();
+                if !name.is_empty() {
+                    claimed = name.chars().take(64).collect();
+                    break;
+                }
+            }
+        }
+        match crate::platform::windows::current_user_sid_text() {
+            Ok(sid) => {
+                let sid: String = sid.chars().take(184).collect();
+                if claimed.is_empty() {
+                    format!("sid:{sid}")
+                } else {
+                    format!("sid:{sid}({claimed})")
+                }
+            }
+            Err(_) => {
+                if claimed.is_empty() {
+                    "unverified:operator".to_owned()
+                } else {
+                    let claimed: String = claimed.chars().take(64).collect();
+                    format!("unverified:{claimed}")
+                }
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         for key in ["USER", "USERNAME", "LOGNAME"] {
             if let Ok(name) = std::env::var(key) {
                 let name = name.trim().to_owned();
                 if !name.is_empty() {
-                    return name.chars().take(128).collect();
+                    let name: String = name.chars().take(64).collect();
+                    return format!("unverified:{name}");
                 }
             }
         }
-        "operator".to_owned()
+        "unverified:operator".to_owned()
     }
 }
 
@@ -477,10 +538,18 @@ mod tests {
     }
 
     #[test]
-    fn retry_record_carries_no_output_or_bindings() {
+    fn retry_record_carries_no_output_bindings_or_fingerprint() {
         let mut bad = record("node:1", None, ResolutionDecision::Retry);
         bad.output = Some(String::new());
         assert!(validate_record(&bad, 1024).is_err());
+        let mut bad = record("node:1", Some(0), ResolutionDecision::Retry);
+        bad.fingerprint = Some("fp".to_owned());
+        assert!(validate_record(&bad, 1024).is_err());
+        // A begun-element retry persists with no fingerprint: the element
+        // log's begin record stays the source of truth, and resume still
+        // gates every uncovered uncertain element by name.
+        let good = record("node:1", Some(0), ResolutionDecision::Retry);
+        assert!(validate_record(&good, 1024).is_ok());
     }
 
     #[test]
@@ -524,6 +593,28 @@ mod tests {
         assert!(
             actor.starts_with("uid:"),
             "actor must carry the effective uid, got {actor:?}"
+        );
+        assert!(actor.len() <= MAX_ID_BYTES);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn actor_identity_is_sid_based() {
+        let actor = current_actor();
+        assert!(
+            actor.starts_with("sid:") || actor.starts_with("unverified:"),
+            "actor must carry the token SID or be marked unverified, got {actor:?}"
+        );
+        assert!(actor.len() <= MAX_ID_BYTES);
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    #[test]
+    fn actor_identity_is_marked_unverified() {
+        let actor = current_actor();
+        assert!(
+            actor.starts_with("unverified:"),
+            "actor must be marked unverified off Unix/Windows, got {actor:?}"
         );
         assert!(actor.len() <= MAX_ID_BYTES);
     }
@@ -585,5 +676,37 @@ mod tests {
         assert_eq!(ok, 1, "exactly one concurrent resolve records");
         let kept = read_resolutions(&path, 1024 * 1024).unwrap();
         assert_eq!(kept.len(), 1);
+    }
+
+    /// Holding the checkpoint lock makes a second acquire fail closed with
+    /// `locked`. Same-process separate handles conflict on both `flock`
+    /// (Unix) and `LockFileEx` (Windows), so this is the deterministic
+    /// in-process half of the resolve-vs-resume mutual exclusion the CLI
+    /// relies on; the live-process half lives in the integration suite. It
+    /// runs in CI on every platform, and no Windows runtime behavior beyond
+    /// CI is claimed here.
+    #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+    #[test]
+    fn resolve_lock_is_exclusive_across_handles() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        let held = crate::runtime::checkpoint::acquire_resolve_lock(path).unwrap();
+        assert!(
+            crate::runtime::checkpoint::directory_lock_held(path).unwrap(),
+            "a held checkpoint must probe as locked"
+        );
+        let error = crate::runtime::checkpoint::acquire_resolve_lock(path)
+            .err()
+            .expect("a second lock must be rejected");
+        assert!(
+            error.to_string().contains("locked"),
+            "unexpected concurrent error: {error:#}"
+        );
+        drop(held);
+        assert!(
+            !crate::runtime::checkpoint::directory_lock_held(path).unwrap(),
+            "a released checkpoint must probe as unlocked"
+        );
+        let _reacquired = crate::runtime::checkpoint::acquire_resolve_lock(path).unwrap();
     }
 }

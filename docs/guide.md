@@ -370,21 +370,36 @@ execute checkpoint resolve CKPT --node STEP_ID --element 1 --as retry \
 instead of rerunning the effect; `retry` authorizes one node or element to run again
 without the bulk `--retry-uncertain` flag. Element indices are 0-based, matching the
 `for each element N` diagnostics. Element nodes take only per-element records, and
-parallel (`parallel for each`) elements resolve as `retry` only. `checkpoint status
---json` lists recorded decisions under `resolutions` and still-undecided items under
-`unresolved_uncertain`. A committed element is stored as that element's commit on the
-next resume, so repeating the resume never reruns it. Run records (`show-run`) do not
-carry a checkpoint pointer, so they do not display resolutions; read the checkpoint
-status for the recorded decisions.
+parallel (`parallel for each`) elements resolve as `retry` only. On a checkpoint
+that predates the version 6 element marker, a plain node cannot be told from a
+loop killed before its first begin, so node-level records are refused there; use
+`--retry-uncertain` or a fresh checkpoint until the element log proves the node.
+`checkpoint status --json` lists recorded decisions under `resolutions` and
+still-undecided items under `unresolved_uncertain`. A committed element is stored
+as that element's commit on the next resume, so repeating the resume never reruns
+it. Run records (`show-run`) do not carry a checkpoint pointer, so they do not
+display resolutions; read the checkpoint status for the recorded decisions.
+
+Each record notes who decided (Unix `uid:<euid>` with the login name as a
+display-only hint, Windows process-token `sid:S-...` the same way, otherwise
+`unverified:<name>`), when, and why. The reason is operator-supplied plaintext
+shown by status: never paste secrets into it. Committed output and bindings may
+hold secrets; they stay in the 0600 checkpoint as resume evidence and are never
+printed by status or resolve.
 
 Checkpoints do not make external effects transactional. An interrupted command
 with an uncertain outcome requires an explicit decision per uncertain item: a
 resolution, or `--retry-uncertain` for the whole run; completed nodes
 cannot be rewritten in place. Resolutions never authorize two runs of one effect:
-recording the same node or element twice is refused, concurrent resolves hold the
-checkpoint lock so one records and the other is refused as locked or duplicate,
-and a torn resolutions log refuses every resume until the operator removes the
-damaged line. See [recovery contracts](runtime-reference.md#recover-after-a-failure),
+recording the same node or element twice is refused. The running program holds
+the checkpoint `lock` for the whole resume, `resolve` holds the same lock across
+validation and append, and `status` probes it without creating it, so a resume in
+progress makes `resolve` fail with `locked` and status reports `locked`. A torn
+or duplicate resolutions log fails closed with the count of valid records and the
+damaged line number: remove only that line (or the torn trailing bytes) with an
+owner-controlled editor, keep the file 0600, and re-run `resolve` one item at a
+time. There is no revoke tool. See
+[recovery contracts](runtime-reference.md#recover-after-a-failure),
 [per-element checkpoints](runtime-reference.md#per-element-checkpoints) and
 [retry safety](language.md#retry-safety).
 

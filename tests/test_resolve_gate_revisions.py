@@ -125,9 +125,58 @@ class ResolveTests(unittest.TestCase):
             self.assertIn(f"head_sha={HEAD}", written)
 
     def test_cli_reports_incomplete_without_payload(self):
-        self.assertEqual(
-            resolver.main(["--event-name", "pull_request", "--sha", HEAD]), 2
-        )
+        # Hermetic against ambient GitHub Actions state: runners always
+        # export GITHUB_EVENT_PATH, which main() honors when --event-path
+        # is omitted. Without scrubbing, a valid ambient payload turns
+        # this no-payload case exit 0 instead of the expected 2.
+        import os
+
+        old = dict(os.environ)
+        try:
+            for key in (
+                "GITHUB_EVENT_NAME",
+                "GITHUB_EVENT_PATH",
+                "GITHUB_SHA",
+                "GITHUB_OUTPUT",
+            ):
+                os.environ.pop(key, None)
+            self.assertEqual(
+                resolver.main(["--event-name", "pull_request", "--sha", HEAD]),
+                2,
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_cli_uses_ambient_event_path_when_no_explicit_path(self):
+        # Regression for the GitHub Actions interaction above: with no
+        # --event-path flag, the resolver must honor the ambient
+        # GITHUB_EVENT_PATH payload (the production path used by the
+        # "Resolve gate revisions" step). Fail-closed handling is
+        # unchanged: this only provides the payload, it never synthesizes
+        # revisions.
+        with tempfile.TemporaryDirectory(prefix="gate-ambient-") as tmp:
+            import os
+
+            event = Path(tmp) / "event.json"
+            event.write_text(json.dumps(pr_payload()), encoding="utf-8")
+            output = Path(tmp) / "github_output"
+            old = dict(os.environ)
+            try:
+                os.environ.pop("GITHUB_EVENT_NAME", None)
+                os.environ["GITHUB_EVENT_PATH"] = str(event)
+                os.environ.pop("GITHUB_SHA", None)
+                os.environ["GITHUB_OUTPUT"] = str(output)
+                code = resolver.main(
+                    ["--event-name", "pull_request", "--sha", HEAD]
+                )
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+            self.assertEqual(code, 0)
+            written = output.read_text(encoding="utf-8")
+            self.assertIn(f"base_sha={BASE}", written)
+            self.assertIn(f"head_sha={HEAD}", written)
 
 
 class FetchOrderingTests(unittest.TestCase):

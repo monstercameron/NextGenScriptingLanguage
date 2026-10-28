@@ -403,8 +403,9 @@ fn the_launch_check_classifies_the_manifest_name_and_the_resolved_path() {
             "{names:?} {resolved:?}: {error:#}"
         );
     }
-    // A file whose own name is not listed is still refused when its resolved path is an
-    // elevator: a renamed copy of an elevator is an elevator.
+    // A file whose own name is not listed is still refused when its resolved path
+    // keeps a listed file name (for example a symlink or same-named alias).
+    // A renamed copy with an unlisted file name is not recognised.
     let renamed = directory.path().join("pkexec");
     fs::write(&renamed, b"").unwrap();
     let error =
@@ -415,6 +416,7 @@ fn the_launch_check_classifies_the_manifest_name_and_the_resolved_path() {
     );
     flow::capabilities::check_privileged_launch(&registry, &["printf"], Path::new("printf"))
         .expect("a standard executable is not refused");
+}
 
 fn explain_json_plan(work: &Path, source: &str) -> serde_json::Value {
     let program = work.join("probe.program");
@@ -620,7 +622,6 @@ fn policy_header_without_privileged_denies_new_launchers() {
         }),
         "{verdict}"
     );
-}
 }
 
 #[test]

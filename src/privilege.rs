@@ -4,21 +4,24 @@
 //! Classification is by executable name, after its directory and any `.exe` suffix
 //! are removed, compared case-insensitively. Both the name written in the program and
 //! the name of the executable that would actually run (the canonical resolved path,
-//! see `capabilities::check_privileged_launch`) are checked, so a link, an absolute
-//! path, a `PATH` alias, or a renamed copy of a listed program is still classified
-//! the same way. A trailing version (`python3.12`, `lua5.4`) is ignored the same
-//! way. A name that is not on a list is not recognised: this is a review aid and a
-//! policy hook, not a sandbox and not a complete confinement boundary. Fail-closed
-//! enforcement is the strict capability policy itself with OS confinement in
-//! untrusted mode; `deny_privileged` only refuses the known names below.
+//! see `capabilities::check_privileged_launch`) are checked, so an absolute path
+//! or a `PATH` alias that keeps the listed file name, and a symlink whose
+//! canonical target keeps the listed file name, are still classified the same
+//! way. A trailing version (`python3.12`, `lua5.4`) is ignored the same
+//! way. A renamed copy or hardlink (same bytes, unlisted file name) is not
+//! recognised: classification is by name, not content. A name that is not on a list is not
+//! recognised: this is a review aid and a policy hook, not a sandbox and not a
+//! complete confinement boundary. Fail-closed enforcement is the strict capability
+//! policy itself with OS confinement in untrusted mode; `deny_privileged` only
+//! refuses the known names below.
 //!
 //! The lists are conservative. `deny_privileged` in a capability policy refuses every
 //! listed elevator, and it also refuses every wrapper and shell listed here whatever
 //! their arguments, because their arguments can name a program the program text
 //! never mentions (including host-escape, scheduling, D-Bus, and desktop-launch
 //! arguments such as `flatpak-spawn --host`, `at` job text, a `systemd1` D-Bus call,
-//! or `gio open`). A wrapper can be allowed by name with `allow_wrappers`.
-//! Elevators cannot be allowed.
+//! or `gio open`). A wrapper can be allowed by exact normalized name with
+//! `allow_wrappers`. Elevators cannot be allowed.
 
 /// Executables that run a command with elevated rights.
 pub const ELEVATORS: &[&str] = &[
@@ -241,7 +244,11 @@ pub fn is_privileged_invocation(binary: &str) -> bool {
 /// is privileged, so an unclassified step cannot pass as harmless. A known binary
 /// that resolves to a listed launcher or elevator is privileged even when the
 /// written name is an unlisted alias, which keeps `explain` consistent with
-/// `capabilities::check_privileged_launch`.
+/// `capabilities::check_privileged_launch`. A symlink whose canonical target
+/// keeps the listed file name is likewise caught. A renamed copy or hardlink
+/// whose file name is not listed is not recognised, and an alias that fails to
+/// resolve falls back to the written name, so runtime enforcement remains
+/// authoritative.
 pub fn is_privileged_step(binary: Option<&str>, resolved_path: Option<&str>) -> bool {
     if let Some(path) = resolved_path {
         let privileged = match classify(path) {

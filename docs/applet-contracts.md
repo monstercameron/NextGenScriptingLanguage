@@ -693,16 +693,24 @@ marks a command launcher or shell whose arguments can name another program
 `posh`, `cmd`, `powershell`, `pwsh`). Names match after the directory and any
 `.exe` suffix are removed, in any case, ignoring a trailing version
 (`python3.12`, `bash5`). The executable that would actually run is checked too, by
-its canonical path, so an absolute path, symlink, alias, or renamed copy of a
-listed program is still classified the same way.
+its canonical path, so an absolute path or alias that keeps the listed file
+name, and a symlink whose canonical target keeps the listed file name, are
+still classified the same way. A renamed copy or hardlink with an unlisted file
+name is not recognised because classification is by name, not content, and
+hyphenated same-family variants that are not listed (for example
+`docker-compose`, `dbus-run-session`, `atq`) are also not recognised. An alias
+that fails to resolve at review time falls back to its written name, so runtime
+enforcement remains authoritative.
 
 A capability policy with `"deny_privileged": true` refuses those steps before any
 process starts. Elevators are always refused. Launchers and shells are refused
 whatever their arguments, because their arguments can name a program the program
 text never mentions (including `flatpak-spawn --host`, an `at` job, a D-Bus call to
 `org.freedesktop.systemd1` or `org.freedesktop.Flatpak`, a `.desktop` activation,
-or `gio open`); a launcher can be permitted by name with
-`"allow_wrappers": ["env"]`. The check runs in the static preflight and again at
+or `gio open`); a launcher can be permitted by exact normalized name with
+`"allow_wrappers": ["env"]` (a versioned spelling needs its own entry, for
+example `"allow_wrappers": ["docker-27"]` for `docker-27`). The check runs in
+the static preflight and again at
 every command launch, so finite runs, resumed runs, task groups, parallel loops,
 spawned jobs, command conditions and called programs are all covered.
 

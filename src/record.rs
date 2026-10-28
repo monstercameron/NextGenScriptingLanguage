@@ -1899,7 +1899,7 @@ fn unix_ms() -> u128 {
 #[cfg(unix)]
 fn create_private_directory(path: &Path) -> Result<File> {
     let (directory, _created) =
-        crate::runtime::checkpoint::open_or_create_directory_tree(path, true, 0o700)?
+        crate::runtime::checkpoint::open_or_create_directory_tree(path, "record", true, 0o700)?
             .context("creating record directory")?;
     if !crate::runtime::checkpoint::pinned_directory_names(&directory)?.is_empty() {
         bail!(

@@ -1193,10 +1193,22 @@ mod tests {
         assert!(execution_identity(Path::new("/definitely-not-an-execute-test-binary")).is_none());
     }
 
+    /// Strict denial lanes (issue #457) set `EXECUTE_REQUIRE_OS_SANDBOX`, so an
+    /// unavailable facility fails the denial tests instead of skipping them.
+    /// Local runs leave it unset and keep the historical skip behavior.
+    fn sandbox_denial_is_required() -> bool {
+        std::env::var_os("EXECUTE_REQUIRE_OS_SANDBOX").is_some()
+    }
+
     fn require_sandbox(grant: &AppletGrant, binary: &Path, cwd: &Path, label: &str) -> bool {
         match preflight(grant, binary, cwd) {
             Ok(()) => true,
             Err(error) if is_unavailable(&error) => {
+                if sandbox_denial_is_required() {
+                    panic!(
+                        "{label}: OS sandbox facility is unavailable, but EXECUTE_REQUIRE_OS_SANDBOX is set: {error:#}"
+                    );
+                }
                 eprintln!("skipping {label}: OS sandbox facility unavailable: {error:#}");
                 false
             }
@@ -1554,6 +1566,11 @@ mod tests {
             .into_iter()
             .find(|path| path.is_file());
         let Some(python) = python else {
+            if sandbox_denial_is_required() {
+                panic!(
+                    "bubblewrap network integration requires Python 3, but EXECUTE_REQUIRE_OS_SANDBOX is set"
+                );
+            }
             eprintln!("skipping bubblewrap network integration: Python 3 is unavailable");
             return;
         };

@@ -1,0 +1,122 @@
+name: Sandbox denial
+# Issue #457: the untrusted-mode OS-sandbox guarantee must be proven on real
+# runners, never self-skipped. Every job below fails when a denial test
+# skips: EXECUTE_REQUIRE_OS_SANDBOX turns the facility-absent skips in
+# platform::sandbox tests and lane_v8_sandbox_denial into panics, and each
+# Unix step additionally greps its own log for "skipping " as a backstop.
+#
+# Runner limitations (see issue #457):
+# - Linux needs unprivileged user namespaces for bubblewrap. A runner without
+#   them fails this lane closed (red job), never silently green.
+# - macOS relies on the deprecated sandbox-exec facility (threat model H8).
+#   If Apple removes it, this lane fails closed until the backend is replaced.
+# - Windows has no OS sandbox backend (threat model H6), so it proves refusal
+#   only: untrusted native launches must be refused before execution.
+#   Positive confinement is proven on Linux and macOS.
+# - Network fixtures use an owned loopback listener only; no external egress
+#   is attempted, so runners need no network allowlist.
+# - Failpoint panic tests (lane_v8_panic, issue #368) are out of scope here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sandbox-denial-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux-denial:
+    name: Linux sandbox denial (bubblewrap, no silent skips)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      EXECUTE_REQUIRE_OS_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install Bubblewrap and fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          command -v bwrap
+          bwrap --version
+          python3 --version
+      - name: Real bubblewrap denial tests (no skips)
+        run: |
+          set -euo pipefail
+          cargo test --locked --release --features full,test-fixtures --lib platform::sandbox:: \
+            -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-lib.log"
+          if grep -E "skipping " "$RUNNER_TEMP/sandbox-lib.log"; then
+            echo "::error::sandbox denial tests skipped in the mandatory lane"
+            exit 1
+          fi
+      - name: Untrusted-mode denial through the CLI (no skips)
+        run: |
+          set -euo pipefail
+          cargo test --locked --release --features full,test-fixtures \
+            --test lane_v8_sandbox_denial --test lane_v8_untrusted --test lane_v8_hosts \
+            -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-cli.log"
+          if grep -E "skipping " "$RUNNER_TEMP/sandbox-cli.log"; then
+            echo "::error::sandbox denial tests skipped in the mandatory lane"
+            exit 1
+          fi
+  macos-denial:
+    name: macOS sandbox denial (sandbox-exec, no silent skips)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      EXECUTE_REQUIRE_OS_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Require the system sandbox facility and fixtures
+        run: |
+          test -x /usr/bin/sandbox-exec
+          /usr/bin/nc -h 2>&1 | head -1 || true
+          python3 --version
+      - name: Real sandbox-exec denial tests (no skips)
+        run: |
+          set -euo pipefail
+          cargo test --locked --release --features full,test-fixtures --lib platform::sandbox:: \
+            -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-lib.log"
+          if grep -E "skipping " "$RUNNER_TEMP/sandbox-lib.log"; then
+            echo "::error::sandbox denial tests skipped in the mandatory lane"
+            exit 1
+          fi
+      - name: Untrusted-mode denial through the CLI (no skips)
+        run: |
+          set -euo pipefail
+          cargo test --locked --release --features full,test-fixtures \
+            --test lane_v8_sandbox_denial --test lane_v8_untrusted --test lane_v8_hosts \
+            -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/sandbox-cli.log"
+          if grep -E "skipping " "$RUNNER_TEMP/sandbox-cli.log"; then
+            echo "::error::sandbox denial tests skipped in the mandatory lane"
+            exit 1
+          fi
+  windows-refusal:
+    name: Windows untrusted native refusal
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Untrusted native launches are refused without OS confinement
+        run: |
+          cargo test --locked --release --features full,test-fixtures --test lane_v8_sandbox_denial --test lane_v8_untrusted --test lane_v8_hosts -- --test-threads=1

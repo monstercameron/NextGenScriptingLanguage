@@ -96,6 +96,24 @@ original version labels.
   policy setup dominates: a one-line program is level with a cold run, and a
   530-manifest directory with two policies ran 14 percent faster. Unix only. See the
   [daemon section](docs/language.md#warm-daemon---daemon).
+- Live control endpoints are confined to private directories. `execute live serve`
+  refuses a Unix socket whose parent directory is not owned by you and private
+  (mode 0700), and `run --control` hosts its endpoint under a private per-user
+  directory with a randomized name instead of a predictable `$TMPDIR` path. A
+  reserved lane keeps `control stop` and `read` working while all 16 client slots
+  hold long polls; other requests past the slot limit fail fast with `busy`. A
+  burst-tolerant flood budget admits benign bursts (2048 back-to-back
+  non-priority requests, refilling at 64 per second) while sustained floods shed
+  with `busy`; reserve-eligible priority never spends the budget, and partial
+  senders wait in a bounded 64-connection queue holding no thread or slot. When
+  `--agent-policy` is configured, only requests already authorized for `read` or
+  `control stop` may claim a reserve slot; other fake-priority frames are demoted
+  to the general lane, as are no-policy claims carrying `auth` and
+  authorized-but-invalid `read`/`stop` frames the handler would reject. Shed
+  `busy` replies use non-blocking writes that may truncate under saturation
+  (callers should retry `busy`, EOF, and truncated responses like `busy`; the
+  CLI itself performs a single attempt and does not auto-retry). See the
+  [live control contract](docs/live-control.md#resource-and-compatibility-contract).
 - Bundled manifest index. The shipped manifests are embedded as one deflate stream with a
   generated index and parsed on first use, so registry load fell from 5.41 to 0.32 ms.
   The default directory uses the index when it matches by name and size; a directory

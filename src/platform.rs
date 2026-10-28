@@ -394,6 +394,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 mod cancel_signal_tests {
     use super::*;
 

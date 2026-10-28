@@ -115,6 +115,40 @@ fn console_wide(data: &[u8]) -> Vec<u16> {
     String::from_utf8_lossy(data).encode_utf16().collect()
 }
 
+/// Whether this process's stdout is a Windows console. A native child that
+/// inherits a console handle writes through its own runtime, which may reject
+/// non-UTF-8 bytes before this process can replace them (Rust's stdio does);
+/// callers must capture such a child's stdout instead and relay it through
+/// `write_with_deadline`, whose console branch is lossy.
+pub(super) fn stdout_is_console() -> bool {
+    let Ok(target) = handle(1) else {
+        return false;
+    };
+    let mut mode = 0;
+    // SAFETY: target is the live standard-output handle from handle(), and
+    // mode is a live local u32 for the out-parameter. A zero return means the
+    // handle is redirected (pipe or file), which keeps exact bytes.
+    unsafe { GetConsoleMode(target, &mut mode) != 0 }
+}
+
+/// Bytes from `bytes` (appended to `pending`) that are ready for a lossy
+/// console write. A trailing UTF-8 sequence that is merely incomplete is held
+/// in `pending` for the next chunk, so a character split across pipe reads is
+/// not replaced; a complete invalid sequence is released at once, because the
+/// console writer replaces it with U+FFFD.
+pub(super) fn console_relay_ready(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
+    pending.extend_from_slice(bytes);
+    match std::str::from_utf8(pending) {
+        Ok(_) => std::mem::take(pending),
+        Err(error) if error.error_len().is_none() => {
+            let ready = pending[..error.valid_up_to()].to_vec();
+            pending.drain(..error.valid_up_to());
+            ready
+        }
+        Err(_) => std::mem::take(pending),
+    }
+}
+
 /// Writes every byte to `target`, checking `stop` between chunks and retrying partial
 /// writes until all bytes are out.
 fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
@@ -256,5 +290,22 @@ mod tests {
     #[test]
     fn truncated_multibyte_sequence_becomes_one_replacement_char() {
         assert_eq!(displayed(&[0xE2, 0x82]), "�");
+    }
+
+    #[test]
+    fn relay_releases_complete_invalid_sequence_for_replacement() {
+        let mut pending = Vec::new();
+        let ready = super::console_relay_ready(&mut pending, &[0xFF, 0x41]);
+        assert!(pending.is_empty());
+        assert_eq!(displayed(&ready), "�A");
+    }
+
+    #[test]
+    fn relay_holds_a_multibyte_character_split_across_chunks() {
+        let mut pending = Vec::new();
+        assert!(super::console_relay_ready(&mut pending, &[0xE2, 0x82]).is_empty());
+        let ready = super::console_relay_ready(&mut pending, &[0xAC, 0x41]);
+        assert!(pending.is_empty());
+        assert_eq!(displayed(&ready), "€A");
     }
 }

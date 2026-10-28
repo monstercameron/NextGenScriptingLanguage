@@ -16,6 +16,14 @@ pub(crate) fn peer_is_owner(stream: &UnixStream) -> bool {
     }
 }
 
+// No helper here compares peer confinement: chroot without new namespaces,
+// Landlock and other unobservable restrictions, per-thread credentials, pid
+// reuse between credential and `/proc` reads, and platforms without a complete
+// attestation leave gaps no same-UID comparison can close. A "shared" result
+// cannot prove same confinement, so the daemon never conditions forwarding on
+// one and instead requires explicit operator opt-in at both ends for every
+// forwarded run.
+
 #[cfg(unix)]
 pub(crate) fn peer_has_uid(stream: &UnixStream, owner: libc::uid_t) -> bool {
     use std::os::fd::AsRawFd;

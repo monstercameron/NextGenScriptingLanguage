@@ -1,6 +1,6 @@
 {
   "name": "wc",
-  "description": "Counts lines, words, bytes, or characters in standard input according to the selected wc flags.",
+  "description": "Counts lines, words, bytes, or characters in standard input according to the selected wc flags. Flag operands can name input files, so file arguments read files.",
   "binary": "wc",
   "accepts_stdin": true,
   "cacheable": false,
@@ -19,5 +19,23 @@
         }
       ]
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ]
+  }
 }

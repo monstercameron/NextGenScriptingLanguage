@@ -1,6 +1,6 @@
 {
   "name": "jev.classify",
-  "description": "Chooses a label or described criterion for the question and returns the label, confidence, and separate threshold-based accepted flag.",
+  "description": "Chooses a label or described criterion for the question and returns the label, confidence, and separate threshold-based accepted flag. The env_file and fixture options read files, and live requests connect to the model endpoint.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,
@@ -225,7 +225,16 @@
         "confidence_percent",
         "accepted"
       ]
-    }
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "network.connect"
+    ],
+    "effects": [
+      "filesystem.read",
+      "network.connect"
+    ]
   },
   "parameter_alternatives": [
     {

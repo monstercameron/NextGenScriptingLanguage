@@ -1,6 +1,6 @@
 {
   "name": "uniq",
-  "description": "Collapses or reports adjacent duplicate lines from standard input according to the selected uniq flags.",
+  "description": "Collapses or reports adjacent duplicate lines from standard input according to the selected uniq flags. Flag operands can name an input file and an output file, so file arguments read and write files.",
   "binary": "uniq",
   "accepts_stdin": true,
   "parameters": {
@@ -18,5 +18,25 @@
         }
       ]
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.read",
+      "filesystem.write"
+    ]
+  }
 }

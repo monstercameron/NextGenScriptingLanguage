@@ -1,6 +1,6 @@
 {
   "name": "jev.judge",
-  "description": "Evaluates the question as a yes-or-no decision and returns the decision, confidence, and separate threshold-based accepted flag.",
+  "description": "Evaluates the question as a yes-or-no decision and returns the decision, confidence, and separate threshold-based accepted flag. The env_file and fixture options read files, and live requests connect to the model endpoint.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,
@@ -188,6 +188,15 @@
         "confidence_percent",
         "accepted"
       ]
-    }
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "network.connect"
+    ],
+    "effects": [
+      "filesystem.read",
+      "network.connect"
+    ]
   }
 }

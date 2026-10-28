@@ -2051,6 +2051,7 @@ mod tests {
                 loop {
                     // SAFETY: filler is live; fd is the open pipe writer.
                     let count =
+                        // SAFETY: filler is live; fd is the open pipe writer.
                         unsafe { libc::write(fd, filler.as_ptr().cast(), filler.len()) };
                     if count > 0 {
                         filled += count as usize;
@@ -2349,6 +2350,7 @@ mod tests {
                 loop {
                     // SAFETY: filler is live; fd is the open pipe writer.
                     let count =
+                        // SAFETY: filler is live; fd is the open pipe writer.
                         unsafe { libc::write(fd, filler.as_ptr().cast(), filler.len()) };
                     if count > 0 {
                         filled += count as usize;

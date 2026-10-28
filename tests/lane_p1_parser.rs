@@ -144,3 +144,43 @@ fn graph_parser_accepts_version_marker_and_multiline_accept_and_node_values() {
     assert!(error.starts_with("line 2: "), "{error}");
     assert!(!error.contains("line 1:"), "{error}");
 }
+
+#[test]
+fn sh_probe_workflow_keeps_status_path_out_of_the_shell_script() {
+    // Portable regression for issue #526 (PR #642 Linux CI failure): the
+    // inherited-stderr slow-pipe probe interpolated a quoted status path into
+    // the `sh -c` script string, which terminates the program string literal
+    // early, so workflow line 1 failed with "expected `,` or `]` in list"
+    // before the probe ever ran. The status path must travel as `$1`, a
+    // separate argv element, which also keeps shell quoting exact for paths
+    // containing spaces. This parses anywhere; the slow pipe itself still
+    // runs only on Linux in `inherited_stdio_nonblocking.rs`.
+    let bytes = 1024 * 1024;
+    let fixture = "/tmp/issue-526/native-fixture";
+    let status = "/tmp/issue 526/stream-probe.status";
+    let script = format!("exec \"$0\" stream-probe {bytes} \"$1\"");
+    let source = format!(
+        "run \"sh\" with arguments [\"-c\", {}, {}, {}]\nrun printf with message \"output-line\"\n",
+        serde_json::to_string(&script).unwrap(),
+        serde_json::to_string(&fixture).unwrap(),
+        serde_json::to_string(&status).unwrap(),
+    );
+    let program = parser::parse(&source).unwrap();
+    assert_eq!(program.steps.len(), 2);
+    let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+        panic!("first step must invoke sh");
+    };
+    assert_eq!(call.operation, "sh");
+    let Some(flow::ast::Value::List(arguments)) = call.parameters.get("arguments") else {
+        panic!("sh invocation must carry an arguments list");
+    };
+    assert_eq!(
+        arguments,
+        &vec![
+            flow::ast::Value::String("-c".to_owned()),
+            flow::ast::Value::String(script),
+            flow::ast::Value::String(fixture.to_owned()),
+            flow::ast::Value::String(status.to_owned()),
+        ]
+    );
+}

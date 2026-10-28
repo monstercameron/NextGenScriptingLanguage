@@ -207,6 +207,10 @@ name = "named_background_jobs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "inherited_stdio_nonblocking"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "agent_checkpoint_status"
 required-features = ["model", "agent-advisory"]
 

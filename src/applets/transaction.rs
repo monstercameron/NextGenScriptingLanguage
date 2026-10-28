@@ -285,11 +285,26 @@ fn apply_with_fault(
     // final name first and then verifies the prepared checksum under the lock.
     #[cfg(windows)]
     let _journal_lock = {
-        fs::rename(&stage, &published).map_err(|error| {
-            super::io_error(
-                error,
-                format!("publishing transaction journal {}", published.display()),
-            )
+        // Route the directory publish through the pinned-parent backend so the
+        // post-rename flush addresses the pre-rename handle instead of a
+        // re-resolved path. A flush failure after the rename is
+        // published-but-unsynced; only a failed rename keeps `io_error`.
+        crate::platform::replace_file(&stage, &published).map_err(|error| {
+            if error.published {
+                failed(
+                    "uncertain_effect",
+                    format!(
+                        "transaction journal {} was published but its directory entry may not be on disk: {}",
+                        published.display(),
+                        error.error
+                    ),
+                )
+            } else {
+                super::io_error(
+                    error.error,
+                    format!("publishing transaction journal {}", published.display()),
+                )
+            }
         })?;
         cleanup.0 = None;
         let lock = lock_published_prepared_journal(&published, &data, timeout, context)?;
@@ -308,11 +323,24 @@ fn apply_with_fault(
     let _journal_lock = {
         let lock =
             filesystem::acquire_path_lock(&stage.join("transaction.lock"), timeout, context)?;
-        fs::rename(&stage, &published).map_err(|error| {
-            super::io_error(
-                error,
-                format!("publishing transaction journal {}", published.display()),
-            )
+        // Same pinned-parent backend as the Windows branch above; on Unix this
+        // is a plain rename with unchanged failure codes.
+        crate::platform::replace_file(&stage, &published).map_err(|error| {
+            if error.published {
+                failed(
+                    "uncertain_effect",
+                    format!(
+                        "transaction journal {} was published but its directory entry may not be on disk: {}",
+                        published.display(),
+                        error.error
+                    ),
+                )
+            } else {
+                super::io_error(
+                    error.error,
+                    format!("publishing transaction journal {}", published.display()),
+                )
+            }
         })?;
         cleanup.0 = None;
         sync_directory(published.parent().unwrap_or_else(|| Path::new("."))).map_err(|error| {

@@ -49,7 +49,9 @@ Checkpoint directories and files receive protected owner/SYSTEM DACLs and an
 exclusive `LockFileEx` lock. NTFS reparse points are rejected at the checkpoint
 boundary, and directory flushes never follow a trailing reparse point either:
 a junction or symlink parent is refused instead of flushing another
-directory. Journal replacement flushes the file, publishes it with a POSIX-semantics
+directory. Only the trailing component is checked; intermediate junctions in
+the parent path are still followed. Journal replacement flushes the file,
+publishes it with a POSIX-semantics
 rename (or `MoveFileEx` with write-through where POSIX rename is unavailable),
 then flushes the published parent directory and syncs the checkpoint directory;
 the transaction-journal, `then save to`, and applet file/directory syncs that
@@ -57,9 +59,12 @@ were previously no-ops on Windows now run the same directory flush. The
 publish backend opens the parent directory before the rename and flushes that
 pinned handle rather than a re-resolved path; when the parent cannot be opened
 as a real directory the publish fails before any rename, so no path-based flush
-fallback ever runs. The residual window is a parent swap between the pin and
-the rename (and the `MoveFileEx` fallback takes paths only), which the
-checkpoint lock excludes for journal publishes. Flush handles
+fallback ever runs. The pin does not cover the rename itself: both rename
+APIs take paths, so a parent swap between the pin and the rename (or a swap
+of the target's own path) can still redirect the publish, and replacement
+identity is not re-verified after the rename. The checkpoint lock excludes
+that window for journal publishes; other publishers need their own exclusion
+for the same guarantee. Flush handles
 require `GENERIC_WRITE`, so the writer needs write access to the parent
 directory. These flushes only ask the OS to persist the rename. A successful
 flush means the flush call succeeded; it does not by itself prove the entry

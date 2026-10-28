@@ -1,6 +1,6 @@
 {
   "name": "gh.repo",
-  "description": "Fetches a GitHub repository’s name, star and fork counts, description, URL, and last-update time as JSON.",
+  "description": "Fetches a GitHub repository’s name, star and fork counts, description, URL, and last-update time as JSON. It reads local gh credential and configuration files and connects to the GitHub API.",
   "binary": "gh",
   "cacheable": false,
   "parameters": {
@@ -28,5 +28,25 @@
     {
       "parameter": "repository"
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "network.connect"
+    ],
+    "effects": [
+      "filesystem.read",
+      "network.connect"
+    ]
+  }
 }

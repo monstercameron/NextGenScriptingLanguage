@@ -24,11 +24,56 @@ const MIN_TOKEN_BYTES: usize = 32;
 /// Credential carried only in a live-control request. Its debug form never
 /// includes the token, and callers should remove this field before persisting
 /// the request or constructing a response.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// The wire shape is always an object (`{"agent": ..., "token": ...}`): the
+/// derived struct deserializer would also accept a positional sequence such as
+/// `["reader", "<token>"]`, so this type parses maps only. That keeps the
+/// accept-loop preclassification and the handler's strict parse in agreement
+/// and leaves no undocumented alias encoding for credentials.
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct RequestAuth {
     pub agent: String,
     pub token: String,
+}
+
+impl<'de> Deserialize<'de> for RequestAuth {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AuthVisitor;
+        impl<'de> Visitor<'de> for AuthVisitor {
+            type Value = RequestAuth;
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object with agent and token")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
+                let mut agent: Option<String> = None;
+                let mut token: Option<String> = None;
+                while let Some(key) = access.next_key::<String>()? {
+                    match key.as_str() {
+                        "agent" => {
+                            if agent.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agent"));
+                            }
+                            agent = Some(access.next_value()?);
+                        }
+                        "token" => {
+                            if token.is_some() {
+                                return Err(serde::de::Error::duplicate_field("token"));
+                            }
+                            token = Some(access.next_value()?);
+                        }
+                        _ => {
+                            return Err(serde::de::Error::unknown_field(&key, &["agent", "token"]));
+                        }
+                    }
+                }
+                Ok(RequestAuth {
+                    agent: agent.ok_or_else(|| serde::de::Error::missing_field("agent"))?,
+                    token: token.ok_or_else(|| serde::de::Error::missing_field("token"))?,
+                })
+            }
+        }
+        deserializer.deserialize_map(AuthVisitor)
+    }
 }
 
 impl fmt::Debug for RequestAuth {

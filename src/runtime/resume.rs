@@ -1115,6 +1115,21 @@ pub(super) fn prepare_with_modules(
     if journal.is_finished() && !terminal && start != program.steps.len() {
         bail!("completed checkpoint program changed: use a fresh checkpoint for additional steps");
     }
+    // Program-aware pre-marking guard: on a journal without the version 6
+    // marker, the marker and element log cannot tell a plain node from a loop
+    // killed before its first begin. When the program says the in-flight node
+    // is a loop, a node-level record is refused here instead of authorizing
+    // the re-begin below or skipping the loop later.
+    if let Some(start) = journal.in_flight_start() {
+        let is_element_step = program.steps.get(start).is_some_and(|step| {
+            matches!(step.kind, crate::ast::StepKind::Loop { .. })
+                || matches!(
+                    step.kind,
+                    crate::ast::StepKind::TaskGroup { ref each, .. } if each.is_some()
+                )
+        });
+        journal.refuse_node_level_resolution_for_element_step(is_element_step)?;
+    }
     journal.ensure_retry_allowed()
 }
 pub(super) fn trigger_fingerprint(
@@ -1231,6 +1246,9 @@ pub fn run_checkpointed(
         &|key| input_signature(program, &options.inputs, key),
     )?;
     prepare_with_modules(program, registry, &journal, module_session.fingerprints())?;
+    // Issue #536: a node-level `committed` resolution completes the in-flight
+    // node with operator-supplied output before execution resumes.
+    journal.apply_committed_node_resolution()?;
     let already_finished = journal.is_finished();
     let result = run_finite_inner(
         FiniteRun {

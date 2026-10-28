@@ -1,6 +1,6 @@
 {
   "name": "sed",
-  "description": "Edits or filters standard input using the supplied sed program and optional sed flags.",
+  "description": "Edits or filters standard input using the supplied sed program and optional sed flags. The program's r command reads files and its w command writes files; the e command executes shell commands where the platform sed supports it. The contract declares that command execution as a process effect, so untrusted programs need explicit `undeclared` gate approval plus a grant carrying `process.exec`; file grants alone are refused. The `e` command exists only where the platform sed supports it (BSD `sed` has none), but the effect is declared unconditionally, so approval is still required there. The gate verdict is advisory and the sandbox narrows the surrounding file and network grants, but neither separately confines the child command.",
   "binary": "sed",
   "accepts_stdin": true,
   "parameters": {
@@ -28,5 +28,26 @@
     {
       "parameter": "program"
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.read",
+      "filesystem.write",
+      "process.exec"
+    ]
+  }
 }

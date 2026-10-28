@@ -465,3 +465,51 @@ fn run_control_honours_the_per_loop_iteration_limit() {
     );
     assert_eq!(allowed.stdout, b"done");
 }
+
+#[test]
+fn run_control_endpoint_uses_a_private_randomized_directory() {
+    const PREFIX: &str = "execute: control endpoint ";
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("tool.program"), PLAIN).unwrap();
+    let mut endpoints = Vec::new();
+    for _ in 0..2 {
+        let output = execute(&["run", "tool.program", "--control"], directory.path());
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let endpoint = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix(PREFIX))
+            .expect("run --control prints its endpoint")
+            .to_owned();
+        endpoints.push(endpoint);
+    }
+    assert_ne!(
+        endpoints[0], endpoints[1],
+        "each hosted run gets a fresh endpoint"
+    );
+    for endpoint in &endpoints {
+        let socket = std::path::Path::new(endpoint);
+        let parent = socket.parent().expect("the endpoint has a parent");
+        assert!(parent.is_dir(), "the endpoint directory exists");
+        assert!(
+            !socket.exists(),
+            "the endpoint is removed when the run exits"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::symlink_metadata(parent).unwrap();
+            assert!(!metadata.file_type().is_symlink());
+            assert!(metadata.is_dir());
+            assert_eq!(
+                metadata.permissions().mode() & 0o777,
+                0o700,
+                "the endpoint directory is private: {parent:?}"
+            );
+        }
+    }
+}

@@ -1,5 +1,5 @@
-//! The graph journal (mode `graph`, journal version 5). It keeps the completed nodes
-//! of a finite applet graph and the set of nodes in flight.
+//! The graph journal (mode `graph`, journal versions 5 and 6). It keeps the
+//! completed nodes of a finite applet graph and the set of nodes in flight.
 //!
 //! `journal.json` names the committed prefix of `graph.jsonl` by its line count and
 //! chain digest, and lists the in-flight nodes. A node enters that list before its
@@ -8,7 +8,7 @@
 
 use super::{
     hex_digest, lock_directory, open_regular, restrict_file, serialized_digest, write_envelope,
-    JournalEnvelope, JOURNAL_VERSION,
+    JournalEnvelope, JOURNAL_VERSION, STEP_ID_JOURNAL_VERSION,
 };
 #[cfg(not(unix))]
 use super::{real_directory, sync_directory};
@@ -338,7 +338,9 @@ fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
     }
     let disk: GraphJournalDisk =
         serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
-    if disk.version != JOURNAL_VERSION {
+    // Version 6 changed only the program journal's in-flight marker; graph
+    // bodies are identical, so both read.
+    if disk.version != JOURNAL_VERSION && disk.version != STEP_ID_JOURNAL_VERSION {
         bail!("unsupported graph checkpoint version {}", disk.version);
     }
     if serialized_digest(&disk)? != envelope.checksum {
@@ -374,7 +376,9 @@ fn read_disk_file(file: File) -> Result<GraphJournalDisk> {
     }
     let disk: GraphJournalDisk =
         serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
-    if disk.version != JOURNAL_VERSION {
+    // Version 6 changed only the program journal's in-flight marker; graph
+    // bodies are identical, so both read.
+    if disk.version != JOURNAL_VERSION && disk.version != STEP_ID_JOURNAL_VERSION {
         bail!("unsupported graph checkpoint version {}", disk.version);
     }
     if serialized_digest(&disk)? != envelope.checksum {

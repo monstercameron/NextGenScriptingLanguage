@@ -6,8 +6,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
+/// Staged as a private single-link copy: the trusted-executable gate refuses
+/// the hardlinked `target/` original.
 fn fixture() -> String {
-    env!("CARGO_BIN_EXE_native-fixture").to_owned()
+    staged_helpers::native_fixture()
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn quoted(value: &str) -> String {

@@ -7,7 +7,14 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const HELPER: &str = env!("CARGO_BIN_EXE_execute-model");
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
+/// The cargo-built model helper, staged as a private single-link copy: the
+/// trusted-executable gate refuses the hardlinked `target/` original.
+fn helper() -> &'static std::path::Path {
+    staged_helpers::execute_model()
+}
 
 fn project() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -209,11 +216,11 @@ fn write_manifests(directory: &Path) -> PathBuf {
     let manifests = directory.join("manifests");
     std::fs::create_dir_all(&manifests).unwrap();
     let applets = [
-        json!({"name": "ok.helper", "binary": HELPER, "accepts_stdin": false, "parameters": {}, "arguments": [{"literal": "--version"}]}),
-        json!({"name": "fail.helper", "binary": HELPER, "accepts_stdin": false, "parameters": {}, "arguments": [{"literal": "--nope"}]}),
-        json!({"name": "plain.helper", "binary": HELPER, "accepts_stdin": false, "parameters": {"text": {"type": "string"}},
+        json!({"name": "ok.helper", "binary": helper(), "accepts_stdin": false, "parameters": {}, "arguments": [{"literal": "--version"}]}),
+        json!({"name": "fail.helper", "binary": helper(), "accepts_stdin": false, "parameters": {}, "arguments": [{"literal": "--nope"}]}),
+        json!({"name": "plain.helper", "binary": helper(), "accepts_stdin": false, "parameters": {"text": {"type": "string"}},
                "arguments": [{"literal": "--version"}, {"when_present": "text", "append": [{"literal": "--text"}, {"parameter": "text"}]}]}),
-        json!({"name": "net.helper", "binary": HELPER, "accepts_stdin": false, "parameters": {}, "arguments": [{"literal": "--version"}],
+        json!({"name": "net.helper", "binary": helper(), "accepts_stdin": false, "parameters": {}, "arguments": [{"literal": "--version"}],
                "contract": {"version": 1, "backend": "command", "lifecycle": {"kind": "oneshot"},
                             "capabilities": ["network.loopback"], "effects": ["network.loopback"]}}),
         json!({"name": "cd", "binary": "cd", "builtin": "cd", "parameters": {"path": {"type": "string", "required": true}},

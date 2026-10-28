@@ -5,7 +5,14 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const HELPER: &str = env!("CARGO_BIN_EXE_execute-model");
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
+/// The cargo-built model helper, staged as a private single-link copy: the
+/// trusted-executable gate refuses the hardlinked `target/` original.
+fn helper() -> &'static std::path::Path {
+    staged_helpers::execute_model()
+}
 
 fn write_manifests(directory: &Path) -> PathBuf {
     let manifests = directory.join("manifests");
@@ -13,14 +20,14 @@ fn write_manifests(directory: &Path) -> PathBuf {
     // No contract: effects must stay undeclared (null) in the plan.
     let plain = serde_json::json!({
         "name": "plain.helper",
-        "binary": HELPER,
+        "binary": helper(),
         "accepts_stdin": false,
         "parameters": { "text": { "type": "string" } },
         "arguments": [{ "literal": "--version" }, { "when_present": "text", "append": [{ "literal": "--text" }, { "parameter": "text" }] }]
     });
     std::fs::write(manifests.join("plain.helper.json"), plain.to_string()).unwrap();
     let nested = serde_json::json!({
-        "name": "nested.helper", "binary": HELPER, "accepts_stdin": false,
+        "name": "nested.helper", "binary": helper(), "accepts_stdin": false,
         "parameters": {"data": {"type": "json", "required": true}},
         "arguments": [{"json_parameter": "data"}]
     });
@@ -28,7 +35,7 @@ fn write_manifests(directory: &Path) -> PathBuf {
     // A contract that declares a loopback network effect and a write effect.
     let declared = serde_json::json!({
         "name": "net.helper",
-        "binary": HELPER,
+        "binary": helper(),
         "accepts_stdin": false,
         "parameters": {},
         "arguments": [{ "literal": "--version" }],
@@ -53,7 +60,7 @@ fn write_manifests(directory: &Path) -> PathBuf {
     // A stdin-accepting stage with a declared network effect, for pipe groups.
     let stage = serde_json::json!({
         "name": "stdin.helper",
-        "binary": HELPER,
+        "binary": helper(),
         "accepts_stdin": true,
         "parameters": {},
         "arguments": [{ "literal": "--version" }],
@@ -1003,7 +1010,7 @@ fn cd_is_detected_by_the_builtin_field_not_by_its_name() {
     std::fs::create_dir_all(&manifests).unwrap();
     let native_cd = serde_json::json!({
         "name": "cd",
-        "binary": HELPER,
+        "binary": helper(),
         "accepts_stdin": false,
         "parameters": { "path": { "type": "string", "required": true } },
         "arguments": [{ "literal": "--version" }]
@@ -1011,7 +1018,7 @@ fn cd_is_detected_by_the_builtin_field_not_by_its_name() {
     std::fs::write(manifests.join("cd.json"), native_cd.to_string()).unwrap();
     let plain = serde_json::json!({
         "name": "plain.helper",
-        "binary": HELPER,
+        "binary": helper(),
         "accepts_stdin": false,
         "parameters": {},
         "arguments": [{ "literal": "--version" }]

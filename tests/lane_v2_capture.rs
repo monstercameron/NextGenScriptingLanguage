@@ -1,8 +1,13 @@
 use flow::{manifest::Registry, parser, runtime};
 use std::path::{Path, PathBuf};
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
+/// Staged as a private single-link copy: the trusted-executable gate refuses
+/// the hardlinked `target/` original.
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_native-fixture"))
+    staged_helpers::native_fixture().to_path_buf()
 }
 
 fn source(arguments: &[&str]) -> String {

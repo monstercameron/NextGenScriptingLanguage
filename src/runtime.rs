@@ -5125,6 +5125,38 @@ mod opt_manifest_binary_path_tests {
         );
     }
 
+    #[test]
+    fn opt_manifest_untrusted_first_path_hit_fails_closed_without_fallthrough() {
+        // Fail-before-effect for PATH search: the first executable hit is what
+        // would run, so an untrusted first hit is refused even when a later
+        // entry holds a trusted copy. Falling through would either launch a
+        // different binary than the resolved one or mask the untrusted entry.
+        let root = tempdir().unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let binary = "probe";
+        let untrusted = PathBuf::from("untrusted");
+        let trusted = PathBuf::from("trusted");
+        opt_manifest_write_file(&cwd.join(&untrusted).join(binary), 0o777).unwrap();
+        opt_manifest_write_file(&cwd.join(&trusted).join(binary), 0o755).unwrap();
+        let path = opt_manifest_join_path(&[untrusted, trusted]);
+        let error = format!(
+            "{:#}",
+            binary_path_from_path(binary, &cwd, &path)
+                .err()
+                .expect("untrusted first PATH hit must fail")
+        );
+        assert!(
+            error.contains("untrusted") && error.contains(binary),
+            "{error}"
+        );
+        let mut cache = LaunchPathCache::default();
+        assert!(
+            cache.lookup(binary, &cwd, &path).is_err(),
+            "cached PATH search must fail closed on the same untrusted hit"
+        );
+    }
+
     fn opt_manifest_lookup_sample(
         lookup: fn(&str, &Path, &OsStr) -> Result<PathBuf>,
         binary: &str,

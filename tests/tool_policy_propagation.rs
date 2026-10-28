@@ -5,6 +5,9 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 #[test]
 fn policies_reach_children_and_repl_and_legacy_behavior_remains() {
     let dir = tempfile::tempdir().unwrap();
@@ -14,15 +17,10 @@ fn policies_reach_children_and_repl_and_legacy_behavior_remains() {
     )
     .unwrap();
     fs::write(dir.path().join("flow.json"), r#"{"version":1}"#).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(
-            dir.path().join("flow.json"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-    }
+    // Both policies are security-sensitive files: without a private ACL Windows
+    // refuses the load before any propagation assertion runs.
+    private_answers::make_private(&dir.path().join("policy.json"));
+    private_answers::make_private(&dir.path().join("flow.json"));
     fs::create_dir(dir.path().join("parts")).unwrap();
     fs::write(
         dir.path().join("parts/deny.program"),

@@ -62,6 +62,7 @@ stress-evidence-harness-check:
 
 # Keep this sequence shared by local development and macOS/Linux CI.
 check: rust-check docs-check applet-boundaries-harness-check stress-evidence-harness-check
+	$(PYTHON) tests/test_regenerate_latency_budget.py
 	$(PYTHON) tests/staged_rust.py
 	$(PYTHON) tests/releases.py
 	$(PYTHON) -O tests/releases.py

@@ -557,7 +557,7 @@ impl Supervisor {
             // Workers collect every stage result so a later await can decide
             // whether to retain a nonzero terminal status.
             call.status_binding = Some("__execute_job_stage_status".into());
-            let binary = binary_path(manifest.binary_for(&call), cwd)
+            let binary = binary_path_for_applet(&manifest, &call, cwd)
                 .with_context(|| format!("line {}: resolving job executable", stage.line))?;
             crate::capabilities::command_for(
                 &binary,

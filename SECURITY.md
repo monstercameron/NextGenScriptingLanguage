@@ -170,7 +170,7 @@ include `filesystem.read`/`filesystem.write`, respectively. The optional
 `host` grant follows the same rule for host-language file actions. These grant
 checks do not require a remote applet's logical contract to declare
 `network.connect`.
-`binary_sha256` is an optional executable-content check. For each applet launch,
+`binary_sha256` is an optional executable-content check, and a manifest may declare its own `binary_sha256` pin, verified at launch with or without a policy (both pins must match when both are present). The policy preflight and the launch resolve the same manifest-anchored file, so the checked executable is the executed executable. Applet binaries resolve without relative or empty PATH entries, so a working-directory shadow never wins a PATH lookup, and a `/`-bearing applet binary anchors at its manifest's directory rather than the runtime working directory; `..` elements that would leave that directory fail closed lexically, symlinks (final or intermediate) resolving outside it fail closed canonically on Unix and Windows via `std::fs::canonicalize`, and a catalog-relative binary in a manifest with no recorded origin (embedded or synthetic registries) is refused — use an absolute executable path there. Bare-name and `/`-bearing lookups behave the same with and without a policy. For each applet launch,
 the environment is cleared and only names in that grant's `environment` list
 are forwarded. Contract-level `set` overrides must use allowlisted names;
 `unset` may remove inherited names. Host `UseFolder`, `Read` and `Save` paths are
@@ -324,8 +324,30 @@ task hosts still require integration in the task runtime; graph/task threads
 without a finite-step scope report null step/line. Actual supervisor restart
 and daemon-parent survival after an aborted forwarded run require Unix CI.
 
-The executable hash check narrows replacement risk but does not pin an inode
-through `exec`; a replacement race can remain between hashing and launch. The
+The executable hash is checked against the same canonical manifest-anchored
+path that launch executes — preflight, the manifest pin, and the policy pin
+all bind that file — but the check reads file bytes while `exec` re-opens the
+path, so a replacement race remains between hashing and launch, for manifest
+pins and policy pins alike: replacing the target file, or renaming a parent
+directory, after the hash still runs the replacement. Launching the canonical
+path means swapping the link itself after the check no longer redirects
+execution, but nothing pins an inode or open file description through `exec`:
+there is no `O_NOFOLLOW` open-then-`fexec` handoff, and the `verify_binary`
+path re-hash helper is not called on the launch path. Preflight and launch
+also resolve the executable separately, so a mutation between the two checks
+can make them disagree, and the sandbox preflight canonicalizes separately
+from `exec` on every platform (Windows reparse points resolve only as far as
+`canonicalize` reports them). Bare-name `PATH` launches and absolute binaries
+name their file outright and skip canonical confinement; a symlink inside an
+absolute `PATH` entry is followed. The traversal boundary is lexical first,
+then canonical: a `..` that stays inside the manifest directory is allowed,
+while one that leaves it is refused, and a symlink — final-component or
+intermediate — that resolves outside the manifest directory is refused before
+hashing or execution; links resolving inside the directory still run. The
+review (`--what-if`) fingerprint binds the explain plan's manifest-anchored
+resolved path, and refuses separator-bearing or absolute applet binaries when
+that path is missing rather than fingerprinting a review-cwd file the launch
+would never run. The
 macOS profile uses Apple's undocumented, deprecated `sandbox-exec` interface.
 The sandbox applies to the launched applet and descendants that inherit it; a
 descendant that deliberately detaches may outlive its parent, so parent

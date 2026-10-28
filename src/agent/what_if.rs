@@ -258,6 +258,24 @@ fn resolved_executables(plan: &Value, cwd: &Path) -> Result<Value> {
                     row["line"].as_u64().unwrap_or(0)
                 );
             }
+            // Without the explain plan's manifest-anchored `resolved_path`,
+            // this review cannot reproduce the manifest-directory anchor a
+            // launch uses for separator-bearing applet binaries; resolving
+            // them against the review cwd instead would bind (and
+            // fingerprint) a different file than execution runs. Refuse that
+            // rather than reviewing the wrong executable. Absolute paths name
+            // their file outright — launch resolves them without any anchor —
+            // so review binds the identical file by resolving them the same
+            // way. Bare names keep the hardened PATH lookup, which matches
+            // launch.
+            if !Path::new(binary).is_absolute()
+                && (binary.contains('/') || (cfg!(windows) && binary.contains('\\')))
+            {
+                bail!(
+                    "cannot bind the executable {binary:?} for line {} without its manifest-anchored resolved path",
+                    row["line"].as_u64().unwrap_or(0)
+                );
+            }
             crate::runtime::binary_path(binary, cwd)
                 .with_context(|| format!("resolving executable {binary:?} for review"))?
         };
@@ -453,6 +471,24 @@ mod tests {
         .unwrap();
         assert_ne!(first_settings, second_settings);
         assert!(first_settings.to_string().contains("sha256"));
+    }
+
+    #[test]
+    fn review_still_refuses_separator_relative_binary_without_resolved_path() {
+        // A relative separator-bearing binary resolves against the manifest
+        // directory at launch but against the review cwd here; without the
+        // manifest-anchored `resolved_path` the review would fingerprint a
+        // different file than execution runs, so it must stay refused even
+        // though absolute paths are now anchor-independent.
+        let directory = tempfile::tempdir().unwrap();
+        let error = resolved_executables(
+            &json!({"steps":[{"binary":"sub/tool","direct":true,"effective_path_hmac_sha256":"a"}]}),
+            directory.path(),
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("without its manifest-anchored resolved path"));
     }
 
     #[test]

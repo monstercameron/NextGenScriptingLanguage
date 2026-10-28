@@ -247,8 +247,8 @@ fn manifest_identity(
             Some(None) => bail!(
                 "checkpoint executable identity cannot use a runtime-derived PATH; use a fresh checkpoint"
             ),
-            Some(Some(path)) => binary_path_with_path(manifest.binary_for(call), cwd, Some(path)),
-            None => binary_path(manifest.binary_for(call), cwd),
+            Some(Some(path)) => binary_path_for_applet_with_path(manifest, call, cwd, Some(path)),
+            None => binary_path_for_applet(manifest, call, cwd),
         };
         let binary = match binary_result {
             Ok(binary) => binary,

@@ -1617,6 +1617,157 @@ pub(crate) fn binary_path_with_path(
     }
 }
 
+/// Join a catalog-relative applet binary onto its manifest anchor without
+/// leaving the anchor. Lexical `..` handling keeps `sub/../../evil` from
+/// escaping the manifest directory. The joined path is then canonically
+/// confined (see `contain_within_anchor`), so a symlink inside the directory
+/// that points outside it is refused rather than executed.
+fn join_within(anchor: &Path, binary: &str) -> Result<PathBuf> {
+    use std::path::Component;
+    let mut joined = anchor.to_path_buf();
+    let mut extra = 0usize;
+    for component in Path::new(binary).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                bail!("executable {binary:?} must be relative to stay within its directory");
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if extra == 0 {
+                    bail!("executable {binary:?} escapes its manifest directory");
+                }
+                joined.pop();
+                extra -= 1;
+            }
+            Component::Normal(part) => {
+                joined.push(part);
+                extra += 1;
+            }
+        }
+    }
+    Ok(joined)
+}
+
+/// Confine a lexically joined catalog-relative executable to its manifest
+/// anchor after resolving symlinks. Both the anchor and the candidate are
+/// canonicalized (resolving every intermediate link as well as the final
+/// component), and the canonical candidate must sit inside the canonical
+/// anchor; anything else — an escape, a dangling link, or an unreadable
+/// path — fails closed. The canonical path is returned so the caller hashes
+/// and executes the resolved file rather than re-traversing the link. This
+/// uses only cross-platform `std::fs::canonicalize`, so the same check runs
+/// on Unix and Windows (resolving symlinks and Windows junctions/reparse
+/// points as far as the platform reports them). It does not eliminate the
+/// hash-to-exec replacement race documented in `SECURITY.md`.
+fn contain_within_anchor(anchor: &Path, binary: &str, candidate: &Path) -> Result<PathBuf> {
+    let anchor_canonical = fs::canonicalize(anchor).with_context(|| {
+        format!("cannot confine executable {binary:?} without its manifest directory")
+    })?;
+    let candidate_canonical = fs::canonicalize(candidate).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            anyhow!("executable {binary:?} not found in its manifest directory: {error}")
+        } else {
+            anyhow!("executable {binary:?} cannot be confined to its manifest directory: {error}")
+        }
+    })?;
+    if !candidate_canonical.starts_with(&anchor_canonical) {
+        bail!("executable {binary:?} escapes its manifest directory via symlink");
+    }
+    Ok(candidate_canonical)
+}
+
+/// Resolve an applet's declared binary. A `/`-bearing (or absolute) binary is
+/// anchored at the manifest's own directory, never the runtime working
+/// directory, so running from an untrusted folder cannot redirect it to a
+/// shadowing executable. Lexical `..` escapes fail closed, and symlinks —
+/// final or intermediate — that resolve outside the manifest directory fail
+/// closed canonically. Bare names use the hardened PATH search, which
+/// ignores relative and empty entries. Direct quoted commands have no manifest
+/// origin and keep the runtime working directory as their anchor.
+pub(crate) fn binary_path_for_applet(
+    manifest: &Manifest,
+    call: &Invocation,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    binary_path_for_applet_with_path(
+        manifest,
+        call,
+        cwd,
+        crate::capabilities::command_overlay_path().as_deref(),
+    )
+}
+
+/// [`binary_path_for_applet`] with a caller-supplied PATH override, for static
+/// checks and checkpoint identity that run under an explicit PATH.
+pub(crate) fn binary_path_for_applet_with_path(
+    manifest: &Manifest,
+    call: &Invocation,
+    cwd: &Path,
+    path_override: Option<&OsStr>,
+) -> Result<PathBuf> {
+    let binary = manifest.binary_for(call);
+    if binary == "@execute-model" {
+        return bundled_model_applet();
+    }
+    if binary == "@execute-applet" {
+        return bundled_applet_helper();
+    }
+    if binary.contains('/')
+        || (cfg!(windows) && binary.contains('\\'))
+        || Path::new(binary).is_absolute()
+    {
+        // Absolute executables name their file outright; no anchor applies.
+        // Otherwise a direct quoted command names its executable explicitly,
+        // so it keeps the runtime working directory anchor, while a catalog
+        // applet anchors at the manifest directory. A catalog binary never
+        // leaves its anchor: `..` escapes fail closed lexically, and
+        // symlinks (final or intermediate) that resolve outside the anchor
+        // fail closed canonically. Manifests without a
+        // recorded origin (embedded or synthetic registries) have no catalog
+        // directory, so a relative executable would resolve against whatever
+        // the runtime cwd happens to be — the shadowing the manifest anchor
+        // removes everywhere else. Refuse that instead of running a
+        // cwd-planted file; use an absolute executable path for synthetic
+        // registries.
+        // The manifest anchor, when this branch is catalog-anchored. Absolute
+        // and direct-command paths name their file outright and skip
+        // canonical confinement; only catalog-relative binaries are confined.
+        let mut anchor: Option<PathBuf> = None;
+        let joined = if Path::new(binary).is_absolute() {
+            PathBuf::from(binary)
+        } else if call.direct {
+            cwd.join(binary)
+        } else if let Some(parent) = manifest.origin().and_then(|origin| origin.parent()) {
+            let joined = join_within(parent, binary)?;
+            anchor = Some(parent.to_path_buf());
+            joined
+        } else {
+            bail!(
+                "applet {:?} declares a relative executable {:?} without a manifest origin; use an absolute executable path",
+                manifest.name, binary
+            );
+        };
+        let candidate = crate::platform::executable_path(joined)?;
+        // Canonical confinement runs on the final candidate (after any
+        // platform extension such as `.exe`), so the confined, hashed, and
+        // executed path are the same file without re-traversing a link.
+        let candidate = match anchor {
+            Some(anchor) => contain_within_anchor(&anchor, binary, &candidate)?,
+            None => candidate,
+        };
+        let metadata = fs::metadata(&candidate)?;
+        if !metadata.is_file() || !crate::platform::executable(&metadata) {
+            bail!("{} is not an executable file", candidate.display());
+        }
+        return Ok(candidate);
+    }
+    let path = path_override
+        .map(OsStr::to_os_string)
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    binary_path_from_path(binary, cwd, &path)
+}
+
 /// Verify a manifest-selected executable against the trusted-input gate. The
 /// canonical target passes the leaf plus ancestor, hardlink/setuid and ACL
 /// checks; the caller's spelling is kept for launch. Failures name the
@@ -1690,13 +1841,23 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
     }
     let mut candidate = PathBuf::new();
     for entry in std::env::split_paths(path) {
+        // PATH order decides what would run: the first executable hit is
+        // refused when untrusted instead of falling through, so relative and
+        // empty entries resolve against the runtime working directory here in
+        // PATH order. A trusted hit through such an entry is still skipped —
+        // a working-directory shadow must never win, so only absolute entries
+        // run — while an untrusted hit fails closed with the trust refusal.
+        let hardened = entry.as_os_str().is_empty() || !entry.is_absolute();
         candidate.clear();
-        if entry.is_absolute() {
-            // Path::join replaces its left-hand side for an absolute entry.
-            // Pushing it directly avoids copying cwd and keeps the exact spelling.
+        if hardened {
+            // Path::join replaces its left-hand side for an absolute entry,
+            // so only relative entries are joined onto the cwd here (pushing
+            // an empty entry is a no-op, leaving the cwd itself).
+            candidate.push(cwd);
             candidate.push(entry);
         } else {
-            candidate.push(cwd);
+            // Pushing an absolute entry directly avoids copying cwd and keeps
+            // the exact spelling.
             candidate.push(entry);
         }
         candidate.push(binary);
@@ -1707,10 +1868,24 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
         };
         if metadata.is_file() && crate::platform::executable(&metadata) {
             verify_trusted_executable(&candidate)?;
+            if hardened {
+                continue;
+            }
             return Ok(candidate);
         }
     }
     Err(anyhow!("executable {binary:?} not found in PATH"))
+}
+
+/// One PATH entry in lookup order: the directory to join the binary onto
+/// (the absolute entry itself, or a relative/empty entry resolved against
+/// the lookup cwd) plus whether the entry was absolute. Trusted hits through
+/// non-absolute entries are skipped so a working-directory shadow can never
+/// win; untrusted hits still fail closed in PATH order.
+#[derive(Clone)]
+struct LaunchPathEntry {
+    dir: PathBuf,
+    absolute: bool,
 }
 
 /// Cache only PATH parsing, never an executable or its metadata. Registry host state
@@ -1719,6 +1894,7 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
 struct LaunchPathCache {
     key: Option<(OsString, PathBuf)>,
     entries: Arc<[PathBuf]>,
+    ordered: Arc<[LaunchPathEntry]>,
 }
 
 impl LaunchPathCache {
@@ -1726,33 +1902,62 @@ impl LaunchPathCache {
         if !self.key.as_ref().is_some_and(|(saved_path, saved_cwd)| {
             saved_path == path && saved_cwd.as_os_str() == cwd.as_os_str()
         }) {
-            self.entries = if path.is_empty() {
-                Vec::new().into()
-            } else {
-                std::env::split_paths(path)
-                    .map(|entry| cwd.join(entry))
-                    .collect::<Vec<_>>()
-                    .into()
-            };
+            let mut absolute = Vec::new();
+            let mut ordered = Vec::new();
+            if !path.is_empty() {
+                for entry in std::env::split_paths(path) {
+                    if entry.is_absolute() {
+                        // Joining an absolute entry is the entry itself.
+                        absolute.push(entry.clone());
+                        ordered.push(LaunchPathEntry {
+                            dir: entry,
+                            absolute: true,
+                        });
+                    } else {
+                        // Keep only absolute entries here. Joining a relative
+                        // entry onto the cwd would let a working-directory
+                        // shadow win the lookup, so those entries are dropped
+                        // here exactly as in the direct search above. The
+                        // ordered walk below still resolves them for the
+                        // untrusted-first-hit refusal, in PATH order.
+                        let mut dir = cwd.to_path_buf();
+                        dir.push(entry);
+                        ordered.push(LaunchPathEntry {
+                            dir,
+                            absolute: false,
+                        });
+                    }
+                }
+            }
+            self.entries = absolute.into();
+            self.ordered = ordered.into();
             self.key = Some((path.to_owned(), cwd.to_path_buf()));
         }
         Arc::clone(&self.entries)
     }
 
+    fn ordered(&mut self, cwd: &Path, path: &OsStr) -> Arc<[LaunchPathEntry]> {
+        self.components(cwd, path);
+        Arc::clone(&self.ordered)
+    }
+
     #[cfg(test)]
     fn lookup(&mut self, binary: &str, cwd: &Path, path: &OsStr) -> Result<PathBuf> {
-        binary_path_in_components(binary, &self.components(cwd, path))
+        let ordered = self.ordered(cwd, path);
+        binary_path_in_ordered_components(binary, &ordered)
     }
 }
 
-fn binary_path_in_components(binary: &str, entries: &[PathBuf]) -> Result<PathBuf> {
+fn binary_path_in_ordered_components(binary: &str, entries: &[LaunchPathEntry]) -> Result<PathBuf> {
     if entries.is_empty() {
         bail!("executable {binary:?} not found in PATH");
     }
     let mut candidate = PathBuf::new();
     for entry in entries {
         candidate.clear();
-        candidate.push(entry);
+        // Path::join replaces its left-hand side for an absolute entry, so
+        // pushing the resolved directory keeps the exact spelling.
+        candidate.push(&entry.dir);
         candidate.push(binary);
         candidate = crate::platform::executable_path(candidate)?;
         let Ok(metadata) = fs::metadata(&candidate) else {
@@ -1760,6 +1965,9 @@ fn binary_path_in_components(binary: &str, entries: &[PathBuf]) -> Result<PathBu
         };
         if metadata.is_file() && crate::platform::executable(&metadata) {
             verify_trusted_executable(&candidate)?;
+            if !entry.absolute {
+                continue;
+            }
             return Ok(candidate);
         }
     }
@@ -1772,23 +1980,29 @@ fn binary_path_from_cached_path(
     path: &OsStr,
     registry: &Registry,
 ) -> Result<PathBuf> {
-    let entries = registry
+    let ordered = registry
         .host_state::<Mutex<LaunchPathCache>>()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .components(cwd, path);
+        .ordered(cwd, path);
     // Release the cache lock before filesystem I/O, so parallel jobs can resolve
     // executables concurrently, including runs with different PATH/cwd keys.
-    binary_path_in_components(binary, &entries)
+    binary_path_in_ordered_components(binary, &ordered)
 }
 
-fn binary_path_for_launch(binary: &str, cwd: &Path, registry: &Registry) -> Result<PathBuf> {
+fn binary_path_for_launch(
+    manifest: &Manifest,
+    call: &Invocation,
+    cwd: &Path,
+    registry: &Registry,
+) -> Result<PathBuf> {
+    let binary = manifest.binary_for(call);
     if matches!(binary, "@execute-model" | "@execute-applet")
         || binary.contains('/')
         || (cfg!(windows) && binary.contains('\\'))
         || Path::new(binary).is_absolute()
     {
-        return binary_path(binary, cwd);
+        return binary_path_for_applet(manifest, call, cwd);
     }
     let path = crate::capabilities::command_overlay_path()
         .or_else(|| std::env::var_os("PATH"))
@@ -3897,7 +4111,7 @@ fn worker_launch_for_call(
     worker_backend::WorkerLaunch::inherited(
         registry.clone(),
         manifest.name_for(call).to_owned(),
-        binary_path_for_launch(manifest.binary_for(call), cwd, registry)?,
+        binary_path_for_launch(manifest, call, cwd, registry)?,
         cwd.to_path_buf(),
         startup_arguments.iter().map(OsString::from).collect(),
         worker_backend::WorkerLimits {
@@ -5193,7 +5407,8 @@ mod opt_manifest_binary_path_tests {
     use tempfile::tempdir;
 
     fn opt_manifest_legacy_binary_path(binary: &str, cwd: &Path, path: &OsStr) -> Result<PathBuf> {
-        // This preserves the original candidate construction as a parity oracle.
+        // Parity oracle for the hardened lookup: relative and empty PATH
+        // entries are ignored so a working-directory shadow can never win.
         // Empty PATH is a refusal rather than an implicit current-directory lookup.
         if path.is_empty() {
             bail!("executable {binary:?} not found in PATH");
@@ -5210,8 +5425,9 @@ mod opt_manifest_binary_path_tests {
             Ok(candidate)
         } else {
             std::env::split_paths(path)
+                .filter(|entry| !entry.as_os_str().is_empty() && entry.is_absolute())
                 .find_map(|entry| {
-                    let candidate = cwd.join(entry).join(binary);
+                    let candidate = entry.join(binary);
                     let metadata = fs::metadata(&candidate).ok()?;
                     (metadata.is_file() && crate::platform::executable(&metadata))
                         .then_some(candidate)
@@ -5301,6 +5517,14 @@ mod opt_manifest_binary_path_tests {
                 assert!(binary_path_from_path(binary, &cwd, &path).is_err());
                 continue;
             }
+            // Relative entries are ignored so a cwd-planted shadow can never
+            // win; the fixture below proves the shadow is refused, not run.
+            if !entry.is_absolute() {
+                opt_manifest_write_file(&candidate, 0o755).unwrap();
+                opt_manifest_assert_path_parity(binary, &cwd, &path);
+                assert!(binary_path_from_path(binary, &cwd, &path).is_err());
+                continue;
+            }
             opt_manifest_write_file(&candidate, 0o755).unwrap();
             opt_manifest_assert_path_parity(binary, &cwd, &path);
             let selected = binary_path_from_path(binary, &cwd, &path).unwrap();
@@ -5331,7 +5555,10 @@ mod opt_manifest_binary_path_tests {
         fs::create_dir_all(&cwd).unwrap();
         let binary = "probe";
 
-        let missing_path = opt_manifest_join_path(&[PathBuf::from("absent")]);
+        // Only absolute entries participate; a relative entry can never
+        // redirect the lookup into the working directory.
+        let missing = cwd.join("absent");
+        let missing_path = opt_manifest_join_path(std::slice::from_ref(&missing));
         opt_manifest_assert_path_parity(binary, &cwd, &missing_path);
         assert_eq!(
             binary_path_from_path(binary, &cwd, &missing_path)
@@ -5340,8 +5567,21 @@ mod opt_manifest_binary_path_tests {
             "executable \"probe\" not found in PATH"
         );
 
-        let non_executable = PathBuf::from("no-execute");
-        opt_manifest_write_file(&cwd.join(&non_executable).join(binary), 0o644).unwrap();
+        // A cwd-planted shadow behind a relative entry is refused, not run.
+        let shadow_entry = PathBuf::from("late-hit");
+        opt_manifest_write_file(&cwd.join(&shadow_entry).join(binary), 0o755).unwrap();
+        let shadow_path = opt_manifest_join_path(std::slice::from_ref(&shadow_entry));
+        opt_manifest_assert_path_parity(binary, &cwd, &shadow_path);
+        assert_eq!(
+            binary_path_from_path(binary, &cwd, &shadow_path)
+                .unwrap_err()
+                .to_string(),
+            "executable \"probe\" not found in PATH"
+        );
+        fs::remove_file(cwd.join(&shadow_entry).join(binary)).unwrap();
+
+        let non_executable = cwd.join("no-execute");
+        opt_manifest_write_file(&non_executable.join(binary), 0o644).unwrap();
         let non_executable_path = opt_manifest_join_path(std::slice::from_ref(&non_executable));
         opt_manifest_assert_path_parity(binary, &cwd, &non_executable_path);
         assert_eq!(
@@ -5353,12 +5593,12 @@ mod opt_manifest_binary_path_tests {
 
         let mut entries = Vec::with_capacity(65);
         for index in 0..64 {
-            let entry = PathBuf::from(format!("miss-{index:02}"));
-            fs::create_dir_all(cwd.join(&entry)).unwrap();
+            let entry = cwd.join(format!("miss-{index:02}"));
+            fs::create_dir_all(&entry).unwrap();
             entries.push(entry);
         }
-        let late_hit = PathBuf::from("late-hit");
-        let expected = cwd.join(&late_hit).join(binary);
+        let late_hit = cwd.join("late-hit");
+        let expected = late_hit.join(binary);
         opt_manifest_write_file(&expected, 0o755).unwrap();
         entries.push(late_hit);
         let late_path = opt_manifest_join_path(&entries);
@@ -5367,6 +5607,39 @@ mod opt_manifest_binary_path_tests {
         assert_eq!(
             selected.as_os_str().as_encoded_bytes(),
             expected.as_os_str().as_encoded_bytes()
+        );
+    }
+
+    #[test]
+    fn opt_manifest_binary_path_resolves_absolute_non_utf8_entry() {
+        let root = tempdir().unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let binary = "probe";
+
+        // An absolute directory whose bytes are not valid UTF-8. The lookup
+        // must resolve an executable through it, not merely preserve the
+        // bytes while refusing: both sides share `split_paths`, so parity
+        // alone would pass even if the bytes were mangled.
+        let mut entry_bytes = root.path().as_os_str().as_encoded_bytes().to_vec();
+        entry_bytes.extend_from_slice(b"/non-utf8-\x80");
+        let entry = PathBuf::from(OsString::from_vec(entry_bytes));
+        assert!(entry.is_absolute());
+        let candidate = entry.join(binary);
+        let path = opt_manifest_join_path(std::slice::from_ref(&entry));
+        // APFS rejects invalid UTF-8 filenames, so the fixture cannot be
+        // planted there; the split bytes must still parse identically.
+        if cfg!(target_os = "macos") {
+            opt_manifest_assert_path_parity(binary, &cwd, &path);
+            assert!(binary_path_from_path(binary, &cwd, &path).is_err());
+            return;
+        }
+        opt_manifest_write_file(&candidate, 0o755).unwrap();
+        opt_manifest_assert_path_parity(binary, &cwd, &path);
+        let selected = binary_path_from_path(binary, &cwd, &path).unwrap();
+        assert_eq!(
+            selected.as_os_str().as_encoded_bytes(),
+            candidate.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -5432,6 +5705,54 @@ mod opt_manifest_binary_path_tests {
         );
     }
 
+    #[test]
+    fn opt_manifest_untrusted_relative_hit_refused_by_cached_lookup_with_trust_reason() {
+        // The cached PATH search walks entries in the same order as the
+        // direct search, so it must refuse the untrusted first hit with the
+        // trust refusal rather than masking it as "not found in PATH".
+        let root = tempdir().unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let binary = "probe";
+        let untrusted = PathBuf::from("untrusted");
+        let trusted = PathBuf::from("trusted");
+        opt_manifest_write_file(&cwd.join(&untrusted).join(binary), 0o777).unwrap();
+        opt_manifest_write_file(&cwd.join(&trusted).join(binary), 0o755).unwrap();
+        let path = opt_manifest_join_path(&[untrusted, trusted]);
+        let mut cache = LaunchPathCache::default();
+        let error = format!(
+            "{:#}",
+            cache
+                .lookup(binary, &cwd, &path)
+                .expect_err("untrusted relative first PATH hit must fail")
+        );
+        assert!(
+            error.contains("untrusted") && error.contains(binary),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn opt_manifest_trusted_relative_shadow_skipped_for_absolute_hit() {
+        // A trusted working-directory shadow behind a relative entry must
+        // never win: both the direct and the cached search skip it and run
+        // the later absolute hit.
+        let root = tempdir().unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let binary = "probe";
+        let shadow_entry = PathBuf::from("shadow");
+        opt_manifest_write_file(&cwd.join(&shadow_entry).join(binary), 0o755).unwrap();
+        let absolute = cwd.join("absolute");
+        let expected = absolute.join(binary);
+        opt_manifest_write_file(&expected, 0o755).unwrap();
+        let path = opt_manifest_join_path(&[shadow_entry, absolute]);
+        let selected = binary_path_from_path(binary, &cwd, &path).unwrap();
+        assert_eq!(selected, expected);
+        let mut cache = LaunchPathCache::default();
+        assert_eq!(cache.lookup(binary, &cwd, &path).unwrap(), expected);
+    }
+
     fn opt_manifest_lookup_sample(
         lookup: fn(&str, &Path, &OsStr) -> Result<PathBuf>,
         binary: &str,
@@ -5453,19 +5774,19 @@ mod opt_manifest_binary_path_tests {
         let cwd = root.path().join("work");
         fs::create_dir_all(&cwd)?;
 
-        let single_entry = PathBuf::from("single");
-        let single_candidate = cwd.join(&single_entry).join("probe");
+        let single_entry = cwd.join("single");
+        let single_candidate = single_entry.join("probe");
         opt_manifest_write_file(&single_candidate, 0o755)?;
         let single_path = opt_manifest_join_path(std::slice::from_ref(&single_entry));
 
         let mut late_entries = Vec::with_capacity(65);
         for index in 0..64 {
-            let entry = PathBuf::from(format!("miss-{index:02}"));
-            fs::create_dir_all(cwd.join(&entry))?;
+            let entry = cwd.join(format!("miss-{index:02}"));
+            fs::create_dir_all(&entry)?;
             late_entries.push(entry);
         }
-        let late_entry = PathBuf::from("late-hit");
-        opt_manifest_write_file(&cwd.join(&late_entry).join("probe"), 0o755)?;
+        let late_entry = cwd.join("late-hit");
+        opt_manifest_write_file(&late_entry.join("probe"), 0o755)?;
         late_entries.push(late_entry);
         let late_path = opt_manifest_join_path(&late_entries);
 
@@ -6721,15 +7042,54 @@ mod lane_v2_path_tests {
     fn lane_v2_path_cache_invalidates_path_and_cwd() {
         let root = tempfile::tempdir().unwrap();
         let mut cache = LaunchPathCache::default();
+        let path_one = root.path().join("path-one");
+        let path_two = root.path().join("path-two");
         for (cwd, path) in [
-            (root.path().join("one"), OsStr::new("relative")),
-            (root.path().join("two"), OsStr::new("relative")),
-            (root.path().join("two"), OsStr::new("changed")),
-            (root.path().join("two").join("."), OsStr::new("changed")),
+            (root.path().join("one"), path_one.as_os_str()),
+            (root.path().join("two"), path_one.as_os_str()),
+            (root.path().join("two"), path_two.as_os_str()),
+            (root.path().join("two").join("."), path_two.as_os_str()),
         ] {
             assert!(cache.lookup("absent", &cwd, path).is_err());
-            assert_eq!(cache.entries[0].as_os_str(), cwd.join(path).as_os_str());
+            assert_eq!(cache.entries[0].as_os_str(), path);
         }
+        // Relative entries are dropped so a cwd shadow can never win; the
+        // cache still records the (empty) parse under the current key.
+        let cwd = root.path().join("two");
+        let relative = OsStr::new("relative");
+        assert!(cache.lookup("absent", &cwd, relative).is_err());
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn lane_v2_path_cache_drops_relative_entries_without_reordering() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("abs-first-514");
+        let second = root.path().join("abs-second-514");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let relative = PathBuf::from("relative-514");
+        let path = std::env::join_paths([&first, &relative, &second]).unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let mut cache = LaunchPathCache::default();
+        // A filter that reordered entries or truncated at the first relative
+        // entry would go uncaught by single-entry tests; the surviving
+        // absolute entries must keep their order.
+        let entries = cache.components(&cwd, &path);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], first);
+        assert_eq!(entries[1], second);
+        // The trailing absolute entry must still be reachable: plant the
+        // executable only there and prove the lookup reaches past the gap.
+        let name = if cfg!(windows) { "probe.exe" } else { "probe" };
+        fs::write(second.join(name), b"fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(second.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(cache.lookup(name, &cwd, &path).unwrap(), second.join(name));
     }
 
     #[cfg(unix)]
@@ -6757,17 +7117,37 @@ mod lane_v2_path_tests {
         use std::os::windows::ffi::OsStringExt;
         let root = tempfile::tempdir().unwrap();
         let entry = OsString::from_wide(&[b'x' as u16, 0xd800, b'y' as u16]);
+        // Keep the non-Unicode bytes in an absolute entry: relative entries
+        // are dropped so a cwd shadow can never win.
+        let absolute = root.path().join(&entry);
+        let path = absolute.as_os_str().to_os_string();
         let mut cache = LaunchPathCache::default();
-        assert!(cache.lookup("absent", root.path(), &entry).is_err());
-        assert_eq!(
-            cache.entries[0].as_os_str(),
-            root.path().join(&entry).as_os_str()
-        );
-        assert!(cache.lookup("absent", root.path(), &entry).is_err());
-        assert_eq!(
-            cache.entries[0].as_os_str(),
-            root.path().join(&entry).as_os_str()
-        );
+        assert!(cache.lookup("absent", root.path(), &path).is_err());
+        assert_eq!(cache.entries[0].as_os_str(), absolute.as_os_str());
+        assert!(cache.lookup("absent", root.path(), &path).is_err());
+        assert_eq!(cache.entries[0].as_os_str(), absolute.as_os_str());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lane_v2_path_cache_drops_drive_relative_and_rooted_entries() {
+        // `C:foo` is drive-relative and `\foo` is rooted without a drive:
+        // `Path::is_absolute` is false for both, so neither may survive
+        // filtering even though each carries a separator-like shape.
+        let root = tempfile::tempdir().unwrap();
+        let absolute = root.path().join("real-514");
+        let path = std::env::join_paths([
+            absolute.as_os_str(),
+            OsStr::new("C:drive-relative-514"),
+            OsStr::new("\\rooted-no-drive-514"),
+            OsStr::new("rel"),
+        ])
+        .unwrap();
+        let mut cache = LaunchPathCache::default();
+        let entries = cache.components(root.path(), &path);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], absolute);
+        assert!(cache.lookup("absent", root.path(), &path).is_err());
     }
 
     #[test]

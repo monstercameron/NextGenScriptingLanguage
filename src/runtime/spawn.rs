@@ -629,20 +629,20 @@ pub(super) fn execute_group_with_sink(
                 Some((binary, argv)) => (binary, GroupArguments::Owned(argv)),
                 None => {
                     let argv = arguments_for_group_call(call, manifest, bindings)?;
-                    let binary = binary_path_for_launch(manifest.binary_for(call), cwd, registry)
-                        .map_err(|error| {
-                        native_spawn_failure(
-                            format!(
-                                "line {line}: resolving executable for {}: {error:#}",
-                                manifest.name_for(call)
-                            ),
-                            index,
-                            calls,
-                            &children,
-                            &mut observed_stages,
-                            signals,
-                        )
-                    })?;
+                    let binary =
+                        binary_path_for_launch(manifest, call, cwd, registry).map_err(|error| {
+                            native_spawn_failure(
+                                format!(
+                                    "line {line}: resolving executable for {}: {error:#}",
+                                    manifest.name_for(call)
+                                ),
+                                index,
+                                calls,
+                                &children,
+                                &mut observed_stages,
+                                signals,
+                            )
+                        })?;
                     (binary, argv)
                 }
             };

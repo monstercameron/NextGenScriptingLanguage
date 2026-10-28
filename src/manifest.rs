@@ -32,6 +32,12 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<ManifestExample>,
     pub binary: String,
+    /// Expected SHA-256 (64 lowercase or uppercase hexadecimal characters) of
+    /// the resolved applet executable. Verified at launch, with or without a
+    /// capability policy; a mismatch refuses the launch. This narrows, but
+    /// cannot eliminate, replacement races between hashing and `exec`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_sha256: Option<String>,
     pub builtin: Option<Builtin>,
     pub accepts_stdin: bool,
     pub cacheable: bool,
@@ -1127,6 +1133,7 @@ impl Registry {
             description: None,
             examples: Vec::new(),
             binary: "".into(),
+            binary_sha256: None,
             builtin: None,
             accepts_stdin: true,
             cacheable: false,
@@ -1831,6 +1838,11 @@ impl Manifest {
 
     pub fn origin(&self) -> Option<&Path> {
         self.origin.as_deref()
+    }
+
+    /// Expected SHA-256 of the resolved executable, when the manifest pins one.
+    pub fn binary_sha256(&self) -> Option<&str> {
+        self.binary_sha256.as_deref()
     }
 
     pub fn cache_dependencies(&self) -> &[String] {
@@ -3789,6 +3801,8 @@ struct RawManifest {
     phrases: Vec<String>,
     binary: String,
     #[serde(default)]
+    binary_sha256: Option<String>,
+    #[serde(default)]
     builtin: Option<Builtin>,
     #[serde(default)]
     accepts_stdin: bool,
@@ -4061,6 +4075,14 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
     if raw.binary.contains('\0') {
         bail!("manifest binary cannot contain a NUL byte");
     }
+    if let Some(digest) = &raw.binary_sha256 {
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!(
+                "manifest {:?} has invalid binary_sha256; expected exactly 64 hexadecimal characters",
+                raw.name
+            );
+        }
+    }
     if raw.description.as_deref().is_some_and(|description| {
         description.trim().is_empty() || description.contains(['\n', '\r'])
     }) {
@@ -4277,6 +4299,23 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         if contract.backend == AppletBackend::Remote && raw.binary != "@remote-applet" {
             bail!("remote backend requires binary \"@remote-applet\"");
         }
+        if raw.binary_sha256.is_some()
+            && !matches!(
+                contract.backend,
+                AppletBackend::Command | AppletBackend::JsonLinesWorker
+            )
+        {
+            bail!(
+                "manifest {:?} declares binary_sha256, which is only supported for command and json_lines_worker backends",
+                raw.name
+            );
+        }
+    }
+    if raw.binary_sha256.is_some() && raw.contract.is_none() && raw.binary.starts_with('@') {
+        bail!(
+            "manifest {:?} declares binary_sha256 for a helper binary, which cannot be pinned",
+            raw.name
+        );
     }
     validate_cache_dependencies(&raw.cache_dependencies, raw.cacheable)?;
     if let Some(stdio) = &raw.stdio {
@@ -4307,6 +4346,7 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         examples: raw.examples,
         phrases: raw.phrases,
         binary: raw.binary,
+        binary_sha256: raw.binary_sha256,
         builtin: raw.builtin,
         accepts_stdin: raw.accepts_stdin,
         cacheable: raw.cacheable,

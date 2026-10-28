@@ -1236,12 +1236,26 @@ impl GraphSession {
         &self.context
     }
 
+    /// Per-event serialized byte bound for this session's stream, derived
+    /// from its configured per-message payload bound (see
+    /// [`stream_event_byte_limit`]). The streaming path holds no collected
+    /// outputs, so each line is bounded individually instead.
+    pub fn max_stream_event_bytes(&self) -> usize {
+        stream_event_byte_limit(self.options.max_message_bytes)
+    }
+
     /// Read one terminal output without allowing stale revisions into the
     /// current session. Returns `None` once every terminal has closed.
+    ///
+    /// Queued events are delivered before a recorded worker failure or
+    /// cancellation surfaces: a worker that emits and then fails must have
+    /// its events observed first, and a failure that lands while events are
+    /// still queued must not discard them. Once the queues are drained, the
+    /// failure or cancellation is reported; a clean EOF needs both drained
+    /// queues and a clean bill of health.
     pub fn recv_output(&mut self) -> Result<Option<EventEnvelope>> {
         loop {
             self.poll_finished_workers()?;
-            self.cancellation_check()?;
             for (_, queue) in &self.terminals {
                 if let Some(event) = queue.try_recv()? {
                     if event.generation == self.context.generation
@@ -1251,6 +1265,7 @@ impl GraphSession {
                     }
                 }
             }
+            self.cancellation_check()?;
             if self
                 .terminals
                 .iter()
@@ -1259,9 +1274,27 @@ impl GraphSession {
                 .iter()
                 .all(|closed| *closed)
             {
+                // A worker may have failed after the poll above but before
+                // its queues closed (failure-at-EOF). Re-poll and drain once
+                // more so a late failure surfaces as an error instead of a
+                // clean EOF while an event that landed with it is still
+                // delivered; any failure after this point is reported by
+                // `cancel_and_join`.
+                self.poll_finished_workers()?;
+                for (_, queue) in &self.terminals {
+                    if let Some(event) = queue.try_recv()? {
+                        if event.generation == self.context.generation
+                            && event.revision == self.context.revision
+                        {
+                            return Ok(Some(event));
+                        }
+                    }
+                }
+                self.cancellation_check()?;
                 return Ok(None);
             }
             if self.terminals.is_empty() {
+                self.cancellation_check()?;
                 return Ok(None);
             }
             thread::sleep(Duration::from_millis(2));
@@ -1276,8 +1309,48 @@ impl GraphSession {
     }
 
     pub fn cancel_and_join(&mut self) -> Result<()> {
+        // `TaskScope::cancel_and_join` only waits for workers; their typed
+        // results stay in these handles, so a worker that failed after the
+        // last `recv_output` poll (failure-at-EOF) would be lost. Drain
+        // already-finished workers and the recorded first failure *before*
+        // signalling cancellation: anything recorded after this point is
+        // cancellation fallout from our own cancel and must not mask the
+        // caller's reason for stopping (for example a closed pipe reader).
+        // `Drop` cannot propagate errors; callers that need a late failure
+        // must call this method instead of dropping the session.
+        let mut first_error = None;
+        for slot in &mut self.tasks {
+            let Some(handle) = slot.as_mut() else {
+                continue;
+            };
+            if !handle.is_finished() {
+                continue;
+            }
+            match self.scope.try_join(handle) {
+                Ok(Some(())) => *slot = None,
+                Ok(None) => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    *slot = None;
+                }
+            }
+        }
+        if let Ok(recorded) = self.worker_error.lock() {
+            if let Some(message) = recorded.as_ref() {
+                first_error.get_or_insert_with(|| anyhow!("graph worker failed: {message}"));
+            }
+        }
         self.cancel();
-        self.scope.cancel_and_join()
+        let _ = self.scope.cancel_and_join();
+        for slot in &mut self.tasks {
+            // Remaining workers were cancelled above; their results are
+            // cancellation fallout and are discarded here on purpose.
+            slot.take();
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Consume, stop, and reap this session before starting a new generation.
@@ -2410,7 +2483,12 @@ impl RuntimeGraphExecutor {
         let client = RemoteClient::new_with_credential_base(config, credential_base)?
             .with_secret_redactor(crate::security::secret_redactor(&self.registry))
             .with_resolver_helper(resolver_helper)
-            .with_process_observer(process_observer);
+            .with_process_observer(process_observer)
+            .with_ssrf_grant(crate::capabilities::remote_origin_is_explicitly_granted(
+                &self.registry,
+                &manifest.name,
+                &endpoint.endpoint,
+            ));
         if let Some(path) = client.descriptor_cache_path() {
             crate::capabilities::authorize_applet_host_path(
                 &self.registry,
@@ -3039,6 +3117,126 @@ pub fn run(
     run_plan(plan, registry, options, cancelled, None)
 }
 
+/// Render a terminal payload the way the published `graph-event.v1` schema
+/// describes it: bytes as an integer array, every other value as natural
+/// JSON. `Value` itself serializes as an externally tagged object
+/// (`{"Integer": 42}`), which the schema's open `value` still accepts but
+/// consumers do not expect; both the stream and the closing document use
+/// this shape so a piped line matches its document entry.
+pub fn graph_event_payload_json(payload: &PortValue) -> serde_json::Value {
+    match payload {
+        PortValue::Bytes(bytes) => serde_json::json!({"kind": "bytes", "value": bytes}),
+        PortValue::Value(value) => {
+            let natural = crate::structured::to_json(value)
+                .unwrap_or_else(|_| serde_json::to_value(value).unwrap_or(serde_json::Value::Null));
+            serde_json::json!({"kind": "value", "value": natural})
+        }
+    }
+}
+
+/// One streamed terminal event as a single JSON line on stdout. The shape
+/// matches one entry of the closing `execute.graph-run/1` document's
+/// `outputs` array, wrapped with the `execute.graph-event/1` protocol, the
+/// graph name, and its generation/revision so a consumer can align a stream
+/// with a document. Callers write the compact rendering followed by `\n`
+/// and flush after every event so a tick is visible within milliseconds.
+pub fn graph_event_line(
+    graph_name: &str,
+    generation: u64,
+    revision: u64,
+    event: &EventEnvelope,
+) -> serde_json::Value {
+    serde_json::json!({
+        "protocol": "execute.graph-event/1",
+        "graph": graph_name,
+        "generation": generation,
+        "revision": revision,
+        "port": event.port,
+        "sequence": event.sequence,
+        "sensitivity": event.sensitivity,
+        "payload": graph_event_payload_json(&event.payload)
+    })
+}
+
+/// Bound for one serialized `execute.graph-event/1` line, derived from the
+/// configured per-message payload bound instead of a new knob: a bytes
+/// payload renders as a JSON integer array at up to four bytes per input
+/// byte (`255,`), plus envelope overhead. Every payload admitted by `emit`
+/// fits; anything larger is rejected before an unbounded allocation.
+pub fn stream_event_byte_limit(max_message_bytes: usize) -> usize {
+    max_message_bytes
+        .checked_mul(4)
+        .map(|expanded| expanded.saturating_add(4096))
+        .unwrap_or(usize::MAX)
+}
+
+/// Render [`graph_event_line`] as compact JSON without allocating past
+/// `max_bytes`. A single huge bytes event must not serialize unbounded
+/// JSON on the streaming path, which holds no collected outputs and so has
+/// no total to exceed. Returns an error naming the port and the limit when
+/// the line does not fit.
+pub fn graph_event_line_json(
+    graph_name: &str,
+    generation: u64,
+    revision: u64,
+    event: &EventEnvelope,
+    max_bytes: usize,
+) -> Result<String> {
+    let line = graph_event_line(graph_name, generation, revision, event);
+    let mut buffer = Vec::new();
+    {
+        let mut bounded = BoundedJsonWriter {
+            inner: &mut buffer,
+            limit: max_bytes,
+            port: event.port.clone(),
+        };
+        serde_json::to_writer(&mut bounded, &line)?;
+    }
+    String::from_utf8(buffer).map_err(|error| anyhow!("graph event JSON was not UTF-8: {error}"))
+}
+
+struct BoundedJsonWriter<'a> {
+    inner: &'a mut Vec<u8>,
+    limit: usize,
+    port: PortRef,
+}
+
+impl std::io::Write for BoundedJsonWriter<'_> {
+    fn write(&mut self, chunk: &[u8]) -> std::io::Result<usize> {
+        if self.inner.len().saturating_add(chunk.len()) > self.limit {
+            return Err(std::io::Error::other(format!(
+                "graph event for {}.{} exceeds stream limit of {} bytes",
+                self.port.node, self.port.port, self.limit,
+            )));
+        }
+        self.inner.extend_from_slice(chunk);
+        Ok(chunk.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Start a live graph session with the same registry, policy, and module
+/// preflight as [`run`], without collecting terminal outputs. Use this for
+/// graphs with persistent nodes: consume terminal events through
+/// [`GraphSession::recv_output`] and render each with
+/// [`graph_event_line_json`] (bounded by
+/// [`GraphSession::max_stream_event_bytes`]) as it arrives, so memory stays
+/// flat no matter how many events flow. Checkpointed graphs are finite-only
+/// and keep the closing document path.
+pub fn start_session(
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+) -> Result<(String, GraphSession)> {
+    let session = prepare_session(plan, registry, options, cancelled, None)?.0;
+    let name = session.context().graph_name.clone();
+    Ok((name, session))
+}
+
 /// Run a finite applet graph with its node completions recorded in `store` (#71
 /// phase 1). Terminal outputs come in node completion order. A node recorded by an
 /// earlier run replays its outputs instead of running. `retry_uncertain` lets a node
@@ -3067,6 +3265,25 @@ fn run_plan(
     cancelled: Arc<AtomicBool>,
     checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
 ) -> Result<GraphRunResult> {
+    let (session, ordering_store) =
+        prepare_session(plan, registry, options, cancelled, checkpoint)?;
+    let mut result = session.run_to_completion()?;
+    if let Some(store) = ordering_store {
+        super::checkpoint::order_by_completion(&mut result.outputs, store.as_ref())?;
+    }
+    Ok(result)
+}
+
+/// Shared activation path for [`run`] and [`start_session`]: budget, input,
+/// registry, capability, data-flow, and module preflight, then worker start.
+/// Returns the live session plus the checkpoint ordering store, if any.
+fn prepare_session(
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
+) -> Result<(GraphSession, Option<Arc<dyn GraphCheckpointStore>>)> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = options
@@ -3174,11 +3391,8 @@ fn run_plan(
         deadline,
         ..GraphRunOptions::default()
     };
-    let mut result = GraphSession::start(plan, executor, graph_options)?.run_to_completion()?;
-    if let Some(store) = ordering_store {
-        super::checkpoint::order_by_completion(&mut result.outputs, store.as_ref())?;
-    }
-    Ok(result)
+    let session = GraphSession::start(plan, executor, graph_options)?;
+    Ok((session, ordering_store))
 }
 
 fn graph_module_sensitivity_floor(

@@ -521,12 +521,20 @@ uses its declared stdout mode. A non-captured final stdout cannot supply a
 result binding, save, downstream consumer or stream listener.
 
 These contracts do not make multi-applet or multi-file updates transactional.
-The generic filesystem helpers atomically replace one file at a time. Native
-command timeouts are not deadlines for arbitrary filesystem calls, and
-cooperative in-process checks do not interrupt a synchronous filesystem call,
-JSON parser/serializer routine, or other library operation between checkpoints.
-The interpreter's output limits are not universal bounds on a command's reads,
-writes, memory, filesystem effects or data sent through inherited descriptors.
+The generic filesystem helpers atomically replace one file at a time.
+In-process filesystem, hash and JSONC applets additionally poll the call
+budget at cooperative checkpoints: at dispatch, between targets, in 64 KiB
+file-I/O and hashing chunks, and every 5 ms while waiting on an advisory
+lock. An exceeded `--command-timeout-ms` or parent deadline surfaces as
+`timeout` (workflow cancellation as `cancelled`) with effects possibly
+incomplete. Cancelled file, symlink and directory writes remove their
+half-written temporaries instead of leaving them behind. A checkpoint cannot
+interrupt a thread already blocked inside one
+operating-system call (a stalled read, write, sync or rename, for example on
+NFS) or a library routine without checkpoints, so such a call can still return
+after the budget. The interpreter's output limits are not universal bounds on
+a command's reads, writes, memory, filesystem effects or data sent through
+inherited descriptors.
 
 ## Bundled generic operations
 
@@ -650,9 +658,20 @@ advisory and coordinate only participants that use the same lock.
 There is no transaction cleanup applet; keep the journal until its recovery and
 audit record is no longer needed, then remove it deliberately.
 
-Native command timeouts are not deadlines for arbitrary filesystem calls, and
-the interpreter's output limits are not universal bounds on a command's reads,
-writes, memory, filesystem effects or data sent through inherited descriptors.
+Advisory target and journal locks wait with 5 ms polls that recheck the call
+budget, so cancellation or an exceeded `--command-timeout-ms`/parent deadline
+preempts the wait instead of serving the full lock timeout; a wait that
+outlived its deadline reports the deadline rather than `lock_timeout`. Target
+reads, blob writes and journal updates move in 64 KiB chunks with a budget
+check per chunk. A budget failure partway through leaves the retained journal
+in its last persisted state for explicit recovery with
+`fs.transaction.recover`. A budget failure while writing a journal temporary
+or a private blob removes that half-written file, and a failure before
+publication removes the staging directory; a published journal is always
+retained for explicit recovery. As elsewhere, a thread blocked inside a single
+operating-system call can still return after the budget, and the interpreter's
+output limits are not universal bounds on a command's reads, writes, memory,
+filesystem effects or data sent through inherited descriptors.
 
 The applet catalog and failure codes are source-defined contracts, not an
 application policy layer. Workflow code chooses which generic operation to call,
@@ -685,27 +704,44 @@ privilege elevator (`sudo`, `sudo-rs`, `pkexec`, `doas`, `run0`, `su`, `runuser`
 marks a command launcher or shell whose arguments can name another program
 (`env`, `nice`, `nohup`, `timeout`, `stdbuf`, `setsid`, `xargs`, `busybox`, `flock`,
 `chroot`, `unshare`, `nsenter`, `ionice`, `chrt`, `taskset`, `time`, `watch`,
-`script`, `start-stop-daemon`, `setpriv`, and the shells `sh`, `bash`, `dash`, `zsh`,
-`fish`, `ksh`, `mksh`, `ash`, `csh`, `tcsh`, `yash`, `posh`, `cmd`, `powershell`,
-`pwsh`). Names match after the directory and any `.exe` suffix are removed, in any
-case. The executable that would actually run is checked too, by its canonical path,
-so a link to an elevator is still an elevator.
+`script`, `start-stop-daemon`, `setpriv`, container-host escape and container CLIs
+`flatpak-spawn`, `host-spawn`, `distrobox`, `distrobox-host-exec`, `toolbox`,
+`docker`, `podman`, `kubectl`, schedulers `at`, `batch`, `crontab`, D-Bus launchers
+`dbus-send`, `gdbus`, `busctl`, desktop launchers `xdg-open`, `gio`, and the shells
+`sh`, `bash`, `dash`, `zsh`, `fish`, `ksh`, `mksh`, `ash`, `csh`, `tcsh`, `yash`,
+`posh`, `cmd`, `powershell`, `pwsh`). Names match after the directory and any
+`.exe` suffix are removed, in any case, ignoring a trailing version
+(`python3.12`, `bash5`). The executable that would actually run is checked too, by
+its canonical path, so an absolute path or alias that keeps the listed file
+name, and a symlink whose canonical target keeps the listed file name, are
+still classified the same way. A renamed copy or hardlink with an unlisted file
+name is not recognised because classification is by name, not content, and
+hyphenated same-family variants that are not listed (for example
+`docker-compose`, `dbus-run-session`, `atq`) are also not recognised. An alias
+that fails to resolve at review time falls back to its written name, so runtime
+enforcement remains authoritative.
 
 A capability policy with `"deny_privileged": true` refuses those steps before any
 process starts. Elevators are always refused. Launchers and shells are refused
 whatever their arguments, because their arguments can name a program the program
-text never mentions; a launcher can be permitted by name with
-`"allow_wrappers": ["env"]`. The check runs in the static preflight and again at
+text never mentions (including `flatpak-spawn --host`, an `at` job, a D-Bus call to
+`org.freedesktop.systemd1` or `org.freedesktop.Flatpak`, a `.desktop` activation,
+or `gio open`); a launcher can be permitted by exact normalized name with
+`"allow_wrappers": ["env"]` (a versioned spelling needs its own entry, for
+example `"allow_wrappers": ["docker-27"]` for `docker-27`). The check runs in
+the static preflight and again at
 every command launch, so finite runs, resumed runs, task groups, parallel loops,
 spawned jobs, command conditions and called programs are all covered.
 
 This is a best-effort deny-list of known elevators and launchers. It recognises
-names, not behavior: a renamed or unlisted tool is not recognised. Fail-closed
-enforcement is the strict capability policy itself, an explicit allowlist of
-granted applets and executables. A policy without a grant for an applet refuses
-it, and direct quoted commands are refused outright. An applet that is granted
-still runs whatever binary its manifest names, so grant only manifests whose
-binaries you have reviewed. Do not rely on `deny_privileged` as the only control.
+names, not behavior: a renamed or unlisted tool is not recognised, and the list is
+a review aid, not a sandbox or a complete confinement boundary. Fail-closed
+enforcement is the strict capability policy itself (an explicit allowlist of
+granted applets and executables) with OS confinement in untrusted mode. A policy
+without a grant for an applet refuses it, and direct quoted commands are refused
+outright. An applet that is granted still runs whatever binary its manifest names,
+so grant only manifests whose binaries you have reviewed. Do not rely on
+`deny_privileged` as the only control.
 
 ## File tests, globs and line lists
 

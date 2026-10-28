@@ -29,5 +29,23 @@
     {
       "spread": "files"
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ]
+  }
 }

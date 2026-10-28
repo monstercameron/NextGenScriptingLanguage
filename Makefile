@@ -60,8 +60,14 @@ applet-boundaries-harness-check:
 stress-evidence-harness-check:
 	$(PYTHON) tests/mixed_stress_evidence.py
 
+native-tool-contracts:
+	$(PYTHON) tests/native_tool_contracts.py
+
 # Keep this sequence shared by local development and macOS/Linux CI.
-check: rust-check docs-check applet-boundaries-harness-check stress-evidence-harness-check
+# The static native-tool audit runs before rust-check so a stale bundled
+# bundle (which fails cargo test by design until the coordinator regenerates
+# it) cannot mask a taxonomy regression.
+check: native-tool-contracts rust-check docs-check applet-boundaries-harness-check stress-evidence-harness-check
 	$(PYTHON) tests/test_regenerate_latency_budget.py
 	$(PYTHON) tests/staged_rust.py
 	$(PYTHON) tests/releases.py

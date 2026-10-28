@@ -2058,16 +2058,15 @@ fn check_trusted_windows_handle(
         // predicate: either route trusting the owner accepts the input.
         // SAFETY: owner is non-null in the live descriptor; the other SIDs are
         // live in the token and local buffers.
-        let owner_trusted = windows_owner_sid_is_trusted(&owner_string, &user_string)
-            || {
-                // SAFETY: owner is non-null in the live descriptor; the other
-                // SIDs are live in the token and local buffers.
-                unsafe {
-                    EqualSid(owner, user.User.Sid) != 0
-                        || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
-                        || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
-                }
-            };
+        let owner_trusted = windows_owner_sid_is_trusted(&owner_string, &user_string) || {
+            // SAFETY: owner is non-null in the live descriptor; the other
+            // SIDs are live in the token and local buffers.
+            unsafe {
+                EqualSid(owner, user.User.Sid) != 0
+                    || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
+                    || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
+            }
+        };
         if !owner_trusted {
             bail!(
                 "{label} {} must be owned by the current user, SYSTEM, Administrators or TrustedInstaller (owner {owner_string})",

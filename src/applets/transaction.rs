@@ -1933,9 +1933,10 @@ mod tests {
         let plan = args(&journal, &[(&target, "before", "after")]);
         let changed_target = target.clone();
         let context = ExecutionContext::unrestricted();
+        let inspect_context = ExecutionContext::unrestricted();
         let interpose_target_drift = move |published: &Path| {
             assert_eq!(
-                read_journal(published, &context).unwrap().state,
+                read_journal(published, &inspect_context).unwrap().state,
                 TransactionState::Prepared
             );
             fs::write(&changed_target, b"third-party update").unwrap();

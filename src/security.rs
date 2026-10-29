@@ -9,9 +9,7 @@
 use crate::contracts::Sensitivity;
 use crate::manifest::Registry;
 use crate::manifest::{AppletBackend, Manifest};
-use anyhow::{anyhow, Result};
-#[cfg(windows)]
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -1611,6 +1609,203 @@ pub(crate) fn verify_trusted_fd(
     Ok(())
 }
 
+/// Check that an existing checkpoint root is private before its entries are
+/// trusted. Checkpoints contain resumable execution state, so unlike ordinary
+/// trusted inputs they must not be readable by other local principals either.
+/// The caller supplies the already-opened directory descriptor on Unix so the
+/// ownership, mode, and Linux ACL checks apply to the inode pinned for resume.
+/// Windows validates the opened directory handle's protected DACL; failures to
+/// read its owner or ACL fail closed.
+pub(crate) fn verify_private_checkpoint_directory(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    #[cfg(unix)] file: &File,
+) -> Result<()> {
+    if metadata.file_type().is_symlink() {
+        bail!("checkpoint directory {} is a symbolic link", path.display());
+    }
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(metadata) {
+        bail!("checkpoint directory {} is a reparse point", path.display());
+    }
+    if !metadata.is_dir() {
+        bail!("checkpoint root {} is not a directory", path.display());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != crate::platform::unix_ffi::effective_uid()
+            || metadata.mode() & 0o077 != 0
+        {
+            bail!(
+                "checkpoint root {} must be owned by the current user and private; set its Unix mode to 0700 before resuming",
+                path.display()
+            );
+        }
+        // ACL grants can exceed mode bits, so reject them on the pinned
+        // descriptor. If this platform or filesystem cannot attest whether an
+        // ACL exists, fail closed rather than treating that as a private root.
+        if checkpoint_directory_has_acl(file)? {
+            bail!(
+                "checkpoint root {} has an extended ACL; remove the ACL before resuming",
+                path.display()
+            );
+        }
+    }
+    #[cfg(windows)]
+    {
+        validate_private_windows_acl_for_directory(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+    let name = c"system.posix_acl_access";
+    // SAFETY: the descriptor is live; a null buffer with size zero only queries
+    // the extended attribute size and does not change the checkpoint root.
+    let size = unsafe {
+        libc::fgetxattr(
+            file.as_raw_fd(),
+            name.as_ptr().cast(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if size >= 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        // ENODATA only establishes that this POSIX ACL xattr is absent; it
+        // does not attest the absence of a separate NFSv4/RichACL dialect.
+        Some(libc::ENODATA) => {}
+        Some(libc::ENOTSUP) => Err(anyhow!(
+            "the filesystem does not support POSIX ACL xattrs, so checkpoint ACL access cannot be verified; resume from a filesystem with ACL-query support"
+        ))?,
+        _ => return Err(error).context("checking checkpoint root POSIX ACL"),
+    }
+    let names = linux_xattr_names(file)?;
+    checkpoint_xattr_list_has_unsupported_acl(&names)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_xattr_names(file: &File) -> Result<Vec<u8>> {
+    use std::os::unix::io::AsRawFd;
+
+    // Linux caps an xattr name list at 64 KiB. Keep the bound explicit so a
+    // malformed or unusual filesystem cannot trigger an unbounded allocation.
+    const MAX_XATTR_LIST_BYTES: usize = 64 * 1024;
+    // SAFETY: the descriptor is live; a null list with size zero only queries
+    // the length of the extended-attribute name list.
+    let size = unsafe { libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0) };
+    if size < 0 {
+        return Err(std::io::Error::last_os_error()).context("listing checkpoint root xattrs");
+    }
+    let size = usize::try_from(size).context("checkpoint root xattr list length overflowed")?;
+    if size > MAX_XATTR_LIST_BYTES {
+        bail!("checkpoint root xattr list exceeds the verification limit");
+    }
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut names = vec![0; size];
+    // SAFETY: names is a writable buffer of `size` bytes and file is a live fd.
+    // If the list grew since the size query, Linux returns ERANGE and we fail closed.
+    let actual =
+        unsafe { libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len()) };
+    if actual < 0 {
+        return Err(std::io::Error::last_os_error()).context("reading checkpoint root xattr list");
+    }
+    let actual = usize::try_from(actual).context("checkpoint root xattr list length overflowed")?;
+    if actual > names.len() {
+        bail!("checkpoint root xattr list changed while it was being read");
+    }
+    names.truncate(actual);
+    Ok(names)
+}
+
+fn checkpoint_xattr_list_has_unsupported_acl(names: &[u8]) -> Result<bool> {
+    let mut rest = names;
+    while !rest.is_empty() {
+        let Some(end) = rest.iter().position(|byte| *byte == 0) else {
+            bail!("checkpoint root xattr list is malformed");
+        };
+        let name = &rest[..end];
+        if name.is_empty() {
+            bail!("checkpoint root xattr list contains an empty name");
+        }
+        if name == b"system.nfs4_acl"
+            || name == b"system.nfs4_dacl"
+            || name == b"system.nfs4_sacl"
+            || name == b"system.richacl"
+            || name == b"system.posix_acl_default"
+            || name.starts_with(b"security.nfs4acl_")
+        {
+            return Ok(true);
+        }
+        rest = &rest[end + 1..];
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    // Darwin's ACL API reports ENOENT when no extended ACL is attached. Any
+    // other failure to inspect it is a refusal to resume.
+    #[link(name = "System")]
+    extern "C" {
+        fn acl_get_fd_np(fd: libc::c_int, acl_type: libc::c_int) -> *mut std::ffi::c_void;
+        fn acl_free(acl: *mut std::ffi::c_void) -> libc::c_int;
+    }
+
+    const ACL_TYPE_EXTENDED: libc::c_int = 0x0000_0100;
+    // SAFETY: file is live; ACL_TYPE_EXTENDED requests an ACL read from this
+    // descriptor and the returned allocation is released with acl_free below.
+    let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(false)
+        } else {
+            Err(error).context("checking checkpoint root macOS ACL")
+        };
+    }
+    // SAFETY: acl_get_fd_np returned a live ACL allocation owned by this call.
+    if unsafe { acl_free(acl) } == -1 {
+        return Err(std::io::Error::last_os_error()).context("releasing checkpoint root macOS ACL");
+    }
+    Ok(true)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn checkpoint_directory_has_acl(_file: &File) -> Result<bool> {
+    bail!(
+        "cannot verify checkpoint root ACLs on {}; resume is refused",
+        std::env::consts::OS
+    )
+}
+
+#[cfg(windows)]
+fn validate_private_windows_acl_for_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+        .with_context(|| format!("reading checkpoint root Windows ACL {}", path.display()))?;
+    validate_private_windows_acl(&handle, path)
+}
+
 /// Check every ancestor directory of the canonical form of `path` for the
 /// same ownership and writability gate as the leaf: a writable ancestor lets
 /// an attacker rename or replace the verified leaf or helper binary. The leaf
@@ -2464,6 +2659,67 @@ mod tests {
         DataFlowPolicy::from_json(text.as_bytes()).unwrap()
     }
 
+    #[test]
+    fn checkpoint_root_xattr_scan_detects_known_alternate_acl_names() {
+        for name in [
+            b"system.nfs4_acl\0".as_slice(),
+            b"system.nfs4_dacl\0".as_slice(),
+            b"system.nfs4_sacl\0".as_slice(),
+            b"system.richacl\0".as_slice(),
+            b"system.posix_acl_default\0".as_slice(),
+            b"security.nfs4acl_dacl\0".as_slice(),
+            b"security.nfs4acl_sacl\0".as_slice(),
+        ] {
+            assert!(
+                checkpoint_xattr_list_has_unsupported_acl(name).unwrap(),
+                "must recognize {}",
+                String::from_utf8_lossy(name)
+            );
+        }
+        assert!(!checkpoint_xattr_list_has_unsupported_acl(
+            b"security.selinux\0user.description\0system.posix_acl_access\0"
+        )
+        .unwrap());
+        assert!(checkpoint_xattr_list_has_unsupported_acl(b"system.nfs4_acl").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn checkpoint_linux_xattr_scan_uses_the_pinned_directory_descriptor() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = std::ffi::CString::new(directory.path().as_os_str().as_bytes()).unwrap();
+        let value = b"value";
+        // SAFETY: path and attribute name are NUL-terminated; value is a live
+        // readable byte slice for the supplied length.
+        let result = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                c"user.checkpoint-root-scan-test".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "setting a test xattr: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let directory_handle = std::fs::File::open(directory.path()).unwrap();
+        let names = linux_xattr_names(&directory_handle).unwrap();
+        assert!(names
+            .split(|byte| *byte == 0)
+            .any(|name| name == b"user.checkpoint-root-scan-test"));
+        assert!(
+            !checkpoint_xattr_list_has_unsupported_acl(b"user.checkpoint-root-scan-test\0")
+                .unwrap()
+        );
+    }
+
     #[cfg(all(windows, feature = "live"))]
     fn current_user_sid_string() -> String {
         use std::os::windows::ffi::OsStringExt;
@@ -2507,11 +2763,14 @@ mod tests {
                 GetSecurityDescriptorDacl, DACL_SECURITY_INFORMATION,
                 PROTECTED_DACL_SECURITY_INFORMATION,
             },
-            Storage::FileSystem::{FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC},
+            Storage::FileSystem::{
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
+            },
         };
 
         let file = std::fs::OpenOptions::new()
             .access_mode(WRITE_DAC | READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)
             .unwrap();
         let wide = std::ffi::OsStr::new(sddl)
@@ -2619,6 +2878,38 @@ mod tests {
             open_private_file(&administrators).is_ok(),
             "Administrators and SYSTEM ACEs are trusted exceptions"
         );
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn checkpoint_root_rejects_an_explicit_outsider_acl() {
+        let directory = tempfile::tempdir().unwrap();
+        let user_sid = current_user_sid_string();
+        replace_test_dacl(
+            directory.path(),
+            &format!("D:P(A;;FA;;;WD)(A;;FA;;;{user_sid})"),
+        );
+        let metadata = std::fs::symlink_metadata(directory.path()).unwrap();
+        let error = verify_private_checkpoint_directory(directory.path(), &metadata)
+            .expect_err("checkpoint roots must reject an outsider write ACE");
+        assert!(
+            format!("{error:#}").contains("another Windows principal"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn checkpoint_root_accepts_a_private_user_system_administrators_dacl() {
+        let directory = tempfile::tempdir().unwrap();
+        let user_sid = current_user_sid_string();
+        replace_test_dacl(
+            directory.path(),
+            &format!("D:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;{user_sid})"),
+        );
+        let metadata = std::fs::symlink_metadata(directory.path()).unwrap();
+        verify_private_checkpoint_directory(directory.path(), &metadata)
+            .expect("the owner and trusted platform principals may access the checkpoint");
     }
 
     #[test]

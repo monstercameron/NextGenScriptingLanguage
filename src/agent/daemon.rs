@@ -210,7 +210,9 @@ mod imp {
             }
         }
     }
-    const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
+    // A normal request can occupy the serial daemon for IO_TIMEOUT. Leave time for its
+    // queued ping to be answered before treating a failed probe as inconclusive.
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
     const MAX_HEADER_BYTES: usize = 256 * 1024;
     /// Room in the control buffer for one descriptor-passing message.
     const CONTROL_WORDS: usize = 32;
@@ -425,6 +427,18 @@ mod imp {
             .parent()
             .ok_or_else(|| anyhow!("socket path {} has no directory", socket.display()))?;
         private_directory(directory, true)?;
+        // Use a probe to reject the ordinary case promptly, but never let its timeout decide
+        // ownership: the daemon may be busy reading another request. The longer deadline
+        // gives a queued ping time to be answered (request reads are bounded by IO_TIMEOUT).
+        if request(socket, "ping", PROBE_TIMEOUT).is_ok() {
+            bail!("a daemon is already running at {}", socket.display());
+        }
+        // Serialize every owner decision with a lock whose lifetime covers the listener and
+        // its shutdown. A replacement waits until the old daemon has finished stopping its
+        // children and released the lock before it can inspect or remove the socket path.
+        let ownership = SocketOwnership::acquire(socket)?;
+        // Recheck after acquiring: another starter may have won the lock and bound a socket
+        // while this process waited.
         if request(socket, "ping", PROBE_TIMEOUT).is_ok() {
             bail!("a daemon is already running at {}", socket.display());
         }
@@ -442,7 +456,7 @@ mod imp {
         listener
             .set_nonblocking(true)
             .context("making the listener nonblocking")?;
-        let _guard = SocketGuard(socket.to_owned());
+        let _guard = SocketGuard::new(socket.to_owned())?;
         let wake = ChildWake::install().context("installing the child-exit wake")?;
         let mut server = Server {
             prepare,
@@ -454,6 +468,7 @@ mod imp {
             started: Instant::now(),
             served: 0,
             wake,
+            ownership_fd: ownership.file.as_raw_fd(),
         };
         loop {
             server.wait_for_activity();
@@ -463,15 +478,92 @@ mod imp {
             }
         }
         server.shutdown();
+        drop(_guard);
+        drop(ownership);
         Ok(())
     }
 
-    /// Removes the socket file when the daemon exits.
-    struct SocketGuard(PathBuf);
+    /// An advisory lock serializing daemon ownership decisions for one socket path.
+    /// The lock file remains in the private runtime directory so concurrent starters always
+    /// lock the same inode, including while a previous daemon is shutting down.
+    struct SocketOwnership {
+        file: fs::File,
+    }
+
+    impl SocketOwnership {
+        fn acquire(socket: &Path) -> Result<Self> {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut lock_path = socket.as_os_str().to_owned();
+            lock_path.push(".lock");
+            let lock_path = PathBuf::from(lock_path);
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .mode(0o600)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+                .open(&lock_path)
+                .with_context(|| {
+                    format!("opening daemon ownership lock {}", lock_path.display())
+                })?;
+            let metadata = file.metadata().with_context(|| {
+                format!("reading daemon ownership lock {}", lock_path.display())
+            })?;
+            if !metadata.is_file() || metadata.uid() != euid() || metadata.mode() & 0o077 != 0 {
+                bail!(
+                    "{} must be a private regular file owned by you",
+                    lock_path.display()
+                );
+            }
+            loop {
+                // SAFETY: flock uses the live descriptor and does not retain any pointers.
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                    break;
+                }
+                let error = io::Error::last_os_error();
+                if error.kind() != ErrorKind::Interrupted {
+                    return Err(error).with_context(|| {
+                        format!("locking daemon ownership file {}", lock_path.display())
+                    });
+                }
+            }
+            Ok(Self { file })
+        }
+    }
+
+    /// Removes only the socket inode this daemon bound when it exits.
+    struct SocketGuard {
+        path: PathBuf,
+        device: u64,
+        inode: u64,
+    }
+
+    impl SocketGuard {
+        fn new(path: PathBuf) -> Result<Self> {
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("reading bound socket {}", path.display()))?;
+            if !metadata.file_type().is_socket() || metadata.uid() != euid() {
+                bail!("{} is not a socket owned by you", path.display());
+            }
+            Ok(Self {
+                path,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            })
+        }
+    }
 
     impl Drop for SocketGuard {
         fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
+            if fs::symlink_metadata(&self.path).is_ok_and(|metadata| {
+                metadata.file_type().is_socket()
+                    && metadata.uid() == euid()
+                    && metadata.dev() == self.device
+                    && metadata.ino() == self.inode
+            }) {
+                let _ = fs::remove_file(&self.path);
+            }
         }
     }
 
@@ -594,6 +686,7 @@ mod imp {
         served: u64,
         wake: ChildWake,
         prepare: PrepareHook,
+        ownership_fd: RawFd,
     }
 
     impl Server {
@@ -790,7 +883,11 @@ mod imp {
                 .children
                 .iter()
                 .map(|child| child.connection.as_raw_fd())
-                .chain([self.wake.read.as_raw_fd(), self.wake.write.as_raw_fd()])
+                .chain([
+                    self.wake.read.as_raw_fd(),
+                    self.wake.write.as_raw_fd(),
+                    self.ownership_fd,
+                ])
                 .collect();
             let setup = ChildSetup {
                 listener_fd: self.listener.as_raw_fd(),

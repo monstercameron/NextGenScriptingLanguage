@@ -818,6 +818,45 @@ mod flood_budget_tests {
     }
 }
 
+#[cfg(test)]
+mod patch_test_permission {
+    use super::*;
+
+    #[test]
+    fn every_patch_test_requires_read_scope_regardless_of_json_pointer_path() {
+        for path in [
+            "", // document root
+            "/inbox",
+            "/inbox/0",
+            "/inbox/0/text",
+            "/ui",
+            "/ui/events",
+            "/ui/events/0/type",
+            "/ui/events/~10", // escaped slash within a descendant token
+            "/user/note",
+            "/cwd",
+            "/bindings/public",
+            "/source",
+        ] {
+            let request = json!({"operations":[{"op":"test","path":path,"value":"guess"}]});
+            assert!(patch_contains_test("patch", &request), "{path}");
+        }
+
+        for (operation, request) in [
+            (
+                "patch",
+                json!({"operations":[{"op":"replace","path":"/inbox/0/text","value":"guess"}]}),
+            ),
+            ("update", json!({"path":"/inbox/0/text","value":"guess"})),
+        ] {
+            assert!(
+                !patch_contains_test(operation, &request),
+                "{operation}: {request}"
+            );
+        }
+    }
+}
+
 /// Burst-tolerant flood budget for non-priority admissions on the live control
 /// endpoint. A fresh server starts with [`FLOOD_BURST`] immediate non-priority
 /// admissions — enough for a legitimate burst such as eight workers driving a
@@ -1039,6 +1078,21 @@ fn mutate(root: &mut Json, op: &str, path: &str, value: Option<Json>) -> Result<
         _ => bail!("path parent is not a container"),
     }
     Ok(())
+}
+
+/// Whether a patch includes a `test` operation. Every test is an equality
+/// oracle over state and therefore requires the same read permission as a
+/// direct `read`, regardless of its path.
+pub(crate) fn patch_contains_test(operation: &str, request: &Json) -> bool {
+    if operation != "patch" {
+        return false;
+    }
+    request
+        .get("operations")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .any(|entry| entry.get("op").and_then(Json::as_str) == Some("test"))
 }
 
 pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {

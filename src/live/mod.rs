@@ -1733,6 +1733,37 @@ fn handle_request(
             );
         }
         authorization.map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+        if state::patch_contains_test(&op, &value) {
+            // `test` is read-only, but its success or failure reveals equality
+            // for any state path. Require the same grant as a direct read
+            // before evaluating the patch, including queued listener/UI input.
+            let read_authorization = policy.authorize(auth.as_ref(), "read", None);
+            let (outcome, reason) = if read_authorization.is_ok() {
+                (
+                    crate::security::PolicyDecisionOutcome::Approved,
+                    crate::security::PolicyDecisionReason::PolicyMatched,
+                )
+            } else {
+                (
+                    crate::security::PolicyDecisionOutcome::Denied,
+                    crate::security::PolicyDecisionReason::MissingGrant,
+                )
+            };
+            let subject = auth
+                .as_ref()
+                .map_or("unknown", |credential| credential.agent.as_str());
+            crate::security::record_policy_decision(
+                &shared.registry,
+                subject,
+                "live.read",
+                None,
+                crate::security::PolicyRisk::Low,
+                outcome,
+                reason,
+            );
+            read_authorization
+                .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+        }
     } else if auth.is_some() {
         bail!("live agent credentials require serve --agent-policy");
     }

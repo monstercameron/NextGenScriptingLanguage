@@ -954,6 +954,101 @@ fn total_timeout_is_enforced_for_finite_run() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn total_timeout_after_caught_native_timeout_blocks_save_in_catch() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("caught-timeout.program");
+    let saved = root.path().join("after-deadline.txt");
+    fs::write(
+        &workflow,
+        format!(
+            "try\n  run \"sleep\" with arguments [\"1\"]\ncatch failure\n  use value \"late effect\"\n  then save to {:?}\n",
+            saved
+        ),
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--total-timeout-ms",
+            "40",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!saved.exists(), "save ran after the workflow deadline");
+}
+
+#[cfg(unix)]
+#[test]
+fn per_command_timeout_remains_catchable_before_total_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("command-timeout.program");
+    let saved = root.path().join("caught-command-timeout.txt");
+    fs::write(
+        &workflow,
+        format!(
+            "try\n  run \"sleep\" with arguments [\"1\"]\ncatch failure\n  use value \"caught command timeout\"\n  then save to {:?}\n",
+            saved
+        ),
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--command-timeout-ms",
+            "40",
+            "--total-timeout-ms",
+            "1000",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(saved).unwrap(), "caught command timeout");
+}
+
+#[cfg(unix)]
+#[test]
+fn total_timeout_stops_a_pure_in_process_loop() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("in-process-loop.program");
+    fs::write(
+        &workflow,
+        "while true is true\n  use value \"still running\"\n",
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--total-timeout-ms",
+            "250",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[cfg(feature = "tooling")]
 #[test]
 fn applet_discovery_and_typed_matching_are_machine_readable_without_execution() {

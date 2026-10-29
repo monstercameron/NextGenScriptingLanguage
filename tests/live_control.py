@@ -175,10 +175,13 @@ class LiveControl(unittest.TestCase):
             self.assertEqual(mixed['error'], denied[0]['error'])
             self.assertNotIn('should_rollback', app.ok('read', auth=authorized)['result']['state']['user'])
             app.ok('create', auth=editor, path='/user/ordinary_edit', value=True)
+            app.ok('create', auth=editor, path='/user/a~1b', value='escaped path')
             ordinary_state = app.ok('read', auth=authorized)['result']['state']
             ordinary_guesses = [
                 {'op': 'test', 'path': '/user/ordinary_edit', 'value': True},
                 {'op': 'test', 'path': '/user/ordinary_edit', 'value': False},
+                {'op': 'test', 'path': '/user/a~1b', 'value': 'escaped path'},
+                {'op': 'test', 'path': '/user/a~1b', 'value': 'wrong guess'},
                 {'op': 'test', 'path': '/cwd', 'value': ordinary_state['cwd']},
                 {'op': 'test', 'path': '/cwd', 'value': 'wrong directory'},
                 {'op': 'test', 'path': '/source', 'value': listener},
@@ -192,6 +195,11 @@ class LiveControl(unittest.TestCase):
             self.assertTrue(app.ok('patch', auth=authorized, operations=[ordinary_guesses[0]])['ok'])
             self.assertEqual(
                 app.call('patch', auth=authorized, operations=[ordinary_guesses[1]])['error']['code'],
+                'test_failed',
+            )
+            self.assertTrue(app.ok('patch', auth=authorized, operations=[ordinary_guesses[2]])['ok'])
+            self.assertEqual(
+                app.call('patch', auth=authorized, operations=[ordinary_guesses[3]])['error']['code'],
                 'test_failed',
             )
 

@@ -441,9 +441,12 @@ loops can therefore execute many more iterations in total; use
 that loop's limit.
 Recorded runs retain the configured limit for replay. Older records without a
 limit retain the original shared 100,000-iteration guard during replay.
-Cancellation is checked between VM steps, including loops containing only
-builtins. Browser execution uses a separate 100,000-iteration per-loop limit
-and retains its worker watchdog. `break` and `continue` target the innermost loop in the current
+Cancellation and the total workflow deadline are checked between VM steps,
+including loops containing only builtins. Once the total deadline expires, it
+bypasses `catch` like cancellation; bounded `finally` cleanup is still attempted
+but remains subject to the parent deadline and may stop immediately. Browser
+execution uses a separate 100,000-iteration per-loop limit and retains its
+worker watchdog. `break` and `continue` target the innermost loop in the current
 reusable-program scope and cannot cross a reusable call boundary. `break`
 leaves the loop; `continue` finishes the current iteration and tests the loop
 again. Neither collects iteration output: the pipeline remains the last value

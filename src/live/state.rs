@@ -1041,6 +1041,21 @@ fn mutate(root: &mut Json, op: &str, path: &str, value: Option<Json>) -> Result<
     Ok(())
 }
 
+/// A JSON Patch test must not compare against the stored value of a secret
+/// binding. Reject the binding map itself (an ancestor of every secret), and
+/// every path at or below a secret binding. `parts` has already been decoded
+/// as an RFC 6901 pointer, so escaped binding names are handled consistently
+/// with `mutate`.
+fn test_targets_secret_binding(parts: &[String], secret_names: &[String]) -> bool {
+    if parts.first().map(String::as_str) != Some("bindings") {
+        return false;
+    }
+    match parts.get(1) {
+        None => true,
+        Some(name) => secret_names.iter().any(|secret| secret == name),
+    }
+}
+
 pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
     let mut state = shared.state.lock().unwrap();
     if request.op == "wait" {
@@ -1284,6 +1299,8 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             if operations.is_empty() || operations.len() > 128 {
                 bail!("patch needs 1..128 operations");
             }
+            let mut secret_names = state.secret_names();
+            let mut checked_source = state.doc.source.clone();
             for operation in operations {
                 let op = operation
                     .get("op")
@@ -1294,6 +1311,31 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                     .and_then(Json::as_str)
                     .context("patch operation needs path")?;
                 let parts = tokens(path)?;
+                let current_source = candidate
+                    .get("source")
+                    .and_then(Json::as_str)
+                    .context("state source must be text")?;
+                if current_source != checked_source {
+                    // A batch may introduce a secret input before testing its
+                    // binding. Keep existing secret names too, so changing or
+                    // removing the declaration cannot declassify a value in
+                    // the middle of the same batch.
+                    let candidate_plan = Plan::parse(current_source)?;
+                    secret_names.extend(
+                        crate::runtime::sensitive_binding_names(
+                            &candidate_plan.program,
+                            &state.registry,
+                        )
+                        .into_iter(),
+                    );
+                    checked_source = current_source.to_owned();
+                }
+                if op == "test" && test_targets_secret_binding(&parts, &secret_names) {
+                    return Err(fail(
+                        "secret_test_denied",
+                        "patch test cannot target a withheld secret binding",
+                    ));
+                }
                 if state.in_flight
                     && !parts.first().is_some_and(|v| {
                         v == "user"

@@ -137,7 +137,8 @@ mod tests {
         .unwrap();
         assert!(plan.after.ends_with("run \"true\"\n"));
 
-        let raw_block = "use value \"\"\"\nline one \"quoted\" \\back\n# block text\n\"\"\"\npipe to \"wc\" with flags [\"-c\"]\nrun \"false\"\n";
+        // The quoted command is a direct executable, so its argv uses `arguments`.
+        let raw_block = "use value \"\"\"\nline one \"quoted\" \\back\n# block text\n\"\"\"\npipe to \"wc\" with arguments [\"-c\"]\nrun \"false\"\n";
         fs::write(&path, raw_block).unwrap();
         let plan = plan_repair(
             raw_block,

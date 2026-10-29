@@ -1,10 +1,16 @@
 #![cfg(feature = "model")]
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::Mutex;
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
@@ -94,6 +100,7 @@ fn model_helper_child_environment_allowlist_filters_variables() {
     assert!(flow::capabilities::apply_host_child_environment(&mut invalid).is_err());
 }
 
+#[cfg(unix)]
 fn read_request_headers(stream: &mut TcpStream) -> std::io::Result<String> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut bytes = Vec::new();
@@ -113,6 +120,7 @@ fn read_request_headers(stream: &mut TcpStream) -> std::io::Result<String> {
     }
 }
 
+#[cfg(unix)]
 fn serve_chat_completion() -> (String, thread::JoinHandle<Option<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind owned loopback listener");
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -146,6 +154,7 @@ fn serve_chat_completion() -> (String, thread::JoinHandle<Option<String>>) {
     (endpoint, server)
 }
 
+#[cfg(unix)]
 fn run_execute_model(executable: &Path, allow: &str, endpoint: &str) -> Output {
     let mut command = Command::new(executable);
     command
@@ -179,8 +188,7 @@ fn run_execute_model(executable: &Path, allow: &str, endpoint: &str) -> Output {
         .unwrap()
 }
 
-#[test]
-fn model_cli_parses_env_allow_and_launches_the_trusted_sibling_helper() {
+fn stage_real_model_binaries() -> (tempfile::TempDir, PathBuf) {
     let execute_source = PathBuf::from(env!("CARGO_BIN_EXE_execute"));
     let helper_source = PathBuf::from(env!("CARGO_BIN_EXE_execute-model"));
     let source_directory = execute_source
@@ -212,7 +220,13 @@ fn model_cli_parses_env_allow_and_launches_the_trusted_sibling_helper() {
     });
     std::fs::copy(&execute_source, &executable).unwrap();
     std::fs::copy(&helper_source, &helper).unwrap();
+    (directory, executable)
+}
 
+#[cfg(unix)]
+#[test]
+fn model_cli_parses_env_allow_and_launches_the_trusted_sibling_helper() {
+    let (_directory, executable) = stage_real_model_binaries();
     let offline = run_execute_model(
         &executable,
         "EXECUTE_MODELS_OFFLINE",
@@ -253,4 +267,29 @@ fn model_cli_parses_env_allow_and_launches_the_trusted_sibling_helper() {
         "allowlisted helper credential missing from request: {headers}"
     );
     assert!(!headers.contains("unselected-default-key"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_model_cli_launches_the_real_sibling_helper() {
+    let (_directory, executable) = stage_real_model_binaries();
+    let output = Command::new(executable)
+        .args(["model", "--version"])
+        .env_remove("EXECUTE_CHILD_ENV_ALLOW")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stdout,
+        format!("execute-model {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+    );
+    assert!(output.stderr.is_empty());
 }

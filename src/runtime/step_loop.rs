@@ -50,6 +50,10 @@ fn remember_task_group_presentation(
     }
 }
 
+fn is_terminal_presentation_step(program: &crate::ast::Program, index: usize) -> bool {
+    !crate::ast::has_stdout_consumer(&program.steps, index + 1)
+}
+
 pub(super) fn merge_environment_overlay(
     target: &mut crate::capabilities::CommandEnvOverlay,
     update: crate::capabilities::CommandEnvOverlay,
@@ -729,6 +733,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             match &step.kind {
                 StepKind::Loop { kind, end } => {
                     control_state.enter_loop(index, index + end)?;
+                    let for_each_values = match kind {
+                        crate::ast::LoopKind::ForEach { binding: _, values } => {
+                            let raw = resolve(values, &bindings)?;
+                            let presentation = task_group_presentation_source(
+                                values,
+                                &bindings,
+                                &task_group_presentations,
+                            )?;
+                            Some((raw, presentation))
+                        }
+                        _ => None,
+                    };
                     let entered = loop_frames
                         .header_with_commands(
                             index,
@@ -754,6 +770,39 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             },
                         )
                         .with_context(|| format!("line {}", step.line))?;
+                    if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
+                        if entered {
+                            let presentation_item = for_each_values.as_ref().and_then(
+                                |(raw_values, presentation_values)| {
+                                    let (
+                                        Value::List(raw_items),
+                                        Some(Value::List(presented_items)),
+                                    ) = (raw_values, presentation_values)
+                                    else {
+                                        return None;
+                                    };
+                                    let raw_item = bindings.get(binding)?;
+                                    let index =
+                                        raw_items.iter().position(|item| item == raw_item)?;
+                                    presented_items.get(index)
+                                },
+                            );
+                            if let Some(raw_item) = bindings.get(binding) {
+                                if let Some(presentation_item) = presentation_item {
+                                    remember_task_group_presentation(
+                                        binding,
+                                        raw_item,
+                                        presentation_item,
+                                        &mut task_group_presentations,
+                                    );
+                                } else {
+                                    task_group_presentations.remove(binding);
+                                }
+                            }
+                        } else {
+                            task_group_presentations.remove(binding);
+                        }
+                    }
                     lazy_event(
                         options.trace,
                         signals,
@@ -1244,7 +1293,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::UseValue { source } => {
                     pipeline_sensitive = value_references_sensitive(source, &sensitive_bindings);
-                    let presentation_source = if program.steps.get(index + 1).is_none() {
+                    let presentation_source = if is_terminal_presentation_step(program, index) {
                         task_group_presentation_source(
                             source,
                             &bindings,
@@ -1272,7 +1321,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         task_group_presentation_bindings(&bindings, &task_group_presentations)
                             .map(|presentation_bindings| resolve(source, &presentation_bindings))
                             .transpose()?;
-                    let is_terminal_presentation = program.steps.get(index + 1).is_none();
+                    let is_terminal_presentation = is_terminal_presentation_step(program, index);
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_bindings.contains(binding) || sensitive_source;
                     if sensitive_bindings.contains(binding) || sensitive_source {
@@ -1494,7 +1543,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 StepKind::EncodeJson { source } => {
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_source;
-                    let is_terminal_presentation = program.steps.get(index + 1).is_none();
+                    let is_terminal_presentation = is_terminal_presentation_step(program, index);
                     let presentation_source = if is_terminal_presentation {
                         // Keep the language binding raw for explicit data flow,
                         // while JSON serialization exposes its diagnostic view.

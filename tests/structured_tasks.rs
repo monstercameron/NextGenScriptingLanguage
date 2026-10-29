@@ -1077,6 +1077,33 @@ fn task_group_json_redacts_declared_secret_stderr_but_api_keeps_raw_bytes() -> R
     let flowed: serde_json::Value = serde_json::from_slice(&result.output)?;
     assert_eq!(flowed, serde_json::json!(secret.to_vec()));
 
+    let program = flow::parser::parse(
+        "parallel at most 1 as results\n  run secret.echo as echoed\ntake json at \"/tasks\" from results as records\nfor each task in records\n  then encode task as json\n",
+    )?;
+    let result = flow::runtime::run(&program, &make_registry()?, &options)?;
+    let loop_presentation: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(
+        loop_presentation["stderr"],
+        serde_json::json!(b"[REDACTED]".to_vec())
+    );
+
+    let program = flow::parser::parse(
+        "parallel at most 1 as results\n  run secret.echo as echoed\ntake json at \"/tasks\" from results as records\nfor each task in records\n  then encode task as json\nuse folder \".\"\n",
+    )?;
+    let result = flow::runtime::run(&program, &make_registry()?, &options)?;
+    let loop_presentation: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(
+        loop_presentation["stderr"],
+        serde_json::json!(b"[REDACTED]".to_vec())
+    );
+
+    let program = flow::parser::parse(
+        "parallel at most 1 as results\n  run secret.echo as echoed\ntake json at \"/tasks\" from results as records\nfor each task in records\n  then encode task as json\nthen \"cat\"\n",
+    )?;
+    let result = flow::runtime::run(&program, &make_registry()?, &options)?;
+    let loop_flowed: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(loop_flowed["stderr"], serde_json::json!(secret.to_vec()));
+
     // V3 element records redact before encoding, while leaving the backend's
     // raw API unchanged.
     let program = flow::parser::parse(

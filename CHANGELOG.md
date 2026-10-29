@@ -7,6 +7,11 @@ original version labels.
 
 ## Unreleased
 
+- Graph inspection with supplied sensitive prompt or environment inputs now keeps
+  those values withheld in resolved applet parameters while resolving non-sensitive
+  inputs normally. Graph validation diagnostics redact supplied sensitive values
+  before they reach `check`, `inspect`, `explain`, or `run` error output.
+
 - `execute run GRAPH --events jsonl` streams one `execute.graph-event/1` JSON
   line per terminal event as it arrives, flushing after every event and holding
   no collected outputs. Graphs with persistent nodes (timers, listeners, native

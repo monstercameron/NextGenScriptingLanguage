@@ -1153,9 +1153,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         if args.execution_mode.is_some() {
             registry.set_host_state(args.execution_mode);
         }
-        let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
+        let parsed_graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
         if args.checkpoint_dir.is_some()
-            && graph
+            && parsed_graph
                 .input_declarations()
                 .iter()
                 .any(flow::ast::is_sensitive)
@@ -1176,20 +1176,30 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         // A capability policy decides which environment variables a graph may read,
         // before any input is resolved.
-        flow::capabilities::authorize_environment_inputs(graph.input_declarations(), &registry)?;
+        flow::capabilities::authorize_environment_inputs(
+            parsed_graph.input_declarations(),
+            &registry,
+        )?;
         let supplied_inputs = flow::inputs::parse_cli_arguments(
-            graph.input_declarations(),
+            parsed_graph.input_declarations(),
             &args.inputs,
             &args.program_arguments,
         )?;
         let inputs = if args.command == "run" {
-            flow::inputs::resolve(graph.input_declarations(), &supplied_inputs, false)?
+            flow::inputs::resolve(parsed_graph.input_declarations(), &supplied_inputs, false)?
         } else {
             supplied_inputs
         };
-        let interface = flow::inputs::describe(graph.input_declarations(), &inputs)?;
-        let graph = graph.with_input_values(&inputs, false)?;
-        graph.validate_with_registry(&registry)?;
+        let interface = flow::inputs::describe(parsed_graph.input_declarations(), &inputs)?;
+        flow::security::register_sensitive_inputs(
+            &registry,
+            parsed_graph.input_declarations(),
+            &inputs,
+        )?;
+        let graph = parsed_graph.with_input_values(&inputs, false)?;
+        graph
+            .validate_with_registry(&registry)
+            .map_err(|error| redact_runtime_error(&registry, error))?;
         let cwd = if capability_policy.is_some() || matches!(args.command, "run" | "resume") {
             Some(env::current_dir()?)
         } else {
@@ -1225,7 +1235,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 "protocol": "execute.graph/1",
                 "validation": "static",
                 "interface": interface,
-                "graph": serde_json::to_value(&graph)?
+                "graph": serde_json::to_value(
+                    &parsed_graph.with_input_values_for_inspection(&inputs)?
+                )?
             })),
             "explain" => {
                 writeln!(

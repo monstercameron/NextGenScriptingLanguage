@@ -1046,13 +1046,23 @@ fn mutate(root: &mut Json, op: &str, path: &str, value: Option<Json>) -> Result<
 /// every path at or below a secret binding. `parts` has already been decoded
 /// as an RFC 6901 pointer, so escaped binding names are handled consistently
 /// with `mutate`.
-fn test_targets_secret_binding(parts: &[String], secret_names: &[String]) -> bool {
-    if parts.first().map(String::as_str) != Some("bindings") {
-        return false;
-    }
-    match parts.get(1) {
-        None => true,
-        Some(name) => secret_names.iter().any(|secret| secret == name),
+fn test_targets_redacted_state(
+    parts: &[String],
+    secret_names: &[String],
+    source_is_redacted: bool,
+) -> bool {
+    match parts.first().map(String::as_str) {
+        // `/bindings` is an ancestor of every secret binding. A secret name
+        // also protects the binding itself and every nested path below it.
+        Some("bindings") => match parts.get(1) {
+            None => true,
+            Some(name) => secret_names.iter().any(|secret| secret == name),
+        },
+        // Reads replace the whole input record whenever the program contains
+        // a secret binding, and source reads redact any registered secret text.
+        Some("input") => !secret_names.is_empty(),
+        Some("source") => source_is_redacted,
+        _ => false,
     }
 }
 
@@ -1301,6 +1311,8 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             }
             let mut secret_names = state.secret_names();
             let mut checked_source = state.doc.source.clone();
+            let mut source_is_redacted =
+                state.redactor.redact_text(&state.doc.source) != state.doc.source;
             for operation in operations {
                 let op = operation
                     .get("op")
@@ -1328,12 +1340,18 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                         )
                         .into_iter(),
                     );
+                    source_is_redacted |=
+                        candidate_plan.program.inputs.iter().any(|input| {
+                            crate::ast::is_sensitive(input) && input.default.is_some()
+                        });
                     checked_source = current_source.to_owned();
                 }
-                if op == "test" && test_targets_secret_binding(&parts, &secret_names) {
+                if op == "test"
+                    && test_targets_redacted_state(&parts, &secret_names, source_is_redacted)
+                {
                     return Err(fail(
                         "secret_test_denied",
-                        "patch test cannot target a withheld secret binding",
+                        "patch test cannot target redacted state",
                     ));
                 }
                 if state.in_flight

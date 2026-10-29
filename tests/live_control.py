@@ -160,13 +160,17 @@ class LiveControl(unittest.TestCase):
                 {'op': 'test', 'path': '/bindings/token', 'value': 'incorrect-guess'},
                 {'op': 'test', 'path': '/bindings', 'value': {'token': secret}},
                 {'op': 'test', 'path': '/bindings/token/0', 'value': secret[0]},
+                {'op': 'test', 'path': '/input', 'value': {'text': ''}},
+                {'op': 'test', 'path': '/input', 'value': {'text': 'incorrect-guess'}},
+                {'op': 'test', 'path': '/input/text', 'value': ''},
+                {'op': 'test', 'path': '/input/text', 'value': 'incorrect-guess'},
             ]
             for agent, auth in credentials.items():
                 failures = [app.call('patch', auth=auth, operations=[operation]) for operation in attempts]
                 self.assertTrue(all(not result['ok'] for result in failures), (agent, failures))
                 self.assertEqual(
                     [result['error'] for result in failures],
-                    [{'code': 'secret_test_denied', 'message': 'patch test cannot target a withheld secret binding'}] * len(attempts),
+                    [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(attempts),
                 )
                 self.assertTrue(all(secret not in json.dumps(result) for result in failures))
 
@@ -189,6 +193,33 @@ class LiveControl(unittest.TestCase):
             after = app.ok('read', auth=credentials['reader_editor'])
             self.assertEqual(after['result']['state']['bindings']['token'], {'withheld': 'secret'})
             self.assertNotIn(secret, json.dumps(after))
+
+            # A public source path remains testable when it contains no
+            # redacted text, even though the program has another secret field.
+            app.ok('patch', auth=credentials['editor'], operations=[
+                {'op': 'test', 'path': '/source', 'value': source},
+            ])
+
+        # Secret prompt defaults are redacted from source reads. Exact and
+        # mismatching source guesses must receive the same fixed rejection.
+        source_with_default = (
+            'accept token as text from secret prompt "Token?" '
+            f'with default "{secret}"\nuse value token\n'
+        )
+        with Session(source_with_default, {'token': secret}, agent_policy=policy) as app:
+            visible = app.ok('read', auth=credentials['reader_editor'])
+            self.assertNotIn(secret, json.dumps(visible))
+            self.assertIn('[REDACTED]', visible['result']['state']['source'])
+            guesses = [source_with_default, source_with_default.replace(secret, 'incorrect-guess')]
+            for auth in credentials.values():
+                failures = [app.call('patch', auth=auth, operations=[
+                    {'op': 'test', 'path': '/source', 'value': guess},
+                ]) for guess in guesses]
+                self.assertEqual(
+                    [result['error'] for result in failures],
+                    [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(guesses),
+                )
+                self.assertTrue(all(secret not in json.dumps(result) for result in failures))
 
     def test_stream_rejects_record_that_would_exceed_document_budget(self):
         source = 'stream from "printf" with arguments ["%s", "' + 'r' * 32768 + '"]\nshow each line\n'

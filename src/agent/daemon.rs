@@ -497,10 +497,17 @@ mod imp {
                 ),
                 Err(error) => Err(error).with_context(|| format!("reading {}", socket.display())),
             },
-            Err(DaemonError::Untrusted { reason, .. }) => bail!(
-                "refusing to replace untrusted daemon socket {}: {reason}",
-                socket.display()
-            ),
+            Err(DaemonError::Untrusted { reason, .. }) => match fs::symlink_metadata(socket) {
+                // `check_trusted` reports an absent endpoint as untrusted. A genuinely
+                // missing path is the normal first-start case, so allow it after checking
+                // the directory and the path independently.
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Ok(_) => bail!(
+                    "refusing to replace untrusted daemon socket {}: {reason}",
+                    socket.display()
+                ),
+                Err(error) => Err(error).with_context(|| format!("reading {}", socket.display())),
+            },
         }
     }
 
@@ -1728,11 +1735,11 @@ mod imp {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(test)]
     mod socket_ownership_tests {
         use super::{ensure_socket_recoverable, SocketGuard, SocketOwnership};
         use std::io::Read;
-        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
         use std::os::unix::net::{UnixListener, UnixStream};
         use std::sync::mpsc;
         use std::thread;
@@ -1791,6 +1798,8 @@ mod imp {
         #[test]
         fn an_unresponsive_listener_is_not_reclaimed_as_a_stale_socket() {
             let directory = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
             let socket = directory.path().join("daemon.sock");
             let listener = UnixListener::bind(&socket).unwrap();
             let legacy = thread::spawn(move || {
@@ -1813,6 +1822,19 @@ mod imp {
                 "the live listener's socket path was removed"
             );
             legacy.join().unwrap();
+        }
+
+        #[test]
+        fn a_missing_socket_is_recoverable_but_an_existing_untrusted_path_is_not() {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            let socket = directory.path().join("daemon.sock");
+            ensure_socket_recoverable(&socket).expect("an absent socket is a fresh start");
+
+            std::fs::write(&socket, b"foreign sentinel").unwrap();
+            assert!(ensure_socket_recoverable(&socket).is_err());
+            assert_eq!(std::fs::read(&socket).unwrap(), b"foreign sentinel");
         }
     }
 }

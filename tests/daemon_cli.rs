@@ -253,7 +253,7 @@ fn daemon_stop_restart_with_active_child_keeps_replacement_socket_reachable() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let socket = default_socket_under(runtime.path());
-    let mut old = serve_in_background(runtime.path());
+    let mut old = serve_in_background_accepting(runtime.path());
     let old_status: Value =
         serde_json::from_slice(&daemon_output(runtime.path(), &["status"]).stdout).unwrap();
     let old_pid = old_status["pid"].as_u64().unwrap();

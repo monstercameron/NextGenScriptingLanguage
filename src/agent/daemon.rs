@@ -210,7 +210,9 @@ mod imp {
             }
         }
     }
-    const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
+    // A normal request can occupy the serial daemon for IO_TIMEOUT. Leave time for its
+    // queued ping to be answered before treating a failed probe as inconclusive.
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
     const MAX_HEADER_BYTES: usize = 256 * 1024;
     /// Room in the control buffer for one descriptor-passing message.
     const CONTROL_WORDS: usize = 32;
@@ -425,9 +427,19 @@ mod imp {
             .parent()
             .ok_or_else(|| anyhow!("socket path {} has no directory", socket.display()))?;
         private_directory(directory, true)?;
+        // Use a probe to reject the ordinary case promptly, but never let its timeout decide
+        // ownership: the daemon may be busy reading another request. The longer deadline
+        // gives a queued ping time to be answered (request reads are bounded by IO_TIMEOUT).
         if request(socket, "ping", PROBE_TIMEOUT).is_ok() {
             bail!("a daemon is already running at {}", socket.display());
         }
+        // Serialize every owner decision with a lock whose lifetime covers the listener and
+        // its shutdown. A replacement waits until the old daemon has finished stopping its
+        // children and released the lock before it can inspect or remove the socket path.
+        let ownership = SocketOwnership::acquire(socket)?;
+        // Recheck after acquiring: another starter may have won the lock and bound a socket
+        // while this process waited.
+        ensure_socket_recoverable(socket)?;
         if fs::symlink_metadata(socket).is_ok() {
             // Only a stale socket of ours is replaced; anything else is left alone.
             if !owned_socket(socket) {
@@ -442,7 +454,7 @@ mod imp {
         listener
             .set_nonblocking(true)
             .context("making the listener nonblocking")?;
-        let _guard = SocketGuard(socket.to_owned());
+        let _guard = SocketGuard::new(socket.to_owned())?;
         let wake = ChildWake::install().context("installing the child-exit wake")?;
         let mut server = Server {
             prepare,
@@ -454,6 +466,7 @@ mod imp {
             started: Instant::now(),
             served: 0,
             wake,
+            ownership_fd: ownership.file.as_raw_fd(),
         };
         loop {
             server.wait_for_activity();
@@ -463,15 +476,122 @@ mod imp {
             }
         }
         server.shutdown();
+        drop(_guard);
+        drop(ownership);
         Ok(())
     }
 
-    /// Removes the socket file when the daemon exits.
-    struct SocketGuard(PathBuf);
+    /// A failed ping alone cannot establish that a socket is stale. In particular, an older
+    /// daemon does not participate in the ownership lock and can still be shutting down.
+    /// Only connection-refused/not-found evidence permits replacement; a path that accepted
+    /// a connection but did not answer is left untouched while its owner may still exist.
+    fn ensure_socket_recoverable(socket: &Path) -> Result<()> {
+        match request(socket, "ping", PROBE_TIMEOUT) {
+            Ok(_) => bail!("a daemon is already running at {}", socket.display()),
+            Err(DaemonError::NotRunning { .. }) => Ok(()),
+            Err(DaemonError::Protocol { detail, .. }) => match fs::symlink_metadata(socket) {
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Ok(_) => bail!(
+                    "{} exists but did not answer the daemon probe ({detail}); refusing to replace it",
+                    socket.display()
+                ),
+                Err(error) => Err(error).with_context(|| format!("reading {}", socket.display())),
+            },
+            Err(DaemonError::Untrusted { reason, .. }) => match fs::symlink_metadata(socket) {
+                // `check_trusted` reports an absent endpoint as untrusted. A genuinely
+                // missing path is the normal first-start case, so allow it after checking
+                // the directory and the path independently.
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Ok(_) => bail!(
+                    "refusing to replace untrusted daemon socket {}: {reason}",
+                    socket.display()
+                ),
+                Err(error) => Err(error).with_context(|| format!("reading {}", socket.display())),
+            },
+        }
+    }
+
+    /// An advisory lock serializing daemon ownership decisions for one socket path.
+    /// The lock file remains in the private runtime directory so concurrent starters always
+    /// lock the same inode, including while a previous daemon is shutting down.
+    struct SocketOwnership {
+        file: fs::File,
+    }
+
+    impl SocketOwnership {
+        fn acquire(socket: &Path) -> Result<Self> {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut lock_path = socket.as_os_str().to_owned();
+            lock_path.push(".lock");
+            let lock_path = PathBuf::from(lock_path);
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .mode(0o600)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+                .open(&lock_path)
+                .with_context(|| {
+                    format!("opening daemon ownership lock {}", lock_path.display())
+                })?;
+            let metadata = file.metadata().with_context(|| {
+                format!("reading daemon ownership lock {}", lock_path.display())
+            })?;
+            if !metadata.is_file() || metadata.uid() != euid() || metadata.mode() & 0o077 != 0 {
+                bail!(
+                    "{} must be a private regular file owned by you",
+                    lock_path.display()
+                );
+            }
+            loop {
+                // SAFETY: flock uses the live descriptor and does not retain any pointers.
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                    break;
+                }
+                let error = io::Error::last_os_error();
+                if error.kind() != ErrorKind::Interrupted {
+                    return Err(error).with_context(|| {
+                        format!("locking daemon ownership file {}", lock_path.display())
+                    });
+                }
+            }
+            Ok(Self { file })
+        }
+    }
+
+    /// Removes only the socket inode this daemon bound when it exits.
+    struct SocketGuard {
+        path: PathBuf,
+        device: u64,
+        inode: u64,
+    }
+
+    impl SocketGuard {
+        fn new(path: PathBuf) -> Result<Self> {
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("reading bound socket {}", path.display()))?;
+            if !metadata.file_type().is_socket() || metadata.uid() != euid() {
+                bail!("{} is not a socket owned by you", path.display());
+            }
+            Ok(Self {
+                path,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            })
+        }
+    }
 
     impl Drop for SocketGuard {
         fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
+            if fs::symlink_metadata(&self.path).is_ok_and(|metadata| {
+                metadata.file_type().is_socket()
+                    && metadata.uid() == euid()
+                    && metadata.dev() == self.device
+                    && metadata.ino() == self.inode
+            }) {
+                let _ = fs::remove_file(&self.path);
+            }
         }
     }
 
@@ -594,6 +714,7 @@ mod imp {
         served: u64,
         wake: ChildWake,
         prepare: PrepareHook,
+        ownership_fd: RawFd,
     }
 
     impl Server {
@@ -790,7 +911,11 @@ mod imp {
                 .children
                 .iter()
                 .map(|child| child.connection.as_raw_fd())
-                .chain([self.wake.read.as_raw_fd(), self.wake.write.as_raw_fd()])
+                .chain([
+                    self.wake.read.as_raw_fd(),
+                    self.wake.write.as_raw_fd(),
+                    self.ownership_fd,
+                ])
                 .collect();
             let setup = ChildSetup {
                 listener_fd: self.listener.as_raw_fd(),
@@ -1607,6 +1732,109 @@ mod imp {
             assert!(receive_request(&server).is_err());
             assert!(started.elapsed() < Duration::from_millis(2_500));
             writer.join().unwrap();
+        }
+    }
+
+    #[cfg(test)]
+    mod socket_ownership_tests {
+        use super::{ensure_socket_recoverable, SocketGuard, SocketOwnership};
+        use std::io::Read;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+        use std::os::unix::net::{UnixListener, UnixStream};
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        #[test]
+        fn a_second_owner_waits_until_the_first_releases_its_lock() {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("daemon.sock");
+            let first = SocketOwnership::acquire(&socket).unwrap();
+            let second_socket = socket.clone();
+            let (started, wait_started) = mpsc::channel();
+            let (acquired, wait_acquired) = mpsc::channel();
+            let second = thread::spawn(move || {
+                started.send(()).unwrap();
+                let _owner = SocketOwnership::acquire(&second_socket).unwrap();
+                acquired.send(()).unwrap();
+            });
+
+            wait_started.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(
+                wait_acquired
+                    .recv_timeout(Duration::from_millis(100))
+                    .is_err(),
+                "a replacement owner acquired the lock while shutdown still held it"
+            );
+            drop(first);
+            wait_acquired.recv_timeout(Duration::from_secs(2)).unwrap();
+            second.join().unwrap();
+        }
+
+        #[test]
+        fn an_exiting_guard_does_not_unlink_a_replacement_socket_inode() {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("daemon.sock");
+            let old_listener = UnixListener::bind(&socket).unwrap();
+            let old_guard = SocketGuard::new(socket.clone()).unwrap();
+
+            // Unix permits rebinding a pathname after unlink even while the old listener is
+            // still open. This is the exact pathname-reuse sequence from the restart race.
+            std::fs::remove_file(&socket).unwrap();
+            let replacement = UnixListener::bind(&socket).unwrap();
+            let replacement_metadata = std::fs::symlink_metadata(&socket).unwrap();
+            drop(old_guard);
+
+            let current = std::fs::symlink_metadata(&socket).unwrap();
+            assert_eq!(
+                (replacement_metadata.dev(), replacement_metadata.ino()),
+                (current.dev(), current.ino()),
+                "old daemon cleanup removed the replacement's endpoint"
+            );
+            UnixStream::connect(&socket).expect("replacement endpoint stays reachable");
+            drop((old_listener, replacement));
+        }
+
+        #[test]
+        fn an_unresponsive_listener_is_not_reclaimed_as_a_stale_socket() {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            let socket = directory.path().join("daemon.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let legacy = thread::spawn(move || {
+                let (mut connection, _) = listener.accept().unwrap();
+                let mut request = [0; 256];
+                let _ = connection.read(&mut request);
+                // An older or shutting-down daemon can accept without answering its probe.
+            });
+
+            let result = ensure_socket_recoverable(&socket);
+            assert!(
+                result.is_err(),
+                "an unresponsive listener must be preserved"
+            );
+            assert!(
+                std::fs::symlink_metadata(&socket)
+                    .unwrap()
+                    .file_type()
+                    .is_socket(),
+                "the live listener's socket path was removed"
+            );
+            legacy.join().unwrap();
+        }
+
+        #[test]
+        fn a_missing_socket_is_recoverable_but_an_existing_untrusted_path_is_not() {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            let socket = directory.path().join("daemon.sock");
+            ensure_socket_recoverable(&socket).expect("an absent socket is a fresh start");
+
+            std::fs::write(&socket, b"foreign sentinel").unwrap();
+            assert!(ensure_socket_recoverable(&socket).is_err());
+            assert_eq!(std::fs::read(&socket).unwrap(), b"foreign sentinel");
         }
     }
 }

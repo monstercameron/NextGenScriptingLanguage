@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -246,6 +246,236 @@ fn daemon_serve_answers_status_and_stop_removes_its_socket() {
         socket.display()
     );
     daemon.0 = None;
+}
+
+#[test]
+fn daemon_stop_restart_with_active_child_keeps_replacement_socket_reachable() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let socket = default_socket_under(runtime.path());
+    let mut old = serve_in_background_accepting(runtime.path());
+    let old_status: Value =
+        serde_json::from_slice(&daemon_output(runtime.path(), &["status"]).stdout).unwrap();
+    let old_pid = old_status["pid"].as_u64().unwrap();
+
+    let program = work.path().join("long.program");
+    fs::write(&program, "run time.sleep with milliseconds 30000\n").unwrap();
+    let mut run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(work.path())
+        .arg("run")
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .arg("--daemon")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = raw_request(&socket, "status");
+        if status["runs"].as_u64() == Some(1) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not admit active child: {status}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // `stop` replies before shutdown waits for active children. Starting the replacement
+    // immediately must serialize behind that shutdown, then leave the replacement's inode
+    // in place when the old daemon's socket guard runs.
+    assert!(daemon_output(runtime.path(), &["stop"]).status.success());
+    let mut replacement = Daemon(Some(
+        daemon_command(runtime.path(), &["serve"])
+            .spawn()
+            .expect("spawn replacement daemon"),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let replacement_status = loop {
+        if let Some(exit) = old.0.as_mut().unwrap().try_wait().unwrap() {
+            assert!(exit.success(), "old daemon exited unsuccessfully: {exit}");
+        }
+        if let Some(exit) = replacement.0.as_mut().unwrap().try_wait().unwrap() {
+            panic!("replacement daemon exited before becoming reachable: {exit}");
+        }
+        let output = daemon_output(runtime.path(), &["status"]);
+        if let Ok(status) = serde_json::from_slice::<Value>(&output.stdout) {
+            if status["running"] == true && status["pid"].as_u64() != Some(old_pid) {
+                break status;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "replacement never became reachable"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(replacement_status["runs"], 0);
+    assert_eq!(
+        raw_request(&socket, "status")["pid"],
+        replacement_status["pid"]
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while run.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "shutdown did not stop the active run"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(daemon_output(runtime.path(), &["stop"]).status.success());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while replacement
+        .0
+        .as_mut()
+        .unwrap()
+        .try_wait()
+        .unwrap()
+        .is_none()
+    {
+        assert!(Instant::now() < deadline, "replacement did not stop");
+        thread::sleep(Duration::from_millis(20));
+    }
+    replacement.0 = None;
+    assert!(
+        !socket.exists(),
+        "replacement socket remains after its own stop"
+    );
+}
+
+#[test]
+fn daemon_serve_does_not_call_a_busy_live_socket_stale() {
+    let runtime = tempfile::tempdir().unwrap();
+    let mut daemon = serve_in_background(runtime.path());
+    let socket = default_socket_under(runtime.path());
+    let before = fs::symlink_metadata(&socket).unwrap();
+
+    // Hold the daemon in its serial request reader beyond the 50 ms startup probe limit.
+    let mut slow = UnixStream::connect(&socket).unwrap();
+    slow.write_all(b"{").unwrap();
+    let mut competing = Daemon(Some(
+        daemon_command(runtime.path(), &["serve"])
+            .spawn()
+            .expect("spawn competing daemon"),
+    ));
+    thread::sleep(Duration::from_millis(250));
+    assert!(
+        competing.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+        "a probe timeout must not authorize a second daemon"
+    );
+    let during = fs::symlink_metadata(&socket).unwrap();
+    assert_eq!((before.dev(), before.ino()), (during.dev(), during.ino()));
+
+    // Finish the malformed request so the existing daemon can continue and answer the
+    // waiting owner's ping after it acquires the ownership lock.
+    slow.write_all(b"\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(exit) = competing.0.as_mut().unwrap().try_wait().unwrap() {
+            assert!(
+                !exit.success(),
+                "competing serve must reject the live daemon"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "competing serve never completed its liveness check"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    let status: Value =
+        serde_json::from_slice(&daemon_output(runtime.path(), &["status"]).stdout).unwrap();
+    assert_eq!(status["running"], true);
+    assert_eq!((before.dev(), before.ino()), {
+        let current = fs::symlink_metadata(&socket).unwrap();
+        (current.dev(), current.ino())
+    });
+    assert!(daemon_output(runtime.path(), &["stop"]).status.success());
+    let child = daemon.0.as_mut().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not stop after busy-probe regression"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    daemon.0 = None;
+}
+
+#[test]
+fn daemon_serve_recovers_stale_sockets_and_preserves_foreign_files() {
+    let runtime = tempfile::tempdir().unwrap();
+    let directory = runtime.path().join("private");
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = directory.join("daemon.sock");
+
+    // Dropping the listener leaves a socket inode with no owner. Serve should recover it.
+    drop(UnixListener::bind(&socket).unwrap());
+    assert!(fs::symlink_metadata(&socket)
+        .unwrap()
+        .file_type()
+        .is_socket());
+    let mut daemon = Daemon(Some(
+        daemon_command(
+            runtime.path(),
+            &["serve", "--socket", socket.to_str().unwrap()],
+        )
+        .spawn()
+        .expect("spawn daemon for stale socket recovery"),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = daemon_output(
+            runtime.path(),
+            &["status", "--socket", socket.to_str().unwrap()],
+        );
+        if let Ok(status) = serde_json::from_slice::<Value>(&output.stdout) {
+            if status["running"] == true {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not recover stale socket"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(daemon_output(
+        runtime.path(),
+        &["stop", "--socket", socket.to_str().unwrap()]
+    )
+    .status
+    .success());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon.0.as_mut().unwrap().try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "stale recovery daemon did not stop"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    daemon.0 = None;
+
+    // A regular file at the socket path is never replaced, even though the startup lock
+    // file can be created alongside it in the private directory.
+    fs::write(&socket, b"foreign sentinel").unwrap();
+    let output = daemon_output(
+        runtime.path(),
+        &["serve", "--socket", socket.to_str().unwrap()],
+    );
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&socket).unwrap(), b"foreign sentinel");
 }
 
 #[test]

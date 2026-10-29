@@ -440,6 +440,10 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # The build target lives on an ephemeral VHD that is detached before
+          # post-job cache saving; keep the registry cache only.
+          cache-targets: false
       - run: cargo fmt --check
       - run: rustfmt --edition 2021 --check src/runtime/shared.rs
       - name: Audit native-tool contracts and bundled index freshness

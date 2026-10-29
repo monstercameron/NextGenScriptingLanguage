@@ -140,7 +140,7 @@ class LiveControl(unittest.TestCase):
                 },
                 'reader_editor': {
                     'token_sha256': hashlib.sha256(reader_token.encode()).hexdigest(),
-                    'permissions': ['read', 'edit'],
+                    'permissions': ['read', 'edit', 'control'],
                 },
             },
         }
@@ -220,6 +220,41 @@ class LiveControl(unittest.TestCase):
                     [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(guesses),
                 )
                 self.assertTrue(all(secret not in json.dumps(result) for result in failures))
+
+        # Exercise a nonempty live input produced by a secret pipeline, rather
+        # than only the empty input record present when a session starts.
+        pipeline_source = (
+            'accept token as text from secret prompt "Token?"\n'
+            'use value token\n'
+            'then "cat" as echoed\n'
+            'run printf with message "finished"\n'
+        )
+        with Session(pipeline_source, {'token': secret}, agent_policy=policy) as app:
+            runner = credentials['reader_editor']
+            app.ok('control', auth=runner, action='resume')
+            deadline = time.monotonic() + 8
+            snapshot = None
+            while time.monotonic() < deadline:
+                snapshot = app.ok('read', auth=runner)['result']
+                if snapshot['runtime']['status'] == 'completed':
+                    break
+                app.ok('wait', auth=runner, after=snapshot['revision'], timeout_ms=50)
+            self.assertEqual(snapshot['runtime']['status'], 'completed', snapshot)
+            self.assertEqual(snapshot['state']['input'], {'withheld': 'secret'})
+            self.assertNotIn(secret, json.dumps(snapshot))
+
+            guesses = [
+                {'op': 'test', 'path': '/input', 'value': {'text': secret}},
+                {'op': 'test', 'path': '/input', 'value': {'text': 'incorrect-guess'}},
+                {'op': 'test', 'path': '/input/text', 'value': secret},
+                {'op': 'test', 'path': '/input/text', 'value': 'incorrect-guess'},
+            ]
+            failures = [app.call('patch', auth=runner, operations=[guess]) for guess in guesses]
+            self.assertEqual(
+                [result['error'] for result in failures],
+                [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(guesses),
+            )
+            self.assertTrue(all(secret not in json.dumps(result) for result in failures))
 
     def test_stream_rejects_record_that_would_exceed_document_budget(self):
         source = 'stream from "printf" with arguments ["%s", "' + 'r' * 32768 + '"]\nshow each line\n'

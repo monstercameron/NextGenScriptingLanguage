@@ -72,6 +72,11 @@
           "binding": { "type": ["string", "null"] },
           "program_stdout": { "enum": ["none", "stream", "unbound_final_value"] },
           "status_binding": { "type": ["string", "null"] },
+          "resolved_path_inferred": {
+            "type": "boolean",
+            "const": true,
+            "description": "The path follows from static evaluation of a restricted direct system printf binding; the command was not run. Sensitive PATH-derived components are not disclosed."
+          },
           "enforcement": { "enum": ["refused", "os_sandbox_required", "declared_only", "host_managed"] },
           "scope": { "type": ["string", "null"] },
           "direct": { "type": "boolean" },

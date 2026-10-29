@@ -238,9 +238,26 @@ fn run_execute(directory: &Path, arguments: &[&str]) -> Output {
         .env_remove("EXECUTE_MODELS_OFFLINE")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("start execute")
+        .stderr(Stdio::piped());
+    for variable in [
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_IMAGE_SUFFIX",
+    ] {
+        command.env_remove(variable);
+    }
+    if arguments.contains(&"--what-if") || arguments.contains(&"--confirm") {
+        #[cfg(unix)]
+        command.env("XDG_STATE_HOME", directory.join("what-if-state"));
+        #[cfg(windows)]
+        command.env("LOCALAPPDATA", directory.join("what-if-local-app-data"));
+    }
+    command.output().expect("start execute")
 }
 
 fn last_json_line(stderr: &[u8]) -> Value {
@@ -356,6 +373,15 @@ run program inner\n";
         .iter()
         .position(|row| row["kind"] == "invoke")
         .unwrap();
+    let mut optional_review_fields = object.clone();
+    optional_review_fields["steps"][invoke_index]["resolved_path_inferred"] = json!(true);
+    assert_conforms(
+        "docs/schemas/explain.v2.schema.json",
+        &optional_review_fields,
+    );
+    let mut false_path_inference = optional_review_fields.clone();
+    false_path_inference["steps"][invoke_index]["resolved_path_inferred"] = json!(false);
+    assert_rejects("docs/schemas/explain.v2.schema.json", &false_path_inference);
     let mut templates = object.clone();
     templates["steps"][invoke_index]["argv"] = json!([
         {"ref":"later"},
@@ -501,6 +527,15 @@ fn legacy_v1_consumer_accepts_opt_in_explain_output() {
     );
     assert_conforms("docs/schemas/explain.v1.schema.json", &plan);
 
+    let mut optional_review_fields = plan.clone();
+    optional_review_fields["steps"][0]["resolved_path_inferred"] = json!(true);
+    assert_conforms(
+        "docs/schemas/explain.v1.schema.json",
+        &optional_review_fields,
+    );
+    let mut false_path_inference = optional_review_fields.clone();
+    false_path_inference["steps"][0]["resolved_path_inferred"] = json!(false);
+    assert_rejects("docs/schemas/explain.v1.schema.json", &false_path_inference);
     for (field, value) in [
         ("environment_path_only", json!("yes")),
         ("status_binding", json!(7)),
@@ -509,4 +544,113 @@ fn legacy_v1_consumer_accepts_opt_in_explain_output() {
         damaged["steps"][0][field] = value;
         assert_rejects("docs/schemas/explain.v1.schema.json", &damaged);
     }
+}
+
+#[test]
+fn what_if_explain_plans_match_schemas_and_keep_path_hmac_in_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("plan.program"), "run plain.helper\n").unwrap();
+
+    for (version, schema) in [
+        ("2", "docs/schemas/explain.v2.schema.json"),
+        ("1", "docs/schemas/explain.v1.schema.json"),
+    ] {
+        let output = run_execute(
+            directory.path(),
+            &["plan.program", "--what-if", "--explain-version", version],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let plan = &report["plan"];
+        assert_eq!(plan["protocol"], format!("execute.explain/{version}"));
+        assert_conforms(schema, plan);
+        let invocation = plan["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|step| step["kind"] == "invoke")
+            .expect("what-if plan includes a native invocation");
+        assert!(invocation.get("effective_path_hmac_sha256").is_none());
+        let executable = report["settings"]["executables"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .expect("what-if settings include the native executable identity");
+        let path_hmac = executable["effective_path_hmac_sha256"].as_str().unwrap();
+        assert_eq!(path_hmac.len(), 64);
+        assert!(
+            path_hmac
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "PATH token must be lowercase SHA-256 hex"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn v1_schema_accepts_only_a_true_resolved_path_inference_marker() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let bin = directory.path().join("fakebin");
+    std::fs::create_dir(&bin).unwrap();
+    let tool = bin.join("schema-inferred-tool");
+    std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let canonical_bin = std::fs::canonicalize(&bin).unwrap();
+    let path_literal = serde_json::to_string(&canonical_bin.to_string_lossy()).unwrap();
+    std::fs::write(
+        directory.path().join("plan.program"),
+        format!(
+            "run \"printf\" with arguments [\"%s\", {path_literal}] as newpath\n\
+             use environment {{\"PATH\": newpath}}\n\
+             run \"schema-inferred-tool\" with arguments []\n"
+        ),
+    )
+    .unwrap();
+    let output = run_execute(
+        directory.path(),
+        &[
+            "explain",
+            "plan.program",
+            "--json",
+            "--explain-version",
+            "1",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_conforms("docs/schemas/explain.v1.schema.json", &plan);
+    let invocation = plan["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["binary"] == "schema-inferred-tool")
+        .unwrap();
+    assert_eq!(
+        invocation["resolved_path_inferred"],
+        true,
+        "{plan}\nsource: {}",
+        std::fs::read_to_string(directory.path().join("plan.program")).unwrap()
+    );
+
+    let mut false_marker = plan.clone();
+    let invocation = false_marker["steps"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|step| step["binary"] == "schema-inferred-tool")
+        .unwrap();
+    invocation["resolved_path_inferred"] = json!(false);
+    assert_rejects("docs/schemas/explain.v1.schema.json", &false_marker);
 }

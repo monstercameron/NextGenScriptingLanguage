@@ -457,6 +457,198 @@ fn graph_run_preserves_input_bytes_as_a_single_literal_argv_value() {
 
 #[cfg(unix)]
 #[test]
+fn graph_execution_apis_authorize_environment_inputs_before_resolution() {
+    use flow::capabilities::{AppletGrant, CapabilityPolicy, FilesystemGrant};
+    use flow::graph::MemoryGraphStore;
+    use flow::security::{policy_decisions, PolicyDecisionOutcome, PolicyDecisionReason};
+    use std::collections::BTreeSet;
+
+    #[derive(Clone, Copy)]
+    enum Api {
+        Finite,
+        Streaming,
+        Checkpointed,
+    }
+
+    fn execute(
+        api: Api,
+        plan: GraphPlan,
+        registry: &Registry,
+        run_options: &RunOptions,
+    ) -> anyhow::Result<Vec<flow::graph::EventEnvelope>> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        match api {
+            Api::Finite => Ok(graph::run(plan, registry, run_options, cancelled)?.outputs),
+            Api::Streaming => {
+                let (_, mut session) =
+                    graph::start_session(plan, registry, run_options, cancelled)?;
+                let mut events = Vec::new();
+                while let Some(event) = session.recv_output()? {
+                    events.push(event);
+                }
+                Ok(events)
+            }
+            Api::Checkpointed => Ok(graph::run_checkpointed(
+                plan,
+                registry,
+                run_options,
+                cancelled,
+                Arc::new(MemoryGraphStore::default()),
+                false,
+            )?
+            .outputs),
+        }
+    }
+
+    fn registry(environment: Option<&str>) -> Registry {
+        let registry = echo_registry();
+        registry.set_host_state(Some(CapabilityPolicy {
+            version: 1,
+            applets: BTreeMap::from([(
+                "demo.echo".into(),
+                AppletGrant {
+                    capabilities: BTreeSet::from(["process.exec".into()]),
+                    binary_sha256: None,
+                    environment: BTreeSet::new(),
+                    filesystem: FilesystemGrant::default(),
+                    network: false,
+                    network_origins: BTreeSet::new(),
+                    sandbox_required: false,
+                },
+            )]),
+            host: None,
+            host_environment: environment.into_iter().map(str::to_owned).collect(),
+            deny_privileged: false,
+            allow_wrappers: BTreeSet::new(),
+        }));
+        registry
+    }
+
+    fn plan(registry: &Registry, environment: &str, public: bool) -> GraphPlan {
+        graph::parse(
+            &format!(
+                "accept message as text from {}environment \"{environment}\"\n\
+                 graph env_api\n\
+                 run demo.echo with message message as echoed\n\
+                 end graph\n",
+                if public { "public " } else { "" }
+            ),
+            registry,
+        )
+        .unwrap()
+    }
+
+    fn outputs_text(events: &[flow::graph::EventEnvelope]) -> String {
+        let event = events
+            .iter()
+            .find(|event| event.port.node == "echoed" && event.port.port == "stdout")
+            .expect("graph should emit the echo result");
+        let flow::graph::PortValue::Bytes(bytes) = &event.payload else {
+            panic!("printf output should be bytes");
+        };
+        String::from_utf8(bytes.clone()).unwrap()
+    }
+
+    let key = format!("EXECUTE_GRAPH_API_AUTH_{}", std::process::id());
+    let secret = format!("graph-env-canary-{}", std::process::id());
+    std::env::set_var(&key, &secret);
+    let directory = tempfile::tempdir().unwrap();
+
+    // A denied declaration is rejected at the same point for every public
+    // execution API, before resolving even an explicitly supplied override.
+    for api in [Api::Finite, Api::Streaming, Api::Checkpointed] {
+        let registry = registry(None);
+        let denied = execute(
+            api,
+            plan(&registry, &key, false),
+            &registry,
+            &options(directory.path(), BTreeMap::new()),
+        )
+        .unwrap_err();
+        let message = format!("{denied:#}");
+        assert!(
+            message.contains("denies reading environment variable"),
+            "{message}"
+        );
+        assert!(message.contains(&key), "{message}");
+        assert!(
+            !message.contains(&secret),
+            "environment value leaked: {message}"
+        );
+        let decision = policy_decisions(&registry)
+            .pop()
+            .expect("denial is audited");
+        assert_eq!(decision.action, "environment.read");
+        assert_eq!(decision.outcome, PolicyDecisionOutcome::Denied);
+        assert_eq!(decision.reason, PolicyDecisionReason::CapabilityNotGranted);
+        assert!(!format!("{decision:?}").contains(&secret));
+
+        let supplied = BTreeMap::from([("message".into(), Value::String("explicit".into()))]);
+        let overridden = execute(
+            api,
+            plan(&registry, &key, false),
+            &registry,
+            &options(directory.path(), supplied),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{overridden:#}").contains("denies reading environment variable"),
+            "explicit values do not override the documented environment grant"
+        );
+    }
+
+    // A matching host grant allows each execution style to resolve and use
+    // the declared value. Checkpointed graphs use a public declaration because
+    // the checkpoint contract separately refuses sensitive inputs.
+    for api in [Api::Finite, Api::Streaming, Api::Checkpointed] {
+        let registry = registry(Some(&key));
+        let events = execute(
+            api,
+            plan(&registry, &key, true),
+            &registry,
+            &options(directory.path(), BTreeMap::new()),
+        )
+        .unwrap();
+        assert_eq!(outputs_text(&events), secret);
+        let supplied = BTreeMap::from([("message".into(), Value::String("explicit".into()))]);
+        let events = execute(
+            api,
+            plan(&registry, &key, true),
+            &registry,
+            &options(directory.path(), supplied),
+        )
+        .unwrap();
+        assert_eq!(outputs_text(&events), "explicit");
+        let decision = policy_decisions(&registry)
+            .into_iter()
+            .find(|decision| decision.action == "environment.read")
+            .expect("grant is audited");
+        assert_eq!(decision.action, "environment.read");
+        assert_eq!(decision.outcome, PolicyDecisionOutcome::Approved);
+        assert_eq!(decision.reason, PolicyDecisionReason::PolicyMatched);
+    }
+
+    // No-policy resolution remains compatible and is explicitly audited.
+    let registry = echo_registry();
+    let events = execute(
+        Api::Finite,
+        plan(&registry, &key, true),
+        &registry,
+        &options(directory.path(), BTreeMap::new()),
+    )
+    .unwrap();
+    assert_eq!(outputs_text(&events), secret);
+    let decision = policy_decisions(&registry)
+        .into_iter()
+        .find(|decision| decision.action == "environment.read")
+        .expect("baseline is audited");
+    assert_eq!(decision.outcome, PolicyDecisionOutcome::Approved);
+    assert_eq!(decision.reason, PolicyDecisionReason::NoPolicyConfigured);
+    std::env::remove_var(key);
+}
+
+#[cfg(unix)]
+#[test]
 fn invalid_resolved_graph_input_fails_before_starting_any_applet() {
     use std::os::unix::fs::PermissionsExt;
 

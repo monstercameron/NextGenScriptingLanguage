@@ -375,6 +375,39 @@ define a program named panel
             self.assertEqual(sum(r['ok'] for r in responses), 1)
             self.assertEqual([r['error']['code'] for r in responses if not r['ok']], ['conflict'])
 
+    def test_crud_and_patch_distinguish_missing_values_from_json_null(self):
+        with Session('run printf with message "probe"\n') as app:
+            app.ok('create', path='/user/existing', value={'value': 'before'})
+
+            def unchanged_after_failure(call):
+                before = app.ok('read')
+                response = call()
+                self.assertFalse(response['ok'], response)
+                after = app.ok('read')
+                self.assertEqual(after['revision'], before['revision'])
+                self.assertEqual(after['result'], before['result'])
+
+            unchanged_after_failure(lambda: app.call('create', path='/user/missing'))
+            app.ok('create', path='/user/explicit-null', value=None)
+            self.assertIsNone(app.ok('read', path='/user/explicit-null')['result'])
+
+            unchanged_after_failure(lambda: app.call('update', path='/user/existing/value'))
+            app.ok('update', path='/user/existing/value', value=None)
+            self.assertIsNone(app.ok('read', path='/user/existing/value')['result'])
+
+            # The first operation must be rolled back when a later patch omits
+            # its value; explicit null remains a real patch value.
+            unchanged_after_failure(lambda: app.call('patch', operations=[
+                {'op': 'add', 'path': '/user/temporary', 'value': 1},
+                {'op': 'replace', 'path': '/user/existing/value'},
+            ]))
+            app.ok('patch', operations=[
+                {'op': 'add', 'path': '/user/patch-null', 'value': None},
+                {'op': 'replace', 'path': '/user/existing/value', 'value': None},
+            ])
+            self.assertIsNone(app.ok('read', path='/user/patch-null')['result'])
+            self.assertIsNone(app.ok('read', path='/user/existing/value')['result'])
+
     def test_cancel_reaps_owned_child_and_requires_explicit_retry(self):
         code = 'import os,time;open("pid","w").write(str(os.getpid()));time.sleep(30)'
         manifest = {'name': 'hold', 'binary': sys.executable, 'arguments': [{'literal': '-c'}, {'literal': code}]}

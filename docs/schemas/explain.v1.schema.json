@@ -61,9 +61,9 @@
           "id", "line", "kind", "scope", "direct", "applet", "binary", "builtin", "process",
           "resolved_path", "argv", "effects",
           "capabilities", "writes", "network", "reads", "cwd_change",
-          "modifies_next_invocation", "environment_sensitive", "environment_tainted",
+          "modifies_next_invocation", "environment_sensitive", "environment_tainted", "environment_path_only",
           "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged", "retry",
-          "binding", "program_stdout"
+          "binding", "program_stdout", "status_binding"
         ],
         "properties": {
           "id": { "type": ["string", "null"] },
@@ -71,6 +71,7 @@
           "kind": { "type": "string" },
           "binding": { "type": ["string", "null"] },
           "program_stdout": { "enum": ["none", "stream", "unbound_final_value"] },
+          "status_binding": { "type": ["string", "null"] },
           "enforcement": { "enum": ["refused", "os_sandbox_required", "declared_only", "host_managed"] },
           "scope": { "type": ["string", "null"] },
           "direct": { "type": "boolean" },
@@ -98,6 +99,7 @@
           "modifies_next_invocation": { "type": "boolean" },
           "environment_sensitive": { "type": "boolean" },
           "environment_tainted": { "type": "boolean" },
+          "environment_path_only": { "type": "boolean" },
           "path": { "type": ["string", "null"] },
           "path_is_runtime": { "type": "boolean" },
           "escapes_cwd": { "type": "boolean" },

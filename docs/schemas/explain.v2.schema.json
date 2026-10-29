@@ -151,6 +151,7 @@
           "modifies_next_invocation",
           "environment_sensitive",
           "environment_tainted",
+          "environment_path_only",
           "path",
           "path_is_runtime",
           "escapes_cwd",
@@ -159,7 +160,8 @@
           "privileged",
           "retry",
           "binding",
-          "program_stdout"
+          "program_stdout",
+          "status_binding"
         ],
         "allOf": [
           {
@@ -221,6 +223,12 @@
               "none",
               "stream",
               "unbound_final_value"
+            ]
+          },
+          "status_binding": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "enforcement": {
@@ -343,6 +351,9 @@
             "type": "boolean"
           },
           "environment_tainted": {
+            "type": "boolean"
+          },
+          "environment_path_only": {
             "type": "boolean"
           },
           "path": {

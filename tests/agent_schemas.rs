@@ -342,6 +342,8 @@ run program inner\n";
     for (field, value) in [
         ("program_stdout", json!(true)),
         ("binding", json!(7)),
+        ("environment_path_only", json!("yes")),
+        ("status_binding", json!(7)),
         ("enforcement", json!("unchecked")),
     ] {
         let mut damaged = object.clone();
@@ -498,4 +500,13 @@ fn legacy_v1_consumer_accepts_opt_in_explain_output() {
         json!(["--version", "--text", "literal"])
     );
     assert_conforms("docs/schemas/explain.v1.schema.json", &plan);
+
+    for (field, value) in [
+        ("environment_path_only", json!("yes")),
+        ("status_binding", json!(7)),
+    ] {
+        let mut damaged = plan.clone();
+        damaged["steps"][0][field] = value;
+        assert_rejects("docs/schemas/explain.v1.schema.json", &damaged);
+    }
 }

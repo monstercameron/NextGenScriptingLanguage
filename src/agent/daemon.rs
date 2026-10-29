@@ -439,9 +439,7 @@ mod imp {
         let ownership = SocketOwnership::acquire(socket)?;
         // Recheck after acquiring: another starter may have won the lock and bound a socket
         // while this process waited.
-        if request(socket, "ping", PROBE_TIMEOUT).is_ok() {
-            bail!("a daemon is already running at {}", socket.display());
-        }
+        ensure_socket_recoverable(socket)?;
         if fs::symlink_metadata(socket).is_ok() {
             // Only a stale socket of ours is replaced; anything else is left alone.
             if !owned_socket(socket) {
@@ -481,6 +479,29 @@ mod imp {
         drop(_guard);
         drop(ownership);
         Ok(())
+    }
+
+    /// A failed ping alone cannot establish that a socket is stale. In particular, an older
+    /// daemon does not participate in the ownership lock and can still be shutting down.
+    /// Only connection-refused/not-found evidence permits replacement; a path that accepted
+    /// a connection but did not answer is left untouched while its owner may still exist.
+    fn ensure_socket_recoverable(socket: &Path) -> Result<()> {
+        match request(socket, "ping", PROBE_TIMEOUT) {
+            Ok(_) => bail!("a daemon is already running at {}", socket.display()),
+            Err(DaemonError::NotRunning { .. }) => Ok(()),
+            Err(DaemonError::Protocol { detail, .. }) => match fs::symlink_metadata(socket) {
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Ok(_) => bail!(
+                    "{} exists but did not answer the daemon probe ({detail}); refusing to replace it",
+                    socket.display()
+                ),
+                Err(error) => Err(error).with_context(|| format!("reading {}", socket.display())),
+            },
+            Err(DaemonError::Untrusted { reason, .. }) => bail!(
+                "refusing to replace untrusted daemon socket {}: {reason}",
+                socket.display()
+            ),
+        }
     }
 
     /// An advisory lock serializing daemon ownership decisions for one socket path.
@@ -1704,6 +1725,94 @@ mod imp {
             assert!(receive_request(&server).is_err());
             assert!(started.elapsed() < Duration::from_millis(2_500));
             writer.join().unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    mod socket_ownership_tests {
+        use super::{ensure_socket_recoverable, SocketGuard, SocketOwnership};
+        use std::io::Read;
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::net::{UnixListener, UnixStream};
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        #[test]
+        fn a_second_owner_waits_until_the_first_releases_its_lock() {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("daemon.sock");
+            let first = SocketOwnership::acquire(&socket).unwrap();
+            let second_socket = socket.clone();
+            let (started, wait_started) = mpsc::channel();
+            let (acquired, wait_acquired) = mpsc::channel();
+            let second = thread::spawn(move || {
+                started.send(()).unwrap();
+                let _owner = SocketOwnership::acquire(&second_socket).unwrap();
+                acquired.send(()).unwrap();
+            });
+
+            wait_started.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(
+                wait_acquired
+                    .recv_timeout(Duration::from_millis(100))
+                    .is_err(),
+                "a replacement owner acquired the lock while shutdown still held it"
+            );
+            drop(first);
+            wait_acquired.recv_timeout(Duration::from_secs(2)).unwrap();
+            second.join().unwrap();
+        }
+
+        #[test]
+        fn an_exiting_guard_does_not_unlink_a_replacement_socket_inode() {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("daemon.sock");
+            let old_listener = UnixListener::bind(&socket).unwrap();
+            let old_guard = SocketGuard::new(socket.clone()).unwrap();
+
+            // Unix permits rebinding a pathname after unlink even while the old listener is
+            // still open. This is the exact pathname-reuse sequence from the restart race.
+            std::fs::remove_file(&socket).unwrap();
+            let replacement = UnixListener::bind(&socket).unwrap();
+            let replacement_metadata = std::fs::symlink_metadata(&socket).unwrap();
+            drop(old_guard);
+
+            let current = std::fs::symlink_metadata(&socket).unwrap();
+            assert_eq!(
+                (replacement_metadata.dev(), replacement_metadata.ino()),
+                (current.dev(), current.ino()),
+                "old daemon cleanup removed the replacement's endpoint"
+            );
+            UnixStream::connect(&socket).expect("replacement endpoint stays reachable");
+            drop((old_listener, replacement));
+        }
+
+        #[test]
+        fn an_unresponsive_listener_is_not_reclaimed_as_a_stale_socket() {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("daemon.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let legacy = thread::spawn(move || {
+                let (mut connection, _) = listener.accept().unwrap();
+                let mut request = [0; 256];
+                let _ = connection.read(&mut request);
+                // An older or shutting-down daemon can accept without answering its probe.
+            });
+
+            let result = ensure_socket_recoverable(&socket);
+            assert!(
+                result.is_err(),
+                "an unresponsive listener must be preserved"
+            );
+            assert!(
+                std::fs::symlink_metadata(&socket)
+                    .unwrap()
+                    .file_type()
+                    .is_socket(),
+                "the live listener's socket path was removed"
+            );
+            legacy.join().unwrap();
         }
     }
 }

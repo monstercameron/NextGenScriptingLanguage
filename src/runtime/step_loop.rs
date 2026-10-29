@@ -3,6 +3,53 @@
 
 use super::*;
 
+fn task_group_presentation_bindings(
+    bindings: &std::collections::BTreeMap<String, Value>,
+    presentations: &std::collections::BTreeMap<String, (Value, Value)>,
+) -> Option<std::collections::BTreeMap<String, Value>> {
+    let applicable = presentations
+        .iter()
+        .filter(|(name, (raw, presentation))| {
+            raw != presentation && bindings.get(*name) == Some(raw)
+        })
+        .collect::<Vec<_>>();
+    if applicable.is_empty() {
+        return None;
+    }
+    let mut projected = bindings.clone();
+    for (name, (_, presentation)) in applicable {
+        projected.insert(name.clone(), presentation.clone());
+    }
+    Some(projected)
+}
+
+fn task_group_presentation_source(
+    source: &Value,
+    bindings: &std::collections::BTreeMap<String, Value>,
+    presentations: &std::collections::BTreeMap<String, (Value, Value)>,
+) -> Result<Option<Value>> {
+    let Some(presentation_bindings) = task_group_presentation_bindings(bindings, presentations)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        structured_source(source, &presentation_bindings)?.into_owned(),
+    ))
+}
+
+fn remember_task_group_presentation(
+    binding: &str,
+    raw: &Value,
+    presentation: &Value,
+    presentations: &mut std::collections::BTreeMap<String, (Value, Value)>,
+) {
+    if raw == presentation {
+        presentations.remove(binding);
+    } else {
+        presentations.insert(binding.to_owned(), (raw.clone(), presentation.clone()));
+    }
+}
+
 pub(super) fn merge_environment_overlay(
     target: &mut crate::capabilities::CommandEnvOverlay,
     update: crate::capabilities::CommandEnvOverlay,
@@ -1197,7 +1244,23 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::UseValue { source } => {
                     pipeline_sensitive = value_references_sensitive(source, &sensitive_bindings);
-                    let bytes = text_value_bytes(source, &bindings, step.line)?;
+                    let presentation_source = if program.steps.get(index + 1).is_none() {
+                        task_group_presentation_source(
+                            source,
+                            &bindings,
+                            &task_group_presentations,
+                        )?
+                    } else {
+                        None
+                    };
+                    let bytes = match presentation_source {
+                        Some(Value::String(text)) => text.into_bytes(),
+                        Some(_) => bail!(
+                            "line {}: use value requires text; encode structured values first with `then encode ... as json`",
+                            step.line
+                        ),
+                        None => text_value_bytes(source, &bindings, step.line)?,
+                    };
                     if pipeline_sensitive {
                         crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
@@ -1205,16 +1268,36 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::BindValue { source, binding } => {
                     let value = resolve(source, &bindings)?;
+                    let presentation_value =
+                        task_group_presentation_bindings(&bindings, &task_group_presentations)
+                            .map(|presentation_bindings| resolve(source, &presentation_bindings))
+                            .transpose()?;
+                    let is_terminal_presentation = program.steps.get(index + 1).is_none();
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_bindings.contains(binding) || sensitive_source;
                     if sensitive_bindings.contains(binding) || sensitive_source {
                         crate::security::register_sensitive_value(registry, &value)?;
                     }
-                    let bytes = bound_value_bytes(&value, options.max_output_bytes)?;
+                    let pipeline_value = if is_terminal_presentation {
+                        presentation_value.as_ref().unwrap_or(&value)
+                    } else {
+                        &value
+                    };
+                    let bytes = bound_value_bytes(pipeline_value, options.max_output_bytes)?;
                     if sensitive_bindings.contains(binding) || sensitive_source {
                         crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
                     data = Input::Bytes(bytes);
+                    if let Some(presentation_value) = presentation_value {
+                        remember_task_group_presentation(
+                            binding,
+                            &value,
+                            &presentation_value,
+                            &mut task_group_presentations,
+                        );
+                    } else {
+                        task_group_presentations.remove(binding);
+                    }
                     bindings.insert(binding.clone(), value);
                 }
                 StepKind::CaptureBytes { binding } => {
@@ -1330,12 +1413,32 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     kind,
                     binding,
                 } => {
+                    let presentation_source = task_group_presentation_source(
+                        source,
+                        &bindings,
+                        &task_group_presentations,
+                    )?;
                     let source = structured_source(source, &bindings)?;
                     let value = crate::structured::take(pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}", step.line))?;
                     let value = value.clone();
+                    let presentation_value = presentation_source
+                        .as_ref()
+                        .map(|source| crate::structured::take(pointer, source, *kind, step.line))
+                        .transpose()?
+                        .cloned();
                     if sensitive_bindings.contains(binding) {
                         crate::security::register_sensitive_value(registry, &value)?;
+                    }
+                    if let Some(presentation_value) = presentation_value {
+                        remember_task_group_presentation(
+                            binding,
+                            &value,
+                            &presentation_value,
+                            &mut task_group_presentations,
+                        );
+                    } else {
+                        task_group_presentations.remove(binding);
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1354,12 +1457,32 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let Value::String(pointer) = pointer else {
                         bail!("line {}: dynamic JSON pointer must be text", step.line);
                     };
+                    let presentation_source = task_group_presentation_source(
+                        source,
+                        &bindings,
+                        &task_group_presentations,
+                    )?;
                     let source = structured_source(source, &bindings)?;
                     let value = crate::structured::take(&pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}", step.line))?
                         .clone();
+                    let presentation_value = presentation_source
+                        .as_ref()
+                        .map(|source| crate::structured::take(&pointer, source, *kind, step.line))
+                        .transpose()?
+                        .cloned();
                     if sensitive_bindings.contains(binding) {
                         crate::security::register_sensitive_value(registry, &value)?;
+                    }
+                    if let Some(presentation_value) = presentation_value {
+                        remember_task_group_presentation(
+                            binding,
+                            &value,
+                            &presentation_value,
+                            &mut task_group_presentations,
+                        );
+                    } else {
+                        task_group_presentations.remove(binding);
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1372,20 +1495,19 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_source;
                     let is_terminal_presentation = program.steps.get(index + 1).is_none();
-                    let source = if task_group_presentations.is_empty() || !is_terminal_presentation
-                    {
-                        structured_source(source, &bindings)?.into_owned()
-                    } else {
+                    let presentation_source = if is_terminal_presentation {
                         // Keep the language binding raw for explicit data flow,
                         // while JSON serialization exposes its diagnostic view.
-                        let mut presentation_bindings = bindings.clone();
-                        for (name, (raw, presentation)) in &task_group_presentations {
-                            if bindings.get(name) == Some(raw) {
-                                presentation_bindings.insert(name.clone(), presentation.clone());
-                            }
-                        }
-                        structured_source(source, &presentation_bindings)?.into_owned()
+                        task_group_presentation_source(
+                            source,
+                            &bindings,
+                            &task_group_presentations,
+                        )?
+                    } else {
+                        None
                     };
+                    let source = presentation_source
+                        .unwrap_or(structured_source(source, &bindings)?.into_owned());
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_source {
@@ -1503,12 +1625,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     signals.account_child_process_launches(group.launched_processes);
                     let value = group.value;
                     let presentation = group.presentation;
-                    if value != presentation {
-                        task_group_presentations
-                            .insert(binding.clone(), (value.clone(), presentation.clone()));
-                    } else {
-                        task_group_presentations.remove(binding);
-                    }
+                    remember_task_group_presentation(
+                        binding,
+                        &value,
+                        &presentation,
+                        &mut task_group_presentations,
+                    );
                     let pipeline_is_replaced = each.is_some()
                         && !options.trace
                         && journal.is_none()

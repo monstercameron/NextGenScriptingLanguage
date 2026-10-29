@@ -405,6 +405,7 @@ jobs:
           # workspace have runner ACLs that grant foreign write rights, so
           # use a fresh NTFS volume whose root is the trust boundary.
           $vhd = Join-Path $env:RUNNER_TEMP "ngs-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.vhdx"
+          "NGS_TEST_VHD_PATH=$vhd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $letters = @('Z','Y','X','W','V','U','T','S','R','Q','P','O','N','M','L','K','J','I','H','G','F','E')
           $letter = $letters | Where-Object { -not (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) } | Select-Object -First 1
           if (-not $letter) { throw "No free drive letter for the trusted Windows CI volume" }
@@ -431,7 +432,6 @@ jobs:
           $target = Join-Path $driveRoot "target"
           $temp = Join-Path $driveRoot "temp"
           New-Item -ItemType Directory -Path $target, $temp | Out-Null
-          "NGS_TEST_VHD_PATH=$vhd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CARGO_TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

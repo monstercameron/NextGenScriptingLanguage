@@ -6,8 +6,8 @@ use flow::contracts::{
     RemoteEndpointConfig, Sensitivity, ValueSchema,
 };
 use flow::graph::{
-    EdgeSpec, GraphNode, GraphPlan, GraphRunOptions, GraphSession, PortRef, PortSchema,
-    RuntimeGraphExecutor,
+    EdgeSpec, GraphCheckpointStore, GraphNode, GraphPlan, GraphRunOptions, GraphSession, PortRef,
+    PortSchema, RuntimeGraphExecutor,
 };
 use flow::manifest::Registry;
 use flow::remote::{RemoteAppletDescriptor, RemoteAppletIdentity, PROTOCOL_VERSION};
@@ -637,4 +637,142 @@ fn explicit_secret_blocks_save_checkpoint_and_declared_filesystem_write_without_
     .unwrap();
     assert!(runtime::run(&write_program, &registry, &options(directory.path())).is_err());
     assert!(!write_marker.exists());
+}
+
+fn graph_with_input_source(declaration: &str, registry: &Registry) -> GraphPlan {
+    flow::graph::parse(
+        &format!(
+            "accept message as text {declaration}\ngraph secret_input\nrun fixture.remote with message message as submitted\nend graph\n"
+        ),
+        registry,
+    )
+    .unwrap()
+}
+
+fn run_graph_with_value(
+    plan: GraphPlan,
+    registry: &Registry,
+    cwd: &Path,
+    value: &str,
+) -> anyhow::Result<flow::graph::GraphRunResult> {
+    let mut run_options = options(cwd);
+    run_options
+        .inputs
+        .insert("message".into(), Value::String(value.into()));
+    flow::graph::run(
+        plan,
+        registry,
+        &run_options,
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+#[test]
+fn sensitive_graph_inputs_retain_secret_provenance_before_remote_admission() {
+    for (declaration, expected_name) in [
+        ("from secret prompt \"Enter a token\"", "prompt"),
+        ("from environment \"FLOW_ISSUE_792_SECRET\"", "environment"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (listener, endpoint) = endpoint_listener();
+        listener.set_nonblocking(true).unwrap();
+        let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+        let registry = Registry::from_sources(&[remote]).unwrap();
+        registry.set_host_state(policy_for(&endpoint, &["public", "unknown"]));
+        let secret = "issue-792-secret-value-must-not-appear";
+        let plan = graph_with_input_source(declaration, &registry);
+        let error = run_graph_with_value(plan, &registry, directory.path(), secret).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("data flow"),
+            "{expected_name}: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains(secret),
+            "{expected_name} secret leaked into diagnostics: {diagnostic}"
+        );
+        assert!(matches!(
+            listener.accept(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ));
+    }
+}
+
+#[test]
+fn secret_graph_input_can_reach_remote_only_with_secret_grant_and_keeps_output_label() {
+    let directory = tempfile::tempdir().unwrap();
+    let (listener, endpoint) = endpoint_listener();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public", "unknown", "secret"]));
+    let responder = reply_to_one_remote_call(listener);
+    let plan = graph_with_input_source("from secret prompt \"Enter a token\"", &registry);
+    let result = run_graph_with_value(plan, &registry, directory.path(), "allowed-secret").unwrap();
+    responder.join().unwrap();
+    let output = result
+        .outputs
+        .iter()
+        .find(|event| event.port.node == "submitted" && event.port.port == "value")
+        .expect("remote output should be emitted");
+    assert!(output.sensitivity.contains(&Sensitivity::Secret));
+}
+
+#[test]
+fn checkpointed_graph_api_denies_ungranted_secret_input_before_persisting_or_sending() {
+    let directory = tempfile::tempdir().unwrap();
+    let (listener, endpoint) = endpoint_listener();
+    listener.set_nonblocking(true).unwrap();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public", "unknown"]));
+    let plan = graph_with_input_source(
+        "from secret prompt \"Enter a checkpointed token\"",
+        &registry,
+    );
+    let store = Arc::new(flow::graph::MemoryGraphStore::default());
+    let mut run_options = options(directory.path());
+    let secret = "checkpoint-secret-value-must-not-appear";
+    run_options
+        .inputs
+        .insert("message".into(), Value::String(secret.into()));
+    let error = flow::graph::run_checkpointed(
+        plan,
+        &registry,
+        &run_options,
+        Arc::new(AtomicBool::new(false)),
+        store.clone(),
+        false,
+    )
+    .unwrap_err();
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("data flow"), "{diagnostic}");
+    assert!(!diagnostic.contains(secret), "secret leaked: {diagnostic}");
+    assert!(store.load().unwrap().completed.is_empty());
+    assert!(matches!(
+        listener.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[test]
+fn public_graph_inputs_remain_public_at_a_public_remote_port() {
+    let directory = tempfile::tempdir().unwrap();
+    let (listener, endpoint) = endpoint_listener();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public"]));
+    let responder = reply_to_one_remote_call(listener);
+    let plan = graph_with_input_source(
+        "from public environment \"FLOW_ISSUE_792_PUBLIC\"",
+        &registry,
+    );
+    let result = run_graph_with_value(plan, &registry, directory.path(), "public-value").unwrap();
+    responder.join().unwrap();
+    let output = result
+        .outputs
+        .iter()
+        .find(|event| event.port.node == "submitted" && event.port.port == "value")
+        .expect("remote output should be emitted");
+    assert!(output.sensitivity.contains(&Sensitivity::Public));
+    assert!(!output.sensitivity.contains(&Sensitivity::Secret));
 }

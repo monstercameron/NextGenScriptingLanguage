@@ -171,6 +171,10 @@ name = "execution_results"
 required-features = ["test-fixtures", "remote"]
 
 [[test]]
+name = "manifest_json_reference_regressions"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "graph_program_services"
 required-features = ["test-fixtures", "graph"]
 

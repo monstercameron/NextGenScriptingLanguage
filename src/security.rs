@@ -9,9 +9,7 @@
 use crate::contracts::Sensitivity;
 use crate::manifest::Registry;
 use crate::manifest::{AppletBackend, Manifest};
-#[cfg(windows)]
-use anyhow::Context;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -1644,9 +1642,10 @@ pub(crate) fn verify_private_checkpoint_directory(
                 path.display()
             );
         }
-        // Linux ACL grants can exceed mode bits, so reject an ACL on the pinned
-        // descriptor just as private sensitive-file validation does.
-        if has_posix_extended_acl_fd(file) {
+        // ACL grants can exceed mode bits, so reject them on the pinned
+        // descriptor. If this platform or filesystem cannot attest whether an
+        // ACL exists, fail closed rather than treating that as a private root.
+        if checkpoint_directory_has_acl(file)? {
             bail!(
                 "checkpoint root {} has an extended ACL; remove the ACL before resuming",
                 path.display()
@@ -1658,6 +1657,69 @@ pub(crate) fn verify_private_checkpoint_directory(
         validate_private_windows_acl_for_directory(path)?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+    let name = c"system.posix_acl_access";
+    // SAFETY: the descriptor is live; a null buffer with size zero only queries
+    // the extended attribute size and does not change the checkpoint root.
+    let size = unsafe {
+        libc::fgetxattr(
+            file.as_raw_fd(),
+            name.as_ptr().cast(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if size >= 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ENODATA) | Some(libc::ENOTSUP) => Ok(false),
+        _ => Err(error).context("checking checkpoint root POSIX ACL"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    // Darwin's ACL API reports ENOENT when no extended ACL is attached. Any
+    // other failure to inspect it is a refusal to resume.
+    #[link(name = "System")]
+    extern "C" {
+        fn acl_get_fd_np(fd: libc::c_int, acl_type: libc::c_int) -> *mut std::ffi::c_void;
+        fn acl_free(acl: *mut std::ffi::c_void) -> libc::c_int;
+    }
+
+    const ACL_TYPE_EXTENDED: libc::c_int = 0x0000_0100;
+    // SAFETY: file is live; ACL_TYPE_EXTENDED requests an ACL read from this
+    // descriptor and the returned allocation is released with acl_free below.
+    let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(false)
+        } else {
+            Err(error).context("checking checkpoint root macOS ACL")
+        };
+    }
+    // SAFETY: acl_get_fd_np returned a live ACL allocation owned by this call.
+    if unsafe { acl_free(acl) } == -1 {
+        return Err(std::io::Error::last_os_error()).context("releasing checkpoint root macOS ACL");
+    }
+    Ok(true)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn checkpoint_directory_has_acl(_file: &File) -> Result<bool> {
+    bail!(
+        "cannot verify checkpoint root ACLs on {}; resume is refused",
+        std::env::consts::OS
+    )
 }
 
 #[cfg(windows)]

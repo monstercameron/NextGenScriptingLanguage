@@ -4085,6 +4085,42 @@ mod tests {
         assert!(format!("{error:#}").contains("extended ACL"));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resume_rejects_checkpoint_root_with_a_macos_acl() {
+        use std::process::Command;
+
+        let (_temp, mut options, cwd) = setup();
+        drop(Journal::open(&options, &cwd, "finite", 1024).unwrap());
+        let acl = Command::new("chmod")
+            .args([
+                "+a",
+                "everyone allow list,search,add_file,add_subdirectory,delete_child",
+            ])
+            .arg(&options.directory)
+            .status();
+        let Ok(status) = acl else {
+            return;
+        };
+        if !status.success() {
+            return;
+        }
+        assert_eq!(
+            fs::metadata(&options.directory)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o077,
+            0,
+            "the test must exercise ACL access that mode bits do not reveal"
+        );
+        options.resume = true;
+        let error = Journal::open(&options, &cwd, "finite", 1024)
+            .err()
+            .expect("a macOS ACL on the root must not be resumed");
+        assert!(format!("{error:#}").contains("extended ACL"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn resume_rejects_a_foreign_owned_checkpoint_root_when_chown_is_available() {

@@ -3295,6 +3295,9 @@ fn prepare_session(
         })
         .transpose()?;
     check_preflight_budget(&cancelled, deadline)?;
+    // Match the CLI and module entrypoints: policy must approve every declared
+    // host-environment input before complete resolution can read process env.
+    crate::capabilities::authorize_environment_inputs(plan.input_declarations(), registry)?;
     let plan = plan.with_input_values(&options.inputs, true)?;
     plan.validate_with_registry(registry)?;
     let cwd = std::fs::canonicalize(&options.working_directory)?;

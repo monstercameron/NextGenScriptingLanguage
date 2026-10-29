@@ -3395,7 +3395,7 @@ fn prepare_session(
     Ok((session, ordering_store))
 }
 
-fn graph_module_sensitivity_floor(
+pub(super) fn graph_module_sensitivity_floor(
     plan: &GraphPlan,
     registry: &Registry,
     cwd: &Path,

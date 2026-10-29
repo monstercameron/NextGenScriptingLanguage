@@ -6,12 +6,16 @@ use flow::contracts::{
     RemoteEndpointConfig, Sensitivity, ValueSchema,
 };
 use flow::graph::{
-    EdgeSpec, GraphNode, GraphPlan, GraphRunOptions, GraphSession, PortRef, PortSchema,
-    RuntimeGraphExecutor,
+    EdgeSpec, GraphCheckpointStore, GraphNode, GraphPlan, GraphRunOptions, GraphSession, PortRef,
+    PortSchema, RuntimeGraphExecutor,
 };
 use flow::manifest::Registry;
 use flow::remote::{RemoteAppletDescriptor, RemoteAppletIdentity, PROTOCOL_VERSION};
-use flow::{ast::Value, parser, runtime, security::DataFlowPolicy};
+use flow::{
+    ast::Value,
+    parser, runtime,
+    security::{DataFlowPolicy, PolicyDecisionReason},
+};
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -637,4 +641,281 @@ fn explicit_secret_blocks_save_checkpoint_and_declared_filesystem_write_without_
     .unwrap();
     assert!(runtime::run(&write_program, &registry, &options(directory.path())).is_err());
     assert!(!write_marker.exists());
+}
+
+fn graph_with_input_source(declaration: &str, registry: &Registry) -> GraphPlan {
+    flow::graph::parse(
+        &format!(
+            "accept message as text {declaration}\ngraph secret_input\nrun fixture.remote with message message as submitted\nend graph\n"
+        ),
+        registry,
+    )
+    .unwrap()
+}
+
+fn run_graph_with_value(
+    plan: GraphPlan,
+    registry: &Registry,
+    cwd: &Path,
+    value: &str,
+) -> anyhow::Result<flow::graph::GraphRunResult> {
+    let mut run_options = options(cwd);
+    run_options
+        .inputs
+        .insert("message".into(), Value::String(value.into()));
+    flow::graph::run(
+        plan,
+        registry,
+        &run_options,
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+#[test]
+fn sensitive_graph_inputs_retain_secret_provenance_before_remote_admission() {
+    for (declaration, expected_name) in [
+        ("from secret prompt \"Enter a token\"", "prompt"),
+        ("from environment \"FLOW_ISSUE_792_SECRET\"", "environment"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (listener, endpoint) = endpoint_listener();
+        listener.set_nonblocking(true).unwrap();
+        let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+        let registry = Registry::from_sources(&[remote]).unwrap();
+        registry.set_host_state(policy_for(&endpoint, &["public", "unknown"]));
+        let secret = "issue-792-secret-value-must-not-appear";
+        let plan = graph_with_input_source(declaration, &registry);
+        let error = run_graph_with_value(plan, &registry, directory.path(), secret).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("data flow"),
+            "{expected_name}: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains(secret),
+            "{expected_name} secret leaked into diagnostics: {diagnostic}"
+        );
+        assert!(matches!(
+            listener.accept(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ));
+    }
+}
+
+#[test]
+fn secret_graph_input_can_reach_remote_only_with_secret_grant_and_keeps_output_label() {
+    let directory = tempfile::tempdir().unwrap();
+    let (listener, endpoint) = endpoint_listener();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public", "unknown", "secret"]));
+    let responder = reply_to_one_remote_call(listener);
+    let plan = graph_with_input_source("from secret prompt \"Enter a token\"", &registry);
+    let result = run_graph_with_value(plan, &registry, directory.path(), "allowed-secret").unwrap();
+    responder.join().unwrap();
+    let output = result
+        .outputs
+        .iter()
+        .find(|event| event.port.node == "submitted" && event.port.port == "value")
+        .expect("remote output should be emitted");
+    assert!(output.sensitivity.contains(&Sensitivity::Secret));
+}
+
+#[test]
+fn checkpointed_graph_api_denies_ungranted_secret_input_before_persisting_or_sending() {
+    let directory = tempfile::tempdir().unwrap();
+    let (listener, endpoint) = endpoint_listener();
+    listener.set_nonblocking(true).unwrap();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public", "unknown"]));
+    let plan = graph_with_input_source(
+        "from secret prompt \"Enter a checkpointed token\"",
+        &registry,
+    );
+    let store = Arc::new(flow::graph::MemoryGraphStore::default());
+    let mut run_options = options(directory.path());
+    let secret = "checkpoint-secret-value-must-not-appear";
+    run_options
+        .inputs
+        .insert("message".into(), Value::String(secret.into()));
+    let error = flow::graph::run_checkpointed(
+        plan,
+        &registry,
+        &run_options,
+        Arc::new(AtomicBool::new(false)),
+        store.clone(),
+        false,
+    )
+    .unwrap_err();
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("data flow"), "{diagnostic}");
+    assert!(!diagnostic.contains(secret), "secret leaked: {diagnostic}");
+    assert!(store.load().unwrap().completed.is_empty());
+    assert!(matches!(
+        listener.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[test]
+fn checkpointed_graph_rejects_secret_before_custom_store_or_local_applet_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("local-applet-ran");
+    let binary = directory.path().join("local-applet");
+    executable(
+        &binary,
+        &format!(
+            "#!/bin/sh\nprintf ran > '{}'\nprintf result\n",
+            marker.display()
+        ),
+    );
+    let manifest = json!({
+        "name": "fixture.local",
+        "binary": binary,
+        "parameters": {"message": {"type": "string", "required": true}},
+        "arguments": [{"parameter": "message"}],
+        "contract": {"version": 1, "output": {"type": "text", "encoding": "raw"}}
+    })
+    .to_string();
+    let registry = Registry::from_sources(&[manifest]).unwrap();
+    // The inactive policy permits Unknown, but never permits plaintext Secret
+    // checkpoint persistence. This isolates the result from the legacy applet's
+    // Unknown output/status labels.
+    registry.set_host_state(DataFlowPolicy::default());
+    let plan = flow::graph::parse(
+        "accept message as text from secret prompt \"Enter a local token\"\ngraph local_secret\nrun fixture.local with message message as local\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    let store = Arc::new(flow::graph::MemoryGraphStore::default());
+    let mut run_options = options(directory.path());
+    let secret = "local-checkpoint-secret-must-not-appear";
+    run_options
+        .inputs
+        .insert("message".into(), Value::String(secret.into()));
+    let error = flow::graph::run_checkpointed(
+        plan,
+        &registry,
+        &run_options,
+        Arc::new(AtomicBool::new(false)),
+        store.clone(),
+        false,
+    )
+    .unwrap_err();
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("secret data cannot be persisted without encryption"),
+        "expected a Secret-specific checkpoint refusal, got {diagnostic}"
+    );
+    assert!(!diagnostic.contains(secret), "secret leaked: {diagnostic}");
+    assert!(
+        !marker.exists(),
+        "local applet ran before persistence preflight"
+    );
+    let state = store.load().unwrap();
+    assert!(state.completed.is_empty());
+    assert!(state.interrupted.is_empty());
+
+    // The checkpoint preflight is not a blanket refusal of custom stores.
+    let public_plan = flow::graph::parse(
+        "accept message as text from public environment \"FLOW_ISSUE_792_PUBLIC\"\ngraph local_public\nrun fixture.local with message message as local\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    let public_store = Arc::new(flow::graph::MemoryGraphStore::default());
+    let mut public_options = options(directory.path());
+    public_options
+        .inputs
+        .insert("message".into(), Value::String("public value".into()));
+    flow::graph::run_checkpointed(
+        public_plan,
+        &registry,
+        &public_options,
+        Arc::new(AtomicBool::new(false)),
+        public_store.clone(),
+        false,
+    )
+    .unwrap();
+    assert!(marker.exists(), "public checkpointed applet did not run");
+    assert_eq!(public_store.load().unwrap().completed.len(), 1);
+}
+
+#[test]
+fn public_graph_inputs_keep_their_declared_public_label() {
+    let directory = tempfile::tempdir().unwrap();
+    let (listener, endpoint) = endpoint_listener();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public"]));
+    let plan = graph_with_input_source(
+        "from public environment \"FLOW_ISSUE_792_PUBLIC\"",
+        &registry,
+    );
+    assert_eq!(
+        plan.nodes()[0].inputs["message"].sensitivity,
+        Sensitivity::Public,
+        "the applet's declared Public port must survive input substitution"
+    );
+    assert_eq!(
+        plan.nodes()[0].outputs["status"].sensitivity,
+        Sensitivity::Unknown,
+        "the generated status output contributes Unknown to invocation policy"
+    );
+    assert!(
+        !flow::ast::is_sensitive(&plan.input_declarations()[0]),
+        "the explicitly public environment declaration must remain public"
+    );
+    assert_eq!(
+        plan.nodes()[0]
+            .invocation()
+            .unwrap()
+            .parameters
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["message"],
+        "the public source is the only declared remote parameter"
+    );
+    listener.set_nonblocking(true).unwrap();
+    let error = run_graph_with_value(plan.clone(), &registry, directory.path(), "public-value")
+        .expect_err("the current policy path also requires an Unknown grant");
+    assert!(format!("{error:#}").contains("remote data flow is denied"));
+    assert_eq!(
+        flow::security::policy_decisions(&registry)
+            .last()
+            .expect("the denied policy decision is recorded")
+            .reason,
+        PolicyDecisionReason::UnclassifiedDataDenied,
+        "Public-only failure is caused by an Unknown contributor, not Secret"
+    );
+    assert!(matches!(
+        listener.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+
+    // The Public-only denial is pre-existing and reproducible with the
+    // origin/main plan implementation. Runtime invocation sensitivity includes
+    // output port labels; the graph-generated `status` output defaults to
+    // Unknown, so the remote authorization needs both grants even though the
+    // supplied input and `value` output are Public. Keep both grants here to
+    // verify the Secret fix does not relabel the explicitly public value.
+    listener.set_nonblocking(false).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public", "unknown"]));
+    let responder = reply_to_one_remote_call(listener);
+    let result = run_graph_with_value(plan, &registry, directory.path(), "public-value").unwrap();
+    responder.join().unwrap();
+    let output = result
+        .outputs
+        .iter()
+        .find(|event| event.port.node == "submitted" && event.port.port == "value")
+        .expect("remote output should be emitted");
+    assert!(output.sensitivity.contains(&Sensitivity::Public));
+    assert!(!output.sensitivity.contains(&Sensitivity::Secret));
+    let status = result
+        .outputs
+        .iter()
+        .find(|event| event.port.node == "submitted" && event.port.port == "status")
+        .expect("graph-generated status should be emitted");
+    assert!(status.sensitivity.contains(&Sensitivity::Unknown));
 }

@@ -398,16 +398,28 @@ impl GraphPlan {
         } else {
             crate::inputs::known_values(&self.inputs, supplied)?
         };
+        let sensitive_inputs = self
+            .inputs
+            .iter()
+            .filter(|input| crate::ast::is_sensitive(input))
+            .map(|input| input.name.as_str())
+            .collect::<BTreeSet<_>>();
         let mut plan = self.clone();
         for node in &mut plan.nodes {
             match &mut node.kind {
                 GraphNodeKind::Applet { call }
                 | GraphNodeKind::AppletResultEvent { call, .. }
-                | GraphNodeKind::ProgramService { call } => resolve_call_inputs(call, &values),
+                | GraphNodeKind::ProgramService { call } => {
+                    preserve_input_sensitivity(&mut node.inputs, call, &sensitive_inputs);
+                    resolve_call_inputs(call, &values);
+                }
                 GraphNodeKind::Listener {
                     source: crate::ast::ListenSource::Applet(call),
                     ..
-                } => resolve_call_inputs(call, &values),
+                } => {
+                    preserve_input_sensitivity(&mut node.inputs, call, &sensitive_inputs);
+                    resolve_call_inputs(call, &values);
+                }
                 GraphNodeKind::NativeStream { calls, .. }
                     if calls
                         .iter()
@@ -1834,6 +1846,36 @@ fn contains_reference(value: &Value) -> bool {
 fn resolve_call_inputs(call: &mut Invocation, values: &BTreeMap<String, Value>) {
     for value in call.parameters.values_mut() {
         *value = resolve_known_references(value, values);
+    }
+}
+
+/// A graph input's sensitivity follows its value into the applet parameter.
+/// Keep it on the corresponding graph input port before references are
+/// replaced, so admission, runtime invocation, and emitted output labels all
+/// observe the same provenance. The parameter value itself is deliberately
+/// never included in diagnostics or serialized provenance metadata.
+fn preserve_input_sensitivity(
+    inputs: &mut BTreeMap<String, PortSchema>,
+    call: &Invocation,
+    sensitive_inputs: &BTreeSet<&str>,
+) {
+    for (parameter, value) in &call.parameters {
+        if value_references_any(value, sensitive_inputs) {
+            if let Some(port) = inputs.get_mut(parameter) {
+                port.sensitivity = Sensitivity::Secret;
+            }
+        }
+    }
+}
+
+fn value_references_any(value: &Value, names: &BTreeSet<&str>) -> bool {
+    match value {
+        Value::Reference(name) => names.contains(name.as_str()),
+        Value::List(items) => items.iter().any(|item| value_references_any(item, names)),
+        Value::Record(fields) => fields
+            .values()
+            .any(|field| value_references_any(field, names)),
+        _ => false,
     }
 }
 

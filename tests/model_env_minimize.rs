@@ -1,9 +1,12 @@
 #![cfg(feature = "model")]
-use std::fs;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::sync::Mutex;
 
-// This test executable is also copied next to Execute as its model helper. The
-// helper invocation selects only this test so it can report the actual child env.
+static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
+
+// Spawn this test executable as a lightweight child-environment probe. The
+// production helper's identity check is covered by the model CLI tests; this
+// probe only needs to report the variables that survive the host allowlist.
 #[test]
 fn model_helper_probe() {
     if std::env::var_os("EXECUTE_TEST_MODEL_HELPER").is_some() {
@@ -18,35 +21,48 @@ fn model_helper_probe() {
     }
 }
 
-#[test]
-fn model_helper_obeys_child_environment_allowlist() {
-    let directory = tempfile::tempdir().unwrap();
-    let executable = directory.path().join(if cfg!(windows) {
-        "execute.exe"
-    } else {
-        "execute"
-    });
-    let helper = directory.path().join(if cfg!(windows) {
-        "execute-model.exe"
-    } else {
-        "execute-model"
-    });
-    fs::copy(env!("CARGO_BIN_EXE_execute"), &executable).unwrap();
-    fs::copy(std::env::current_exe().unwrap(), &helper).unwrap();
-    let run = |allow: Option<&str>| {
-        let mut command = Command::new(&executable);
-        if let Some(allow) = allow {
-            command.args(["--env-allow", allow]);
+struct RestoreEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl Drop for RestoreEnvironment {
+    fn drop(&mut self) {
+        for (name, value) in &self.0 {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
         }
+    }
+}
+
+#[test]
+fn model_helper_child_environment_allowlist_filters_variables() {
+    let _lock = ENVIRONMENT_LOCK.lock().unwrap();
+    let names = ["EXECUTE_CHILD_ENV_ALLOW", "LANE_SAFE", "LANE_PRIVATE"];
+    let _restore = RestoreEnvironment(
+        names
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect(),
+    );
+
+    std::env::set_var("LANE_SAFE", "yes");
+    std::env::set_var("LANE_PRIVATE", "private-helper-canary");
+
+    let probe = |allow: Option<&str>| -> Output {
+        match allow {
+            Some(allow) => std::env::set_var("EXECUTE_CHILD_ENV_ALLOW", allow),
+            None => std::env::remove_var("EXECUTE_CHILD_ENV_ALLOW"),
+        }
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "model_helper_probe", "--nocapture"]);
+        flow::capabilities::apply_host_child_environment(&mut command).unwrap();
         command
-            .args(["model", "--exact", "model_helper_probe", "--nocapture"])
             .env("EXECUTE_TEST_MODEL_HELPER", "1")
-            .env("LANE_SAFE", "yes")
-            .env("LANE_PRIVATE", "private-helper-canary");
-        command.env_remove("EXECUTE_CHILD_ENV_ALLOW");
-        command.output().unwrap()
+            .output()
+            .unwrap()
     };
-    let limited = run(Some("EXECUTE_TEST_MODEL_HELPER,LANE_SAFE"));
+
+    let limited = probe(Some("LANE_SAFE"));
     assert!(
         limited.status.success(),
         "{}",
@@ -56,7 +72,8 @@ fn model_helper_obeys_child_environment_allowlist() {
     assert!(text.contains("MODEL_ENV_SAFE=yes"), "{text}");
     assert!(text.contains("MODEL_ENV_PRIVATE=\n"), "{text}");
     assert!(!text.contains("private-helper-canary"));
-    let full = run(None);
+
+    let full = probe(None);
     assert!(
         full.status.success(),
         "{}",
@@ -65,7 +82,9 @@ fn model_helper_obeys_child_environment_allowlist() {
     assert!(
         String::from_utf8_lossy(&full.stdout).contains("MODEL_ENV_PRIVATE=private-helper-canary")
     );
-    let invalid = run(Some("BAD=NAME"));
-    assert!(!invalid.status.success());
-    assert!(!String::from_utf8_lossy(&invalid.stdout).contains("private-helper-canary"));
+
+    let mut invalid = Command::new(std::env::current_exe().unwrap());
+    invalid.args(["--exact", "model_helper_probe", "--nocapture"]);
+    std::env::set_var("EXECUTE_CHILD_ENV_ALLOW", "BAD=NAME");
+    assert!(flow::capabilities::apply_host_child_environment(&mut invalid).is_err());
 }

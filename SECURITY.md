@@ -74,6 +74,12 @@ bits (Linux POSIX ACLs and macOS extended ACLs are refused); Windows roots
 must have an explicit, protected private DACL for the current user, SYSTEM and
 Administrators. A rejected root is left untouched so its permissions or ACL
 can be reviewed and repaired.
+Linux cannot query every ACL dialect through `system.posix_acl_access`: a
+filesystem that reports POSIX ACL xattrs as unsupported is refused, but a
+filesystem may expose an NFSv4 or RichACL separately while reporting no POSIX
+ACL. The current check does not attest those alternate dialects. Do not resume
+Linux checkpoints from filesystems using NFSv4 or RichACL ACLs; move them to a
+filesystem whose access rules are represented by POSIX ACL xattrs.
 Replay parses the program bytes captured from the pinned record descriptor and
 uses the canonical source identity captured while opening that directory; it
 does not re-resolve a replaced record pathname or gain access to called files.

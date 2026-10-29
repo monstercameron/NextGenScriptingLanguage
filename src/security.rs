@@ -1678,7 +1678,12 @@ fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
     }
     let error = std::io::Error::last_os_error();
     match error.raw_os_error() {
-        Some(libc::ENODATA) | Some(libc::ENOTSUP) => Ok(false),
+        // ENODATA only establishes that this POSIX ACL xattr is absent; it
+        // does not attest the absence of a separate NFSv4/RichACL dialect.
+        Some(libc::ENODATA) => Ok(false),
+        Some(libc::ENOTSUP) => Err(anyhow!(
+            "the filesystem does not support POSIX ACL xattrs, so checkpoint ACL access cannot be verified; resume from a filesystem with ACL-query support"
+        )),
         _ => Err(error).context("checking checkpoint root POSIX ACL"),
     }
 }

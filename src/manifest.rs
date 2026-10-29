@@ -2863,9 +2863,13 @@ fn parameter_accepts_reference(
                 ParameterType::Json,
                 InputType::Text
                     | InputType::Integer
+                    | InputType::UnsignedInteger
+                    | InputType::Usize
                     | InputType::Boolean
                     | InputType::TextList
                     | InputType::IntegerList
+                    | InputType::UnsignedIntegerList
+                    | InputType::UsizeList
                     | InputType::JsonList
             )
             | (ParameterType::Record, InputType::Json)
@@ -2904,6 +2908,16 @@ fn parameter_accepts_reference(
         || (expected == ParameterType::List
             && actual == InputType::JsonList
             && matches!(item_type, Some(ParameterType::Json | ParameterType::Number)))
+        || (expected == ParameterType::List
+            && item_type == Some(ParameterType::Json)
+            && matches!(
+                actual,
+                InputType::TextList
+                    | InputType::IntegerList
+                    | InputType::UnsignedIntegerList
+                    | InputType::UsizeList
+                    | InputType::JsonList
+            ))
 }
 
 /// A reference used as one list item must resolve to a single scalar of the
@@ -4731,7 +4745,12 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
                 && (!schema.scalar_only
                     || matches!(
                         kind,
-                        InputType::Text | InputType::Integer | InputType::Boolean | InputType::Json
+                        InputType::Text
+                            | InputType::Integer
+                            | InputType::UnsignedInteger
+                            | InputType::Usize
+                            | InputType::Boolean
+                            | InputType::Json
                     ))
         }
         OutputType::Record => kind == InputType::Json,
@@ -4758,6 +4777,16 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
                         .items
                         .as_deref()
                         .is_some_and(|item| item.kind == OutputType::Json))
+                || (matches!(
+                    kind,
+                    InputType::TextList
+                        | InputType::IntegerList
+                        | InputType::UnsignedIntegerList
+                        | InputType::UsizeList
+                ) && schema
+                    .items
+                    .as_deref()
+                    .is_some_and(|item| item.kind == OutputType::Json))
         }
     }
 }
@@ -5559,6 +5588,109 @@ mod tests {
             Some(ParameterType::UnsignedInteger),
             InputType::UnsignedIntegerList
         ));
+    }
+
+    #[test]
+    fn json_parameter_references_accept_unsigned_and_platform_sized_values() {
+        for kind in [
+            InputType::Text,
+            InputType::Integer,
+            InputType::UnsignedInteger,
+            InputType::Usize,
+            InputType::Boolean,
+            InputType::TextList,
+            InputType::IntegerList,
+            InputType::UnsignedIntegerList,
+            InputType::UsizeList,
+            InputType::JsonList,
+            InputType::Json,
+            InputType::Never,
+        ] {
+            assert!(
+                parameter_accepts_reference(ParameterType::Json, None, kind),
+                "JSON parameters should accept JSON-representable {kind} references"
+            );
+        }
+        assert!(!parameter_accepts_reference(
+            ParameterType::Json,
+            None,
+            InputType::Bytes
+        ));
+
+        for kind in [InputType::UnsignedIntegerList, InputType::UsizeList] {
+            assert!(parameter_accepts_reference(
+                ParameterType::List,
+                Some(ParameterType::Json),
+                kind
+            ));
+        }
+        assert!(!parameter_accepts_reference(
+            ParameterType::List,
+            Some(ParameterType::Json),
+            InputType::Bytes
+        ));
+        assert!(!parameter_accepts_reference(
+            ParameterType::Integer,
+            None,
+            InputType::UnsignedInteger
+        ));
+    }
+
+    #[test]
+    fn json_schemas_accept_unsigned_scalars_and_json_compatible_lists() {
+        let mut scalar_schema = leaf_value_schema(OutputType::Json);
+        scalar_schema.scalar_only = true;
+        for kind in [
+            InputType::Text,
+            InputType::Integer,
+            InputType::UnsignedInteger,
+            InputType::Usize,
+            InputType::Boolean,
+            InputType::Json,
+        ] {
+            assert!(
+                schema_accepts_input_kind(&scalar_schema, kind),
+                "scalar JSON schema should accept {kind}"
+            );
+        }
+        for kind in [
+            InputType::TextList,
+            InputType::IntegerList,
+            InputType::UnsignedIntegerList,
+            InputType::UsizeList,
+            InputType::JsonList,
+            InputType::Bytes,
+        ] {
+            assert!(
+                !schema_accepts_input_kind(&scalar_schema, kind),
+                "scalar-only JSON schema should reject {kind}"
+            );
+        }
+
+        let list_schema = ValueSchema {
+            min_items: None,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            kind: OutputType::List,
+            nullable: false,
+            items: Some(Box::new(leaf_value_schema(OutputType::Json))),
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            single_line: false,
+            minimum: None,
+            pattern: None,
+        };
+        for kind in [InputType::UnsignedIntegerList, InputType::UsizeList] {
+            assert!(
+                schema_accepts_input_kind(&list_schema, kind),
+                "JSON array schema should accept {kind}"
+            );
+        }
+        assert!(!schema_accepts_input_kind(&list_schema, InputType::Bytes));
     }
 
     #[test]

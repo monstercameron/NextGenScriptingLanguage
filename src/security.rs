@@ -1680,12 +1680,75 @@ fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
     match error.raw_os_error() {
         // ENODATA only establishes that this POSIX ACL xattr is absent; it
         // does not attest the absence of a separate NFSv4/RichACL dialect.
-        Some(libc::ENODATA) => Ok(false),
+        Some(libc::ENODATA) => {}
         Some(libc::ENOTSUP) => Err(anyhow!(
             "the filesystem does not support POSIX ACL xattrs, so checkpoint ACL access cannot be verified; resume from a filesystem with ACL-query support"
-        )),
-        _ => Err(error).context("checking checkpoint root POSIX ACL"),
+        ))?,
+        _ => return Err(error).context("checking checkpoint root POSIX ACL"),
     }
+    let names = linux_xattr_names(file)?;
+    checkpoint_xattr_list_has_unsupported_acl(&names)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_xattr_names(file: &File) -> Result<Vec<u8>> {
+    use std::os::unix::io::AsRawFd;
+
+    // Linux caps an xattr name list at 64 KiB. Keep the bound explicit so a
+    // malformed or unusual filesystem cannot trigger an unbounded allocation.
+    const MAX_XATTR_LIST_BYTES: usize = 64 * 1024;
+    // SAFETY: the descriptor is live; a null list with size zero only queries
+    // the length of the extended-attribute name list.
+    let size = unsafe { libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0) };
+    if size < 0 {
+        return Err(std::io::Error::last_os_error()).context("listing checkpoint root xattrs");
+    }
+    let size = usize::try_from(size).context("checkpoint root xattr list length overflowed")?;
+    if size > MAX_XATTR_LIST_BYTES {
+        bail!("checkpoint root xattr list exceeds the verification limit");
+    }
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut names = vec![0; size];
+    // SAFETY: names is a writable buffer of `size` bytes and file is a live fd.
+    // If the list grew since the size query, Linux returns ERANGE and we fail closed.
+    let actual =
+        unsafe { libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len()) };
+    if actual < 0 {
+        return Err(std::io::Error::last_os_error()).context("reading checkpoint root xattr list");
+    }
+    let actual = usize::try_from(actual).context("checkpoint root xattr list length overflowed")?;
+    if actual > names.len() {
+        bail!("checkpoint root xattr list changed while it was being read");
+    }
+    names.truncate(actual);
+    Ok(names)
+}
+
+fn checkpoint_xattr_list_has_unsupported_acl(names: &[u8]) -> Result<bool> {
+    let mut rest = names;
+    while !rest.is_empty() {
+        let Some(end) = rest.iter().position(|byte| *byte == 0) else {
+            bail!("checkpoint root xattr list is malformed");
+        };
+        let name = &rest[..end];
+        if name.is_empty() {
+            bail!("checkpoint root xattr list contains an empty name");
+        }
+        if name == b"system.nfs4_acl"
+            || name == b"system.nfs4_dacl"
+            || name == b"system.nfs4_sacl"
+            || name == b"system.richacl"
+            || name == b"system.posix_acl_default"
+            || name.starts_with(b"security.nfs4acl_")
+        {
+            return Ok(true);
+        }
+        rest = &rest[end + 1..];
+    }
+    Ok(false)
 }
 
 #[cfg(target_os = "macos")]
@@ -2594,6 +2657,67 @@ mod tests {
 
     fn policy(text: &str) -> DataFlowPolicy {
         DataFlowPolicy::from_json(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn checkpoint_root_xattr_scan_detects_known_alternate_acl_names() {
+        for name in [
+            b"system.nfs4_acl\0".as_slice(),
+            b"system.nfs4_dacl\0".as_slice(),
+            b"system.nfs4_sacl\0".as_slice(),
+            b"system.richacl\0".as_slice(),
+            b"system.posix_acl_default\0".as_slice(),
+            b"security.nfs4acl_dacl\0".as_slice(),
+            b"security.nfs4acl_sacl\0".as_slice(),
+        ] {
+            assert!(
+                checkpoint_xattr_list_has_unsupported_acl(name).unwrap(),
+                "must recognize {}",
+                String::from_utf8_lossy(name)
+            );
+        }
+        assert!(!checkpoint_xattr_list_has_unsupported_acl(
+            b"security.selinux\0user.description\0system.posix_acl_access\0"
+        )
+        .unwrap());
+        assert!(checkpoint_xattr_list_has_unsupported_acl(b"system.nfs4_acl").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn checkpoint_linux_xattr_scan_uses_the_pinned_directory_descriptor() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = std::ffi::CString::new(directory.path().as_os_str().as_bytes()).unwrap();
+        let value = b"value";
+        // SAFETY: path and attribute name are NUL-terminated; value is a live
+        // readable byte slice for the supplied length.
+        let result = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                c"user.checkpoint-root-scan-test".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "setting a test xattr: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let directory_handle = std::fs::File::open(directory.path()).unwrap();
+        let names = linux_xattr_names(&directory_handle).unwrap();
+        assert!(names
+            .split(|byte| *byte == 0)
+            .any(|name| name == b"user.checkpoint-root-scan-test"));
+        assert!(
+            !checkpoint_xattr_list_has_unsupported_acl(b"user.checkpoint-root-scan-test\0")
+                .unwrap()
+        );
     }
 
     #[cfg(all(windows, feature = "live"))]

@@ -70,16 +70,15 @@ redirecting those operations. Checkpoint state also has no-follow/regular-file
 checks, private permissions, checksummed state and an exclusive writer lock.
 Before resuming, Execute validates the existing checkpoint root itself: Unix
 roots must be owned by the current user and have no group/other permission
-bits (Linux POSIX ACLs and macOS extended ACLs are refused); Windows roots
-must have an explicit, protected private DACL for the current user, SYSTEM and
-Administrators. A rejected root is left untouched so its permissions or ACL
-can be reviewed and repaired.
-Linux cannot query every ACL dialect through `system.posix_acl_access`: a
-filesystem that reports POSIX ACL xattrs as unsupported is refused, but a
-filesystem may expose an NFSv4 or RichACL separately while reporting no POSIX
-ACL. The current check does not attest those alternate dialects. Do not resume
-Linux checkpoints from filesystems using NFSv4 or RichACL ACLs; move them to a
-filesystem whose access rules are represented by POSIX ACL xattrs.
+bits. Linux POSIX ACLs and listed NFSv4/RichACL xattrs, plus macOS extended
+ACLs, are refused. Windows roots must have an explicit, protected private DACL
+for the current user, SYSTEM and Administrators. A rejected root is left
+untouched so its permissions or ACL can be reviewed and repaired.
+Linux refuses filesystems that cannot answer the POSIX ACL xattr query and
+checks the pinned descriptor's xattr names for known NFSv4 and RichACL entries.
+This does not attest ACL models that the filesystem keeps opaque or omits from
+its xattr list. Do not resume Linux checkpoints on filesystems using an ACL
+dialect that is not exposed by these checks.
 Replay parses the program bytes captured from the pinned record descriptor and
 uses the canonical source identity captured while opening that directory; it
 does not re-resolve a replaced record pathname or gain access to called files.

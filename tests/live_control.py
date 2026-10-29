@@ -3,6 +3,7 @@
 import concurrent.futures
 import errno
 import fcntl
+import hashlib
 import pty
 import struct
 import termios
@@ -25,7 +26,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 
 
 class Session:
-    def __init__(self, source, bindings=None, paused=True, manifests=None, headless=False):
+    def __init__(self, source, bindings=None, paused=True, manifests=None, headless=False, agent_policy=None):
         self.temp = tempfile.TemporaryDirectory(prefix='execute-live-')
         self.root = Path(self.temp.name)
         self.socket = self.root / 'control.sock'
@@ -44,6 +45,11 @@ class Session:
             args += ['--paused']
         if bindings is not None:
             args += ['--bindings', json.dumps(bindings)]
+        if agent_policy is not None:
+            self.policy = self.root / 'agents.json'
+            self.policy.write_text(json.dumps(agent_policy))
+            self.policy.chmod(0o600)
+            args += ['--agent-policy', str(self.policy)]
         self.child = subprocess.Popen(args, cwd=self.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if not select.select([self.child.stdout], [], [], 8)[0]:
             self.close()
@@ -53,11 +59,14 @@ class Session:
             self.close()
             raise AssertionError(f'bad ready response: {line!r}')
 
-    def call(self, op, **values):
+    def call(self, op, auth=None, **values):
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(12)
             client.connect(str(self.socket))
-            client.sendall(json.dumps({'op': op, **values}).encode() + b'\n')
+            request = {'op': op, **values}
+            if auth is not None:
+                request['auth'] = auth
+            client.sendall(json.dumps(request).encode() + b'\n')
             with client.makefile('rb') as reader:
                 result = json.loads(reader.readline(16 * 1024 * 1024))
         return result
@@ -117,6 +126,135 @@ class LiveControl(unittest.TestCase):
                 break
             app.ok('create', path=f'/user/padding{index}', value='x' * min(950000, remaining - 32))
         return len(json.dumps(app.read()['state'], ensure_ascii=False, separators=(',', ':')).encode())
+
+    def test_policy_edits_cannot_test_secret_bindings_or_their_ancestors(self):
+        secret = 'low-entropy-secret-guess'
+        editor_token = 'e' * 64
+        reader_token = 'r' * 64
+        policy = {
+            'version': 1,
+            'agents': {
+                'editor': {
+                    'token_sha256': hashlib.sha256(editor_token.encode()).hexdigest(),
+                    'permissions': ['edit'],
+                },
+                'reader_editor': {
+                    'token_sha256': hashlib.sha256(reader_token.encode()).hexdigest(),
+                    'permissions': ['read', 'edit', 'control'],
+                },
+            },
+        }
+        source = 'accept token as text from secret prompt "Token?"\nuse value token\n'
+        with Session(source, {'token': secret}, agent_policy=policy) as app:
+            credentials = {
+                'editor': {'agent': 'editor', 'token': editor_token},
+                'reader_editor': {'agent': 'reader_editor', 'token': reader_token},
+            }
+            self.assertFalse(app.call('read', auth=credentials['editor'])['ok'])
+            visible = app.ok('read', auth=credentials['reader_editor'])
+            self.assertEqual(visible['result']['state']['bindings']['token'], {'withheld': 'secret'})
+            self.assertNotIn(secret, json.dumps(visible))
+
+            attempts = [
+                {'op': 'test', 'path': '/bindings/token', 'value': secret},
+                {'op': 'test', 'path': '/bindings/token', 'value': 'incorrect-guess'},
+                {'op': 'test', 'path': '/bindings', 'value': {'token': secret}},
+                {'op': 'test', 'path': '/bindings/token/0', 'value': secret[0]},
+                {'op': 'test', 'path': '/input', 'value': {'text': ''}},
+                {'op': 'test', 'path': '/input', 'value': {'text': 'incorrect-guess'}},
+                {'op': 'test', 'path': '/input/text', 'value': ''},
+                {'op': 'test', 'path': '/input/text', 'value': 'incorrect-guess'},
+            ]
+            for agent, auth in credentials.items():
+                failures = [app.call('patch', auth=auth, operations=[operation]) for operation in attempts]
+                self.assertTrue(all(not result['ok'] for result in failures), (agent, failures))
+                self.assertEqual(
+                    [result['error'] for result in failures],
+                    [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(attempts),
+                )
+                self.assertTrue(all(secret not in json.dumps(result) for result in failures))
+
+            # A rejected secret test rolls back earlier operations in its batch.
+            rollback = app.call('patch', auth=credentials['editor'], operations=[
+                {'op': 'add', 'path': '/user/should_rollback', 'value': True},
+                attempts[0],
+            ])
+            self.assertEqual(rollback['error']['code'], 'secret_test_denied')
+            self.assertFalse(app.ok('read', auth=credentials['reader_editor'])['result']['state']['user'].get('should_rollback', False))
+
+            # Ordinary tests and redacted read-modify-write remain supported.
+            app.ok('patch', auth=credentials['editor'], operations=[
+                {'op': 'add', 'path': '/user/public', 'value': 'known'},
+                {'op': 'test', 'path': '/user/public', 'value': 'known'},
+            ])
+            app.ok('patch', auth=credentials['reader_editor'], operations=[
+                {'op': 'replace', 'path': '/bindings/token', 'value': {'withheld': 'secret'}},
+            ])
+            after = app.ok('read', auth=credentials['reader_editor'])
+            self.assertEqual(after['result']['state']['bindings']['token'], {'withheld': 'secret'})
+            self.assertNotIn(secret, json.dumps(after))
+
+            # A public source path remains testable when it contains no
+            # redacted text, even though the program has another secret field.
+            app.ok('patch', auth=credentials['editor'], operations=[
+                {'op': 'test', 'path': '/source', 'value': source},
+            ])
+
+        # Secret prompt defaults are redacted from source reads. Exact and
+        # mismatching source guesses must receive the same fixed rejection.
+        source_with_default = (
+            'accept token as text from secret prompt "Token?" '
+            f'with default "{secret}"\nuse value token\n'
+        )
+        with Session(source_with_default, {'token': secret}, agent_policy=policy) as app:
+            visible = app.ok('read', auth=credentials['reader_editor'])
+            self.assertNotIn(secret, json.dumps(visible))
+            self.assertIn('[REDACTED]', visible['result']['state']['source'])
+            guesses = [source_with_default, source_with_default.replace(secret, 'incorrect-guess')]
+            for auth in credentials.values():
+                failures = [app.call('patch', auth=auth, operations=[
+                    {'op': 'test', 'path': '/source', 'value': guess},
+                ]) for guess in guesses]
+                self.assertEqual(
+                    [result['error'] for result in failures],
+                    [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(guesses),
+                )
+                self.assertTrue(all(secret not in json.dumps(result) for result in failures))
+
+        # Exercise a nonempty live input produced by a secret pipeline, rather
+        # than only the empty input record present when a session starts.
+        pipeline_source = (
+            'accept token as text from secret prompt "Token?"\n'
+            'use value token\n'
+            'then "cat" as echoed\n'
+            'run printf with message "finished"\n'
+        )
+        with Session(pipeline_source, {'token': secret}, agent_policy=policy) as app:
+            runner = credentials['reader_editor']
+            app.ok('control', auth=runner, action='resume')
+            deadline = time.monotonic() + 8
+            snapshot = None
+            while time.monotonic() < deadline:
+                snapshot = app.ok('read', auth=runner)['result']
+                if snapshot['runtime']['status'] == 'completed':
+                    break
+                app.ok('wait', auth=runner, after=snapshot['revision'], timeout_ms=50)
+            self.assertEqual(snapshot['runtime']['status'], 'completed', snapshot)
+            self.assertEqual(snapshot['state']['input'], {'withheld': 'secret'})
+            self.assertNotIn(secret, json.dumps(snapshot))
+
+            guesses = [
+                {'op': 'test', 'path': '/input', 'value': {'text': secret}},
+                {'op': 'test', 'path': '/input', 'value': {'text': 'incorrect-guess'}},
+                {'op': 'test', 'path': '/input/text', 'value': secret},
+                {'op': 'test', 'path': '/input/text', 'value': 'incorrect-guess'},
+            ]
+            failures = [app.call('patch', auth=runner, operations=[guess]) for guess in guesses]
+            self.assertEqual(
+                [result['error'] for result in failures],
+                [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(guesses),
+            )
+            self.assertTrue(all(secret not in json.dumps(result) for result in failures))
 
     def test_stream_rejects_record_that_would_exceed_document_budget(self):
         source = 'stream from "printf" with arguments ["%s", "' + 'r' * 32768 + '"]\nshow each line\n'

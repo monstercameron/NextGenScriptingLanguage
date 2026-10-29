@@ -398,11 +398,52 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare trusted Windows test and build roots
+        shell: pwsh
+        run: |
+          # The trusted-input gate checks every ancestor. ProgramData and the
+          # workspace have runner ACLs that grant foreign write rights, so
+          # use a fresh NTFS volume whose root is the trust boundary.
+          $vhd = Join-Path $env:RUNNER_TEMP "ngs-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.vhdx"
+          "NGS_TEST_VHD_PATH=$vhd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $letters = @('Z','Y','X','W','V','U','T','S','R','Q','P','O','N','M','L','K','J','I','H','G','F','E')
+          $letter = $letters | Where-Object { -not (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) } | Select-Object -First 1
+          if (-not $letter) { throw "No free drive letter for the trusted Windows CI volume" }
+          $diskpart = Join-Path $env:RUNNER_TEMP "ngs-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.diskpart"
+          $commands = @(
+            "create vdisk file=`"$vhd`" maximum=32768 type=expandable",
+            "select vdisk file=`"$vhd`"",
+            "attach vdisk",
+            "create partition primary",
+            "format fs=ntfs quick label=NGSCI",
+            "assign letter=$letter",
+            "exit"
+          )
+          [System.IO.File]::WriteAllLines($diskpart, $commands, [System.Text.Encoding]::ASCII)
+          & "$env:WINDIR\System32\diskpart.exe" /s $diskpart
+          if ($LASTEXITCODE -ne 0) { throw "Could not create the trusted Windows CI volume" }
+          $driveRoot = $letter + ":" + [System.IO.Path]::DirectorySeparatorChar
+          $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          & "$env:WINDIR\System32\icacls.exe" $driveRoot /setowner "*$userSid"
+          if ($LASTEXITCODE -ne 0) { throw "Could not set the trusted Windows CI volume owner" }
+          & "$env:WINDIR\System32\icacls.exe" $driveRoot /inheritance:r `
+            /grant:r "*$($userSid):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+          if ($LASTEXITCODE -ne 0) { throw "Could not secure the trusted Windows CI volume" }
+          $target = Join-Path $driveRoot "target"
+          $temp = Join-Path $driveRoot "temp"
+          New-Item -ItemType Directory -Path $target, $temp | Out-Null
+          "CARGO_TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # The build target lives on an ephemeral VHD that is detached before
+          # post-job cache saving; keep the registry cache only.
+          cache-targets: false
       - run: cargo fmt --check
       - run: rustfmt --edition 2021 --check src/runtime/shared.rs
       - name: Audit native-tool contracts and bundled index freshness
@@ -430,9 +471,20 @@ jobs:
       - name: Install manifest fixture beside the release test binaries
         shell: pwsh
         run: |
-          $fixture = "target/${{ matrix.target }}/manifests"
+          $fixture = Join-Path $env:CARGO_TARGET_DIR "${{ matrix.target }}\manifests"
           if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
           Copy-Item -Path manifests -Destination $fixture -Recurse
 
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff --test checkpoint_resolve_elements -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --lib -- --test-threads=1
+      - name: Detach trusted Windows CI volume
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not $env:NGS_TEST_VHD_PATH -or -not (Test-Path -LiteralPath $env:NGS_TEST_VHD_PATH)) { exit 0 }
+          $diskpart = Join-Path $env:RUNNER_TEMP "ngs-ci-cleanup-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.diskpart"
+          $commands = @("select vdisk file=`"$env:NGS_TEST_VHD_PATH`"", "detach vdisk", "exit")
+          [System.IO.File]::WriteAllLines($diskpart, $commands, [System.Text.Encoding]::ASCII)
+          & "$env:WINDIR\System32\diskpart.exe" /s $diskpart
+          if ($LASTEXITCODE -ne 0) { Write-Warning "Could not detach the trusted Windows CI volume" }
+          Remove-Item -LiteralPath $env:NGS_TEST_VHD_PATH -Force -ErrorAction SilentlyContinue

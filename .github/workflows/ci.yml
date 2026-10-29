@@ -398,6 +398,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare trusted Windows test and build roots
+        shell: pwsh
+        run: |
+          # The trusted-input ACL gate checks every path component. GitHub's
+          # workspace and runner temp roots inherit broad ACLs, so Windows
+          # fixtures must live below a private ProgramData directory.
+          $root = Join-Path $env:ProgramData "NextGenScriptingLanguage-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $target = Join-Path $root "target"
+          $temp = Join-Path $root "temp"
+          New-Item -ItemType Directory -Force -Path $target, $temp | Out-Null
+          $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          & "$env:WINDIR\System32\icacls.exe" $root /inheritance:r `
+            /grant:r "*$($userSid):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C
+          if ($LASTEXITCODE -ne 0) { throw "Could not secure Windows CI test roots" }
+          "CARGO_TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
@@ -430,7 +447,7 @@ jobs:
       - name: Install manifest fixture beside the release test binaries
         shell: pwsh
         run: |
-          $fixture = "target/${{ matrix.target }}/manifests"
+          $fixture = Join-Path $env:CARGO_TARGET_DIR "${{ matrix.target }}\manifests"
           if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
           Copy-Item -Path manifests -Destination $fixture -Recurse
 

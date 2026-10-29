@@ -330,6 +330,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
     let _step_ids = StepIdScope::enter(&program.steps, options.trace || observe::is_installed());
     let mut bindings = initial_bindings;
+    let mut task_group_presentations: BTreeMap<String, (Value, Value)> = BTreeMap::new();
     // Raw captures from `then capture bytes as NAME`, kept apart from text bindings.
     let mut byte_bindings: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut data = initial_input;
@@ -1370,7 +1371,21 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 StepKind::EncodeJson { source } => {
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_source;
-                    let source = structured_source(source, &bindings)?;
+                    let is_terminal_presentation = program.steps.get(index + 1).is_none();
+                    let source = if task_group_presentations.is_empty() || !is_terminal_presentation
+                    {
+                        structured_source(source, &bindings)?.into_owned()
+                    } else {
+                        // Keep the language binding raw for explicit data flow,
+                        // while JSON serialization exposes its diagnostic view.
+                        let mut presentation_bindings = bindings.clone();
+                        for (name, (raw, presentation)) in &task_group_presentations {
+                            if bindings.get(name) == Some(raw) {
+                                presentation_bindings.insert(name.clone(), presentation.clone());
+                            }
+                        }
+                        structured_source(source, &presentation_bindings)?.into_owned()
+                    };
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_source {
@@ -1487,6 +1502,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     result.launched_processes += group.launched_processes;
                     signals.account_child_process_launches(group.launched_processes);
                     let value = group.value;
+                    let presentation = group.presentation;
+                    if value != presentation {
+                        task_group_presentations
+                            .insert(binding.clone(), (value.clone(), presentation.clone()));
+                    } else {
+                        task_group_presentations.remove(binding);
+                    }
                     let pipeline_is_replaced = each.is_some()
                         && !options.trace
                         && journal.is_none()
@@ -1525,7 +1547,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let bytes = if pipeline_is_replaced {
                         Vec::new()
                     } else {
-                        crate::structured::encode(&value, output_limit)
+                        crate::structured::encode(&presentation, output_limit)
                             .with_context(|| format!("line {}: task group output", step.line))?
                     };
                     if sensitive_bindings.contains(binding) {

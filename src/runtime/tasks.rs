@@ -133,7 +133,10 @@ impl std::error::Error for TaskGroupFailure {}
 /// finite workflow result.
 #[derive(Debug)]
 pub(crate) struct TaskGroupResult {
+    /// The exact task-group value retained for the language binding.
     pub value: Value,
+    /// The redacted value serialized to the observable pipeline.
+    pub presentation: Value,
     pub launched_processes: usize,
 }
 
@@ -647,7 +650,9 @@ pub(super) fn run_group(
         }
         if let Some(index) = winner {
             let value = group_value(mode, &records, Some(index), &secret_redactor);
-            ensure_encoded_limit(&value, max_output_bytes).map_err(|error| {
+            let presentation =
+                group_presentation_value(mode, &records, Some(index), &secret_redactor);
+            ensure_encoded_limit(&presentation, max_output_bytes).map_err(|error| {
                 task_group_failure(TaskGroupFailureRequest {
                     mode,
                     failed_task: &prepared[index].id,
@@ -664,6 +669,7 @@ pub(super) fn run_group(
             })?;
             return Ok(TaskGroupResult {
                 value,
+                presentation,
                 launched_processes: launched_processes(&records),
             });
         }
@@ -732,9 +738,11 @@ pub(super) fn run_group(
         .into());
     }
     let value = group_value(mode, &records, None, &secret_redactor);
-    ensure_encoded_limit(&value, max_output_bytes)?;
+    let presentation = group_presentation_value(mode, &records, None, &secret_redactor);
+    ensure_encoded_limit(&presentation, max_output_bytes)?;
     Ok(TaskGroupResult {
         value,
+        presentation,
         launched_processes: launched_processes(&records),
     })
 }
@@ -869,8 +877,10 @@ pub(super) fn run_each(
     let secret_redactor = crate::security::secret_redactor(registry);
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     if prepared.is_empty() {
+        let value = each_value(&mut records, items, &secret_redactor);
         return Ok(TaskGroupResult {
-            value: each_value(&mut records, items, &secret_redactor),
+            presentation: value.clone(),
+            value,
             launched_processes: 0,
         });
     }
@@ -1250,6 +1260,7 @@ pub(super) fn run_each(
         each_result_encoded_limit(max_output_bytes, item_count),
     )?;
     Ok(TaskGroupResult {
+        presentation: value.clone(),
         value,
         launched_processes: launched_processes(&records),
     })
@@ -1484,6 +1495,36 @@ fn group_value(
         (
             "tasks".into(),
             Value::List(records.iter().map(task_value_raw).collect()),
+        ),
+    ]);
+    if let Some(index) = winner {
+        group.insert("winner".into(), Value::String(records[index].id.clone()));
+    }
+    Value::Record(group)
+}
+
+fn group_presentation_value(
+    mode: TaskGroupMode,
+    records: &[TaskRecord],
+    winner: Option<usize>,
+    secret_redactor: &crate::security::SecretRedactor,
+) -> Value {
+    let mut group = std::collections::BTreeMap::from([
+        (
+            "mode".into(),
+            Value::String(match mode {
+                TaskGroupMode::Join => "join".into(),
+                TaskGroupMode::Race => "race".into(),
+            }),
+        ),
+        (
+            "tasks".into(),
+            Value::List(
+                records
+                    .iter()
+                    .map(|record| task_value(record, secret_redactor, false))
+                    .collect(),
+            ),
         ),
     ]);
     if let Some(index) = winner {

@@ -975,7 +975,25 @@ fn task_group_json_redacts_declared_secret_stderr_but_api_keeps_raw_bytes() -> R
         }
     });
     let make_registry = || -> Result<flow::manifest::Registry> {
-        let registry = flow::manifest::Registry::from_sources(&[source.to_string()])?;
+        let plain_source = serde_json::json!({
+            "name": "plain.echo",
+            "binary": "/bin/sh",
+            "arguments": [
+                {"literal": "-c"},
+                {"literal": "printf public-diagnostic >&2; printf output"}
+            ],
+            "stdio": {"stderr": "capture"},
+            "contract": {
+                "version": 1,
+                "backend": "command",
+                "lifecycle": {"kind": "oneshot"},
+                "output": {"type": "text", "encoding": "raw"}
+            }
+        });
+        let registry = flow::manifest::Registry::from_sources(&[
+            source.to_string(),
+            plain_source.to_string(),
+        ])?;
         registry.set_host_state(flow::security::DataFlowPolicy::from_json(
             br#"{"version":1,"secrets":{"environment":{"secret.echo":["FLOW_SENTINEL"]}}}"#,
         )?);
@@ -1001,7 +1019,7 @@ fn task_group_json_redacts_declared_secret_stderr_but_api_keeps_raw_bytes() -> R
 
     let registry = make_registry()?;
     let program = flow::parser::parse(
-        "parallel at most 1 as results\n  run secret.echo as echoed\nthen encode results as json\n",
+        "parallel at most 2 as results\n  run secret.echo as echoed\n  run plain.echo as plain\nthen encode results as json\n",
     )?;
     let result = flow::runtime::run(&program, &registry, &options)?;
     let value: serde_json::Value = serde_json::from_slice(&result.output)?;
@@ -1018,6 +1036,10 @@ fn task_group_json_redacts_declared_secret_stderr_but_api_keeps_raw_bytes() -> R
         })
         .collect::<Result<Vec<_>>>()?;
     assert_eq!(stderr_bytes, b"[REDACTED]");
+    assert_eq!(
+        value["tasks"][1]["stderr"],
+        serde_json::json!(b"public-diagnostic".to_vec())
+    );
     let raw_secret_numbers = secret
         .iter()
         .map(|byte| u64::from(*byte))

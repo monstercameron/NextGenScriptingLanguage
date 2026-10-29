@@ -68,6 +68,11 @@ published relative to pinned directory descriptors after the configured leaf
 directory is validated. This prevents a parent replacement after pinning from
 redirecting those operations. Checkpoint state also has no-follow/regular-file
 checks, private permissions, checksummed state and an exclusive writer lock.
+Before resuming, Execute validates the existing checkpoint root itself: Unix
+roots must be owned by the current user and have no group/other permission
+bits (Linux ACLs are refused); Windows roots must have an explicit, protected
+private DACL for the current user, SYSTEM and Administrators. A rejected root
+is left untouched so its permissions or ACL can be reviewed and repaired.
 Replay parses the program bytes captured from the pinned record descriptor and
 uses the canonical source identity captured while opening that directory; it
 does not re-resolve a replaced record pathname or gain access to called files.

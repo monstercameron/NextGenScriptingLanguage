@@ -9,9 +9,9 @@
 use crate::contracts::Sensitivity;
 use crate::manifest::Registry;
 use crate::manifest::{AppletBackend, Manifest};
-use anyhow::{anyhow, Result};
 #[cfg(windows)]
-use anyhow::{bail, Context};
+use anyhow::Context;
+use anyhow::{anyhow, bail, Result};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -1611,6 +1611,71 @@ pub(crate) fn verify_trusted_fd(
     Ok(())
 }
 
+/// Check that an existing checkpoint root is private before its entries are
+/// trusted. Checkpoints contain resumable execution state, so unlike ordinary
+/// trusted inputs they must not be readable by other local principals either.
+/// The caller supplies the already-opened directory descriptor on Unix so the
+/// ownership, mode, and Linux ACL checks apply to the inode pinned for resume.
+/// Windows validates the opened directory handle's protected DACL; failures to
+/// read its owner or ACL fail closed.
+pub(crate) fn verify_private_checkpoint_directory(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    #[cfg(unix)] file: &File,
+) -> Result<()> {
+    if metadata.file_type().is_symlink() {
+        bail!("checkpoint directory {} is a symbolic link", path.display());
+    }
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(metadata) {
+        bail!("checkpoint directory {} is a reparse point", path.display());
+    }
+    if !metadata.is_dir() {
+        bail!("checkpoint root {} is not a directory", path.display());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != crate::platform::unix_ffi::effective_uid()
+            || metadata.mode() & 0o077 != 0
+        {
+            bail!(
+                "checkpoint root {} must be owned by the current user and private; set its Unix mode to 0700 before resuming",
+                path.display()
+            );
+        }
+        // Linux ACL grants can exceed mode bits, so reject an ACL on the pinned
+        // descriptor just as private sensitive-file validation does.
+        if has_posix_extended_acl_fd(file) {
+            bail!(
+                "checkpoint root {} has an extended ACL; remove the ACL before resuming",
+                path.display()
+            );
+        }
+    }
+    #[cfg(windows)]
+    {
+        validate_private_windows_acl_for_directory(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_private_windows_acl_for_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+        .with_context(|| format!("reading checkpoint root Windows ACL {}", path.display()))?;
+    validate_private_windows_acl(&handle, path)
+}
+
 /// Check every ancestor directory of the canonical form of `path` for the
 /// same ownership and writability gate as the leaf: a writable ancestor lets
 /// an attacker rename or replace the verified leaf or helper binary. The leaf
@@ -2507,11 +2572,14 @@ mod tests {
                 GetSecurityDescriptorDacl, DACL_SECURITY_INFORMATION,
                 PROTECTED_DACL_SECURITY_INFORMATION,
             },
-            Storage::FileSystem::{FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC},
+            Storage::FileSystem::{
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
+            },
         };
 
         let file = std::fs::OpenOptions::new()
             .access_mode(WRITE_DAC | READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)
             .unwrap();
         let wide = std::ffi::OsStr::new(sddl)
@@ -2619,6 +2687,38 @@ mod tests {
             open_private_file(&administrators).is_ok(),
             "Administrators and SYSTEM ACEs are trusted exceptions"
         );
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn checkpoint_root_rejects_an_explicit_outsider_acl() {
+        let directory = tempfile::tempdir().unwrap();
+        let user_sid = current_user_sid_string();
+        replace_test_dacl(
+            directory.path(),
+            &format!("D:P(A;;FA;;;WD)(A;;FA;;;{user_sid})"),
+        );
+        let metadata = std::fs::symlink_metadata(directory.path()).unwrap();
+        let error = verify_private_checkpoint_directory(directory.path(), &metadata)
+            .expect_err("checkpoint roots must reject an outsider write ACE");
+        assert!(
+            format!("{error:#}").contains("another Windows principal"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn checkpoint_root_accepts_a_private_user_system_administrators_dacl() {
+        let directory = tempfile::tempdir().unwrap();
+        let user_sid = current_user_sid_string();
+        replace_test_dacl(
+            directory.path(),
+            &format!("D:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;{user_sid})"),
+        );
+        let metadata = std::fs::symlink_metadata(directory.path()).unwrap();
+        verify_private_checkpoint_directory(directory.path(), &metadata)
+            .expect("the owner and trusted platform principals may access the checkpoint");
     }
 
     #[test]

@@ -34,7 +34,7 @@ ratatui = { version = "0.30", optional = true }
 crossterm = { version = "0.29", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
+ureq = { version = "=3.5.0", default-features = false, features = ["rustls"], optional = true }
 mio = { version = "1.2.4", features = ["net", "os-poll"], optional = true }
 
 [target.'cfg(windows)'.dependencies]

@@ -529,7 +529,10 @@ pub fn register_sensitive_inputs(
     declarations: &[crate::ast::InputDeclaration],
     inputs: &BTreeMap<String, crate::ast::Value>,
 ) -> Result<()> {
-    let resolved = crate::inputs::resolve(declarations, inputs, false)?;
+    // Static graph commands may have only a subset of required inputs. The
+    // caller supplies resolved environment values for `run`; known_values
+    // adds defaults without making inspection require every input.
+    let resolved = crate::inputs::known_values(declarations, inputs)?;
     for declaration in declarations
         .iter()
         .filter(|input| crate::ast::is_sensitive(input))

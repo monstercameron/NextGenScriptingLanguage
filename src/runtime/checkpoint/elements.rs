@@ -175,6 +175,7 @@ mod lane_v3_tests {
                 cwd_before: &cwd,
                 retry_safe: true,
                 step_id: None,
+                element_kind: None,
             })
             .unwrap();
         open_elements(&mut journal);
@@ -437,6 +438,26 @@ impl GroupSink for GroupJournal<'_> {
         if !self.uncertain {
             return Ok(());
         }
+        // A resumed run refuses an unresolved uncertain element before it
+        // starts, naming it (#536). Committed elements were already skipped
+        // through the replay, so reaching begin means retry or refusal.
+        if self.journal.is_resuming() {
+            let step_id = self
+                .journal
+                .data
+                .in_flight
+                .as_ref()
+                .and_then(|node| node.step_id.clone());
+            let resolutions = super::resolutions::read_resolutions(
+                &self.journal.directory,
+                self.journal.max_output_bytes,
+            )?;
+            if !element_may_start(self.journal, &resolutions, step_id.as_deref(), index) {
+                bail!(
+                    "for each element {index} may contain an interrupted side effect; pass --retry-uncertain to retry"
+                );
+            }
+        }
         let fingerprint = element_fingerprint(&self.node_fingerprint, index, &self.items[index])?;
         self.journal.append_element(&ElementLine::Begin {
             index,
@@ -448,6 +469,18 @@ impl GroupSink for GroupJournal<'_> {
     fn commit(&mut self, index: usize, outcome: &ElementOutcome) -> Result<()> {
         let fingerprint = element_fingerprint(&self.node_fingerprint, index, &self.items[index])?;
         self.journal.commit_outcome(index, fingerprint, outcome)
+    }
+
+    fn mark_uncertain(&mut self, index: usize) -> Result<()> {
+        // Durable before the refusal propagates: a crash after this line still
+        // resumes behind `--retry-uncertain`. Re-recording the begin replaces
+        // any entry already recorded for this element with an uncertain one.
+        let fingerprint = element_fingerprint(&self.node_fingerprint, index, &self.items[index])?;
+        self.journal.append_element(&ElementLine::Begin {
+            index,
+            fingerprint,
+            uncertain: true,
+        })
     }
 }
 
@@ -549,10 +582,34 @@ fn verify_commits(
 }
 
 /// An element that may have started without committing blocks resume unless the
-/// operator explicitly allowed retrying uncertain work.
+/// operator explicitly allowed retrying uncertain work, either in bulk with
+/// `--retry-uncertain` or per element with a `checkpoint resolve` record (#536).
+/// A node-level record never covers an element node: each uncertain element
+/// needs its own record. A torn or duplicate resolutions log is reported as
+/// corrupt, never as a missing override.
 fn check_pending(journal: &Journal, pending: &[PendingElement]) -> Result<()> {
-    if let Some(element) = pending.iter().find(|element| element.uncertain) {
-        if !journal.retry_uncertain_allowed() {
+    if journal.retry_uncertain {
+        return Ok(());
+    }
+    let step_id = journal
+        .data
+        .in_flight
+        .as_ref()
+        .and_then(|node| node.step_id.clone());
+    let resolutions = match &step_id {
+        Some(_) => {
+            super::resolutions::read_resolutions(&journal.directory, journal.max_output_bytes)?
+        }
+        None => Vec::new(),
+    };
+    for element in pending.iter().filter(|element| element.uncertain) {
+        let allowed = match &step_id {
+            Some(id) => {
+                super::resolutions::element_resolution(&resolutions, id, element.index).is_some()
+            }
+            None => false,
+        };
+        if !allowed {
             bail!(
                 "for each element {} may contain an interrupted side effect; pass --retry-uncertain to retry",
                 element.index
@@ -560,6 +617,24 @@ fn check_pending(journal: &Journal, pending: &[PendingElement]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether one uncertain element may start during a resumed run: bulk retry or
+/// its own per-element record (#536). A node-level record never covers an
+/// element node. Fresh runs never need the flag.
+fn element_may_start(
+    journal: &Journal,
+    resolutions: &[super::resolutions::ResolutionRecord],
+    step_id: Option<&str>,
+    index: usize,
+) -> bool {
+    if journal.retry_uncertain {
+        return true;
+    }
+    let Some(id) = step_id else {
+        return false;
+    };
+    super::resolutions::element_resolution(resolutions, id, index).is_some()
 }
 
 /// Sequential `for each`: when the in-flight loop has committed elements, the
@@ -589,17 +664,102 @@ pub(in crate::runtime) fn for_each_resume(
     let items = list_items(values, &start.bindings)?;
     let node_fingerprint = journal.element_node_fingerprint()?;
     if replay.commits.is_empty() && replay.pending.is_empty() {
+        // A committed resolution for a future element is refused at resolve
+        // time (it carries no fingerprint to verify the list entry), so an
+        // empty log means there is nothing to skip.
         return Ok(None);
     }
     verify_commits(&node_fingerprint, &replay.commits, &items, true)?;
-    check_pending(journal, &replay.pending)?;
+    let step_id = journal
+        .data
+        .in_flight
+        .as_ref()
+        .and_then(|node| node.step_id.clone());
+    let resolutions = match &step_id {
+        Some(_) => {
+            super::resolutions::read_resolutions(&journal.directory, journal.max_output_bytes)?
+        }
+        None => Vec::new(),
+    };
+    // Pending elements marked `committed` become synthetic commits in log
+    // order. Only the next element can be skipped this way; a gap means the
+    // operator resolved an element the loop cannot reach yet.
+    let mut commits = replay.commits;
+    let mut pending = replay.pending;
+    let mut next = commits.len();
+    if let Some(id) = step_id.as_deref() {
+        while let Some(position) = pending.iter().position(|element| element.index == next) {
+            let element = pending.remove(position);
+            let Some(record) = super::resolutions::element_resolution(&resolutions, id, next)
+            else {
+                pending.insert(position, element);
+                break;
+            };
+            if record.decision != super::resolutions::ResolutionDecision::Committed {
+                pending.insert(position, element);
+                break;
+            }
+            let expected = element_fingerprint(
+                &node_fingerprint,
+                next,
+                items
+                    .get(next)
+                    .context("checkpoint resolution names a missing for each element")?,
+            )?;
+            if record.fingerprint.as_deref() != Some(expected.as_str()) {
+                bail!("for each list changed at element {next}; use a fresh checkpoint");
+            }
+            let output = record.output_bytes(journal.max_output_bytes)?;
+            let bindings = record.bindings_map(journal.max_output_bytes)?;
+            let cwd = commits
+                .last()
+                .and_then(|commit| commit.state.as_ref())
+                .map(|state| state.cwd.clone())
+                .unwrap_or_else(|| start.cwd.clone());
+            // Materialize the operator's decision as this element's commit, so
+            // later resumes replay it as ordinary progress instead of
+            // re-deriving (and possibly re-running) the loop. The
+            // resolutions log keeps who decided what, when and why.
+            journal.commit_state(next, expected.clone(), &cwd, &output, &bindings)?;
+            commits.push(ElementCommit {
+                index: next,
+                fingerprint: expected,
+                state: Some(ExecutionState {
+                    cwd,
+                    output,
+                    bindings,
+                }),
+                outcome: None,
+                state_ref: None,
+            });
+            next += 1;
+        }
+    }
+    // A `committed` record past the skipped prefix can never be honored: the
+    // begin path below only authorizes elements, it never synthesizes their
+    // committed output. Refuse loudly instead of re-running an effect the
+    // operator said already happened. Resolve the next element first, or retry
+    // the gapped one; `--retry-uncertain` remains the bulk escape.
+    if let Some(id) = step_id.as_deref() {
+        if let Some(gap) = pending.iter().find(|element| {
+            super::resolutions::element_resolution(&resolutions, id, element.index).is_some_and(
+                |record| record.decision == super::resolutions::ResolutionDecision::Committed,
+            )
+        }) {
+            bail!(
+                "checkpoint has a committed resolution for for each element {} before element {next} is resolved; resolve element {next} as committed first or retry element {}",
+                gap.index,
+                gap.index
+            );
+        }
+    }
+    check_pending(journal, &pending)?;
     let _ = registry;
-    let consumed = replay.commits.len();
+    let consumed = commits.len();
     if consumed == 0 {
         return Ok(None);
     }
-    let state = replay
-        .commits
+    let state = commits
         .last()
         .and_then(|commit| commit.state.clone())
         .context("checkpoint element log has no state for its last element")?;
@@ -634,6 +794,22 @@ pub(in crate::runtime) fn for_each_element_begin(
     if !uncertain {
         return Ok(());
     }
+    // A resumed run refuses an unresolved uncertain element before it starts,
+    // naming it, so the operator can resolve it per element (#536).
+    if journal.is_resuming() {
+        let step_id = journal
+            .data
+            .in_flight
+            .as_ref()
+            .and_then(|node| node.step_id.clone());
+        let resolutions =
+            super::resolutions::read_resolutions(&journal.directory, journal.max_output_bytes)?;
+        if !element_may_start(journal, &resolutions, step_id.as_deref(), element) {
+            bail!(
+                "for each element {element} may contain an interrupted side effect; pass --retry-uncertain to retry"
+            );
+        }
+    }
     let fingerprint = element_fingerprint(&journal.element_node_fingerprint()?, element, item)?;
     journal.append_element(&ElementLine::Begin {
         index: element,
@@ -650,6 +826,26 @@ pub(in crate::runtime) fn for_each_element_due(
     header: usize,
 ) -> bool {
     tracks_in_flight(journal, program, header)
+}
+
+/// Record that the element ending at the loop end for `header` already ran
+/// before a post-effect checkpoint refusal, so resume requires
+/// `--retry-uncertain`. Re-recording the begin replaces any entry already
+/// recorded for this element with an uncertain one.
+pub(in crate::runtime) fn for_each_element_mark_uncertain(
+    journal: &mut Journal,
+    loops: &LoopStack,
+    header: usize,
+) -> Result<()> {
+    let Some((element, item)) = loops.current_element(header) else {
+        return Ok(());
+    };
+    let fingerprint = element_fingerprint(&journal.element_node_fingerprint()?, element, item)?;
+    journal.append_element(&ElementLine::Begin {
+        index: element,
+        fingerprint,
+        uncertain: true,
+    })
 }
 
 /// Commit the element that just ended at the loop end for `header`.
@@ -685,11 +881,36 @@ pub(in crate::runtime) fn group_journal<'a>(
     if !tracks_in_flight(journal, program, index) {
         return Ok(None);
     }
-    // The floor is fixed for the run, so refusing here is the same refusal the first
-    // element commit would get, and it happens before any element writes a line.
-    crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
+    // Fail before any element runs when the static floor already denies
+    // persistence: launching workers first would execute external side effects
+    // solely to reproduce a knowable refusal. Runtime-revealed secrets (a
+    // literal or transformed echo recognizable only after the element ran) are
+    // still refused per-element in `run_each` with an uncertain marker
+    // (`--retry-uncertain`); the journal stays clean either way because both
+    // paths refuse before any line is written.
+    //
+    // The template's reference to its loop binding contributes Unknown to the
+    // floor even for Public literal lists, so an Unknown-only floor here is a
+    // possible false positive. When declared manifest secrets exist, defer it
+    // to the per-element gates, which compare actual bytes/inputs against the
+    // pre-registered secrets (fail-closed, uncertain marker, no line written).
+    // Secret floors still fail here before any worker launches.
+    if !crate::runtime::defer_unknown_checkpoint_denial(registry, sensitivities, true) {
+        crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
+    }
     let items = list_items(&each.values, bindings)?;
     let node_fingerprint = journal.element_node_fingerprint()?;
+    let step_id = journal
+        .data
+        .in_flight
+        .as_ref()
+        .and_then(|node| node.step_id.clone());
+    let resolutions = match &step_id {
+        Some(_) => {
+            super::resolutions::read_resolutions(&journal.directory, journal.max_output_bytes)?
+        }
+        None => Vec::new(),
+    };
     let mut skip = BTreeMap::new();
     if let Some(replay) = journal.take_element_replay() {
         verify_commits(&node_fingerprint, &replay.commits, &items, false)?;
@@ -699,6 +920,26 @@ pub(in crate::runtime) fn group_journal<'a>(
                 .outcome
                 .context("checkpoint element log has no result for a parallel element")?;
             skip.insert(commit.index, outcome);
+        }
+        // A `committed` record for a parallel element is refused, never
+        // synthesized. A parallel result carries a value, stderr and outcome
+        // the resolution cannot faithfully reproduce (the old code invented a
+        // certain success with empty stderr and no value and dropped bindings
+        // after only a size check), so honoring it would silently change what
+        // later nodes read. Resolve parallel elements as `retry`.
+        if let Some(id) = step_id.as_deref() {
+            for pending in &replay.pending {
+                if let Some(record) =
+                    super::resolutions::element_resolution(&resolutions, id, pending.index)
+                {
+                    if record.decision == super::resolutions::ResolutionDecision::Committed {
+                        bail!(
+                            "parallel for each element {} has a committed resolution; parallel elements resolve as retry",
+                            pending.index
+                        );
+                    }
+                }
+            }
         }
     }
     let uncertain = element_uncertain(program, index, index + 1, registry)?;
@@ -751,10 +992,6 @@ impl Journal {
         self.data.identity.mode == "finite"
     }
 
-    fn in_flight_start(&self) -> Option<usize> {
-        self.data.in_flight.as_ref().map(|node| node.start)
-    }
-
     fn element_node_fingerprint(&self) -> Result<String> {
         self.data
             .in_flight
@@ -765,10 +1002,6 @@ impl Journal {
                     .unwrap_or_else(|| node.fingerprint.clone())
             })
             .context("no checkpoint node is in flight")
-    }
-
-    fn retry_uncertain_allowed(&self) -> bool {
-        self.retry_uncertain
     }
 
     /// Start an empty element log for a new node. A missing log stays missing.
@@ -1276,6 +1509,7 @@ pub(crate) fn fuzz_replay_element_log(scratch: &Path, bytes: &[u8]) -> Result<()
         cwd_before: &cwd,
         retry_safe: true,
         step_id: None,
+        element_kind: None,
     })?;
     fs::write(options.directory.join(ELEMENT_LOG), bytes)?;
     journal.load_elements()

@@ -2,6 +2,8 @@
 //! [`LiveHook`] before each top-level statement; the hook blocks while the run is
 //! paused and returns once a `continue` or `step` control releases it.
 
+#[cfg(test)]
+use super::state::FloodBudget;
 use super::state::{plain, withhold_secret_bindings, Shared};
 use crate::ast::Value;
 use crate::runtime::statement_hook::StatementHook;
@@ -214,6 +216,8 @@ mod tests {
             initial_input: Data::default(),
             headless: true,
             run_mode: false,
+            flood: Mutex::new(FloodBudget::new()),
+            agent_policy_path: None,
         });
         let (sender, receiver) = mpsc::channel();
         let release = Arc::clone(&shared);

@@ -10,14 +10,21 @@ use std::os::windows::{
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicI32, Ordering},
     Arc, Mutex, OnceLock, Weak,
 };
 use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
-    System::{Diagnostics::ToolHelp::*, JobObjects::*, Pipes::*, Threading::*, IO::*},
+    System::{
+        Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT},
+        Diagnostics::ToolHelp::*,
+        JobObjects::*,
+        Pipes::*,
+        Threading::*,
+        IO::*,
+    },
 };
 
 /// Add arguments with a command-line representation accepted by both the MSVC
@@ -66,38 +73,85 @@ where
 pub(crate) fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
-type Registration = (Weak<AtomicBool>, Option<Weak<std::sync::atomic::AtomicU8>>);
+type Registration = (
+    Weak<AtomicBool>,
+    Option<Weak<std::sync::atomic::AtomicU8>>,
+    Weak<AtomicBool>,
+    Weak<AtomicI32>,
+);
+
+/// Ensure the process-wide console handler is installed, retrying after a
+/// failure (B3). A cached failure would brick every later run in this process;
+/// only a successful install is cached, so a transient `SetConsoleCtrlHandler`
+/// failure stays retryable while concurrent installers still install once.
+fn ensure_console_handler_installed(
+    installed: &OnceLock<()>,
+    lock: &Mutex<()>,
+    install: impl FnOnce() -> std::result::Result<(), String>,
+) -> std::result::Result<bool, String> {
+    if installed.get().is_some() {
+        return Ok(false);
+    }
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if installed.get().is_some() {
+        return Ok(false);
+    }
+    install()?;
+    let _ = installed.set(());
+    Ok(true)
+}
 
 pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
+    cleanup: Arc<AtomicBool>,
+    signal_code: Arc<AtomicI32>,
 ) -> Result<()> {
     static FLAGS: OnceLock<Mutex<Vec<Registration>>> = OnceLock::new();
-    static INSTALLED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    static INSTALL_LOCK: Mutex<()> = Mutex::new(());
     FLAGS.get_or_init(|| Mutex::new(Vec::new()));
-    let installed = INSTALLED.get_or_init(|| {
+    if let Err(message) = ensure_console_handler_installed(&INSTALLED, &INSTALL_LOCK, || {
         ctrlc::set_handler(|| {
             super::record_cancel_signal(2);
             if let Some(flags) = FLAGS.get() {
                 let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
-                flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-                for (cancel, drain) in flags.iter() {
+                flags.retain(|(cancel, _, _, _)| cancel.strong_count() != 0);
+                for (cancel, drain, cleanup, signal_code) in flags.iter() {
+                    // The run's own slot is per-run truth; the process-wide
+                    // fallback keeps the CLI entry point reporting after the
+                    // run (and its slot) is gone.
+                    if let Some(code) = signal_code.upgrade() {
+                        code.store(2, Ordering::SeqCst);
+                    }
                     // A run with an `on interrupt` body drains on its first interrupt.
+                    // A repeat interrupt also marks the shared cleanup flag so a
+                    // `finally`, `on exit` or `on interrupt` body aborts at once.
                     if let Some(drain) = drain.as_ref().and_then(|weak| weak.upgrade()) {
                         if super::request_drain(&drain) {
                             continue;
                         }
                         drain.store(super::DRAIN_CANCELLED, Ordering::SeqCst);
+                        if let Some(flag) = cancel.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        if let Some(flag) = cleanup.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        continue;
                     }
                     if let Some(flag) = cancel.upgrade() {
-                        flag.store(true, Ordering::Relaxed);
+                        if flag.swap(true, Ordering::Relaxed) {
+                            if let Some(flag) = cleanup.upgrade() {
+                                flag.store(true, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
             }
         })
         .map_err(|e| e.to_string())
-    });
-    if let Err(message) = installed {
+    }) {
         bail!("registering Windows console cancellation: {message}");
     }
     let mut flags = FLAGS
@@ -105,8 +159,13 @@ pub(crate) fn signals(
         .unwrap()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-    flags.push((Arc::downgrade(&cancel), drain.as_ref().map(Arc::downgrade)));
+    flags.retain(|(cancel, _, _, _)| cancel.strong_count() != 0);
+    flags.push((
+        Arc::downgrade(&cancel),
+        drain.as_ref().map(Arc::downgrade),
+        Arc::downgrade(&cleanup),
+        Arc::downgrade(&signal_code),
+    ));
     Ok(())
 }
 
@@ -270,12 +329,31 @@ impl Job {
             TerminateJobObject(self.0.as_raw_handle(), 1);
         }
     }
+    /// Polite stop for one process group before `terminate`. Best-effort
+    /// `CTRL_BREAK_EVENT` gives console children a chance to flush output,
+    /// remove locks and restore state (issue #525); the job object still
+    /// ends stragglers. Failures are ignored: not every child has a console.
+    pub(crate) fn send_ctrl_break(process_group_id: u32) {
+        // SAFETY: GenerateConsoleCtrlEvent takes a control-event constant and
+        // a group id, reads no memory, and only signals console processes.
+        // A zero return (no console, no such group) is ignored on purpose.
+        unsafe {
+            GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process_group_id);
+        }
+    }
     pub(crate) fn spawn(command: &mut Command) -> Result<(Child, Self)> {
         use std::os::windows::process::CommandExt;
+        // CREATE_NEW_PROCESS_GROUP isolates Ctrl-C handling so the parent's
+        // console Ctrl-C does not kill children directly; the parent forwards
+        // a polite CTRL_BREAK (see `send_ctrl_break`) before the job ends
+        // them. Combined with CREATE_SUSPENDED so no code runs before the job
+        // assignment below.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
         let job = Self::new()?;
         // No untrusted child instruction runs until it belongs to our job.
         let mut child = command
-            .creation_flags(CREATE_SUSPENDED)
+            .creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP)
             .spawn()
             .context("spawning native Windows child")?;
         let setup = (|| -> Result<()> {
@@ -756,6 +834,39 @@ pub(crate) fn lock(file: &File) -> Result<()> {
     Ok(())
 }
 
+/// Current process user as an `S-...` SID string. The SID comes from the
+/// process token, which the process cannot spoof, so it is authoritative in
+/// the same way the effective uid is on Unix. Callers keep any `USER` name as
+/// display-only text.
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+pub(crate) fn current_user_sid_text() -> Result<String> {
+    // SAFETY: GetCurrentProcess returns the current-process pseudo-handle, which is always
+    // valid and needs no closing. user_sid only queries that process's token.
+    let sid = user_sid(unsafe { GetCurrentProcess() })?;
+    let mut text = std::ptr::null_mut();
+    // SAFETY: `sid` is the valid SID copied by user_sid and is still alive during the call.
+    // On success `text` is a LocalAlloc'd, NUL-terminated string that is freed below; the
+    // failure case is the `== 0` branch.
+    if unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast(), &mut text) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("encoding user SID");
+    }
+    let mut length = 0;
+    // SAFETY: `text` is the non-null NUL-terminated string from ConvertSidToStringSidW, so
+    // every index before the terminator is inside its allocation.
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    // SAFETY: the `length` units before the terminator lie inside the string allocation, and
+    // the slice is copied into an owned String before LocalFree runs below.
+    let sid_text = String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) })?;
+    // SAFETY: `text` came from ConvertSidToStringSidW, which allocates it with LocalAlloc, so
+    // LocalFree is its matching release. It is freed once and not read afterwards.
+    unsafe {
+        LocalFree(text.cast());
+    }
+    Ok(sid_text)
+}
+
 /// One bounded reader for an inherited console, file or pipe. Shutdown cancels
 /// this exact worker; no thread is detached or allowed to fill a queue.
 pub(crate) struct Pump {
@@ -933,6 +1044,31 @@ mod tests {
             more = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
         }
         ids
+    }
+
+    #[test]
+    fn failed_console_install_stays_retryable_and_caches_only_success() {
+        // B3: a cached `set_handler` failure must not brick later runs. Only a
+        // successful install is cached, so a transient failure stays retryable
+        // while a second installer after success is a no-op. Deterministic:
+        // fake installs, no console touched.
+        let installed = OnceLock::new();
+        let lock = Mutex::new(());
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let failed = ensure_console_handler_installed(&installed, &lock, || {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("transient".to_string())
+        });
+        assert!(failed.is_err());
+        assert!(installed.get().is_none());
+        let retried = ensure_console_handler_installed(&installed, &lock, || Ok(()));
+        assert_eq!(retried, Ok(true));
+        assert!(installed.get().is_some());
+        let cached = ensure_console_handler_installed(&installed, &lock, || {
+            panic!("cached success must not reinstall");
+        });
+        assert_eq!(cached, Ok(false));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

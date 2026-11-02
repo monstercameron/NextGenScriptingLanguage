@@ -1,6 +1,6 @@
 {
   "name": "git.commit",
-  "description": "Creates a Git commit with the supplied message, optionally limiting the commit to the listed paths.",
+  "description": "Creates a Git commit with the supplied message, optionally limiting the commit to the listed paths. Repository hooks, GPG signing, and the configured editor run as part of the commit and can execute commands. The contract declares that command execution as a process effect, so untrusted use needs explicit `undeclared` gate approval plus a grant carrying `process.exec`; file grants alone are refused. The gate verdict is advisory and the sandbox narrows the surrounding file and network grants, but neither separately confines the child command.",
   "phrases": [
     "commit changes"
   ],
@@ -40,5 +40,26 @@
         }
       ]
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.read",
+      "filesystem.write",
+      "process.exec"
+    ]
+  }
 }

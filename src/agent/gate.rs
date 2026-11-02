@@ -8,7 +8,7 @@
 //! network or writes step also needs `--allow undeclared`.
 //!
 //! Effect mapping. Each declared effect string maps to one category:
-//! `fs.read*` to `reads`; `fs.write*`, `file.write*`, or any name containing
+//! `fs.read*` and `filesystem.read*` to `reads`; `fs.write*`, `file.write*`, or any name containing
 //! `.write` to `writes`; `network.*` to `network`; `process.spawn` to `process`; package installs and
 //! service control to `system`.
 //! Any other effect is `undeclared`, so an unknown effect needs explicit approval.
@@ -66,10 +66,24 @@ pub fn parse_category(name: &str) -> Result<&'static str> {
     }
 }
 
-/// Shipped effects that stay `undeclared` on purpose. They change the desktop, and no
-/// category describes them better, so using one needs an explicit approval of
-/// `undeclared`. Test `shipped_manifest_effects_are_all_placed` keeps this list exact.
-pub const DELIBERATELY_UNDECLARED: &[&str] = &["desktop.notify", "desktop.osd", "desktop.render"];
+/// Shipped effects that stay `undeclared` on purpose, so using one needs an
+/// explicit approval of `undeclared` at the advisory gate. The `desktop.*`
+/// effects change the desktop and no category describes them better.
+/// `process.exec` (child command execution beyond the spawn itself, such as
+/// `awk` `system()`, GNU `sed` `e`, or `git.commit` hooks/GPG/editors) stays
+/// `undeclared` so the gate never passes it on a `process` approval alone;
+/// actual enforcement is the capability policy, which refuses grants that
+/// withhold `process.exec`, plus the OS sandbox narrowing the surrounding
+/// file/network grants (it does not individually confine the child command).
+/// The marking is conservative: platforms lacking a vector (e.g. BSD `sed`
+/// has no `e` command) still declare it and still require the same approval.
+/// Test `shipped_manifest_effects_are_all_placed` keeps this list exact.
+pub const DELIBERATELY_UNDECLARED: &[&str] = &[
+    "desktop.notify",
+    "desktop.osd",
+    "desktop.render",
+    "process.exec",
+];
 
 /// The categories one plan row triggers.
 #[cfg(feature = "agent-advisory")]

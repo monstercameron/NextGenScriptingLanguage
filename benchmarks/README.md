@@ -30,9 +30,38 @@ tree. All 22 workloads have dash counterparts; the here-string case uses an expl
 pipeline equivalent for its dash arm. The tests/test_bash_compare.py contract test checks
 the inventory, grouping and shell oracles.
 
-The bash-compare.yml workflow runs the contract test and then compares all configured
-release/profile variants on ubuntu-24.04 and ubuntu-24.04-arm. The report includes
-scenario group, medians, peak RSS when GNU time is available, and binary sizes. Defaults
+The bash-compare.yml workflow runs the contract tests (workloads, the synthetic
+instruction-gate cases, the gate revision policy) and then compares all configured
+release/profile variants on ubuntu-24.04 and ubuntu-24.04-arm. The wall-time
+comparison runs counter-free (`--instructions-backend none`) so counting never
+perturbs its medians or spends its budget; the report includes scenario group,
+medians with bootstrap 95% confidence intervals, peak RSS when GNU time is
+available, and binary sizes. A separate gate pair then builds two distinct
+binaries on the same runner -- the baseline at the base revision and the
+candidate at the head revision -- and measures the eight gated CPU-bound
+scenarios once per build, back-to-back, pinned to cachegrind
+(`I refs` via valgrind, which needs no PMU), both with the head-revision
+tool so a base predating newer flags still gates and both reports share one
+tool hash (`--source-revision` stamps each report with its built revision);
+each focused report prints its
+own table with real per-scenario instruction counts, the producing backend,
+counter diagnostics, and coverage. `tools/check_instruction_regression.py`
+defines the +2% gate for the CPU-bound rows: CI runs it fail-closed with
+`--fail-closed --require-provenance` on the baseline-versus-candidate reports,
+then runs a canary requiring the wired gate to fail a
+synthetic +3% regression on the measured candidate. The canary proves the wiring
+is live but is not itself a regression gate. An inconclusive canary or an
+incomplete pair fails the job; there is no incomplete-green. Baselines are
+backend-specific (perf and cachegrind counts are different units; the gate
+rejects any backend mismatch, including a missing backend against a recorded
+one; a tool-hash or valgrind-version mismatch is likewise incomparable,
+never green). Revisions come from `tools/resolve_gate_revisions.py` (pull-request
+base/head SHAs; push before/sha with a HEAD~1 fallback for a zero before;
+dispatch inputs or HEAD~1 versus HEAD). Measurement budgets are unchanged from
+the former same-binary pair (3 runs, no warmup, 2 instruction samples per arm,
+285-second cap, shared 10-minute step timeout); cachegrind overhead against that
+timeout, static musl behavior, and the doubled per-variant build cost are still
+unverified on Linux CI. Defaults
 are two warmups and twenty samples, with fewer samples for the larger workloads. A
 285-second end-to-end budget (300-second maximum) bounds each run. Scenarios that write
 files or checkpoint state reset their temporary outputs between invocations. Each report

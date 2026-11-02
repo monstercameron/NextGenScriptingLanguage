@@ -25,6 +25,7 @@ fn grant(capabilities: &[&str], write_roots: Vec<PathBuf>) -> AppletGrant {
         network: false,
         network_origins: BTreeSet::new(),
         sandbox_required: false,
+        resource_limits: None,
     }
 }
 

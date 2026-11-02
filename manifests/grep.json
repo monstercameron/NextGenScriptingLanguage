@@ -1,6 +1,6 @@
 {
   "name": "grep",
-  "description": "Prints input lines that match the supplied pattern, with optional grep flags.",
+  "description": "Prints input lines that match the supplied pattern, with optional grep flags. The -f flag reads patterns from a file, and -r and file operands read files.",
   "binary": "grep",
   "accepts_stdin": true,
   "parameters": {
@@ -28,5 +28,23 @@
     {
       "parameter": "pattern"
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ]
+  }
 }

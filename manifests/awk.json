@@ -1,6 +1,6 @@
 {
   "name": "awk",
-  "description": "Filters standard input with an AWK program, optionally splitting fields on the supplied delimiter.",
+  "description": "Filters standard input with an AWK program, optionally splitting fields on the supplied delimiter. The program runs with file and command access: getline reads files, print/printf redirections write files, and system() executes commands. The contract declares that command execution as a process effect, so untrusted programs need explicit `undeclared` gate approval plus a grant carrying `process.exec`; file grants alone are refused. The gate verdict is advisory and the sandbox narrows the surrounding file and network grants, but neither separately confines the child command.",
   "binary": "awk",
   "accepts_stdin": true,
   "parameters": {
@@ -30,5 +30,26 @@
     {
       "parameter": "program"
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.read",
+      "filesystem.write",
+      "process.exec"
+    ]
+  }
 }

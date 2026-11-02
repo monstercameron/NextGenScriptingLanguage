@@ -23,5 +23,34 @@ class BenchBudgetCommandTests(unittest.TestCase):
         )
 
 
+class BenchWorkflowTests(unittest.TestCase):
+    def test_bench_baseline_is_pinned_validated_and_cleaned_up(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        bench = workflow.split("Measure hot-path benchmarks", 1)[1].split(
+            "Check Linux minimal build size", 1
+        )[0]
+        self.assertIn(
+            "BENCH_BASELINE_SHA: 35483ce354f9481cbe2c6878d48e9f48b37d5a5c",
+            bench,
+        )
+        self.assertNotIn("origin 35483ce\n", bench)
+        self.assertIn('=~ ^[0-9a-f]{40}$', bench)
+        self.assertIn("invalid bench baseline revision", bench)
+        self.assertIn("trap cleanup EXIT", bench)
+        self.assertIn('git worktree remove --force "$baseline_src"', bench)
+        self.assertIn("worktree_added=1", bench)
+
+    def test_bench_guards_missing_executable_without_weakening_gate(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        bench = workflow.split("Measure hot-path benchmarks", 1)[1].split(
+            "Check Linux minimal build size", 1
+        )[0]
+        self.assertIn("[[ ! -x target/release/execute ]]", bench)
+        self.assertIn("preserve the original failure", bench)
+        self.assertIn("tools/bench_budget.py", bench)
+        self.assertIn("tools/linux-bench-budget.json", bench)
+        self.assertNotIn("continue-on-error", bench)
+
+
 if __name__ == "__main__":
     unittest.main()

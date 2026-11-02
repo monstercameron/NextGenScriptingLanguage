@@ -386,7 +386,7 @@ one in full.
 - `run FILE --single-instance LOCK` refuses to start while another run holds LOCK.
 - `run FILE --control` hosts the run on a live control endpoint, and `attach` reads or
   controls that endpoint.
-- `run FILE --daemon` (or `EXECUTE_DAEMON=1`) runs locally with a notice unless `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` explicitly accepts the daemon context.
+- `run FILE --daemon` (or `EXECUTE_DAEMON=1`) runs locally with a notice unless `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` is set for both the client and the daemon, explicitly accepting the daemon context at both ends.
 - `run FILE --checkpoint DIR` and `resume FILE --checkpoint DIR` record and continue a
   run; `execute checkpoint status DIR` reports a checkpoint.
 

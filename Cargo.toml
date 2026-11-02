@@ -28,10 +28,10 @@ url = { version = "2.5.8", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.4"
 libc = "0.2"
-signal-hook = "0.3"
+signal-hook = "0.4"
 chrono = "0.4"
-ratatui = { version = "0.29", optional = true }
-crossterm = { version = "0.28", optional = true }
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
@@ -163,8 +163,20 @@ path = "tests/fixtures/native_fixture.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "kill_grace"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "checkpoint_resolve_elements"
+required-features = ["test-fixtures", "agent-advisory"]
+
+[[test]]
 name = "execution_results"
 required-features = ["test-fixtures", "remote"]
+
+[[test]]
+name = "manifest_json_reference_regressions"
+required-features = ["test-fixtures"]
 
 [[test]]
 name = "graph_program_services"
@@ -208,6 +220,10 @@ required-features = ["test-fixtures"]
 
 [[test]]
 name = "inherited_stdio_nonblocking"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "staged_helpers"
 required-features = ["test-fixtures"]
 
 [[test]]

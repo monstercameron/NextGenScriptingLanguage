@@ -6,7 +6,7 @@
 //! current contents still match one of the recorded states.
 
 use super::filesystem::{self, PathLock};
-use super::{failed, invalid, required_string, AppletError};
+use super::{checkpoint_work, failed, invalid, required_string, AppletError, ExecutionContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -189,27 +189,33 @@ enum CurrentState {
 /// Apply a bounded set of existing-file replacements and removals. A
 /// successful result means every requested state was observed and the journal
 /// says `committed`.
-pub(super) fn apply(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn apply(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
     #[cfg(test)]
     {
-        apply_with_fault(args, cwd, None, None)
+        apply_with_fault(args, cwd, context, None, None)
     }
     #[cfg(not(test))]
     {
-        apply_with_fault(args, cwd, None)
+        apply_with_fault(args, cwd, context, None)
     }
 }
 
 fn apply_with_fault(
     args: &Map<String, Value>,
     cwd: &Path,
+    context: &ExecutionContext<'_>,
     #[cfg(test)] crash_after_replace: Option<usize>,
     #[cfg(not(test))] _crash_after_replace: Option<usize>,
     #[cfg(test)] before_windows_target_preflight: Option<&dyn Fn(&Path)>,
 ) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let timeout = lock_timeout(args)?;
     let journal = journal_path(required_string(args, "journal")?, cwd)?;
-    let operations = parse_operations(args, cwd)?;
+    let operations = parse_operations(args, cwd, context)?;
     if operations.is_empty() || operations.len() > MAX_FILES {
         return Err(invalid(format!(
             "args.operations must contain 1 through {MAX_FILES} file changes"
@@ -221,13 +227,15 @@ fn apply_with_fault(
     let _target_locks = lock_targets(
         operations.iter().map(|operation| operation.path.as_path()),
         timeout,
+        context,
     )?;
 
     let mut loaded = Vec::with_capacity(operations.len());
     let mut total = 0usize;
     for operation in operations {
-        let (before, before_mode) = read_existing_regular_with_mode(&operation.path)?;
-        let before_hash = digest(&before);
+        context.checkpoint()?;
+        let (before, before_mode) = read_existing_regular_with_mode(&operation.path, context)?;
+        let before_hash = digest_with_context(&before, context)?;
         if before_hash != operation.expected_hash {
             return Err(failed(
                 "conflict",
@@ -257,14 +265,14 @@ fn apply_with_fault(
 
     let (stage, published) = create_journal_stage(&journal)?;
     let mut cleanup = DirectoryCleanup(Some(stage.clone()));
-    let entries = write_blobs_and_entries(&stage, &loaded)?;
+    let entries = write_blobs_and_entries(&stage, &loaded, context)?;
     let mut data = JournalData {
         version: VERSION,
         state: TransactionState::Prepared,
         entries,
         error: None,
     };
-    persist_journal(&stage, &data)?;
+    persist_journal(&stage, &data, context)?;
     sync_directory(&stage).map_err(|error| {
         super::io_error(
             error,
@@ -284,7 +292,7 @@ fn apply_with_fault(
             )
         })?;
         cleanup.0 = None;
-        let lock = lock_published_prepared_journal(&published, &data, timeout)?;
+        let lock = lock_published_prepared_journal(&published, &data, timeout, context)?;
         sync_directory(published.parent().unwrap_or_else(|| Path::new("."))).map_err(|error| {
             failed(
                 "uncertain_effect",
@@ -298,7 +306,8 @@ fn apply_with_fault(
     };
     #[cfg(not(windows))]
     let _journal_lock = {
-        let lock = filesystem::acquire_path_lock(&stage.join("transaction.lock"), timeout)?;
+        let lock =
+            filesystem::acquire_path_lock(&stage.join("transaction.lock"), timeout, context)?;
         fs::rename(&stage, &published).map_err(|error| {
             super::io_error(
                 error,
@@ -327,7 +336,11 @@ fn apply_with_fault(
 
     #[cfg(windows)]
     let _target_locks = {
-        let locks = lock_targets(loaded.iter().map(|entry| entry.path.as_path()), timeout)
+        let locks = lock_targets(
+            loaded.iter().map(|entry| entry.path.as_path()),
+            timeout,
+            context,
+        )
             .map_err(|error| AppletError {
                 code: error.code,
                 kind: error.kind,
@@ -337,19 +350,20 @@ fn apply_with_fault(
                     error.message
                 ),
             })?;
-        verify_loaded_targets_unchanged(&published, &loaded)?;
+        verify_loaded_targets_unchanged(&published, &loaded, context)?;
         locks
     };
 
     data.state = TransactionState::Applying;
-    persist_journal(&published, &data)?;
+    persist_journal(&published, &data, context)?;
     #[allow(unused_mut)]
     let mut replaced = 0usize;
     #[cfg(not(test))]
     let _ = replaced;
     for index in 0..data.entries.len() {
+        context.checkpoint()?;
         data.entries[index].state = EntryState::Applying;
-        persist_journal(&published, &data)?;
+        persist_journal(&published, &data, context)?;
         let path = data.entries[index].path.to_path()?;
         let after = &loaded[index].after;
         let before_hash = data.entries[index].before_hash.clone();
@@ -365,10 +379,11 @@ fn apply_with_fault(
                 "reject",
                 permission_policy,
                 mode,
+                context,
             )
             .map(|_| ())
         } else {
-            remove_locked(&path, &before_hash)
+            remove_locked(&path, &before_hash, context)
         };
         match outcome {
             Ok(_) => {
@@ -383,13 +398,14 @@ fn apply_with_fault(
                     }
                 }
                 data.entries[index].state = EntryState::Applied;
-                persist_journal(&published, &data)?;
+                persist_journal(&published, &data, context)?;
             }
             Err(error) => {
                 data.error = Some(error.to_string());
                 data.state = TransactionState::Partial;
-                persist_journal(&published, &data)?;
-                let rollback = drive_journal(&published, &mut data, &loaded, Decision::Rollback);
+                persist_journal(&published, &data, context)?;
+                let rollback =
+                    drive_journal(&published, &mut data, &loaded, Decision::Rollback, context);
                 return match rollback {
                     Ok(()) => Err(failed(
                         "transaction_rolled_back",
@@ -411,12 +427,17 @@ fn apply_with_fault(
     }
     data.state = TransactionState::Committed;
     data.error = None;
-    persist_journal(&published, &data)?;
+    persist_journal(&published, &data, context)?;
     Ok(receipt(&published, &data, "committed"))
 }
 
 /// Explicitly complete or compensate a previously published file journal.
-pub(super) fn recover(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn recover(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let timeout = lock_timeout(args)?;
     let journal = journal_path(required_string(args, "journal")?, cwd)?;
     let decision = match required_string(args, "decision")? {
@@ -446,7 +467,7 @@ pub(super) fn recover(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Ap
         }
     }
     // Validate the journal before creating a lock file in the supplied path.
-    let _ = read_journal(&journal)?;
+    let _ = read_journal(&journal, context)?;
     // Only a directory that holds a valid journal gets its Windows ACL made private
     // again (Unix checks owner and mode above), so recover never rewrites the ACL of
     // an arbitrary directory it was pointed at.
@@ -457,9 +478,10 @@ pub(super) fn recover(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Ap
             format!("protecting transaction journal directory: {error:#}"),
         )
     })?;
-    let _journal_lock = filesystem::acquire_path_lock(&journal.join("transaction.lock"), timeout)?;
-    let mut data = read_journal(&journal)?;
-    let loaded = load_entries(&journal, &data)?;
+    let _journal_lock =
+        filesystem::acquire_path_lock(&journal.join("transaction.lock"), timeout, context)?;
+    let mut data = read_journal(&journal, context)?;
+    let loaded = load_entries(&journal, &data, context)?;
     let operations: Vec<_> = data
         .entries
         .iter()
@@ -475,8 +497,9 @@ pub(super) fn recover(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Ap
     let _target_locks = lock_targets(
         operations.iter().map(|operation| operation.path.as_path()),
         timeout,
+        context,
     )?;
-    drive_journal(&journal, &mut data, &loaded, decision)?;
+    drive_journal(&journal, &mut data, &loaded, decision, context)?;
     let status = match data.state {
         TransactionState::Committed => "committed",
         TransactionState::RolledBack => "rolled_back",
@@ -504,7 +527,9 @@ fn drive_journal(
     data: &mut JournalData,
     loaded: &[LoadedEntry],
     decision: Decision,
+    context: &ExecutionContext<'_>,
 ) -> Result<(), AppletError> {
+    context.checkpoint()?;
     let mut order: Vec<usize> = (0..data.entries.len()).collect();
     if matches!(decision, Decision::Rollback) {
         order.reverse();
@@ -513,17 +538,18 @@ fn drive_journal(
         data.state = TransactionState::Applying;
     }
     data.error = None;
-    persist_journal(directory, data)?;
+    persist_journal(directory, data, context)?;
 
     for index in order {
+        context.checkpoint()?;
         let entry = data.entries[index].clone();
         let path = entry.path.to_path()?;
-        let current = match read_current_target(&path) {
+        let current = match read_current_target(&path, context) {
             Ok(current) => current,
             Err(error) => {
                 data.state = TransactionState::Partial;
                 data.error = Some(error.to_string());
-                persist_journal(directory, data)?;
+                persist_journal(directory, data, context)?;
                 return Err(failed(
                     "manual_recovery",
                     format!(
@@ -533,17 +559,18 @@ fn drive_journal(
                 ));
             }
         };
-        let state = if current
-            .as_deref()
-            .is_some_and(|bytes| digest(bytes) == entry.before_hash)
-        {
+        let before_matches = match current.as_deref() {
+            Some(bytes) => digest_with_context(bytes, context)? == entry.before_hash,
+            None => false,
+        };
+        let after_matches = match (current.as_deref(), entry.after_exists) {
+            (None, false) => true,
+            (Some(bytes), true) => digest_with_context(bytes, context)? == entry.after_hash,
+            _ => false,
+        };
+        let state = if before_matches {
             CurrentState::Before
-        } else if !entry.after_exists && current.is_none()
-            || entry.after_exists
-                && current
-                    .as_deref()
-                    .is_some_and(|bytes| digest(bytes) == entry.after_hash)
-        {
+        } else if after_matches {
             CurrentState::After
         } else {
             CurrentState::Conflict
@@ -551,7 +578,7 @@ fn drive_journal(
         if state == CurrentState::Conflict {
             data.state = TransactionState::Partial;
             data.error = Some(format!("third-state content at {}", path.display()));
-            persist_journal(directory, data)?;
+            persist_journal(directory, data, context)?;
             return Err(failed(
                 "manual_recovery",
                 format!(
@@ -571,7 +598,7 @@ fn drive_journal(
                 Decision::Complete => EntryState::Applied,
                 Decision::Rollback => EntryState::Compensated,
             };
-            persist_journal(directory, data)?;
+            persist_journal(directory, data, context)?;
             continue;
         }
 
@@ -579,7 +606,7 @@ fn drive_journal(
             Decision::Complete => EntryState::Applying,
             Decision::Rollback => EntryState::Compensating,
         };
-        persist_journal(directory, data)?;
+        persist_journal(directory, data, context)?;
         let (expected, replacement, replacement_exists): (&str, &[u8], bool) = match decision {
             Decision::Complete => (
                 entry.before_hash.as_str(),
@@ -611,15 +638,16 @@ fn drive_journal(
                 "reject",
                 permission_policy,
                 mode,
+                context,
             )
             .map(|_| ())
         } else {
-            remove_locked(&path, expected)
+            remove_locked(&path, expected, context)
         };
         if let Err(error) = update {
             data.state = TransactionState::Partial;
             data.error = Some(error.to_string());
-            persist_journal(directory, data)?;
+            persist_journal(directory, data, context)?;
             return Err(failed(
                 "uncertain_effect",
                 format!(
@@ -629,7 +657,7 @@ fn drive_journal(
                 ),
             ));
         }
-        let observed = read_current_target(&path)?;
+        let observed = read_current_target(&path, context)?;
         let expected_after = match decision {
             Decision::Complete if entry.after_exists => Some(entry.after_hash.as_str()),
             Decision::Complete => None,
@@ -637,13 +665,13 @@ fn drive_journal(
         };
         let matches_expected = match (observed.as_deref(), expected_after) {
             (None, None) => true,
-            (Some(bytes), Some(expected)) => digest(bytes) == expected,
+            (Some(bytes), Some(expected)) => digest_with_context(bytes, context)? == expected,
             _ => false,
         };
         if !matches_expected {
             data.state = TransactionState::Partial;
             data.error = Some(format!("post-write hash mismatch at {}", path.display()));
-            persist_journal(directory, data)?;
+            persist_journal(directory, data, context)?;
             return Err(failed(
                 "uncertain_effect",
                 format!(
@@ -657,7 +685,7 @@ fn drive_journal(
             Decision::Complete => EntryState::Applied,
             Decision::Rollback => EntryState::Compensated,
         };
-        persist_journal(directory, data)?;
+        persist_journal(directory, data, context)?;
     }
 
     data.state = match decision {
@@ -665,13 +693,18 @@ fn drive_journal(
         Decision::Rollback => TransactionState::RolledBack,
     };
     data.error = None;
-    persist_journal(directory, data)
+    persist_journal(directory, data, context)
 }
 
 fn parse_operations(
     args: &Map<String, Value>,
     cwd: &Path,
+    context: &ExecutionContext<'_>,
 ) -> Result<Vec<PlannedEntry>, AppletError> {
+    // Each target validation below issues its own filesystem syscalls, and a
+    // single syscall can still block inside the operating system; only the
+    // slices between calls are interruptible.
+    context.checkpoint()?;
     let operations = args
         .get("operations")
         .and_then(Value::as_array)
@@ -684,6 +717,7 @@ fn parse_operations(
     let mut parsed = Vec::with_capacity(operations.len());
     let mut seen = std::collections::BTreeSet::new();
     for (index, value) in operations.iter().enumerate() {
+        context.checkpoint()?;
         let object = value
             .as_object()
             .ok_or_else(|| invalid(format!("args.operations[{index}] must be an object")))?;
@@ -721,8 +755,10 @@ fn parse_operations(
                 ));
             }
         }
+        context.checkpoint()?;
         let path = fs::canonicalize(&requested)
             .map_err(|error| super::io_error(error, format!("resolving {path_text:?}")))?;
+        context.checkpoint()?;
         if !seen.insert(path.clone()) {
             return Err(invalid(format!(
                 "transaction contains duplicate target path {path_text:?}"
@@ -796,7 +832,9 @@ fn parse_operations(
 fn lock_targets<'a>(
     paths: impl IntoIterator<Item = &'a Path>,
     timeout: Duration,
+    context: &ExecutionContext<'_>,
 ) -> Result<Vec<PathLock>, AppletError> {
+    context.checkpoint()?;
     let mut locks: Vec<_> = paths
         .into_iter()
         .map(filesystem::default_lock_path)
@@ -807,8 +845,9 @@ fn lock_targets<'a>(
     locks
         .into_iter()
         .map(|path| {
+            context.checkpoint()?;
             let remaining = timeout.saturating_sub(started.elapsed());
-            filesystem::acquire_path_lock(&path, remaining)
+            filesystem::acquire_path_lock(&path, remaining, context)
         })
         .collect()
 }
@@ -817,9 +856,12 @@ fn lock_targets<'a>(
 fn verify_loaded_targets_unchanged(
     journal: &Path,
     loaded: &[LoadedEntry],
+    context: &ExecutionContext<'_>,
 ) -> Result<(), AppletError> {
     for entry in loaded {
-        let (current, mode) = read_existing_regular_with_mode(&entry.path).map_err(|error| {
+        context.checkpoint()?;
+        let (current, mode) =
+            read_existing_regular_with_mode(&entry.path, context).map_err(|error| {
             if matches!(error.code, "not_found" | "invalid_request") {
                 failed(
                     "conflict",
@@ -946,8 +988,11 @@ fn lock_published_prepared_journal(
     journal: &Path,
     prepared: &JournalData,
     timeout: Duration,
+    context: &ExecutionContext<'_>,
 ) -> Result<PathLock, AppletError> {
-    let lock = filesystem::acquire_path_lock(&journal.join("transaction.lock"), timeout).map_err(
+    context.checkpoint()?;
+    let lock = filesystem::acquire_path_lock(&journal.join("transaction.lock"), timeout, context)
+        .map_err(
         |error| AppletError {
             code: error.code,
             kind: error.kind,
@@ -958,9 +1003,9 @@ fn lock_published_prepared_journal(
             ),
         },
     )?;
-    let current = read_journal(journal)?;
+    let current = read_journal(journal, context)?;
     if current.state != TransactionState::Prepared
-        || serialized_digest(&current)? != serialized_digest(prepared)?
+        || serialized_digest(&current, context)? != serialized_digest(prepared, context)?
     {
         return Err(failed(
             "conflict",
@@ -985,27 +1030,31 @@ impl Drop for DirectoryCleanup {
 fn write_blobs_and_entries(
     directory: &Path,
     loaded: &[LoadedEntry],
+    context: &ExecutionContext<'_>,
 ) -> Result<Vec<JournalEntry>, AppletError> {
     let mut entries = Vec::with_capacity(loaded.len());
     for (index, item) in loaded.iter().enumerate() {
+        context.checkpoint()?;
         let before_name = format!("{index:02}.before");
         let after_name = format!("{index:02}.after");
-        write_private_new(&directory.join(&before_name), &item.before)?;
-        write_private_new(&directory.join(&after_name), &item.after)?;
+        write_private_new(&directory.join(&before_name), &item.before, context)?;
+        write_private_new(&directory.join(&after_name), &item.after, context)?;
+        let before_hash = digest_with_context(&item.before, context)?;
+        let after_hash = digest_with_context(&item.after, context)?;
         entries.push(JournalEntry {
             path: EncodedPath::from_path(&item.path),
-            before_hash: digest(&item.before),
-            after_hash: digest(&item.after),
+            before_hash: before_hash.clone(),
+            after_hash: after_hash.clone(),
             before_mode: item.before_mode,
             after_exists: item.after_exists,
             before_blob: BlobRef {
                 name: before_name,
-                sha256: digest(&item.before),
+                sha256: before_hash,
                 length: item.before.len() as u64,
             },
             after_blob: BlobRef {
                 name: after_name,
-                sha256: digest(&item.after),
+                sha256: after_hash,
                 length: item.after.len() as u64,
             },
             state: EntryState::Pending,
@@ -1014,7 +1063,11 @@ fn write_blobs_and_entries(
     Ok(entries)
 }
 
-fn load_entries(directory: &Path, data: &JournalData) -> Result<Vec<LoadedEntry>, AppletError> {
+fn load_entries(
+    directory: &Path,
+    data: &JournalData,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<LoadedEntry>, AppletError> {
     if data.entries.is_empty() || data.entries.len() > MAX_FILES {
         return Err(failed(
             "journal_corrupt",
@@ -1025,6 +1078,7 @@ fn load_entries(directory: &Path, data: &JournalData) -> Result<Vec<LoadedEntry>
     let mut entries = Vec::with_capacity(data.entries.len());
     let mut paths = std::collections::BTreeSet::new();
     for entry in &data.entries {
+        context.checkpoint()?;
         let path = entry.path.to_path()?;
         if !path.is_absolute() || !paths.insert(path.clone()) {
             return Err(failed(
@@ -1045,9 +1099,11 @@ fn load_entries(directory: &Path, data: &JournalData) -> Result<Vec<LoadedEntry>
                 "transaction journal contains a Unix mode on this platform",
             ));
         }
-        let before = read_blob(directory, &entry.before_blob)?;
-        let after = read_blob(directory, &entry.after_blob)?;
-        if digest(&before) != entry.before_hash || digest(&after) != entry.after_hash {
+        let before = read_blob(directory, &entry.before_blob, context)?;
+        let after = read_blob(directory, &entry.after_blob, context)?;
+        if digest_with_context(&before, context)? != entry.before_hash
+            || digest_with_context(&after, context)? != entry.after_hash
+        {
             return Err(failed(
                 "journal_corrupt",
                 "transaction journal blob hash does not match its recorded target hash",
@@ -1080,7 +1136,12 @@ fn load_entries(directory: &Path, data: &JournalData) -> Result<Vec<LoadedEntry>
     Ok(entries)
 }
 
-fn read_blob(directory: &Path, blob: &BlobRef) -> Result<Vec<u8>, AppletError> {
+fn read_blob(
+    directory: &Path,
+    blob: &BlobRef,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<u8>, AppletError> {
+    context.checkpoint()?;
     let valid_name = matches!(blob.name.len(), 8 | 9)
         && blob.name.as_bytes()[0..2].iter().all(u8::is_ascii_digit)
         && matches!(&blob.name[2..], ".before" | ".after");
@@ -1097,12 +1158,10 @@ fn read_blob(directory: &Path, blob: &BlobRef) -> Result<Vec<u8>, AppletError> {
         ));
     }
     let path = directory.join(&blob.name);
-    let file = open_private_regular(&path, "transaction blob")?;
-    let mut bytes = Vec::with_capacity(blob.length as usize);
-    file.take((MAX_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| super::io_error(error, "reading transaction blob"))?;
-    if bytes.len() != blob.length as usize || digest(&bytes) != blob.sha256 {
+    let mut file = open_private_regular(&path, "transaction blob")?;
+    let mut bytes = Vec::with_capacity(blob.length.min(MAX_FILE_BYTES as u64) as usize);
+    read_chunked(&mut file, &mut bytes, &path, context)?;
+    if bytes.len() != blob.length as usize || digest_with_context(&bytes, context)? != blob.sha256 {
         return Err(failed(
             "journal_corrupt",
             format!("transaction blob {} is truncated or corrupt", blob.name),
@@ -1111,14 +1170,16 @@ fn read_blob(directory: &Path, blob: &BlobRef) -> Result<Vec<u8>, AppletError> {
     Ok(bytes)
 }
 
-fn read_journal(directory: &Path) -> Result<JournalData, AppletError> {
+fn read_journal(
+    directory: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<JournalData, AppletError> {
+    context.checkpoint()?;
     validate_journal_directory(directory)?;
     let path = directory.join("journal.json");
-    let file = open_private_regular(&path, "transaction journal")?;
+    let mut file = open_private_regular(&path, "transaction journal")?;
     let mut bytes = Vec::new();
-    file.take((MAX_JOURNAL_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| super::io_error(error, "reading transaction journal"))?;
+    read_chunked_bounded(&mut file, &mut bytes, &path, MAX_JOURNAL_BYTES, context)?;
     if bytes.len() > MAX_JOURNAL_BYTES {
         return Err(failed(
             "journal_corrupt",
@@ -1131,7 +1192,7 @@ fn read_journal(directory: &Path) -> Result<JournalData, AppletError> {
             format!("malformed transaction journal: {error}"),
         )
     })?;
-    if serialized_digest(&envelope.data)? != envelope.checksum {
+    if serialized_digest(&envelope.data, context)? != envelope.checksum {
         return Err(failed(
             "journal_corrupt",
             "transaction journal checksum mismatch",
@@ -1149,9 +1210,14 @@ fn read_journal(directory: &Path) -> Result<JournalData, AppletError> {
     Ok(envelope.data)
 }
 
-fn persist_journal(directory: &Path, data: &JournalData) -> Result<(), AppletError> {
+fn persist_journal(
+    directory: &Path,
+    data: &JournalData,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    context.checkpoint()?;
     let envelope = EnvelopeRef {
-        checksum: serialized_digest(data)?,
+        checksum: serialized_digest(data, context)?,
         data,
     };
     let bytes = serde_json::to_vec(&envelope).map_err(|error| {
@@ -1169,7 +1235,16 @@ fn persist_journal(directory: &Path, data: &JournalData) -> Result<(), AppletErr
         std::process::id(),
         TEMP_ID.fetch_add(1, Ordering::Relaxed)
     ));
-    write_private_new(&temporary, &bytes)?;
+    // A cancelled or expired budget while writing the temporary leaves a
+    // `.journal.*.tmp` file behind unless it is removed here; the journal
+    // itself keeps its last persisted state for explicit recovery.
+    write_private_new(&temporary, &bytes, context).inspect_err(|_error| {
+        let _ = fs::remove_file(&temporary);
+    })?;
+    // A single replace or sync call can still block inside the operating
+    // system; only the slices between calls are interruptible. Failure codes
+    // are unchanged.
+    context.checkpoint()?;
     if let Err(error) = crate::platform::replace_file(&temporary, &final_path) {
         let _ = fs::remove_file(&temporary);
         return Err(failed(
@@ -1180,25 +1255,36 @@ fn persist_journal(directory: &Path, data: &JournalData) -> Result<(), AppletErr
             ),
         ));
     }
+    context.checkpoint()?;
     sync_directory(directory).map_err(|error| {
         failed(
             "uncertain_effect",
             format!("journal update was published but directory sync failed: {error}"),
         )
-    })
+    })?;
+    context.checkpoint()?;
+    Ok(())
 }
 
-fn serialized_digest(data: &JournalData) -> Result<String, AppletError> {
+fn serialized_digest(
+    data: &JournalData,
+    context: &ExecutionContext<'_>,
+) -> Result<String, AppletError> {
     let bytes = serde_json::to_vec(data).map_err(|error| {
         failed(
             "journal_error",
             format!("encoding journal checksum: {error}"),
         )
     })?;
-    Ok(digest(&bytes))
+    digest_with_context(&bytes, context)
 }
 
-fn write_private_new(path: &Path, bytes: &[u8]) -> Result<(), AppletError> {
+fn write_private_new(
+    path: &Path,
+    bytes: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    context.checkpoint()?;
     let mut options = crate::platform::private_options();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -1218,12 +1304,19 @@ fn write_private_new(path: &Path, bytes: &[u8]) -> Result<(), AppletError> {
         super::io_error(error, format!("creating private state {}", path.display()))
     })?;
     restrict_file(&file)?;
-    file.write_all(bytes).map_err(|error| {
-        super::io_error(error, format!("writing private state {}", path.display()))
-    })?;
+    // A cancelled budget mid-write leaves a partial file behind unless it is
+    // removed here. A sync failure keeps the fully written file in place so
+    // the journal directory shows what was persisted.
+    if let Err(error) = write_chunked(&mut file, bytes, path, context) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    context.checkpoint()?;
     file.sync_all().map_err(|error| {
         super::io_error(error, format!("syncing private state {}", path.display()))
     })?;
+    context.checkpoint()?;
     Ok(())
 }
 
@@ -1269,11 +1362,18 @@ fn open_private_regular(path: &Path, label: &str) -> Result<File, AppletError> {
     Ok(file)
 }
 
-fn read_existing_regular(path: &Path) -> Result<Vec<u8>, AppletError> {
-    read_existing_regular_with_mode(path).map(|(content, _)| content)
+fn read_existing_regular(
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<u8>, AppletError> {
+    read_existing_regular_with_mode(path, context).map(|(content, _)| content)
 }
 
-fn read_existing_regular_with_mode(path: &Path) -> Result<(Vec<u8>, Option<u32>), AppletError> {
+fn read_existing_regular_with_mode(
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<(Vec<u8>, Option<u32>), AppletError> {
+    context.checkpoint()?;
     let link_metadata = fs::symlink_metadata(path).map_err(|error| {
         super::io_error(
             error,
@@ -1312,15 +1412,7 @@ fn read_existing_regular_with_mode(path: &Path) -> Result<(Vec<u8>, Option<u32>)
         )));
     }
     let mut content = Vec::new();
-    (&mut file)
-        .take((MAX_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut content)
-        .map_err(|error| {
-            super::io_error(
-                error,
-                format!("reading transaction target {}", path.display()),
-            )
-        })?;
+    read_chunked_bounded(&mut file, &mut content, path, MAX_FILE_BYTES, context)?;
     if content.len() > MAX_FILE_BYTES {
         return Err(invalid(format!(
             "transaction target exceeds {MAX_FILE_BYTES} bytes: {}",
@@ -1351,7 +1443,11 @@ fn read_existing_regular_with_mode(path: &Path) -> Result<(Vec<u8>, Option<u32>)
     Ok((content, mode))
 }
 
-fn read_current_target(path: &Path) -> Result<Option<Vec<u8>>, AppletError> {
+fn read_current_target(
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Option<Vec<u8>>, AppletError> {
+    context.checkpoint()?;
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(failed(
             "manual_recovery",
@@ -1360,7 +1456,7 @@ fn read_current_target(path: &Path) -> Result<Option<Vec<u8>>, AppletError> {
                 path.display()
             ),
         )),
-        Ok(_) => read_existing_regular(path).map(Some),
+        Ok(_) => read_existing_regular(path, context).map(Some),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(super::io_error(
             error,
@@ -1373,9 +1469,14 @@ fn read_current_target(path: &Path) -> Result<Option<Vec<u8>>, AppletError> {
 /// stable advisory path lock is held by the caller. Locks coordinate Flow's
 /// applets; arbitrary writers that ignore the lock remain outside that CAS
 /// boundary.
-fn remove_locked(path: &Path, expected_hash: &str) -> Result<(), AppletError> {
-    let before = read_existing_regular(path)?;
-    let observed_hash = digest(&before);
+fn remove_locked(
+    path: &Path,
+    expected_hash: &str,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    context.checkpoint()?;
+    let before = read_existing_regular(path, context)?;
+    let observed_hash = digest_with_context(&before, context)?;
     if observed_hash != expected_hash {
         return Err(failed(
             "conflict",
@@ -1387,6 +1488,10 @@ fn remove_locked(path: &Path, expected_hash: &str) -> Result<(), AppletError> {
             ),
         ));
     }
+    // A single remove or sync call can still block inside the operating
+    // system; only the slices between calls are interruptible. Failure codes
+    // are unchanged.
+    context.checkpoint()?;
     fs::remove_file(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             failed(
@@ -1404,13 +1509,15 @@ fn remove_locked(path: &Path, expected_hash: &str) -> Result<(), AppletError> {
         }
     })?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    context.checkpoint()?;
     sync_directory(parent).map_err(|error| {
         failed(
             "uncertain_effect",
             format!("target was removed but its parent could not be synced: {error}"),
         )
     })?;
-    if read_current_target(path)?.is_some() {
+    context.checkpoint()?;
+    if read_current_target(path, context)?.is_some() {
         return Err(failed(
             "uncertain_effect",
             format!(
@@ -1543,6 +1650,96 @@ fn lock_timeout(args: &Map<String, Value>) -> Result<Duration, AppletError> {
     Ok(Duration::from_millis(millis))
 }
 
+/// Chunk between budget checks; each slice is plain CPU work with no helper thread.
+const IO_CHUNK_BYTES: usize = 64 * 1024;
+
+fn digest_with_context(
+    bytes: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<String, AppletError> {
+    let mut hasher = Sha256::new();
+    for chunk in bytes.chunks(IO_CHUNK_BYTES) {
+        context.checkpoint()?;
+        hasher.update(chunk);
+    }
+    context.checkpoint()?;
+    Ok(to_hex_digest(hasher))
+}
+
+fn to_hex_digest(hasher: Sha256) -> String {
+    let digest = hasher.finalize();
+    let mut text = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
+}
+
+fn read_chunked(
+    file: &mut File,
+    content: &mut Vec<u8>,
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    read_chunked_bounded(file, content, path, MAX_FILE_BYTES, context)
+}
+
+fn read_chunked_bounded(
+    file: &mut File,
+    content: &mut Vec<u8>,
+    path: &Path,
+    limit: usize,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    let cap = limit.saturating_add(1);
+    let mut chunk = vec![0u8; IO_CHUNK_BYTES];
+    let mut work = 0usize;
+    loop {
+        context.checkpoint()?;
+        let end = content.len().saturating_add(IO_CHUNK_BYTES).min(cap);
+        let want = end.saturating_sub(content.len());
+        if want == 0 {
+            break;
+        }
+        let read = file
+            .read(&mut chunk[..want])
+            .map_err(|error| super::io_error(error, format!("reading {}", path.display())))?;
+        if read == 0 {
+            break;
+        }
+        content.extend_from_slice(&chunk[..read]);
+        work += 1;
+        checkpoint_work(context, work)?;
+        if content.len() >= cap {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn write_chunked(
+    file: &mut File,
+    bytes: &[u8],
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    let mut written = 0usize;
+    let mut work = 0usize;
+    while written < bytes.len() {
+        context.checkpoint()?;
+        let end = written.saturating_add(IO_CHUNK_BYTES).min(bytes.len());
+        file.write_all(&bytes[written..end]).map_err(|error| {
+            super::io_error(error, format!("writing private state {}", path.display()))
+        })?;
+        written = end;
+        work += 1;
+        checkpoint_work(context, work)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut text = String::with_capacity(digest.len() * 2);
@@ -1600,11 +1797,21 @@ mod tests {
         let first = temp.path().join(".journal.first.tmp");
         let second = temp.path().join(".journal.second.tmp");
 
-        write_private_new(&first, b"first private journal").unwrap();
+        write_private_new(
+            &first,
+            b"first private journal",
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap();
         crate::platform::replace_file(&first, &published).unwrap();
         assert_eq!(fs::read(&published).unwrap(), b"first private journal");
 
-        write_private_new(&second, b"replacement journal").unwrap();
+        write_private_new(
+            &second,
+            b"replacement journal",
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap();
         crate::platform::replace_file(&second, &published).unwrap();
         assert_eq!(fs::read(published).unwrap(), b"replacement journal");
     }
@@ -1624,28 +1831,31 @@ mod tests {
         }];
         let journal = temp.path().join("journal");
         let (stage, published) = create_journal_stage(&journal).unwrap();
-        let entries = write_blobs_and_entries(&stage, &loaded).unwrap();
+        let context = ExecutionContext::unrestricted();
+        let entries = write_blobs_and_entries(&stage, &loaded, &context).unwrap();
         let prepared = JournalData {
             version: VERSION,
             state: TransactionState::Prepared,
             entries,
             error: None,
         };
-        persist_journal(&stage, &prepared).unwrap();
+        persist_journal(&stage, &prepared, &context).unwrap();
         fs::rename(&stage, &published).unwrap();
 
         let recovery_lock = filesystem::acquire_path_lock(
             &published.join("transaction.lock"),
             Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+            &context,
         )
         .unwrap();
-        let recovery_entries = load_entries(&published, &prepared).unwrap();
-        let mut recovered = read_journal(&published).unwrap();
+        let recovery_entries = load_entries(&published, &prepared, &context).unwrap();
+        let mut recovered = read_journal(&published, &context).unwrap();
         drive_journal(
             &published,
             &mut recovered,
             &recovery_entries,
             Decision::Complete,
+            &context,
         )
         .unwrap();
         drop(recovery_lock);
@@ -1654,6 +1864,7 @@ mod tests {
             &published,
             &prepared,
             Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+            &context,
         ) {
             Ok(_) => panic!("publisher must not reapply a recovered journal"),
             Err(error) => error,
@@ -1661,7 +1872,7 @@ mod tests {
         assert_eq!(error.code, "conflict");
         assert!(error.message.contains(published.to_string_lossy().as_ref()));
         assert_eq!(
-            read_journal(&published).unwrap().state,
+            read_journal(&published, &context).unwrap().state,
             TransactionState::Committed
         );
         assert_eq!(fs::read(target).unwrap(), b"after");
@@ -1682,29 +1893,31 @@ mod tests {
         }];
         let journal = temp.path().join("journal");
         let (stage, published) = create_journal_stage(&journal).unwrap();
-        let entries = write_blobs_and_entries(&stage, &loaded).unwrap();
+        let context = ExecutionContext::unrestricted();
+        let entries = write_blobs_and_entries(&stage, &loaded, &context).unwrap();
         let prepared = JournalData {
             version: VERSION,
             state: TransactionState::Prepared,
             entries,
             error: None,
         };
-        persist_journal(&stage, &prepared).unwrap();
+        persist_journal(&stage, &prepared, &context).unwrap();
         fs::rename(&stage, &published).unwrap();
 
         let _journal_lock = filesystem::acquire_path_lock(
             &published.join("transaction.lock"),
             Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+            &context,
         )
         .unwrap();
         fs::write(&target, b"third-party update").unwrap();
 
-        let error = verify_loaded_targets_unchanged(&published, &loaded).unwrap_err();
+        let error = verify_loaded_targets_unchanged(&published, &loaded, &context).unwrap_err();
         assert_eq!(error.code, "conflict");
         assert!(error.message.contains(published.to_string_lossy().as_ref()));
         assert!(error.message.contains("remains for explicit recovery"));
         assert_eq!(
-            read_journal(&published).unwrap().state,
+            read_journal(&published, &context).unwrap().state,
             TransactionState::Prepared
         );
         assert_eq!(fs::read(target).unwrap(), b"third-party update");
@@ -1719,16 +1932,24 @@ mod tests {
         fs::write(&target, b"before").unwrap();
         let plan = args(&journal, &[(&target, "before", "after")]);
         let changed_target = target.clone();
+        let context = ExecutionContext::unrestricted();
+        let inspect_context = ExecutionContext::unrestricted();
         let interpose_target_drift = move |published: &Path| {
             assert_eq!(
-                read_journal(published).unwrap().state,
+                read_journal(published, &inspect_context).unwrap().state,
                 TransactionState::Prepared
             );
             fs::write(&changed_target, b"third-party update").unwrap();
         };
 
-        let error =
-            apply_with_fault(&plan, temp.path(), None, Some(&interpose_target_drift)).unwrap_err();
+        let error = apply_with_fault(
+            &plan,
+            temp.path(),
+            &context,
+            None,
+            Some(&interpose_target_drift),
+        )
+        .unwrap_err();
 
         let published_journal = fs::canonicalize(&journal).unwrap();
         assert_eq!(error.code, "conflict");
@@ -1738,7 +1959,7 @@ mod tests {
         assert!(error.message.contains("remains for explicit recovery"));
         assert_eq!(fs::read(&target).unwrap(), b"third-party update");
         assert_eq!(
-            read_journal(&journal).unwrap().state,
+            read_journal(&journal, &context).unwrap().state,
             TransactionState::Prepared
         );
     }
@@ -1771,19 +1992,20 @@ mod tests {
             ],
         );
 
-        let applied = apply(&plan, temp.path()).unwrap();
+        let context = ExecutionContext::unrestricted();
+        let applied = apply(&plan, temp.path(), &context).unwrap();
         assert_eq!(applied["status"], "committed");
         assert_eq!(fs::read_to_string(&first).unwrap(), "after one");
         assert_eq!(fs::read_to_string(&second).unwrap(), "after two");
 
         let rollback = serde_json::json!({"journal": journal, "decision": "rollback"});
-        let rolled_back = recover(rollback.as_object().unwrap(), temp.path()).unwrap();
+        let rolled_back = recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap();
         assert_eq!(rolled_back["status"], "rolled_back");
         assert_eq!(fs::read_to_string(&first).unwrap(), "before one");
         assert_eq!(fs::read_to_string(&second).unwrap(), "before two");
 
         let complete = serde_json::json!({"journal": journal, "decision": "complete"});
-        let completed = recover(complete.as_object().unwrap(), temp.path()).unwrap();
+        let completed = recover(complete.as_object().unwrap(), temp.path(), &context).unwrap();
         assert_eq!(completed["status"], "committed");
         assert_eq!(fs::read_to_string(&first).unwrap(), "after one");
         assert_eq!(fs::read_to_string(&second).unwrap(), "after two");
@@ -1805,13 +2027,14 @@ mod tests {
             ],
         );
 
-        let crashed = apply_with_fault(&plan, temp.path(), Some(1), None);
+        let context = ExecutionContext::unrestricted();
+        let crashed = apply_with_fault(&plan, temp.path(), &context, Some(1), None);
         assert!(crashed.is_err());
         assert_eq!(fs::read_to_string(&first).unwrap(), "after one");
         assert_eq!(fs::read_to_string(&second).unwrap(), "before two");
 
         let rollback = serde_json::json!({"journal": journal, "decision": "rollback"});
-        let recovered = recover(rollback.as_object().unwrap(), temp.path()).unwrap();
+        let recovered = recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap();
         assert_eq!(recovered["status"], "rolled_back");
         assert_eq!(fs::read_to_string(&first).unwrap(), "before one");
         assert_eq!(fs::read_to_string(&second).unwrap(), "before two");
@@ -1832,11 +2055,12 @@ mod tests {
                 (second.as_path(), "before two", "after two"),
             ],
         );
-        assert!(apply_with_fault(&plan, temp.path(), Some(1), None).is_err());
+        let context = ExecutionContext::unrestricted();
+        assert!(apply_with_fault(&plan, temp.path(), &context, Some(1), None).is_err());
         fs::write(&first, "manual edit").unwrap();
 
         let rollback = serde_json::json!({"journal": journal, "decision": "rollback"});
-        let error = recover(rollback.as_object().unwrap(), temp.path()).unwrap_err();
+        let error = recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap_err();
         assert_eq!(error.code, "manual_recovery");
         assert_eq!(fs::read_to_string(&first).unwrap(), "manual edit");
         assert!(journal.join("journal.json").is_file());
@@ -1855,9 +2079,10 @@ mod tests {
                 (file.as_path(), "before", "two"),
             ],
         );
-        assert!(apply(&duplicate, temp.path()).is_err());
+        let context = ExecutionContext::unrestricted();
+        assert!(apply(&duplicate, temp.path(), &context).is_err());
         let mismatch = args(&journal, &[(file.as_path(), "wrong", "new")]);
-        assert!(apply(&mismatch, temp.path()).is_err());
+        assert!(apply(&mismatch, temp.path(), &context).is_err());
         assert_eq!(fs::read_to_string(file).unwrap(), "before");
         assert!(!journal.exists());
     }
@@ -1875,13 +2100,14 @@ mod tests {
         }
         let plan = remove_args(&journal, &target, b"");
 
-        let applied = apply(&plan, temp.path()).unwrap();
+        let context = ExecutionContext::unrestricted();
+        let applied = apply(&plan, temp.path(), &context).unwrap();
         assert_eq!(applied["status"], "committed");
         assert_eq!(applied["entries"][0]["after_exists"], false);
         assert!(!target.exists());
 
         let rollback = serde_json::json!({"journal": journal, "decision": "rollback"});
-        let rolled_back = recover(rollback.as_object().unwrap(), temp.path()).unwrap();
+        let rolled_back = recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap();
         assert_eq!(rolled_back["status"], "rolled_back");
         assert_eq!(fs::read(&target).unwrap(), b"");
         #[cfg(unix)]
@@ -1894,7 +2120,7 @@ mod tests {
         }
 
         let complete = serde_json::json!({"journal": journal, "decision": "complete"});
-        let completed = recover(complete.as_object().unwrap(), temp.path()).unwrap();
+        let completed = recover(complete.as_object().unwrap(), temp.path(), &context).unwrap();
         assert_eq!(completed["status"], "committed");
         assert!(!target.exists());
     }
@@ -1907,12 +2133,13 @@ mod tests {
         fs::write(&target, b"old contents").unwrap();
         let plan = remove_args(&journal, &target, b"old contents");
 
-        let crashed = apply_with_fault(&plan, temp.path(), Some(1), None);
+        let context = ExecutionContext::unrestricted();
+        let crashed = apply_with_fault(&plan, temp.path(), &context, Some(1), None);
         assert!(crashed.is_err());
         assert!(!target.exists());
 
         let rollback = serde_json::json!({"journal": journal, "decision": "rollback"});
-        let recovered = recover(rollback.as_object().unwrap(), temp.path()).unwrap();
+        let recovered = recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap();
         assert_eq!(recovered["status"], "rolled_back");
         assert_eq!(fs::read(&target).unwrap(), b"old contents");
     }

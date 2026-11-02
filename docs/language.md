@@ -441,9 +441,12 @@ loops can therefore execute many more iterations in total; use
 that loop's limit.
 Recorded runs retain the configured limit for replay. Older records without a
 limit retain the original shared 100,000-iteration guard during replay.
-Cancellation is checked between VM steps, including loops containing only
-builtins. Browser execution uses a separate 100,000-iteration per-loop limit
-and retains its worker watchdog. `break` and `continue` target the innermost loop in the current
+Cancellation and the total workflow deadline are checked between VM steps,
+including loops containing only builtins. Once the total deadline expires, it
+bypasses `catch` like cancellation; bounded `finally` cleanup is still attempted
+but remains subject to the parent deadline and may stop immediately. Browser
+execution uses a separate 100,000-iteration per-loop limit and retains its
+worker watchdog. `break` and `continue` target the innermost loop in the current
 reusable-program scope and cannot cross a reusable call boundary. `break`
 leaves the loop; `continue` finishes the current iteration and tests the loop
 again. Neither collects iteration output: the pipeline remains the last value
@@ -668,7 +671,9 @@ A top-level `on interrupt` block runs when an interrupt starts a drain. The
 first interrupt (SIGINT, SIGTERM, SIGQUIT or SIGHUP on Unix; Ctrl-C on Windows)
 stops admitting new work: a running command or `parallel for each` element
 finishes, the next statement boundary unwinds through the cleanup blocks, and
-the run ends with status 130 unless the interrupt's own status applies. A
+the run ends with status 128 plus the interrupting signal (130 for SIGINT,
+143 for SIGTERM, 129 for SIGHUP, 131 for SIGQUIT). A drain that ends with no
+recorded signal reports 130. A
 second interrupt cancels as before: running children are stopped and the
 `on interrupt` body is skipped. A `parallel for each` that is drained reports
 the elements it did not start as `not_started`; a `parallel` task group with

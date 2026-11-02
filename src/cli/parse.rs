@@ -71,10 +71,12 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut command_timeout = None;
     let mut drain_timeout = None;
     let mut total_timeout = None;
+    let mut kill_grace = None;
     let mut max_record_bytes = 65_536;
     let mut max_record_bytes_seen = false;
     let mut control = false;
     let mut break_at: Vec<usize> = Vec::new();
+    let mut events: Option<String> = None;
     let mut index = first_argument;
     while index < arguments.len() {
         let argument = &arguments[index];
@@ -418,6 +420,25 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     .context("total timeout is too large")?;
                 total_timeout = Some(duration);
             }
+            "--kill-grace-ms" if matches!(command, "run" | "resume") => {
+                if kill_grace.is_some() {
+                    bail!("--kill-grace-ms may be specified only once");
+                }
+                let value = take_option_value(
+                    arguments,
+                    &mut index,
+                    "--kill-grace-ms",
+                    "a non-negative integer",
+                )?;
+                let millis = value
+                    .parse::<u64>()
+                    .map_err(|_| anyhow!("--kill-grace-ms must be a non-negative integer"))?;
+                let duration = std::time::Duration::from_millis(millis);
+                std::time::Instant::now()
+                    .checked_add(duration)
+                    .context("kill grace is too large")?;
+                kill_grace = Some(duration);
+            }
             "--max-runs" if matches!(command, "run" | "resume") => {
                 if max_runs.is_some() {
                     bail!("--max-runs may be specified only once");
@@ -475,6 +496,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
             "--break-at" if command == "run" => {
                 let line = parse_positive_usize(arguments, &mut index, "--break-at")?;
                 break_at.push(line);
+            }
+            "--events" if matches!(command, "run" | "resume") => {
+                if events.is_some() {
+                    bail!("--events may be specified only once");
+                }
+                let value =
+                    take_option_value(arguments, &mut index, "--events", "document or jsonl")?;
+                match value.as_str() {
+                    "document" | "jsonl" => events = Some(value),
+                    _ => bail!("--events accepts document or jsonl"),
+                }
             }
             value if value.starts_with('-') => bail!("unknown or unsupported option `{value}`"),
             _ => {
@@ -547,11 +579,13 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         command_timeout,
         drain_timeout,
         total_timeout,
+        kill_grace,
         max_record_bytes,
         max_record_bytes_set: max_record_bytes_seen,
         record_dir,
         control,
         break_at,
+        events,
     }))
 }
 

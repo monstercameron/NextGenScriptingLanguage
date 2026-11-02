@@ -1,5 +1,5 @@
-//! The graph journal (mode `graph`, journal version 5). It keeps the completed nodes
-//! of a finite applet graph and the set of nodes in flight.
+//! The graph journal (mode `graph`, journal versions 5 and 6). It keeps the
+//! completed nodes of a finite applet graph and the set of nodes in flight.
 //!
 //! `journal.json` names the committed prefix of `graph.jsonl` by its line count and
 //! chain digest, and lists the in-flight nodes. A node enters that list before its
@@ -8,7 +8,7 @@
 
 use super::{
     hex_digest, lock_directory, open_regular, restrict_file, serialized_digest, write_envelope,
-    JournalEnvelope, JOURNAL_VERSION,
+    JournalEnvelope, JOURNAL_VERSION, STEP_ID_JOURNAL_VERSION,
 };
 #[cfg(not(unix))]
 use super::{real_directory, sync_directory};
@@ -81,7 +81,7 @@ pub(crate) fn open_graph_journal(
     #[cfg(unix)]
     let (directory_handle, existed) = {
         let Some((handle, created)) =
-            super::open_or_create_directory_tree(&requested, !resume, 0o700)?
+            super::open_or_create_directory_tree(&requested, "checkpoint", !resume, 0o700)?
         else {
             bail!("checkpoint directory does not exist for resume");
         };
@@ -108,6 +108,19 @@ pub(crate) fn open_graph_journal(
     let resolved = real_directory(&directory, "checkpoint", false)?;
     #[cfg(windows)]
     let _ = (original, resolved);
+    if resume {
+        #[cfg(unix)]
+        let root_metadata = directory_handle.metadata()?;
+        #[cfg(windows)]
+        let root_metadata =
+            fs::symlink_metadata(&directory).context("inspecting checkpoint root permissions")?;
+        crate::security::verify_private_checkpoint_directory(
+            &directory,
+            &root_metadata,
+            #[cfg(unix)]
+            &directory_handle,
+        )?;
+    }
     // Same rule as program checkpoints: a created or empty fresh directory is made
     // private; a resumed one keeps its permissions; a non-empty one was refused.
     if !resume || !existed {
@@ -338,7 +351,9 @@ fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
     }
     let disk: GraphJournalDisk =
         serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
-    if disk.version != JOURNAL_VERSION {
+    // Version 6 changed only the program journal's in-flight marker; graph
+    // bodies are identical, so both read.
+    if disk.version != JOURNAL_VERSION && disk.version != STEP_ID_JOURNAL_VERSION {
         bail!("unsupported graph checkpoint version {}", disk.version);
     }
     if serialized_digest(&disk)? != envelope.checksum {
@@ -374,7 +389,9 @@ fn read_disk_file(file: File) -> Result<GraphJournalDisk> {
     }
     let disk: GraphJournalDisk =
         serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
-    if disk.version != JOURNAL_VERSION {
+    // Version 6 changed only the program journal's in-flight marker; graph
+    // bodies are identical, so both read.
+    if disk.version != JOURNAL_VERSION && disk.version != STEP_ID_JOURNAL_VERSION {
         bail!("unsupported graph checkpoint version {}", disk.version);
     }
     if serialized_digest(&disk)? != envelope.checksum {
@@ -538,6 +555,24 @@ fn append_line(
 #[cfg(test)]
 mod lane_v3_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_resume_rejects_a_permissive_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let authorize: PersistenceAuthorizer = Arc::new(|_| Ok(()));
+        drop(open_graph_journal(directory.path(), false, "identity", authorize.clone()).unwrap());
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = open_graph_journal(directory.path(), true, "identity", authorize)
+            .err()
+            .expect("graph resume must reject a root accessible to other users");
+        assert!(format!("{error:#}").contains("must be owned by the current user and private"));
+        assert_eq!(
+            fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
 
     #[test]
     fn graph_envelope_streams_without_a_second_buffer() {

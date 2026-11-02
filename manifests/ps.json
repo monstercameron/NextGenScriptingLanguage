@@ -1,6 +1,6 @@
 {
   "name": "ps",
-  "description": "Lists process information using the selected platform ps flags.",
+  "description": "Lists process information using the selected platform ps flags. Output reflects live host process state, so results change between runs and are never cached.",
   "binary": "ps",
   "cacheable": false,
   "parameters": {
@@ -18,5 +18,20 @@
         }
       ]
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec"
+    ],
+    "effects": []
+  }
 }

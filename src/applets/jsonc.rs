@@ -23,7 +23,7 @@ pub(super) fn set(
         .ok_or_else(|| invalid("args.value is required"))?;
     let replacement = serde_json::to_string(value)
         .map_err(|error| failed("serialization_error", error.to_string()))?;
-    write_jsonc_update(args, cwd, move |source| {
+    write_jsonc_update(args, cwd, context, move |source| {
         let updated = set_source(source, &key, &replacement, context)?;
         Ok((updated != source).then_some(updated))
     })
@@ -35,7 +35,7 @@ pub(super) fn remove(
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     let key = required_string(args, "key")?.to_owned();
-    write_jsonc_update(args, cwd, move |source| {
+    write_jsonc_update(args, cwd, context, move |source| {
         remove_source(source, &key, context)
     })
 }

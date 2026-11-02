@@ -24,7 +24,7 @@
     },
     "value": {
       "type": "json",
-      "description": "JSON value written when action is set; unused for remove."
+      "description": "Required when action is set (including JSON null); unused for remove."
     }
   },
   "arguments": [
@@ -100,6 +100,15 @@
       }
     }
   },
+  "parameter_alternatives": [
+    {
+      "message": "jsonc.edit_content requires value when action is set",
+      "any_of": [
+        [{"test": "present", "parameter": "value"}],
+        [{"test": "string_not_equals", "parameter": "action", "value": "set"}]
+      ]
+    }
+  ],
   "phrases": [
     "jsonc edit_content"
   ],

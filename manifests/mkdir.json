@@ -30,5 +30,23 @@
     {
       "spread": "paths"
     }
-  ]
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw"
+    },
+    "capabilities": [
+      "process.exec",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.write"
+    ]
+  }
 }

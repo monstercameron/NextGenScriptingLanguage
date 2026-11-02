@@ -301,6 +301,22 @@ impl AgentAuthPolicy {
         operation: &str,
         action: Option<&str>,
     ) -> Result<(), AuthError> {
+        let permission = required_permission(operation, action)?;
+        self.authorize_permissions(auth, &[permission])
+    }
+
+    /// Authorize a request that needs every listed permission. Live edits may
+    /// combine ordinary state changes with listener or UI input injection;
+    /// those requests must hold both `edit` and `input` before any mutation is
+    /// attempted.
+    pub fn authorize_permissions(
+        &self,
+        auth: Option<&RequestAuth>,
+        permissions: &[AgentPermission],
+    ) -> Result<(), AuthError> {
+        if permissions.is_empty() {
+            return Err(AuthError::InvalidRequest);
+        }
         let auth = auth.ok_or(AuthError::Unauthorized)?;
         if !valid_agent_id(&auth.agent) || !valid_token(auth.token.as_bytes()) {
             return Err(AuthError::Unauthorized);
@@ -314,13 +330,117 @@ impl AgentAuthPolicy {
         let live = grant
             .expires_at
             .is_none_or(|expires_at| now_unix_secs() < expires_at);
-        let required = required_permission(operation, action)?;
-        if matched && live && grant.permissions.contains(&required) {
+        if matched
+            && live
+            && permissions
+                .iter()
+                .all(|permission| grant.permissions.contains(permission))
+        {
             Ok(())
         } else {
             Err(AuthError::Unauthorized)
         }
     }
+}
+
+/// Return true when an edit operation can change listener or UI input state.
+/// Paths are JSON Pointer tokens, decoded according to RFC 6901. Ancestor
+/// replacements count because they can replace the protected subtree.
+pub fn edit_injects_input(operation: &str, request: &serde_json::Value) -> bool {
+    let edits: Vec<(String, String)> = match operation {
+        "create" | "update" | "delete" => request
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(|path| vec![(operation.to_owned(), path.to_owned())])
+            .unwrap_or_default(),
+        "patch" => request
+            .get("operations")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                Some((
+                    entry.get("op")?.as_str()?.to_owned(),
+                    entry.get("path")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect(),
+        _ => return false,
+    };
+    edits.into_iter().any(|(op, path)| {
+        if matches!(op.as_str(), "test") {
+            return false;
+        }
+        let Some(parts) = decode_pointer(&path) else {
+            return false;
+        };
+        pointer_intersects(&parts, &["inbox"])
+            || pointer_intersects(&parts, &["ui", "events"])
+            || ui_component_input_intersects(&parts)
+    })
+}
+
+fn decode_pointer(path: &str) -> Option<Vec<String>> {
+    if path.is_empty() {
+        return Some(Vec::new());
+    }
+    if !path.starts_with('/') {
+        return None;
+    }
+    path[1..]
+        .split('/')
+        .map(|part| {
+            let mut decoded = String::new();
+            let mut chars = part.chars();
+            while let Some(c) = chars.next() {
+                if c != '~' {
+                    decoded.push(c);
+                } else {
+                    decoded.push(match chars.next()? {
+                        '0' => '~',
+                        '1' => '/',
+                        _ => return None,
+                    });
+                }
+            }
+            Some(decoded)
+        })
+        .collect()
+}
+
+fn pointer_intersects(path: &[String], protected: &[&str]) -> bool {
+    !path.is_empty()
+        && (path.len() <= protected.len()
+            && path
+                .iter()
+                .map(String::as_str)
+                .zip(protected)
+                .all(|(a, b)| a == *b)
+            || protected.len() <= path.len()
+                && protected
+                    .iter()
+                    .map(|part| *part)
+                    .zip(path.iter().map(String::as_str))
+                    .all(|(a, b)| a == b))
+}
+
+fn ui_component_input_intersects(path: &[String]) -> bool {
+    const PREFIX: &[&str] = &["ui", "programs"];
+    if !path
+        .iter()
+        .map(String::as_str)
+        .zip(PREFIX)
+        .all(|(a, b)| a == *b)
+    {
+        return false;
+    }
+    // Replacing /ui, /ui/programs, or a component can replace its inputs.
+    if path.len() <= 3 {
+        return true;
+    }
+    // Under a component, only its inputs map and descendants represent
+    // handler input. Widget display state remains an ordinary edit.
+    path.len() >= 4 && path[3] == "inputs"
 }
 
 /// Determine which grant protects one validated live request. Exposed so the
@@ -555,6 +675,65 @@ mod tests {
         assert!(policy
             .authorize(Some(&unknown_agent), "read", None)
             .is_err());
+    }
+
+    #[test]
+    fn edits_that_intersect_listener_or_ui_inputs_require_input_scope() {
+        for request in [
+            serde_json::json!({"path":"/inbox/-"}),
+            serde_json::json!({"path":"/inbox"}),
+            serde_json::json!({"path":"/ui"}),
+            serde_json::json!({"path":"/ui/events/-"}),
+            serde_json::json!({"path":"/ui/programs"}),
+            serde_json::json!({"path":"/ui/programs/console"}),
+            serde_json::json!({"path":"/ui/programs/console/inputs/name"}),
+            serde_json::json!({"operations":[{"op":"replace","path":"/inbox","value":[]}]}),
+            serde_json::json!({"operations":[{"op":"add","path":"/ui/events/-","value":{}}]}),
+            serde_json::json!({"operations":[{"op":"replace","path":"/ui/programs/console/inputs","value":{}}]}),
+        ] {
+            let operation = if request.get("operations").is_some() {
+                "patch"
+            } else {
+                "update"
+            };
+            assert!(edit_injects_input(operation, &request), "{request}");
+        }
+        for (operation, request) in [
+            ("update", serde_json::json!({"path":"/user/note"})),
+            (
+                "update",
+                serde_json::json!({"path":"/ui/programs/console/widgets/button/text"}),
+            ),
+            (
+                "patch",
+                serde_json::json!({"operations":[{"op":"test","path":"/inbox","value":[]}]}),
+            ),
+            (
+                "patch",
+                serde_json::json!({"operations":[{"op":"replace","path":"/bindings/name","value":"x"}]}),
+            ),
+        ] {
+            assert!(!edit_injects_input(operation, &request), "{request}");
+        }
+    }
+
+    #[test]
+    fn input_edits_require_both_edit_and_input_grants() {
+        let edit_only = policy(&["edit"]);
+        assert!(edit_only.authorize(Some(&auth()), "update", None).is_ok());
+        assert!(edit_only
+            .authorize_permissions(
+                Some(&auth()),
+                &[AgentPermission::Edit, AgentPermission::Input]
+            )
+            .is_err());
+        let edit_and_input = policy(&["edit", "input"]);
+        assert!(edit_and_input
+            .authorize_permissions(
+                Some(&auth()),
+                &[AgentPermission::Edit, AgentPermission::Input]
+            )
+            .is_ok());
     }
 
     #[test]

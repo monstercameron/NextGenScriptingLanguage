@@ -1199,8 +1199,9 @@ impl Walker<'_> {
                     Some(PathOverride::Set {
                         lookup_path: Some(path),
                         ..
-                    }) => crate::runtime::binary_path_with_path(
-                        manifest.binary_for(call),
+                    }) => crate::runtime::binary_path_for_applet_with_path(
+                        manifest,
+                        call,
                         &cwd,
                         Some(path),
                     ),
@@ -1209,13 +1210,14 @@ impl Walker<'_> {
                     }) => Err(anyhow::anyhow!(
                         "PATH contains a sensitive unresolved component"
                     )),
-                    Some(PathOverride::Unset) => crate::runtime::binary_path_with_path(
-                        manifest.binary_for(call),
+                    Some(PathOverride::Unset) => crate::runtime::binary_path_for_applet_with_path(
+                        manifest,
+                        call,
                         &cwd,
                         Some(std::ffi::OsStr::new("")),
                     ),
                     Some(PathOverride::Runtime) => Err(anyhow::anyhow!("PATH is a runtime value")),
-                    None => crate::runtime::binary_path(manifest.binary_for(call), &cwd),
+                    None => crate::runtime::binary_path_for_applet(manifest, call, &cwd),
                 };
                 row.resolved_path = resolved
                     .ok()

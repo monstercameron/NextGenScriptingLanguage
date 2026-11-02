@@ -26,7 +26,8 @@ PROJECT = Path(__file__).resolve().parents[1]
 
 
 class Session:
-    def __init__(self, source, bindings=None, paused=True, manifests=None, headless=False, agent_policy=None):
+    def __init__(self, source, bindings=None, paused=True, manifests=None, headless=False,
+                 agent_policy=None, stop_auth=None):
         self.temp = tempfile.TemporaryDirectory(prefix='execute-live-')
         self.root = Path(self.temp.name)
         self.socket = self.root / 'control.sock'
@@ -45,6 +46,7 @@ class Session:
             args += ['--paused']
         if bindings is not None:
             args += ['--bindings', json.dumps(bindings)]
+        self.stop_auth = stop_auth
         if agent_policy is not None:
             self.policy = self.root / 'agents.json'
             self.policy.write_text(json.dumps(agent_policy))
@@ -71,8 +73,8 @@ class Session:
                 result = json.loads(reader.readline(16 * 1024 * 1024))
         return result
 
-    def ok(self, op, **values):
-        result = self.call(op, **values)
+    def ok(self, op, auth=None, **values):
+        result = self.call(op, auth=auth, **values)
         assert result['ok'], result
         return result
 
@@ -95,7 +97,7 @@ class Session:
         if hasattr(self, 'child'):
             if self.child.poll() is None:
                 try:
-                    self.call('control', action='stop')
+                    self.call('control', auth=self.stop_auth, action='stop')
                     self.child.wait(timeout=5)
                 except (OSError, ValueError, subprocess.TimeoutExpired):
                     self.child.terminate()
@@ -126,6 +128,104 @@ class LiveControl(unittest.TestCase):
                 break
             app.ok('create', path=f'/user/padding{index}', value='x' * min(950000, remaining - 32))
         return len(json.dumps(app.read()['state'], ensure_ascii=False, separators=(',', ':')).encode())
+
+    def test_patch_tests_on_queued_input_require_read_permission(self):
+        editor_token = 'e' * 64
+        authorized_token = 'a' * 64
+        editor = {'agent': 'editor', 'token': editor_token}
+        authorized = {'agent': 'authorized', 'token': authorized_token}
+        policy = {
+            'version': 1,
+            'agents': {
+                'editor': {
+                    'token_sha256': hashlib.sha256(editor_token.encode()).hexdigest(),
+                    'permissions': ['edit'],
+                },
+                'authorized': {
+                    'token_sha256': hashlib.sha256(authorized_token.encode()).hexdigest(),
+                    'permissions': ['read', 'edit', 'input', 'stop'],
+                },
+            },
+        }
+
+        # Listener records are queued input. Matching and nonmatching tests
+        # both receive one fixed authorization error for an edit-only agent.
+        listener = 'listen to stdin\nwhenever a line arrives as event\n  then "printf" with arguments ["received"]\n'
+        with Session(listener, agent_policy=policy, stop_auth=authorized) as app:
+            app.ok('send', auth=authorized, value={'text': 'private listener record'})
+            guesses = [
+                {'op': 'test', 'path': '/inbox/0/text', 'value': 'private listener record'},
+                {'op': 'test', 'path': '/inbox/0/text', 'value': 'wrong guess'},
+                {'op': 'test', 'path': '/inbox', 'value': [{'text': 'private listener record'}]},
+            ]
+            denied = [app.call('patch', auth=editor, operations=[guess]) for guess in guesses]
+            self.assertEqual(
+                [result['error'] for result in denied],
+                [{'code': 'invalid_request', 'message': 'live request is unauthorized: live request is not authorized'}] * len(guesses),
+            )
+            self.assertEqual(app.ok('patch', auth=authorized, operations=[guesses[0]])['ok'], True)
+            self.assertEqual(
+                app.call('patch', auth=authorized, operations=[guesses[1]])['error']['code'],
+                'test_failed',
+            )
+            # A denied oracle read also rolls back earlier edits in a mixed batch.
+            mixed = app.call('patch', auth=editor, operations=[
+                {'op': 'add', 'path': '/user/should_rollback', 'value': True}, guesses[0],
+            ])
+            self.assertEqual(mixed['error'], denied[0]['error'])
+            self.assertNotIn('should_rollback', app.ok('read', auth=authorized)['result']['state']['user'])
+            app.ok('create', auth=editor, path='/user/ordinary_edit', value=True)
+            app.ok('create', auth=editor, path='/user/a~1b', value='escaped path')
+            ordinary_state = app.ok('read', auth=authorized)['result']['state']
+            ordinary_guesses = [
+                {'op': 'test', 'path': '/user/ordinary_edit', 'value': True},
+                {'op': 'test', 'path': '/user/ordinary_edit', 'value': False},
+                {'op': 'test', 'path': '/user/a~1b', 'value': 'escaped path'},
+                {'op': 'test', 'path': '/user/a~1b', 'value': 'wrong guess'},
+                {'op': 'test', 'path': '/cwd', 'value': ordinary_state['cwd']},
+                {'op': 'test', 'path': '/cwd', 'value': 'wrong directory'},
+                {'op': 'test', 'path': '/source', 'value': listener},
+                {'op': 'test', 'path': '/source', 'value': 'different source'},
+            ]
+            ordinary_denied = [app.call('patch', auth=editor, operations=[guess]) for guess in ordinary_guesses]
+            self.assertEqual(
+                [result['error'] for result in ordinary_denied],
+                [denied[0]['error']] * len(ordinary_guesses),
+            )
+            self.assertTrue(app.ok('patch', auth=authorized, operations=[ordinary_guesses[0]])['ok'])
+            self.assertEqual(
+                app.call('patch', auth=authorized, operations=[ordinary_guesses[1]])['error']['code'],
+                'test_failed',
+            )
+            self.assertTrue(app.ok('patch', auth=authorized, operations=[ordinary_guesses[2]])['ok'])
+            self.assertEqual(
+                app.call('patch', auth=authorized, operations=[ordinary_guesses[3]])['error']['code'],
+                'test_failed',
+            )
+
+        # UI events use the same read gate, including descendants and escaped
+        # JSON Pointer paths. Ordinary authorized event dispatch still works.
+        screen = ('open a screen titled "Events"\nplace panel on the left\ndefine a program named panel\n'
+                  '  show a button named send labelled "Send"\n')
+        with Session(screen, headless=True, agent_policy=policy, stop_auth=authorized) as app:
+            event = {'type': 'press', 'program': 'panel', 'widget': 'send'}
+            app.ok('event', auth=authorized, value=event)
+            guesses = [
+                {'op': 'test', 'path': '/ui/events/0/type', 'value': 'press'},
+                {'op': 'test', 'path': '/ui/events/0/type', 'value': 'submit'},
+                {'op': 'test', 'path': '/ui/events', 'value': [event]},
+                {'op': 'test', 'path': '/ui/events/~10', 'value': 'press'},
+            ]
+            denied = [app.call('patch', auth=editor, operations=[guess]) for guess in guesses]
+            self.assertEqual(
+                [result['error'] for result in denied],
+                [{'code': 'invalid_request', 'message': 'live request is unauthorized: live request is not authorized'}] * len(guesses),
+            )
+            self.assertTrue(app.ok('patch', auth=authorized, operations=[guesses[0]])['ok'])
+            self.assertEqual(
+                app.call('patch', auth=authorized, operations=[guesses[1]])['error']['code'],
+                'test_failed',
+            )
 
     def test_policy_edits_cannot_test_secret_bindings_or_their_ancestors(self):
         secret = 'low-entropy-secret-guess'
@@ -168,14 +268,22 @@ class LiveControl(unittest.TestCase):
             for agent, auth in credentials.items():
                 failures = [app.call('patch', auth=auth, operations=[operation]) for operation in attempts]
                 self.assertTrue(all(not result['ok'] for result in failures), (agent, failures))
+                # The edit-only agent is denied before evaluation because a
+                # patch test requires read permission; the read-capable agent
+                # reaches dispatch and gets the fixed redacted-state denial.
+                expected = (
+                    {'code': 'invalid_request', 'message': 'live request is unauthorized: live request is not authorized'}
+                    if agent == 'editor'
+                    else {'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}
+                )
                 self.assertEqual(
                     [result['error'] for result in failures],
-                    [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(attempts),
+                    [expected] * len(attempts),
                 )
                 self.assertTrue(all(secret not in json.dumps(result) for result in failures))
 
             # A rejected secret test rolls back earlier operations in its batch.
-            rollback = app.call('patch', auth=credentials['editor'], operations=[
+            rollback = app.call('patch', auth=credentials['reader_editor'], operations=[
                 {'op': 'add', 'path': '/user/should_rollback', 'value': True},
                 attempts[0],
             ])
@@ -183,7 +291,7 @@ class LiveControl(unittest.TestCase):
             self.assertFalse(app.ok('read', auth=credentials['reader_editor'])['result']['state']['user'].get('should_rollback', False))
 
             # Ordinary tests and redacted read-modify-write remain supported.
-            app.ok('patch', auth=credentials['editor'], operations=[
+            app.ok('patch', auth=credentials['reader_editor'], operations=[
                 {'op': 'add', 'path': '/user/public', 'value': 'known'},
                 {'op': 'test', 'path': '/user/public', 'value': 'known'},
             ])
@@ -196,7 +304,7 @@ class LiveControl(unittest.TestCase):
 
             # A public source path remains testable when it contains no
             # redacted text, even though the program has another secret field.
-            app.ok('patch', auth=credentials['editor'], operations=[
+            app.ok('patch', auth=credentials['reader_editor'], operations=[
                 {'op': 'test', 'path': '/source', 'value': source},
             ])
 
@@ -211,13 +319,18 @@ class LiveControl(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(visible))
             self.assertIn('[REDACTED]', visible['result']['state']['source'])
             guesses = [source_with_default, source_with_default.replace(secret, 'incorrect-guess')]
-            for auth in credentials.values():
+            for agent, auth in credentials.items():
                 failures = [app.call('patch', auth=auth, operations=[
                     {'op': 'test', 'path': '/source', 'value': guess},
                 ]) for guess in guesses]
+                expected = (
+                    {'code': 'invalid_request', 'message': 'live request is unauthorized: live request is not authorized'}
+                    if agent == 'editor'
+                    else {'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}
+                )
                 self.assertEqual(
                     [result['error'] for result in failures],
-                    [{'code': 'secret_test_denied', 'message': 'patch test cannot target redacted state'}] * len(guesses),
+                    [expected] * len(guesses),
                 )
                 self.assertTrue(all(secret not in json.dumps(result) for result in failures))
 

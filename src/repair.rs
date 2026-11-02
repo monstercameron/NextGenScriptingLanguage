@@ -243,6 +243,15 @@ pub fn apply_at(
                 .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
                 .clone();
             let (body, ending) = line_body_and_ending(&current);
+            // An unterminated final line has no ending to borrow; inserting
+            // without one would join the two statements. Borrow the file's
+            // line-ending style instead (see `insert_line_ending`). The
+            // original line itself is untouched, so it stays unterminated.
+            let ending = if ending.is_empty() {
+                insert_line_ending(source)
+            } else {
+                ending
+            };
             lines.insert(index, format!("{}{statement}{ending}", indentation(body)));
         }
         Operation::Remove { .. } => {
@@ -286,6 +295,16 @@ fn check(source: &str, path: Option<&Path>, registry: &Registry) -> Result<()> {
 
 fn indentation(line: &str) -> &str {
     &line[..line.len() - line.trim_start_matches(' ').len()]
+}
+
+/// The separator for a line inserted before an unterminated final line: the
+/// file's first line ending when one exists, otherwise LF (a single
+/// unterminated line gives no style to borrow).
+fn insert_line_ending(source: &str) -> &'static str {
+    match source.find('\n') {
+        Some(index) if index > 0 && source.as_bytes()[index - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
 }
 
 fn line_body_and_ending(line: &str) -> (&str, &str) {
@@ -1410,6 +1429,43 @@ mod tests {
             plan.after,
             "run fixture.count with count 1\r\nrun fixture.count with count 3"
         );
+    }
+
+    #[test]
+    fn insert_before_unterminated_final_line_keeps_statements_separate() {
+        // LF and CRLF: the inserted line borrows the file's line-ending style,
+        // and the original final line keeps its lack of a trailing newline.
+        for (source, expected) in [
+            (
+                "run fixture.count with count 1\nrun fixture.count with count 2",
+                "run fixture.count with count 1\nrun fixture.count with count 3\nrun fixture.count with count 2",
+            ),
+            (
+                "run fixture.count with count 1\r\nrun fixture.count with count 2",
+                "run fixture.count with count 1\r\nrun fixture.count with count 3\r\nrun fixture.count with count 2",
+            ),
+        ] {
+            let plan = apply(
+                source,
+                &Operation::parse("insert-before 2 run fixture.count with count 3").unwrap(),
+                2,
+                &registry(),
+            )
+            .unwrap();
+            assert_eq!(plan.after, expected);
+            assert!(!plan.after.ends_with('\n'), "{source:?}");
+            assert_eq!(parser::parse(&plan.after).unwrap().steps.len(), 3);
+        }
+        // A single unterminated line has no ending to borrow; fall back to LF.
+        let plan = apply(
+            "run \"false\"",
+            &Operation::parse("insert-before 1 run \"true\"").unwrap(),
+            1,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.after, "run \"true\"\nrun \"false\"");
+        assert_eq!(parser::parse(&plan.after).unwrap().steps.len(), 2);
     }
 
     #[test]

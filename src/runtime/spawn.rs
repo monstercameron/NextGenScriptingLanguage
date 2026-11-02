@@ -693,6 +693,7 @@ pub(super) fn execute_group_with_sink(
         job_stage_results: signals.job_stage_results.clone(),
         job_run_context: Arc::clone(&signals.job_run_context),
         output_writers: Arc::clone(&signals.output_writers),
+        fs_timeout: signals.fs_timeout,
         kill_grace: options.kill_grace,
         #[cfg(test)]
         job_panic_before_ack: signals.job_panic_before_ack.clone(),

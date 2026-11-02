@@ -405,6 +405,7 @@ fn execute_group_with_sink(
         kill_grace: options.kill_grace,
         #[cfg(test)]
         job_panic_before_ack: signals.job_panic_before_ack.clone(),
+        fs_timeout: signals.fs_timeout,
         deadline: {
             let command_deadline = options
                 .command_timeout

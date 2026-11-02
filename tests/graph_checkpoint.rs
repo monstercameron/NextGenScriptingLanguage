@@ -357,6 +357,121 @@ fn clean_checkpointed_run_matches_plain_run_and_replays_without_rerunning() {
 }
 
 #[test]
+fn completed_replay_does_not_block_on_an_undrained_lossless_edge() {
+    let fixture = fixture();
+    // A records-in/records-out variant of `ctrl.count`, on the same script.
+    let script = fixture.root.join(if cfg!(windows) {
+        "count.bat"
+    } else {
+        "count.sh"
+    });
+    let arguments = if cfg!(windows) {
+        json!([
+            {"literal": "/d"},
+            {"literal": "/c"},
+            {"literal": script.to_string_lossy()},
+            {"parameter": "text"}
+        ])
+    } else {
+        json!([{"literal": script.to_string_lossy()}, {"parameter": "text"}])
+    };
+    let manifest = json!({
+        "name": "ctrl.stream",
+        "binary": if cfg!(windows) { "cmd.exe" } else { "/bin/sh" },
+        "accepts_stdin": false,
+        "cacheable": false,
+        "parameters": {"text": {"type": "string", "required": true}},
+        "arguments": arguments,
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw", "trim_final_lf": true},
+            "outcomes": [{"status": 0, "name": "success", "kind": "success"}],
+            "capabilities": [],
+            "effects": [],
+            "ports": {
+                "inputs": {"text": {"schema": {"type": "text"}, "delivery": "records"}},
+                "outputs": {"value": {"schema": {"type": "text"}, "delivery": "records"}}
+            }
+        }
+    });
+    fs::write(
+        fixture.manifests.join("ctrl.stream.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    let registry = Registry::load(&fixture.manifests).unwrap();
+    // Three sources feed `mid`, so it records three outputs. The `mid` to
+    // `sink` edge holds only one, so replaying `mid` blocks unless the
+    // completed `sink`'s edge no longer waits for a consumer (#818).
+    let source = "graph multi\n\
+        \x20 run ctrl.count with text \"a\" as one\n\
+        \x20 run ctrl.count with text \"b\" as two\n\
+        \x20 run ctrl.count with text \"c\" as three\n\
+        \x20 run ctrl.stream as mid\n\
+        \x20 bind one.value to mid.text with capacity 1 lossless\n\
+        \x20 bind two.value to mid.text with capacity 1 lossless\n\
+        \x20 bind three.value to mid.text with capacity 1 lossless\n\
+        \x20 run ctrl.stream as sink\n\
+        \x20 bind mid.value to sink.text with capacity 1 lossless\n\
+        end graph\n";
+    let store = Arc::new(MemoryGraphStore::default());
+    let first = graph::run_checkpointed(
+        plan(source, &registry),
+        &registry,
+        &options(&fixture.root),
+        Arc::new(AtomicBool::new(false)),
+        store.clone(),
+        false,
+    )
+    .unwrap();
+    let sink_values = |result: &graph::GraphRunResult| {
+        let mut values: Vec<String> = terminal(result)
+            .iter()
+            .filter(|(node, port, _)| node == "sink" && port == "value")
+            .map(|(_, _, payload)| trimmed_value(payload))
+            .collect();
+        values.sort();
+        values
+    };
+    assert_eq!(sink_values(&first), ["a", "b", "c"]);
+    let runs = log_lines(&fixture.count_log);
+    assert!(runs > 0);
+
+    // Replay on a thread so a regression fails on the timeout instead of
+    // hanging the test suite.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    {
+        let plan = plan(source, &registry);
+        let registry = registry.clone();
+        let options = options(&fixture.root);
+        let store = Arc::clone(&store);
+        thread::spawn(move || {
+            let result = graph::run_checkpointed(
+                plan,
+                &registry,
+                &options,
+                Arc::new(AtomicBool::new(false)),
+                store,
+                false,
+            );
+            let _ = sender.send(result);
+        });
+    }
+    let replayed = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("completed replay blocked on the undrained lossless edge")
+        .unwrap();
+    assert_eq!(sink_values(&replayed), ["a", "b", "c"]);
+    assert_eq!(
+        log_lines(&fixture.count_log),
+        runs,
+        "replay reran a completed node"
+    );
+}
+
+#[test]
 fn a_changed_completed_node_is_refused_before_any_effect() {
     let fixture = fixture();
     let registry = Registry::load(&fixture.manifests).unwrap();

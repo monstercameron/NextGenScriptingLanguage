@@ -1394,3 +1394,62 @@ fn schedule_flags_are_bounded_and_rejected_for_finite_workflows() {
     assert!(!too_many.status.success());
     assert!(String::from_utf8_lossy(&too_many.stderr).contains("between 1 and 64"));
 }
+
+#[cfg(feature = "screens")]
+#[test]
+fn stream_and_screen_runs_refuse_record_and_answers() {
+    // Issue #711: stream and screen runs have no recording or answers-file
+    // support, so `--record` and `--answers` must be refused by name before
+    // anything runs, not silently dropped.
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("rows"), b"one\ntwo\n").unwrap();
+    let answers = root.path().join("answers.json");
+    fs::write(&answers, "{}").unwrap();
+    let cases: [(&str, &str, &str, &[&str]); 2] = [
+        (
+            "stream",
+            "stream.program",
+            "stream from cat.file with path \"rows\"\nshow each line\n",
+            &[],
+        ),
+        (
+            "screen",
+            "screen.program",
+            "open a screen titled \"options\"\nplace app on the left\ndefine a program named app\n  show a text panel named status with text \"ready\"\n",
+            &["--headless"],
+        ),
+    ];
+    for (kind, filename, source, extra) in cases {
+        let program = root.path().join(filename);
+        fs::write(&program, source).unwrap();
+        let record = root.path().join(format!("{kind}.record"));
+        for (option, value) in [("--record", &record), ("--answers", &answers)] {
+            let mut arguments: Vec<String> =
+                vec!["run".to_owned(), program.to_str().unwrap().to_owned()];
+            arguments.extend(extra.iter().map(|flag| flag.to_string()));
+            arguments.push(option.to_owned());
+            arguments.push(value.to_str().unwrap().to_owned());
+            let references: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            let output = cli(root.path(), &references);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success(),
+                "{kind} run with {option} must be refused: {stderr}"
+            );
+            assert!(
+                stderr.contains(&format!(
+                    "{option} applies only to finite programs, not {kind} programs"
+                )),
+                "refusal must name {option} for {kind} programs: {stderr}"
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "refused {kind} run must not execute or emit output"
+            );
+            assert!(
+                !record.exists(),
+                "refused {kind} run must not create a record directory"
+            );
+        }
+    }
+}

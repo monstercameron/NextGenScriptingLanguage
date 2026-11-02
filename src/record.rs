@@ -1896,7 +1896,11 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
             "audit_scope": "policy-decisions-only",
             "record_verified": false,
         });
-        return Ok(serde_json::to_string_pretty(&document)? + "\n");
+        return Ok(
+            crate::terminal_text::escape_json_for_terminal(&serde_json::to_string_pretty(
+                &document,
+            )?) + "\n",
+        );
     }
     let mut text = String::new();
     text.push_str(&format!(

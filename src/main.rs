@@ -245,14 +245,16 @@ fn report_error(error: &anyhow::Error) -> i32 {
                 .map_or((diagnostic.code, diagnostic.category), |_| {
                     ("interrupted", "signal")
                 });
-            let mut line = serde_json::json!({
-                "protocol": flow::agent::errors::PROTOCOL,
-                "code": code,
-                "category": category,
-                "message": diagnostic.message,
-                "exit_code": status,
-            })
-            .to_string();
+            let mut line = flow::terminal_text::escape_json_for_terminal(
+                &serde_json::json!({
+                    "protocol": flow::agent::errors::PROTOCOL,
+                    "code": code,
+                    "category": category,
+                    "message": diagnostic.message,
+                    "exit_code": status,
+                })
+                .to_string(),
+            );
             line.push('\n');
             runtime::write_exit_diagnostic(line.as_bytes());
         } else {

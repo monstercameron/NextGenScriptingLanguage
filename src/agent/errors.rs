@@ -115,14 +115,16 @@ pub fn render(error: &anyhow::Error, interrupted: bool, exit_code: i32) -> Strin
     } else {
         classify(error)
     };
-    let mut line = serde_json::json!({
-        "protocol": PROTOCOL,
-        "code": code,
-        "category": category,
-        "message": format!("{error:#}"),
-        "exit_code": exit_code,
-    })
-    .to_string();
+    let mut line = crate::terminal_text::escape_json_for_terminal(
+        &serde_json::json!({
+            "protocol": PROTOCOL,
+            "code": code,
+            "category": category,
+            "message": format!("{error:#}"),
+            "exit_code": exit_code,
+        })
+        .to_string(),
+    );
     line.push('\n');
     line
 }
@@ -132,4 +134,22 @@ pub fn render(error: &anyhow::Error, interrupted: bool, exit_code: i32) -> Strin
 /// trailing held prefix is flushed rather than truncated.
 pub fn write_stderr(error: &anyhow::Error, interrupted: bool, exit_code: i32) {
     crate::runtime::write_exit_diagnostic(render(error, interrupted, exit_code).as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn json_diagnostic_escapes_bidi_and_c1_without_changing_decoded_message() {
+        let message = "bad \u{202e}override \u{2066}isolate \u{009b}csi \u{0085}nel";
+        let error = anyhow::anyhow!("{message}");
+        let rendered = super::render(&error, false, 1);
+        for raw in ['\u{202e}', '\u{2066}', '\u{009b}', '\u{0085}'] {
+            assert!(!rendered.contains(raw), "raw {raw:?} in JSON: {rendered:?}");
+        }
+        assert!(rendered.contains(r"\u202e"), "{rendered:?}");
+        assert!(rendered.contains(r"\u009b"), "{rendered:?}");
+        let parsed: serde_json::Value = serde_json::from_str(rendered.trim_end()).unwrap();
+        assert_eq!(parsed["message"].as_str().unwrap(), message);
+        assert_eq!(parsed["protocol"], super::PROTOCOL);
+    }
 }

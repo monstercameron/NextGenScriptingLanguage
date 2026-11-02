@@ -310,6 +310,81 @@ fn ensure_symlink_creates_keeps_and_replaces_only_links() {
 
 #[cfg(unix)]
 #[test]
+fn ensure_symlink_does_not_replace_a_regular_file_installed_before_the_rename() {
+    // Symlink creation is gated to Unix: this Windows host lacks the
+    // privilege to create links, so this test runs only on Unix.
+    use std::os::unix::fs::symlink;
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("real-a"), "a").unwrap();
+    fs::write(dir.path().join("real-b"), "b").unwrap();
+    let link = dir.path().join("link");
+    symlink("real-a", &link).unwrap();
+
+    // Hold the sibling lock `fs.write_atomic` and the replace step share.
+    // The ensure thread passes its first type check, creates its temporary
+    // link, then pauses on this lock before the recheck and rename (#723).
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.path().join(".link.execute-applet.lock"))
+        .unwrap();
+    lock_file.try_lock().unwrap();
+    let cwd = dir.path().to_path_buf();
+    let ensure = std::thread::spawn(move || {
+        run(
+            "fs.ensure_symlink",
+            json!({"path": "link", "target": "real-b"}),
+            &cwd,
+        )
+    });
+    // The temporary link proves the thread is inside the replace step; it
+    // stays present while the thread waits for the lock above.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let temp_present = |dir: &Path| {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+    };
+    while !temp_present(dir.path()) {
+        assert!(Instant::now() < deadline, "temporary link never appeared");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Another caller installs a regular file at the link path in the pause.
+    fs::remove_file(&link).unwrap();
+    fs::write(&link, "new regular file").unwrap();
+    drop(lock_file);
+
+    // The recheck refuses the rename, the regular file survives, and the
+    // temporary link is cleaned up.
+    assert!(ensure.join().unwrap().is_err());
+    assert!(!fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read_to_string(&link).unwrap(), "new regular file");
+    assert!(!temp_present(dir.path()));
+
+    // An existing symlink is still replaced as before.
+    fs::remove_file(&link).unwrap();
+    symlink("real-a", &link).unwrap();
+    assert!(changed(
+        &run(
+            "fs.ensure_symlink",
+            json!({"path": "link", "target": "real-b"}),
+            dir.path()
+        )
+        .unwrap()
+    ));
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("real-b"));
+}
+
+#[cfg(unix)]
+#[test]
 fn ensure_symlink_rollback_restores_relative_directory_target_exactly() {
     // Symlink creation is gated to Unix: this Windows host lacks the
     // privilege to create links. Rollback is a second `fs.ensure_symlink`

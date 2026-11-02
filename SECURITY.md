@@ -25,11 +25,15 @@ undetected. Other Unix systems do not expose ACLs to this gate. The opened
 descriptor is re-checked on the descriptor itself (Linux `fgetxattr`, Windows
 handle ACL), so an ACL or owner attached between the path check and the open
 fails closed. On Windows each leaf and ancestor must be owned by the
-current user, SYSTEM or Administrators and must grant write, delete, and
-extended-attribute-write access to no other principal (data/attribute writes,
-delete, child add/delete, DACL/owner takeover, and the generic umbrellas);
-read grants to others stay allowed so shared installs keep working, and an
-unreadable ACL fails closed. Manifest-selected executables pass the same
+current user, SYSTEM, Administrators or TrustedInstaller. The leaf must grant
+write, delete, and extended-attribute-write access to no other principal
+(data/attribute writes, delete, child add/delete, DACL/owner takeover, and
+the generic umbrellas); ancestors use a narrowed mask that passes create-only
+rights (file/subdirectory add, EA/attribute writes), which cannot rename or
+replace an existing verified entry, while still refusing delete-child,
+delete, DACL/owner takeover, and the generic umbrellas. Every DACL refusal
+names the trustee SID and the granted mask. Read grants to others stay
+allowed so shared installs keep working, and an unreadable ACL fails closed. Manifest-selected executables pass the same
 leaf-plus-ancestor, hardlink/setuid and ACL gate as manifests: a trusted
 manifest naming a writable binary is refused at resolution time. Install or
 extract release archives only into locations writable solely by their owner

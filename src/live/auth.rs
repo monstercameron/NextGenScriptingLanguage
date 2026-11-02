@@ -327,9 +327,7 @@ impl AgentAuthPolicy {
             .ok_or(AuthError::Unauthorized)?;
         let supplied = sha256_hex(auth.token.as_bytes());
         let matched = constant_time_eq(supplied.as_bytes(), grant.token_sha256.as_bytes());
-        let live = grant
-            .expires_at
-            .is_none_or(|expires_at| now_unix_secs() < expires_at);
+        let live = grant_is_live_at(grant.expires_at, std::time::SystemTime::now());
         if matched
             && live
             && permissions
@@ -585,9 +583,22 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Whether a grant is live at `now`. A grant without expiry is always live.
+/// A grant with an expiry is live only when `now` is a valid Unix timestamp
+/// before that expiry: a pre-epoch clock cannot be read as one, so expiring
+/// grants deny (fail closed) instead of comparing a fallback of 0.
+fn grant_is_live_at(expires_at: Option<u64>, now: std::time::SystemTime) -> bool {
+    match expires_at {
+        None => true,
+        Some(expires_at) => now
+            .duration_since(std::time::UNIX_EPOCH)
+            .is_ok_and(|elapsed| elapsed.as_secs() < expires_at),
+    }
+}
+
 /// Wall-clock seconds since the Unix epoch, matching the `expires_at` grant
-/// field. A clock failure yields 0 so every grant carrying an expiry denies
-/// (fail closed); grants without expiry are unaffected.
+/// field. A pre-epoch clock yields 0 here; authorization does not use this
+/// fallback and instead fails closed via [`grant_is_live_at`].
 pub(crate) fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -798,6 +809,24 @@ mod tests {
                 "malformed expires_at must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn pre_epoch_clock_denies_expiring_grants() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        // A clock before the Unix epoch is not a valid Unix timestamp, so
+        // every expiring grant denies, however far ahead its expiry sits.
+        let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
+        assert!(!grant_is_live_at(Some(1), pre_epoch));
+        assert!(!grant_is_live_at(Some(u64::MAX), pre_epoch));
+        // Grants without expiry keep their documented policy.
+        assert!(grant_is_live_at(None, pre_epoch));
+        // Expired and unexpired grants at a valid clock reading.
+        let one_second_in = UNIX_EPOCH + Duration::from_secs(1);
+        assert!(grant_is_live_at(Some(2), one_second_in));
+        assert!(!grant_is_live_at(Some(1), one_second_in));
+        assert!(!grant_is_live_at(Some(0), UNIX_EPOCH));
     }
 
     #[test]

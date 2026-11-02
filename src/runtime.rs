@@ -3152,16 +3152,36 @@ pub(super) fn authorize_checkpoint_persistence(
 /// secrets registered before any element runs, and only when no Secret label
 /// contributes: a Secret floor still fails before any effect, and non-loop
 /// programs keep the upfront denial.
+///
+/// Deferral may delay only the Unknown part of the denial. Every known
+/// label beside Unknown must still pass the full checkpoint data-flow
+/// policy, so a mixed floor (for example Unknown with Secret, or with an
+/// Internal/Confidential label the policy does not grant checkpoint
+/// persistence) never defers: the caller's upfront
+/// `authorize_checkpoint_persistence` runs and refuses before any element.
 pub(super) fn defer_unknown_checkpoint_denial(
     registry: &Registry,
     sensitivities: &crate::security::SensitivitySet,
     has_loop: bool,
 ) -> bool {
     use crate::contracts::Sensitivity;
-    has_loop
+    if !(has_loop
         && !sensitivities.contains(&Sensitivity::Secret)
         && sensitivities.contains(&Sensitivity::Unknown)
-        && !crate::security::declared_secret_applets(registry).is_empty()
+        && !crate::security::declared_secret_applets(registry).is_empty())
+    {
+        return false;
+    }
+    let known: Vec<Sensitivity> = sensitivities
+        .iter()
+        .filter(|label| *label != Sensitivity::Unknown)
+        .collect();
+    known.is_empty()
+        || authorize_checkpoint_persistence(
+            registry,
+            &crate::security::SensitivitySet::from_labels(known),
+        )
+        .is_ok()
 }
 
 /// Whether any step is a `for each`/`parallel for each` loop whose elements

@@ -831,9 +831,63 @@ fn resume_action(status: &str, in_flight: Option<&Value>) -> &'static str {
     }
 }
 
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        crate::platform::windows::is_reparse(metadata)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn read_journal_value(path: &Path) -> Result<Value> {
-    let metadata = fs::metadata(path)
+    let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("no checkpoint journal at {}", path.display()))?;
+    if is_link_or_reparse(&metadata) {
+        bail!(
+            "refusing to read a checkpoint journal through a symbolic link or reparse point: {}",
+            path.display()
+        );
+    }
+    if !metadata.is_file() {
+        bail!(
+            "checkpoint journal is not a regular file: {}",
+            path.display()
+        );
+    }
+    if metadata.len() > MAX_JOURNAL_BYTES {
+        bail!("checkpoint journal is too large");
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .with_context(|| format!("reading checkpoint journal {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("reading checkpoint journal {}", path.display()))?;
+    if is_link_or_reparse(&metadata) {
+        bail!(
+            "refusing to read a checkpoint journal through a symbolic link or reparse point: {}",
+            path.display()
+        );
+    }
     if !metadata.is_file() {
         bail!(
             "checkpoint journal is not a regular file: {}",
@@ -844,10 +898,7 @@ fn read_journal_value(path: &Path) -> Result<Value> {
         bail!("checkpoint journal is too large");
     }
     let mut bytes = Vec::new();
-    fs::File::open(path)
-        .with_context(|| format!("reading checkpoint journal {}", path.display()))?
-        .take(MAX_JOURNAL_BYTES + 1)
-        .read_to_end(&mut bytes)?;
+    file.take(MAX_JOURNAL_BYTES + 1).read_to_end(&mut bytes)?;
     serde_json::from_slice(&bytes).context("checkpoint journal is malformed or corrupt")
 }
 
@@ -997,5 +1048,27 @@ mod resume_action_tests {
             .write_all(b"{\"kind\":\"commit\",\"index\":2}\n")
             .unwrap();
         assert!(pending_elements(directory.path()).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_journal_value_refuses_a_symlinked_journal() {
+        let directory = tempfile::tempdir().unwrap();
+        let external = directory.path().join("external.json");
+        fs::write(&external, br#"{"data":{"status":"completed"}}"#).unwrap();
+        let journal = directory.path().join("journal.json");
+        std::os::unix::fs::symlink(&external, &journal).unwrap();
+
+        let error = read_journal_value(&journal).unwrap_err();
+
+        assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+        assert_eq!(
+            fs::read_to_string(&external).unwrap(),
+            r#"{"data":{"status":"completed"}}"#
+        );
+        assert!(fs::symlink_metadata(&journal)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }

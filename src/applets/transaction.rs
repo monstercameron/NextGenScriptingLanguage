@@ -622,6 +622,24 @@ fn drive_journal(
             Decision::Rollback => state == CurrentState::After,
         };
         if !needs_change {
+            // Content matching the chosen state is not enough: applied and
+            // compensated writes both carry the captured `before_mode`, so a
+            // present target must also carry those bits before it is done.
+            if current.is_some() {
+                if let Err(error) = restore_journaled_mode(&path, entry.before_mode, context) {
+                    data.state = TransactionState::Partial;
+                    data.error = Some(error.to_string());
+                    persist_journal(directory, data, context)?;
+                    return Err(failed(
+                        "manual_recovery",
+                        format!(
+                            "cannot restore journaled permission bits for {}; journal {} remains for manual recovery: {error}",
+                            path.display(),
+                            directory.display()
+                        ),
+                    ));
+                }
+            }
             data.entries[index].state = match decision {
                 Decision::Complete => EntryState::Applied,
                 Decision::Rollback => EntryState::Compensated,
@@ -722,6 +740,45 @@ fn drive_journal(
     };
     data.error = None;
     persist_journal(directory, data, context)
+}
+
+/// Restore the journaled Unix permission bits on a present target whose
+/// content already matches the chosen recovery state. A no-op when the
+/// journal captured no mode (non-Unix journals carry none).
+fn restore_journaled_mode(
+    path: &Path,
+    journaled_mode: Option<u32>,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    context.checkpoint()?;
+    #[cfg(unix)]
+    if let Some(mode) = journaled_mode {
+        let (_, current_mode) = read_existing_regular_with_mode(path, context)?;
+        if current_mode != Some(mode) {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|error| {
+                super::io_error(
+                    error,
+                    format!(
+                        "restoring transaction target permissions {}",
+                        path.display()
+                    ),
+                )
+            })?;
+            let (_, restored_mode) = read_existing_regular_with_mode(path, context)?;
+            if restored_mode != Some(mode) {
+                return Err(failed(
+                    "uncertain_effect",
+                    format!(
+                        "permission bits for {} differ from the journaled mode after restore",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, journaled_mode);
+    Ok(())
 }
 
 fn parse_operations(
@@ -2196,5 +2253,54 @@ mod tests {
         let recovered = recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap();
         assert_eq!(recovered["status"], "rolled_back");
         assert_eq!(fs::read(&target).unwrap(), b"old contents");
+    }
+
+    // The permission-bits setup and assertions are `cfg(unix)`-gated: only
+    // Unix journals capture a mode. On other platforms this still exercises
+    // the content-already-matches recovery path.
+    #[test]
+    fn recovery_restores_journaled_mode_when_content_already_matches() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("secret.conf");
+        let journal = temp.path().join("journal");
+        fs::write(&target, "before").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let plan = args(&journal, &[(target.as_path(), "before", "after")]);
+        let context = ExecutionContext::unrestricted();
+
+        // Interrupt after the after bytes land, then widen the mode without
+        // touching the contents.
+        assert!(apply_with_fault(&plan, temp.path(), &context, Some(1), None).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "after");
+        #[cfg(unix)]
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let complete = serde_json::json!({"journal": journal, "decision": "complete"});
+        let completed = recover(complete.as_object().unwrap(), temp.path(), &context).unwrap();
+        assert_eq!(completed["status"], "committed");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "after");
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+
+        // Same for rollback: roll back, widen the mode, recover again.
+        let rollback = serde_json::json!({"journal": journal, "decision": "rollback"});
+        recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "before");
+        #[cfg(unix)]
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        let rolled_back = recover(rollback.as_object().unwrap(), temp.path(), &context).unwrap();
+        assert_eq!(rolled_back["status"], "rolled_back");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "before");
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
     }
 }

@@ -107,6 +107,7 @@ ShellRoot {
             anchors.leftMargin: 12
             verticalAlignment: Text.AlignVCenter
             color: "#cdd6f4"
+            textFormat: Text.PlainText
             text: parent.text
         }
     }

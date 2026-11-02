@@ -18,6 +18,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::runtime::checkpoint::resolutions;
+use crate::terminal_text::escape_controls;
 
 /// Protocol identifier of the `--json` object.
 pub const PROTOCOL: &str = "execute.checkpoint_status/1";
@@ -964,7 +965,7 @@ fn render_text(summary: &Value) -> String {
         None => text.push_str("in flight: none\n"),
     }
     if let Some(error) = journal["error"].as_str() {
-        text.push_str(&format!("error: {error}\n"));
+        text.push_str(&format!("error: {}\n", escape_controls(error)));
     }
     text.push_str(&format!(
         "blobs: {} files, {} bytes\n",
@@ -990,9 +991,9 @@ fn render_text(summary: &Value) -> String {
             record["decision"].as_str().unwrap_or("?"),
             record["node"].as_str().unwrap_or("?"),
             element,
-            record["actor"].as_str().unwrap_or("?"),
+            escape_controls(record["actor"].as_str().unwrap_or("?")),
             record["at"].as_u64().unwrap_or(0),
-            record["reason"].as_str().unwrap_or("")
+            escape_controls(record["reason"].as_str().unwrap_or(""))
         ));
     }
     let unresolved = summary["unresolved_uncertain"].as_array();
@@ -1048,6 +1049,40 @@ mod resume_action_tests {
             .write_all(b"{\"kind\":\"commit\",\"index\":2}\n")
             .unwrap();
         assert!(pending_elements(directory.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_text_escapes_bidi_and_c1_in_resolution_and_error_fields() {
+        let summary = json!({
+            "directory": "dir",
+            "journal": {
+                "status": "failed",
+                "completed_nodes": 0,
+                "in_flight": null,
+                "error": "err\u{202e}or\u{9b}31m",
+            },
+            "blobs": {"count": 0, "bytes": 0},
+            "resume_action": "none",
+            "resolutions": [{
+                "decision": "committed",
+                "node": "n1",
+                "actor": "ac\u{202e}tor\u{9b}",
+                "at": 1,
+                "reason": "rea\u{202e}son\u{9b}",
+            }],
+            "unresolved_uncertain": [],
+        });
+        let text = render_text(&summary);
+        assert!(
+            !text.contains('\u{202e}'),
+            "raw bidi override in text output: {text:?}"
+        );
+        assert!(
+            !text.contains('\u{9b}'),
+            "raw C1 control in text output: {text:?}"
+        );
+        assert!(text.contains(r"\u{202e}"), "{text:?}");
+        assert!(text.contains(r"\u{9b}"), "{text:?}");
     }
 
     #[cfg(unix)]

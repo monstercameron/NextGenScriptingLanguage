@@ -355,7 +355,11 @@ pub(super) fn open(path: &Path, key: &str) -> Result<Option<Cursor<Vec<u8>>>> {
         pinned_directory,
     )?
     else {
-        bail!("cached result has no integrity tag (legacy or incomplete); refusing cached result");
+        // The tag is published last, as the commit point of a write, so a
+        // payload with no tag is an interrupted publication, not a usable
+        // entry. Report a miss so the caller recomputes and republishes,
+        // instead of failing or returning unverified bytes.
+        return Ok(None);
     };
     let integrity_key = crate::agent::what_if_key::load_or_create()
         .context("loading per-user cache integrity key")?;
@@ -427,13 +431,31 @@ pub(super) fn write(path: &Path, key: &str, bytes: &[u8]) -> Result<bool> {
     let integrity_key = crate::agent::what_if_key::load_or_create()
         .context("loading per-user cache integrity key")?;
     let tag = integrity_tag(&integrity_key, key, bytes);
+    // Invalidate any previous tag before replacing the payload, then
+    // publish the new tag last as the commit point. An interruption can
+    // then only leave an untagged payload, which readers treat as a miss,
+    // never a payload paired with a tag that does not authenticate it.
     #[cfg(unix)]
     {
+        let old_tag = std::ffi::CString::new(format!("{key}.hmac").as_bytes())?;
+        // SAFETY: the name is a generated single path component and the
+        // pinned directory descriptor remains open through unlinkat.
+        if unsafe { libc::unlinkat(pinned_directory.as_raw_fd(), old_tag.as_ptr(), 0) } == 0 {
+            pinned_directory
+                .sync_all()
+                .context("syncing cache directory after invalidating cache tag")?;
+        } else {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error).context("invalidating previous cache integrity tag");
+            }
+        }
         atomic_write_child(pinned_directory, &format!("{key}.bin"), bytes)?;
         atomic_write_child(pinned_directory, &format!("{key}.hmac"), tag.as_bytes())?;
     }
     #[cfg(not(unix))]
     {
+        remove_checksum(&checksum)?;
         atomic_write(&path, bytes)?;
         atomic_write(&checksum, tag.as_bytes())?;
     }
@@ -1000,16 +1022,46 @@ mod tests {
         fs::write(entry(&directory, KEY), b"legacy untagged result").unwrap();
         #[cfg(unix)]
         fs::set_permissions(entry(&directory, KEY), fs::Permissions::from_mode(0o600)).unwrap();
-        // Legacy entries cannot be authenticated and must not silently trigger a rerun.
-        assert!(open(&directory, KEY).is_err());
+        // An untagged payload is the state an interrupted publication
+        // leaves behind, so it is a cache miss, never a usable result.
+        assert!(open(&directory, KEY).unwrap().is_none());
 
         write(&directory, KEY, b"authenticated result").unwrap();
         fs::remove_file(checksum_entry(&directory, KEY)).unwrap();
-        assert!(open(&directory, KEY).is_err());
+        assert!(open(&directory, KEY).unwrap().is_none());
 
         write(&directory, KEY, b"authenticated result").unwrap();
         fs::write(checksum_entry(&directory, KEY), b"not-a-valid-tag").unwrap();
         assert!(open(&directory, KEY).is_err());
+    }
+
+    #[test]
+    fn interrupted_publication_pairs_are_treated_as_absent() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("cache");
+        write(&directory, KEY, b"first result").unwrap();
+
+        // Interruption after the payload step of a replacement: the old
+        // tag was invalidated and the new payload has no tag yet.
+        fs::remove_file(checksum_entry(&directory, KEY)).unwrap();
+        fs::write(entry(&directory, KEY), b"second result").unwrap();
+        assert!(open(&directory, KEY).unwrap().is_none());
+
+        // The incomplete pair does not block a later complete publication.
+        write(&directory, KEY, b"second result").unwrap();
+        assert_eq!(
+            capture(open(&directory, KEY).unwrap().unwrap(), 64).unwrap(),
+            b"second result"
+        );
+
+        // A tag whose payload is missing is likewise absent, not usable.
+        fs::remove_file(entry(&directory, KEY)).unwrap();
+        assert!(open(&directory, KEY).unwrap().is_none());
+        write(&directory, KEY, b"third result").unwrap();
+        assert_eq!(
+            capture(open(&directory, KEY).unwrap().unwrap(), 64).unwrap(),
+            b"third result"
+        );
     }
 
     #[cfg(unix)]

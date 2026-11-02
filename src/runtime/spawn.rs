@@ -650,6 +650,7 @@ pub(super) fn execute_group_with_sink(
         launched,
         signals,
     } = request;
+    validate_kill_grace(options.kill_grace)?;
     let mut writer = InputWriter::default();
     let mut children = Children(
         Vec::with_capacity(calls.len()),

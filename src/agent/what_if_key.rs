@@ -17,8 +17,10 @@
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
+#[cfg(all(not(windows), not(unix)))]
+use std::fs::File;
 #[cfg(not(windows))]
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -132,9 +134,46 @@ fn read_existing(path: &Path) -> Result<Option<[u8; KEY_BYTES]>> {
     #[cfg(windows)]
     let mut file = crate::security::open_private_file(path)
         .with_context(|| format!("reading the what-if key {}", path.display()))?;
-    #[cfg(not(windows))]
-    let mut file =
-        File::open(path).with_context(|| format!("reading the what-if key {}", path.display()))?;
+    // Open without following a final symlink and without blocking on a special
+    // file, then validate the opened descriptor itself: the pathname checks
+    // above can be raced by a replacement between check and open.
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC);
+        match options.open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading the what-if key {}", path.display()))
+            }
+        }
+    };
+    #[cfg(all(not(windows), not(unix)))]
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading the what-if key {}", path.display()))
+        }
+    };
+    let opened = file
+        .metadata()
+        .with_context(|| format!("checking the what-if key {}", path.display()))?;
+    #[cfg(unix)]
+    validate_opened_key(path, &opened)?;
+    #[cfg(not(unix))]
+    if !opened.is_file() {
+        bail!(
+            "the what-if key {} is not a regular file; remove it and run again to create a new key",
+            path.display()
+        );
+    }
     let mut bytes = Vec::with_capacity(KEY_BYTES + 1);
     (&mut file)
         .take(KEY_BYTES as u64 + 1)
@@ -149,6 +188,43 @@ fn read_existing(path: &Path) -> Result<Option<[u8; KEY_BYTES]>> {
     let mut key = [0u8; KEY_BYTES];
     key.copy_from_slice(&bytes);
     Ok(Some(key))
+}
+
+/// Validate the opened key descriptor on Unix: a regular file owned by the
+/// effective user with no group or other permission bits.
+#[cfg(unix)]
+fn validate_opened_key(path: &Path, metadata: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    check_opened_key(
+        path,
+        metadata.is_file(),
+        metadata.uid(),
+        metadata.mode(),
+        crate::platform::unix_ffi::effective_uid(),
+    )
+}
+
+#[cfg(unix)]
+fn check_opened_key(path: &Path, is_file: bool, uid: u32, mode: u32, euid: u32) -> Result<()> {
+    if !is_file {
+        bail!(
+            "the what-if key {} is not a regular file; remove it and run again to create a new key",
+            path.display()
+        );
+    }
+    if uid != euid {
+        bail!(
+            "the what-if key {} is not owned by the current user; remove it and run again to create a new key",
+            path.display()
+        );
+    }
+    if mode & 0o077 != 0 {
+        bail!(
+            "the what-if key {} is readable by other users; set its mode to 0600, or remove it to create a new key",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -282,6 +358,63 @@ mod tests {
         let error = load_or_create_at(&path).expect_err("a short key must be refused");
         assert!(
             format!("{error:#}").contains("is not 32 bytes"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn an_opened_key_owned_by_another_user_is_refused() {
+        let (_directory, path) = private_path();
+        // A private regular file whose owner differs from the effective uid.
+        let error = check_opened_key(&path, true, 65534, 0o600, 1000)
+            .expect_err("a foreign-owned key must be refused");
+        assert!(
+            format!("{error:#}").contains("not owned by the current user"),
+            "{error:#}"
+        );
+        // The same file owned by the effective user passes, and a substituted
+        // non-regular object or group/other bits on the opened fd do not.
+        check_opened_key(&path, true, 1000, 0o600, 1000).unwrap();
+        assert!(check_opened_key(&path, false, 1000, 0o600, 1000).is_err());
+        assert!(check_opened_key(&path, true, 1000, 0o640, 1000).is_err());
+    }
+
+    #[test]
+    fn a_foreign_owned_key_is_refused_when_chown_is_available() {
+        use std::os::unix::ffi::OsStrExt;
+        let (_directory, path) = private_path();
+        load_or_create_at(&path).unwrap();
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the C path is NUL-terminated and valid for the chown call.
+        let changed = unsafe { libc::chown(c_path.as_ptr(), 65534, u32::MAX) } == 0;
+        if !changed {
+            // Changing ownership needs privileges; keep this active on
+            // privileged builders while ordinary runs stay portable.
+            return;
+        }
+        let error = load_or_create_at(&path).expect_err("a foreign-owned key must be refused");
+        // SAFETY: as above; restoring the owner lets TempDir clean up.
+        assert_eq!(
+            unsafe { libc::chown(c_path.as_ptr(), libc::geteuid(), u32::MAX) },
+            0
+        );
+        assert!(
+            format!("{error:#}").contains("not owned by the current user"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn a_fifo_at_the_key_path_is_refused_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+        let (_directory, path) = private_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the C path is NUL-terminated and valid for the mkfifo call.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let error = load_or_create_at(&path).expect_err("a FIFO must be refused, not read");
+        assert!(
+            format!("{error:#}").contains("not a regular file"),
             "{error:#}"
         );
     }

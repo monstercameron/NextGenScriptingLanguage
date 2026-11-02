@@ -457,6 +457,7 @@ impl GroupSink for GroupJournal<'_> {
                     "for each element {index} may contain an interrupted side effect; pass --retry-uncertain to retry"
                 );
             }
+            consume_element_retry(self.journal, &resolutions, step_id.as_deref(), index)?;
         }
         let fingerprint = element_fingerprint(&self.node_fingerprint, index, &self.items[index])?;
         self.journal.append_element(&ElementLine::Begin {
@@ -615,6 +616,35 @@ fn check_pending(journal: &Journal, pending: &[PendingElement]) -> Result<()> {
                 element.index
             );
         }
+    }
+    Ok(())
+}
+
+/// Spend one element's `retry` resolution as its authorized attempt starts
+/// (#709), before the begin record below is appended and before the element
+/// runs. The bulk `--retry-uncertain` flag spends no per-element record,
+/// and `committed` records are never consumed.
+fn consume_element_retry(
+    journal: &Journal,
+    resolutions: &[super::resolutions::ResolutionRecord],
+    step_id: Option<&str>,
+    index: usize,
+) -> Result<()> {
+    if journal.retry_uncertain {
+        return Ok(());
+    }
+    let Some(id) = step_id else {
+        return Ok(());
+    };
+    let is_retry = super::resolutions::element_resolution(resolutions, id, index)
+        .is_some_and(|record| record.decision == super::resolutions::ResolutionDecision::Retry);
+    if is_retry {
+        super::resolutions::consume_retry_resolution(
+            &journal.directory,
+            id,
+            Some(index),
+            journal.max_output_bytes,
+        )?;
     }
     Ok(())
 }
@@ -809,6 +839,7 @@ pub(in crate::runtime) fn for_each_element_begin(
                 "for each element {element} may contain an interrupted side effect; pass --retry-uncertain to retry"
             );
         }
+        consume_element_retry(journal, &resolutions, step_id.as_deref(), element)?;
     }
     let fingerprint = element_fingerprint(&journal.element_node_fingerprint()?, element, item)?;
     journal.append_element(&ElementLine::Begin {
@@ -1754,6 +1785,157 @@ mod tests {
             }]
         )
         .is_ok());
+    }
+
+    fn retry_record(
+        node: &str,
+        element: Option<usize>,
+    ) -> crate::runtime::checkpoint::resolutions::ResolutionRecord {
+        use crate::runtime::checkpoint::resolutions::{ResolutionDecision, RESOLUTION_VERSION};
+        crate::runtime::checkpoint::resolutions::ResolutionRecord {
+            version: RESOLUTION_VERSION,
+            node: node.to_owned(),
+            element,
+            decision: ResolutionDecision::Retry,
+            reason: "checked".to_owned(),
+            actor: "tester".to_owned(),
+            at: 1,
+            output: None,
+            bindings: None,
+            fingerprint: None,
+        }
+    }
+
+    /// #709: a node-level retry resolution authorizes exactly one attempt.
+    /// After that attempt fails, a later resume is refused until a fresh
+    /// retry decision is recorded.
+    #[test]
+    fn retry_resolution_authorizes_one_node_attempt_only() {
+        let temp = tempdir().unwrap();
+        let options = options(temp.path());
+        let cwd = temp.path().join("work");
+        fs::create_dir(&cwd).unwrap();
+        let begin = |journal: &mut Journal| {
+            journal
+                .begin_node_record(NodeBegin {
+                    fingerprint: "effect-node",
+                    start: 0,
+                    end: 1,
+                    line: 1,
+                    cwd_before: &cwd,
+                    retry_safe: false,
+                    step_id: Some("step:effect#1".to_owned()),
+                    element_kind: None,
+                })
+                .unwrap();
+        };
+        let mut journal = open(&options, &cwd);
+        begin(&mut journal);
+        journal.fail("attempt interrupted", true).unwrap();
+        drop(journal);
+
+        crate::runtime::checkpoint::resolutions::append_resolution(
+            &options.directory,
+            &retry_record("step:effect#1", None),
+        )
+        .unwrap();
+
+        // The resolution allows one attempt, which then fails.
+        let mut journal = open(&resuming(&options), &cwd);
+        assert!(journal.ensure_retry_allowed().is_ok());
+        begin(&mut journal);
+        journal.fail("retry attempt failed", false).unwrap();
+        drop(journal);
+
+        // The spent resolution must not authorize another attempt.
+        let journal = open(&resuming(&options), &cwd);
+        assert!(
+            journal.ensure_retry_allowed().is_err(),
+            "a spent retry resolution authorized a second attempt"
+        );
+        drop(journal);
+
+        // A fresh decision authorizes one more attempt.
+        crate::runtime::checkpoint::resolutions::append_resolution(
+            &options.directory,
+            &retry_record("step:effect#1", None),
+        )
+        .unwrap();
+        let journal = open(&resuming(&options), &cwd);
+        assert!(journal.ensure_retry_allowed().is_ok());
+    }
+
+    /// #709, element counterpart: a per-element retry resolution authorizes
+    /// exactly one attempt of that element (parallel begin path).
+    #[test]
+    fn retry_resolution_authorizes_one_element_attempt_only() {
+        let temp = tempdir().unwrap();
+        let options = options(temp.path());
+        let cwd = temp.path().join("work");
+        fs::create_dir(&cwd).unwrap();
+        let mut journal = open(&options, &cwd);
+        journal
+            .begin_node_record(NodeBegin {
+                fingerprint: "loop-node",
+                start: 0,
+                end: 2,
+                line: 1,
+                cwd_before: &cwd,
+                retry_safe: true,
+                step_id: Some("step:loop#1".to_owned()),
+                element_kind: Some(ElementNodeKind::ParallelForEach),
+            })
+            .unwrap();
+        journal
+            .append_element(&ElementLine::Begin {
+                index: 0,
+                fingerprint: "f0".into(),
+                uncertain: true,
+            })
+            .unwrap();
+        journal.fail("attempt interrupted", true).unwrap();
+        drop(journal);
+
+        crate::runtime::checkpoint::resolutions::append_resolution(
+            &options.directory,
+            &retry_record("step:loop#1", Some(0)),
+        )
+        .unwrap();
+
+        // The resolution allows one attempt of element 0, which then fails.
+        let mut journal = open(&resuming(&options), &cwd);
+        let replay = journal.take_element_replay().unwrap();
+        assert!(check_pending(&journal, &replay.pending).is_ok());
+        {
+            let mut sink = GroupJournal {
+                journal: &mut journal,
+                node_fingerprint: "loop-node".to_owned(),
+                items: vec![Value::String("a".into())],
+                uncertain: true,
+            };
+            <GroupJournal as crate::runtime::tasks::GroupSink>::begin(&mut sink, 0).unwrap();
+        }
+        journal.fail("retry attempt failed", false).unwrap();
+        drop(journal);
+
+        // The spent resolution must not authorize another attempt.
+        let mut journal = open(&resuming(&options), &cwd);
+        let replay = journal.take_element_replay().unwrap();
+        assert!(
+            check_pending(&journal, &replay.pending).is_err(),
+            "a spent retry resolution authorized a second element attempt"
+        );
+        drop(journal);
+
+        // A fresh decision authorizes one more attempt.
+        crate::runtime::checkpoint::resolutions::append_resolution(
+            &options.directory,
+            &retry_record("step:loop#1", Some(0)),
+        )
+        .unwrap();
+        let mut journal = open(&resuming(&options), &cwd);
+        let replay = journal.take_element_replay().unwrap();
+        assert!(check_pending(&journal, &replay.pending).is_ok());
     }
 
     /// Two element lines are covered by a journal write; a third is only covered by

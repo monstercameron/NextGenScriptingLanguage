@@ -1377,6 +1377,30 @@ impl Journal {
                 }
             }
         }
+        // Issue #709: a node-level `retry` resolution authorizes exactly one
+        // attempt. Re-beginning the in-flight uncertain node is that attempt
+        // starting, so consume its record durably before the new in-flight
+        // state is persisted and before any effect runs; a later failure
+        // then needs a fresh decision. The bulk `--retry-uncertain` flag
+        // does not spend a per-node record, element nodes resolve (and
+        // consume) per element, and `committed` records are never consumed.
+        if self.resuming && !self.retry_uncertain && element_kind.is_none() {
+            let retry_step = self.data.in_flight.as_ref().and_then(|old| {
+                (old.start == start && !old.retry_safe && old.step_id == step_id)
+                    .then(|| old.step_id.clone())
+                    .flatten()
+            });
+            if let Some(id) = retry_step {
+                if !in_flight_is_element_node(self)? {
+                    resolutions::consume_retry_resolution(
+                        &self.directory,
+                        &id,
+                        None,
+                        self.max_output_bytes,
+                    )?;
+                }
+            }
+        }
         let previous_status = self.data.status;
         let previous_error = self.data.error.take();
         // A node re-begun at the step where the in-flight node started is the same loop

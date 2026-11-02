@@ -693,7 +693,13 @@ pin is optional. `sandbox_required: false` checks declarations and host file
 paths but does not isolate the child process. `sandbox_required: true` opts in
 to platform OS enforcement for command and worker processes; an unsupported or
 unavailable backend fails before workflow effects. In-process operations cannot
-use that OS sandbox. See [security boundaries](../SECURITY.md#applet-contracts-and-optional-capability-policy)
+use that OS sandbox. Each applet grant may also set `resource_limits` with any
+of `cpu_secs`, `address_space_mb` (Linux only), `file_size_mb`,
+`max_processes` and `open_files`; absent knobs take finite untrusted-mode
+defaults and stay unbounded in trusted mode, and zero is rejected. A bound
+that cannot be installed refuses the spawn instead of running unbounded.
+CPU and file-size kills surface as the typed `resource_exhaust` result.
+See [security boundaries](../SECURITY.md#applet-contracts-and-optional-capability-policy)
 for path rules, platform details and the limits of each mechanism.
 
 ### Privileged steps: `deny_privileged` (best effort)

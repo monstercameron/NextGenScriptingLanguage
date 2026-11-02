@@ -1698,17 +1698,28 @@ fn handle_request(
 ) -> Result<Json> {
     let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
     if let Some(policy) = agent_policy.as_ref() {
-        let required = auth::required_permission(&op, action.as_deref()).ok();
-        let authorization = policy.authorize(auth.as_ref(), &op, action.as_deref());
-        if let Some(required) = required {
-            let (permission, risk) = match required {
+        let mut required = auth::required_permission(&op, action.as_deref())
+            .map(|permission| vec![permission])
+            .unwrap_or_default();
+        if required == [auth::AgentPermission::Edit] && auth::edit_injects_input(&op, &value) {
+            required.push(auth::AgentPermission::Input);
+        }
+        let authorization = if required.is_empty() {
+            auth::required_permission(&op, action.as_deref())
+                .and_then(|permission| policy.authorize_permissions(auth.as_ref(), &[permission]))
+        } else {
+            policy.authorize_permissions(auth.as_ref(), &required)
+        };
+        for permission in &required {
+            let (permission_name, risk) = match permission {
                 auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
                 auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
                 auth::AgentPermission::Control => ("control", crate::security::PolicyRisk::High),
                 auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
                 auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
             };
-            let (outcome, reason) = if authorization.is_ok() {
+            let one_authorization = policy.authorize_permissions(auth.as_ref(), &[*permission]);
+            let (outcome, reason) = if one_authorization.is_ok() {
                 (
                     crate::security::PolicyDecisionOutcome::Approved,
                     crate::security::PolicyDecisionReason::PolicyMatched,
@@ -1725,7 +1736,7 @@ fn handle_request(
             crate::security::record_policy_decision(
                 &shared.registry,
                 subject,
-                &format!("live.{permission}"),
+                &format!("live.{permission_name}"),
                 None,
                 risk,
                 outcome,

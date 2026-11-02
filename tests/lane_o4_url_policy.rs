@@ -58,6 +58,7 @@ fn capability_endpoint_rejects_non_ascii_hosts_even_when_idna_matches() {
         network: true,
         network_origins: BTreeSet::from(["https://xn--bcher-kva.example".to_owned()]),
         sandbox_required: false,
+        resource_limits: None,
     };
     registry.set_host_state(Some(CapabilityPolicy {
         host: None,

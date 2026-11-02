@@ -11,6 +11,12 @@ struct Children(Vec<ManagedChild>, Option<Arc<Mutex<Vec<bool>>>>);
 /// Kill the process group that `pid` leads. Callers use this only while the leader is still
 /// unreaped (see `reap_exited`), so `pid` still names the group that was spawned.
 fn kill_group(pid: u32) {
+    signal_group(pid, libc::SIGKILL);
+}
+
+/// Send `signal` to the process group that `pid` leads. See `kill_group` for
+/// the pid-lifetime contract.
+fn signal_group(pid: u32, signal: libc::c_int) {
     // Each applet starts its own group. A negative PID addresses descendants
     // that retain that group, without touching the runner or its terminal.
     // SAFETY: kill(2) takes no pointers. Applets are spawned with process_group(0), so `pid`
@@ -18,7 +24,88 @@ fn kill_group(pid: u32) {
     // leader is running or an unreaped zombie, so it cannot have been recycled for another
     // process group.
     unsafe {
-        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+        libc::kill(-(pid as libc::pid_t), signal);
+    }
+}
+
+/// Polite signal for escalation: SIGINT when the run was interrupted by SIGINT
+/// so a Ctrl-C reaches the child's own group (the terminal never delivers it
+/// there), otherwise SIGTERM. Timeouts always use SIGTERM.
+///
+/// Takes the interrupting run's own exit code, never the process-global
+/// fallback, so overlapping runs cannot cross-poison each other's choice: one
+/// run's SIGINT never turns another run's timeout into SIGINT, and a stale
+/// global SIGINT never leaks into a fresh run's timeout (issue #525).
+fn escalation_signal_for(cancel: Option<i32>) -> libc::c_int {
+    match cancel {
+        Some(130) => libc::SIGINT,
+        _ => libc::SIGTERM,
+    }
+}
+
+/// Whether the group leader `pid` has exited without being reaped. `waitid`
+/// with WNOWAIT leaves the zombie in place, which keeps its pid reserved, so
+/// a live-or-zombie leader still names the group that was spawned.
+fn group_exited(pid: u32) -> bool {
+    // A stale id only yields ESRCH from the group signal; never touch the
+    // runner's own group.
+    matches!(exited_unreaped(pid), Ok(true) | Err(_))
+}
+
+/// Escalate every still-unreaped group before the abort error unwinds. All
+/// live groups get the polite signal up front, then one grace wait shared by
+/// every group, then SIGKILL only for groups that are still running — so the
+/// abort cost is one `grace`, not N times it. Pids are only signalled while
+/// their leader is an unreaped zombie or running (see `signal_group`), and
+/// nothing here reaps; the `Children` drop owns the final wait. Bounded by
+/// `grace` plus a poll slice plus the drop's own bound.
+///
+/// The polite signal comes from this run's own `Signals` slot (SIGINT only
+/// when this run recorded SIGINT), never from the process-global fallback, so
+/// simultaneous runs keep their own escalation choice. Cleanup scopes share
+/// the run's slot, so a double interrupt during cleanup keeps the SIGINT
+/// escalation.
+fn escalate_unreaped_for_abort(children: &Children, signals: &Signals) {
+    let first = escalation_signal_for(signals.cancel_exit_code());
+    let grace = signals.kill_grace;
+    // Snapshot the groups that are still owned: signalling the whole set first
+    // keeps one slow ignorer from delaying the polite signal to the rest.
+    let live: Vec<u32> = children
+        .0
+        .iter()
+        .filter(|child| !child.reaped)
+        .map(|child| child.child.id())
+        .filter(|pid| !group_exited(*pid))
+        .collect();
+    for pid in &live {
+        signal_group(*pid, first);
+    }
+    if grace.is_zero() {
+        for pid in &live {
+            // Re-check: a child that exited on the polite signal since the
+            // snapshot must keep its status instead of taking a SIGKILL.
+            if !group_exited(*pid) {
+                signal_group(*pid, libc::SIGKILL);
+            }
+        }
+        return;
+    }
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        if live.iter().all(|pid| group_exited(*pid)) {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Re-check before SIGKILL so a child that trapped the polite signal and
+    // exited during the last slice keeps its cleanup status.
+    for pid in &live {
+        if !group_exited(*pid) {
+            signal_group(*pid, libc::SIGKILL);
+        }
     }
 }
 
@@ -715,6 +802,134 @@ mod supervisor_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod escalation_tests {
+    use super::*;
+
+    #[test]
+    fn polite_signal_follows_sigint_only() {
+        // No interrupt (including after a clear): the polite signal is
+        // SIGTERM, so timeouts never inherit an older run's SIGINT.
+        assert_eq!(escalation_signal_for(None), libc::SIGTERM);
+        assert_eq!(
+            escalation_signal_for(Some(crate::platform::exit_code_for_signal(libc::SIGTERM))),
+            libc::SIGTERM
+        );
+        assert_eq!(
+            escalation_signal_for(Some(crate::platform::exit_code_for_signal(libc::SIGINT))),
+            libc::SIGINT
+        );
+        // Only SIGINT (exit 130) escalates as SIGINT; other interrupts and
+        // timeouts stay SIGTERM.
+        assert_eq!(escalation_signal_for(Some(143)), libc::SIGTERM);
+        assert_eq!(escalation_signal_for(Some(129)), libc::SIGTERM);
+    }
+
+    #[test]
+    fn simultaneous_runs_keep_their_own_escalation_choice() {
+        // Cross-run poisoning regression (issue #525): escalation reads the
+        // interrupting run's own slot, never the process-global fallback, so
+        // two simultaneous slots keep distinct choices while the fallback says
+        // the opposite. Uses synthetic per-slot records (no real delivery),
+        // serialized through the global-fallback lock.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::platform::clear_cancel_signal();
+        let interrupted = Signals::with_cancellation_and_deadline(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false,
+            None,
+        )
+        .unwrap();
+        let timed_out = Signals::with_cancellation_and_deadline(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false,
+            None,
+        )
+        .unwrap();
+        interrupted.record_cancel_signal(libc::SIGINT);
+        // The global fallback disagrees with both slots here: it must not
+        // move either run's escalation.
+        crate::platform::record_cancel_signal(libc::SIGTERM);
+        assert_eq!(
+            escalation_signal_for(interrupted.cancel_exit_code()),
+            libc::SIGINT
+        );
+        assert_eq!(
+            escalation_signal_for(timed_out.cancel_exit_code()),
+            libc::SIGTERM
+        );
+        // Reverse poisoning: a stale global SIGINT must not turn the other
+        // run's timeout into SIGINT.
+        crate::platform::record_cancel_signal(libc::SIGINT);
+        assert_eq!(
+            escalation_signal_for(interrupted.cancel_exit_code()),
+            libc::SIGINT
+        );
+        assert_eq!(
+            escalation_signal_for(timed_out.cancel_exit_code()),
+            libc::SIGTERM
+        );
+        crate::platform::clear_cancel_signal();
+    }
+
+    #[test]
+    fn termios_save_restore_round_trips_on_a_pty() {
+        let mut master: libc::c_int = -1;
+        let mut slave: libc::c_int = -1;
+        // SAFETY: plain out-fds; defaults for name, termios and window size.
+        assert_eq!(
+            // SAFETY: plain out-fds; null name, termios, and window size.
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let saved = save_termios(slave).expect("pty slave has termios");
+        // Simulate a raw-mode child: clear canonical mode and echo.
+        // SAFETY: the termios comes from the live slave descriptor.
+        let mut altered = saved;
+        altered.c_lflag &= !(libc::ICANON | libc::ECHO);
+        assert_eq!(
+            // SAFETY: the termios comes from the live slave descriptor.
+            unsafe { libc::tcsetattr(slave, libc::TCSANOW, &altered) },
+            0
+        );
+        let current = save_termios(slave).expect("pty slave still has termios");
+        assert_eq!(current.c_lflag & libc::ICANON, 0);
+        restore_termios(slave, &saved);
+        let restored = save_termios(slave).expect("pty slave still has termios");
+        assert_eq!(
+            termios_bytes(&restored),
+            termios_bytes(&saved),
+            "restore must bring back every saved setting"
+        );
+        // SAFETY: both ends came from the openpty above and are still open.
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+    }
+
+    fn termios_bytes(settings: &libc::termios) -> Vec<u8> {
+        // SAFETY: termios is plain data; the slice only reads it.
+        unsafe {
+            std::slice::from_raw_parts(
+                settings as *const libc::termios as *const u8,
+                std::mem::size_of::<libc::termios>(),
+            )
+            .to_vec()
+        }
+    }
+}
+
 /// Exit status for a run ended by an interrupt (128 plus the signal number).
 pub fn interrupt_exit_code() -> Option<i32> {
     crate::platform::cancel_exit_code()
@@ -726,13 +941,39 @@ pub fn record_interrupt(signal: i32) {
     crate::platform::record_cancel_signal(signal);
 }
 
+/// Read the current terminal settings for `fd`. A failure (not a terminal,
+/// `tcgetattr` error) yields `None`, which disables restore.
+fn save_termios(fd: libc::c_int) -> Option<libc::termios> {
+    // SAFETY: termios is plain data; tcgetattr writes only through the pointer.
+    let mut raw: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: tcgetattr writes only through the pointer to plain data.
+    if unsafe { libc::tcgetattr(fd, &mut raw) } == 0 {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+/// Restore terminal settings saved by `save_termios`. Runs before the
+/// SIGTTOU disposition is restored so the settings land while the parent
+/// still owns the terminal.
+fn restore_termios(fd: libc::c_int, saved: &libc::termios) {
+    // SAFETY: tcsetattr reads only through the pointer for TCSANOW.
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, saved);
+    }
+}
+
 /// Foreground ownership for one `interactively` command. The child leads its own
 /// process group and is the terminal's foreground group while this value lives.
-/// Dropping it returns the foreground to the parent's group and restores the
-/// parent's SIGTTOU disposition, on success and on error.
+/// Dropping it returns the foreground to the parent's group, restores the
+/// saved termios settings (issue #525: killing vim/less must not leave raw
+/// mode), and restores the parent's SIGTTOU disposition, on success and on
+/// error.
 struct TerminalForeground {
     parent_group: libc::pid_t,
     previous_ttou: libc::sighandler_t,
+    saved_termios: Option<libc::termios>,
 }
 
 impl TerminalForeground {
@@ -745,6 +986,10 @@ impl TerminalForeground {
         }
         // SAFETY: getpgrp has no preconditions.
         let parent_group = unsafe { libc::getpgrp() };
+        // Save termios before the handoff so a killed interactive child
+        // (vim, less, or a raw-mode probe) cannot leave the terminal altered.
+        // Descriptor 0 is open here because isatty just succeeded.
+        let saved_termios = save_termios(libc::STDIN_FILENO);
         // A background process group may change the foreground only while
         // SIGTTOU is ignored. The child inherits this until its pre-exec hook
         // restores the default disposition.
@@ -765,6 +1010,7 @@ impl TerminalForeground {
         Some(Self {
             parent_group,
             previous_ttou,
+            saved_termios,
         })
     }
 
@@ -782,8 +1028,14 @@ impl Drop for TerminalForeground {
     fn drop(&mut self) {
         // SAFETY: as in `begin`. SIGTTOU stays ignored until after the parent
         // has reclaimed the foreground, which a background process needs.
+        // The termios restore uses the settings saved in `begin`; a `None`
+        // save means stdin was not a terminal or tcgetattr failed, so there
+        // is nothing to restore.
         unsafe {
             libc::tcsetpgrp(libc::STDIN_FILENO, self.parent_group);
+            if let Some(saved) = &self.saved_termios {
+                restore_termios(libc::STDIN_FILENO, saved);
+            }
             libc::signal(libc::SIGTTOU, self.previous_ttou);
         }
     }

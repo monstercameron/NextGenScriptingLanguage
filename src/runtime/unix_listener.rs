@@ -219,14 +219,20 @@ mod native_listener_tests {
 
     fn run_fixture_status_source(status: i32, outcomes: serde_json::Value) -> FixtureListenerRun {
         let directory = tempfile::tempdir().unwrap();
-        let fixture = std::env::current_exe()
+        let exported = std::env::current_exe()
             .unwrap()
             .parent()
             .unwrap()
             .parent()
             .unwrap()
             .join(format!("native-fixture{}", std::env::consts::EXE_SUFFIX));
-        assert!(fixture.is_file(), "native fixture binary is missing");
+        assert!(exported.is_file(), "native fixture binary is missing");
+        // Stage a single-link copy: the exported binary shares links with
+        // cargo's deps dir, which the trusted-executable gate rejects.
+        let fixture = directory
+            .path()
+            .join(format!("native-fixture{}", std::env::consts::EXE_SUFFIX));
+        std::fs::copy(&exported, &fixture).unwrap();
         let manifest = serde_json::json!({
             "name": "test.producer",
             "binary": fixture,

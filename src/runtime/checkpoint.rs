@@ -653,6 +653,19 @@ impl Journal {
                 bail!("checkpoint directory changed while resolving its path");
             }
         }
+        if options.resume {
+            #[cfg(unix)]
+            let root_metadata = directory_handle.metadata()?;
+            #[cfg(windows)]
+            let root_metadata = fs::symlink_metadata(&directory)
+                .context("inspecting checkpoint root permissions")?;
+            crate::security::verify_private_checkpoint_directory(
+                &directory,
+                &root_metadata,
+                #[cfg(unix)]
+                &directory_handle,
+            )?;
+        }
         if !options.resume && !recovering_fresh {
             #[cfg(unix)]
             directory_handle.set_permissions(fs::Permissions::from_mode(0o700))?;
@@ -4005,6 +4018,135 @@ mod tests {
             fs::read(options.directory.join("keep.txt")).unwrap(),
             b"keep"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_rejects_checkpoint_root_readable_by_other_users_without_chmod() {
+        let (_temp, mut options, cwd) = setup();
+        drop(Journal::open(&options, &cwd, "finite", 1024).unwrap());
+        fs::set_permissions(&options.directory, fs::Permissions::from_mode(0o755)).unwrap();
+        let journal_before = fs::read(options.directory.join("journal.json")).unwrap();
+        options.resume = true;
+
+        let error = Journal::open(&options, &cwd, "finite", 1024)
+            .err()
+            .expect("resume must reject a public checkpoint root");
+        assert!(format!("{error:#}").contains("must be owned by the current user and private"));
+        assert_eq!(
+            fs::metadata(&options.directory)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755,
+            "refusal must not silently change the existing root"
+        );
+        assert_eq!(
+            fs::read(options.directory.join("journal.json")).unwrap(),
+            journal_before,
+            "refusal must happen before reading or rewriting journal state"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_accepts_a_private_checkpoint_root() {
+        let (_temp, mut options, cwd) = setup();
+        drop(Journal::open(&options, &cwd, "finite", 1024).unwrap());
+        options.resume = true;
+        let journal = Journal::open(&options, &cwd, "finite", 1024)
+            .expect("a normal private checkpoint remains resumable");
+        drop(journal);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resume_rejects_checkpoint_root_with_an_extended_acl() {
+        use std::process::Command;
+
+        let (_temp, mut options, cwd) = setup();
+        drop(Journal::open(&options, &cwd, "finite", 1024).unwrap());
+        let acl = Command::new("setfacl")
+            .args(["-m", "u:65534:rwx,m::---"])
+            .arg(&options.directory)
+            .status();
+        let Ok(status) = acl else {
+            // Some minimal Linux environments omit the optional ACL utility.
+            return;
+        };
+        if !status.success() {
+            return;
+        }
+        options.resume = true;
+        let error = Journal::open(&options, &cwd, "finite", 1024)
+            .err()
+            .expect("an ACL-bearing root must not be resumed");
+        assert!(format!("{error:#}").contains("extended ACL"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resume_rejects_checkpoint_root_with_a_macos_acl() {
+        use std::process::Command;
+
+        let (_temp, mut options, cwd) = setup();
+        drop(Journal::open(&options, &cwd, "finite", 1024).unwrap());
+        let acl = Command::new("chmod")
+            .args([
+                "+a",
+                "everyone allow list,search,add_file,add_subdirectory,delete_child",
+            ])
+            .arg(&options.directory)
+            .status();
+        let Ok(status) = acl else {
+            return;
+        };
+        if !status.success() {
+            return;
+        }
+        assert_eq!(
+            fs::metadata(&options.directory)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o077,
+            0,
+            "the test must exercise ACL access that mode bits do not reveal"
+        );
+        options.resume = true;
+        let error = Journal::open(&options, &cwd, "finite", 1024)
+            .err()
+            .expect("a macOS ACL on the root must not be resumed");
+        assert!(format!("{error:#}").contains("extended ACL"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_rejects_a_foreign_owned_checkpoint_root_when_chown_is_available() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (_temp, mut options, cwd) = setup();
+        drop(Journal::open(&options, &cwd, "finite", 1024).unwrap());
+        let path = std::ffi::CString::new(options.directory.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the C path is NUL-terminated and valid for the duration of chown.
+        let changed = unsafe { libc::chown(path.as_ptr(), 65534, u32::MAX) } == 0;
+        if !changed {
+            // Changing ownership needs privileges. Leave this regression active on
+            // privileged builders while keeping ordinary developer runs portable.
+            return;
+        }
+        options.resume = true;
+        let error = Journal::open(&options, &cwd, "finite", 1024)
+            .err()
+            .expect("a root owned by another uid must not be resumed");
+        // SAFETY: as the owner-changing privileged test process, restoring the
+        // original owner allows TempDir to clean up normally.
+        assert_eq!(
+            unsafe { libc::chown(path.as_ptr(), libc::geteuid(), u32::MAX) },
+            0
+        );
+        assert!(format!("{error:#}").contains("must be owned by the current user"));
     }
 
     #[test]

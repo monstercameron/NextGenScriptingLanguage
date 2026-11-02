@@ -943,12 +943,48 @@ pub(crate) struct Shared {
 pub(crate) struct Request {
     pub op: String,
     pub path: Option<String>,
-    pub value: Option<Json>,
+    #[serde(default)]
+    pub value: RequestValue,
     pub operations: Option<Vec<Json>>,
     pub action: Option<String>,
     pub if_revision: Option<u64>,
     pub after: Option<u64>,
     pub timeout_ms: Option<u64>,
+}
+
+/// A request value that keeps a missing field distinct from explicit JSON
+/// null. `Option<Json>` cannot represent both because serde maps a JSON null
+/// directly to `None`.
+#[derive(Debug, Default)]
+pub(crate) enum RequestValue {
+    #[default]
+    Missing,
+    Present(Json),
+}
+
+impl RequestValue {
+    fn as_ref(&self) -> Option<&Json> {
+        match self {
+            Self::Missing => None,
+            Self::Present(value) => Some(value),
+        }
+    }
+
+    fn into_option(self) -> Option<Json> {
+        match self {
+            Self::Missing => None,
+            Self::Present(value) => Some(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RequestValue {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Json::deserialize(deserializer).map(Self::Present)
+    }
 }
 
 #[derive(Debug)]
@@ -1093,6 +1129,31 @@ pub(crate) fn patch_contains_test(operation: &str, request: &Json) -> bool {
         .into_iter()
         .flatten()
         .any(|entry| entry.get("op").and_then(Json::as_str) == Some("test"))
+}
+
+/// A JSON Patch test must not compare against the stored value of a secret
+/// binding. Reject the binding map itself (an ancestor of every secret), and
+/// every path at or below a secret binding. `parts` has already been decoded
+/// as an RFC 6901 pointer, so escaped binding names are handled consistently
+/// with `mutate`.
+fn test_targets_redacted_state(
+    parts: &[String],
+    secret_names: &[String],
+    source_is_redacted: bool,
+) -> bool {
+    match parts.first().map(String::as_str) {
+        // `/bindings` is an ancestor of every secret binding. A secret name
+        // also protects the binding itself and every nested path below it.
+        Some("bindings") => match parts.get(1) {
+            None => true,
+            Some(name) => secret_names.iter().any(|secret| secret == name),
+        },
+        // Reads replace the whole input record whenever the program contains
+        // a secret binding, and source reads redact any registered secret text.
+        Some("input") => !secret_names.is_empty(),
+        Some("source") => source_is_redacted,
+        _ => false,
+    }
 }
 
 pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
@@ -1301,7 +1362,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             if events.len() >= MAX_QUEUE {
                 bail!("UI event queue is full");
             }
-            events.push(request.value.context("event requires value")?);
+            events.push(
+                request
+                    .value
+                    .into_option()
+                    .context("event requires value")?,
+            );
             validate(
                 &candidate,
                 &shared.registry,
@@ -1316,8 +1382,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             if !matches!(state.plan.program.trigger, Some(Trigger::Listen { .. })) {
                 bail!("send requires a listener program");
             }
-            let record: Data =
-                serde_json::from_value(request.value.context("send requires a text/bytes value")?)?;
+            let record: Data = serde_json::from_value(
+                request
+                    .value
+                    .into_option()
+                    .context("send requires a text/bytes value")?,
+            )?;
             if record.len() > shared.max_bytes || state.doc.inbox.len() >= MAX_QUEUE {
                 return Err(fail("capacity", "inbox or record capacity exceeded"));
             }
@@ -1331,13 +1401,25 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             let operations = if request.op == "patch" {
                 request.operations.context("patch requires operations")?
             } else {
-                vec![
-                    json!({"op":request.op,"path":request.path.context("mutation requires path")?,"value":request.value}),
-                ]
+                let mut operation = json!({
+                    "op": request.op,
+                    "path": request.path.context("mutation requires path")?,
+                });
+                if let Some(value) = request.value.into_option() {
+                    operation
+                        .as_object_mut()
+                        .expect("constructed operation is an object")
+                        .insert("value".into(), value);
+                }
+                vec![operation]
             };
             if operations.is_empty() || operations.len() > 128 {
                 bail!("patch needs 1..128 operations");
             }
+            let mut secret_names = state.secret_names();
+            let mut checked_source = state.doc.source.clone();
+            let mut source_is_redacted =
+                state.redactor.redact_text(&state.doc.source) != state.doc.source;
             for operation in operations {
                 let op = operation
                     .get("op")
@@ -1348,6 +1430,37 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                     .and_then(Json::as_str)
                     .context("patch operation needs path")?;
                 let parts = tokens(path)?;
+                let current_source = candidate
+                    .get("source")
+                    .and_then(Json::as_str)
+                    .context("state source must be text")?;
+                if current_source != checked_source {
+                    // A batch may introduce a secret input before testing its
+                    // binding. Keep existing secret names too, so changing or
+                    // removing the declaration cannot declassify a value in
+                    // the middle of the same batch.
+                    let candidate_plan = Plan::parse(current_source)?;
+                    secret_names.extend(
+                        crate::runtime::sensitive_binding_names(
+                            &candidate_plan.program,
+                            &state.registry,
+                        )
+                        .into_iter(),
+                    );
+                    source_is_redacted |=
+                        candidate_plan.program.inputs.iter().any(|input| {
+                            crate::ast::is_sensitive(input) && input.default.is_some()
+                        });
+                    checked_source = current_source.to_owned();
+                }
+                if op == "test"
+                    && test_targets_redacted_state(&parts, &secret_names, source_is_redacted)
+                {
+                    return Err(fail(
+                        "secret_test_denied",
+                        "patch test cannot target redacted state",
+                    ));
+                }
                 if state.in_flight
                     && !parts.first().is_some_and(|v| {
                         v == "user"

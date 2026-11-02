@@ -1217,6 +1217,15 @@ fn warning_suppressed(source: &str, line: usize, code: &str) -> bool {
     false
 }
 
+fn executable_name_is_path_like(operation: &str) -> bool {
+    operation.contains('\\')
+        || operation.contains('/')
+        || operation.split_whitespace().next().is_some_and(|first| {
+            let bytes = first.as_bytes();
+            bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+        })
+}
+
 fn collect_lint_diagnostics(
     source: &str,
     program: &Program,
@@ -1282,10 +1291,18 @@ fn collect_lint_diagnostics(
                 .chars()
                 .any(|ch| matches!(ch, ' ' | '*' | '?' | '|' | ';'))
         {
-            let span = line_words_from_start(source, line_starts.start(line))
+            // Compare the decoded quoted token: raw source escapes (for
+            // example `\\` in a Windows path) never equal the decoded name.
+            let token_span = line_words_from_start(source, line_starts.start(line))
                 .into_iter()
-                .find(|word| word.3 && word.0.trim_matches('"') == call.operation)
-                .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
+                .find(|word| {
+                    word.3
+                        && serde_json::from_str::<String>(&word.0)
+                            .is_ok_and(|decoded| decoded == call.operation)
+                })
+                .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token));
+            let span = token_span
+                .clone()
                 .unwrap_or_else(|| line_starts.span(source, line));
             let mut diagnostic = Diagnostic {
                 severity: DiagnosticSeverity::Warning,
@@ -1295,15 +1312,24 @@ fn collect_lint_diagnostics(
                 fixes: Vec::new(),
                 related: Vec::new(),
             };
-            if !call.parameters.contains_key("arguments") {
+            // Offer the split only with a precise token span and a name
+            // that is reliably executable-plus-arguments: a path-like name
+            // (for example a Windows path with spaces) is one filename,
+            // and embedded quotes make word boundaries unreliable.
+            if token_span.is_some()
+                && !executable_name_is_path_like(&call.operation)
+                && !call.operation.contains(['"', '\''])
+                && !call.parameters.contains_key("arguments")
+            {
                 let mut words = call.operation.split_whitespace();
                 if let Some(executable) = words.next() {
                     let arguments = words.map(str::to_owned).collect::<Vec<_>>();
+                    let executable_literal = serde_json::to_string(executable).unwrap_or_default();
                     let replacement = if arguments.is_empty() {
-                        format!("\"{executable}\"")
+                        executable_literal
                     } else {
                         format!(
-                            "\"{executable}\" with arguments {}",
+                            "{executable_literal} with arguments {}",
                             serde_json::to_string(&arguments).unwrap_or_default()
                         )
                     };

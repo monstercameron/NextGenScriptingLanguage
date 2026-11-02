@@ -351,6 +351,33 @@ The host probes the applet-specific generated profile or mount arguments with
 a fixed system no-op executable and a bounded timeout; preflight never runs
 the untrusted applet.
 
+## GitHub Actions workflow-command hardening
+
+`run` and `resume` opt in when `GITHUB_ACTIONS` is exactly `"true"`. While
+enabled, Execute neutralizes line-leading `::` sequences in the bytes it
+forwards to the job log (streamed step output, re-emitted captured stderr on
+the success path, final program output and final diagnostics) by inserting a
+zero-width space between the colons. Manifest `inherit` stdio dispositions are
+force-captured and sanitized like any other terminal output. `hand over to`
+is refused before any step runs: the handed-over program would inherit the
+terminal and write to the log after `exec`, past the point sanitization can
+intercept, so hardening fails closed instead of allowing command forgery. The text
+still reads the same, but the runner no longer parses it as a workflow
+command. Only line starts (buffer start or after `\n`/`\r`) are rewritten;
+mid-line pairs such as Rust paths or URLs and indented pairs stay
+byte-identical. A per-descriptor streaming sanitizer keeps line-start state
+across writes, so a `::` split across two writes (or across the
+streamed-to-final boundary) is still neutralized, while a mid-line `::`
+spanning the boundary is left alone. A trailing line-leading `:` is released
+at end of stream.
+
+Every newly registered secret value emits one `::add-mask::` line before any
+later log line can echo it. Mask values escape `%` as `%25`, CR as `%0D` and
+LF as `%0A`. The mask lines themselves are intentional workflow commands and
+stay raw. `execute check --format github` intentionally emits workflow
+commands and never enables hardening. File redirect targets, framed protocols
+(LSP, DAP, repl JSON) and detached-launch outputs stay raw.
+
 ## Panics and long-lived hosts
 
 Release builds use `panic=abort`. A panic is an interpreter bug and terminates
@@ -491,13 +518,21 @@ and a parent replacement after the Unix cache directory descriptor is pinned.
 [The security evidence](benchmarks/security-2026-10-14-cache.json) retains
 baseline reproductions and the fixed results using owned synthetic fixtures.
 
-Same-user isolation of the persisted cache key, filesystem-operation deadlines
-and broad platform fault injection remain open. Windows state operations remain
+Same-user isolation of the persisted cache key and broad platform fault
+injection remain open. Host `read` opens/reads and in-process filesystem-applet
+opens are bounded by `--fs-timeout-ms` (default two seconds, never later than
+the run deadline): FIFOs and sockets fail with the typed timeout, and other
+non-regular targets are refused before any byte moves. A single
+operating-system call that blocks inside the kernel on an already-open regular
+file (a stalled mount mid-read or mid-write) stays unbounded; only the slices
+between calls observe the deadline. Windows state operations remain
 path-based.
 Capability policy and
 OS sandboxing are source-candidate features; tests do not establish resistance
 to every same-user attack or certify every platform/package combination.
-Supported native child deadlines do not bound arbitrary filesystem operations.
+Command timeouts bound a native child's run, not filesystem operations the
+child performs itself; host `read` and applet file opens carry their own
+`--fs-timeout-ms` budget instead.
 Do not interpret passing tests as a production-completeness or arbitrary-Bash-
 compatibility claim.
 

@@ -233,9 +233,11 @@ pub(crate) fn acquire_path_lock(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
+        // Nonblocking so a FIFO planted at the lock path cannot hang the
+        // open; the regular-file check below then refuses it.
         options
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
     }
     let file = options
         .open(lock_path)
@@ -798,8 +800,10 @@ fn inspect(path: &Path, context: &ExecutionContext<'_>) -> Result<Option<FileSta
     };
     let resolved_path = fs::canonicalize(path)
         .map_err(|error| io_error(error, format!("resolving {}", path.display())))?;
-    let mut file = open_no_follow(&resolved_path)
-        .map_err(|error| io_error(error, format!("opening {}", path.display())))?;
+    // Bounded open (threat model H7): the resolved path carries no symlink,
+    // so refusing a final link here only re-verifies the resolution, while
+    // the nonblocking open keeps a FIFO target from hanging.
+    let mut file = super::open_regular_input(&resolved_path, path, true, context)?;
     let before = file
         .metadata()
         .map_err(|error| io_error(error, format!("checking {}", path.display())))?;
@@ -863,17 +867,6 @@ fn inspect(path: &Path, context: &ExecutionContext<'_>) -> Result<Option<FileSta
         resolved_path,
         mode,
     }))
-}
-
-fn open_no_follow(path: &Path) -> std::io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
-    options.open(path)
 }
 
 /// Copy at most `MAX_FILE_BYTES + 1` bytes from `file` in chunks, checking

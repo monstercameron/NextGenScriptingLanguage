@@ -19,6 +19,7 @@ pub mod diagnostics;
 pub mod discovery;
 #[cfg(feature = "failpoints")]
 pub(crate) mod failpoint;
+pub mod github_actions;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "graph")]
 pub mod graph;
@@ -83,5 +84,7 @@ pub mod fuzz_entry;
 #[cfg(all(feature = "lsp", not(target_arch = "wasm32")))]
 pub mod language_server;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod fs_io;
 #[cfg(not(target_arch = "wasm32"))]
 mod platform;

@@ -49,7 +49,7 @@ fn render_inner(
 ) -> Result<Value, AppletError> {
     let template: Cow<'_, str> = match (args.get("template"), args.get("template_path")) {
         (Some(Value::String(text)), None) => Cow::Borrowed(text.as_str()),
-        (None, Some(Value::String(path))) => Cow::Owned(read_template(path, cwd)?),
+        (None, Some(Value::String(path))) => Cow::Owned(read_template(path, cwd, context)?),
         _ => {
             return Err(invalid(
                 "text.render requires exactly one of args.template or args.template_path",
@@ -96,15 +96,20 @@ fn render_inner(
     Ok(Value::String(output))
 }
 
-fn read_template(path: &str, cwd: &Path) -> Result<String, AppletError> {
+fn read_template(
+    path: &str,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<String, AppletError> {
     if path.is_empty() || path.contains('\0') {
         return Err(invalid(
             "args.template_path must be nonempty and contain no NUL",
         ));
     }
     let resolved = super::filesystem::resolve_path(path, cwd);
-    let file = std::fs::File::open(&resolved)
-        .map_err(|error| io_error(error, format!("opening {}", resolved.display())))?;
+    // Bounded open (threat model H7): a FIFO at the template path must fail
+    // with the typed timeout instead of hanging the open.
+    let file = super::open_regular_input(&resolved, &resolved, false, context)?;
     let mut bytes = Vec::new();
     file.take(MAX_TEMPLATE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)

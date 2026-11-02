@@ -7,6 +7,14 @@ original version labels.
 
 ## Unreleased
 
+- `run` and `resume` now harden the job log when `GITHUB_ACTIONS` is `"true"`:
+  line-leading `::` sequences in terminal-bound output are neutralized with a
+  zero-width space (streamed, captured-stderr, final and diagnostic writes,
+  with cross-write line state; manifest `inherit` stdio is force-captured and
+  sanitized), and each registered secret emits an escaped `::add-mask::` line.
+  `hand over to` is refused before any step runs under hardening because the
+  handed-over program would write to the log unsanitized. Non-CI output is
+  byte-identical.
 - Graph inspection with supplied sensitive prompt or environment inputs now keeps
   those values withheld in resolved applet parameters while resolving non-sensitive
   inputs normally. Graph validation diagnostics redact supplied sensitive values
@@ -230,6 +238,18 @@ original version labels.
   below the last completed node resume without a rerun, and an insertion or removal above
   a completed node is refused with the node and both lines named. Background jobs
   checkpoint (a `spawn` and its `await` or `cancel` form one node).
+- Repair and resume from a run record, without a checkpoint. A failed `run --record`
+  names `execute repair --from-record DIR --program FILE --op '...'`, which edits only
+  the failed suffix, and `execute resume FILE --from-record DIR` replays the completed
+  prefix from captured blobs instead of re-running it. Prefix edits, completed records,
+  missing or withheld bytes, truncated or torn records, short or count-mismatched
+  traces, changed manifests, executables, or working directories, and executables
+  larger than the 64 MiB identity limit (a length-only marker never proves the
+  bytes) are refused with the step and reason instead of re-running completed
+  effects. Records are not tamper-evident: unlike checkpoint journals they carry
+  no authentication code, so a fully consistently rewritten record is not
+  detected — resume only records you wrote, from a directory only you can write. See
+  [record a run](docs/guide.md#record-a-run-show-what-failed-and-replay-it).
 - Checkpoint input digests are a keyed HMAC under a per-user key. A journal written
   before the change matches its unkeyed digest once and is rewritten; a keyed journal never
   matches the unkeyed digest (a bug that kept legacy journals unmigrated is fixed).

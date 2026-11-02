@@ -28,6 +28,10 @@ mod transaction;
 mod wait;
 mod yaml;
 
+pub(crate) fn process_alive(pid: u32) -> bool {
+    transaction::process_alive(pid)
+}
+
 pub(crate) fn valid_time_zone(zone: &str) -> bool {
     time::valid_zone(zone)
 }

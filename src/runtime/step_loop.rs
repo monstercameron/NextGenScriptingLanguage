@@ -3,6 +3,57 @@
 
 use super::*;
 
+fn task_group_presentation_bindings(
+    bindings: &std::collections::BTreeMap<String, Value>,
+    presentations: &std::collections::BTreeMap<String, (Value, Value)>,
+) -> Option<std::collections::BTreeMap<String, Value>> {
+    let applicable = presentations
+        .iter()
+        .filter(|(name, (raw, presentation))| {
+            raw != presentation && bindings.get(*name) == Some(raw)
+        })
+        .collect::<Vec<_>>();
+    if applicable.is_empty() {
+        return None;
+    }
+    let mut projected = bindings.clone();
+    for (name, (_, presentation)) in applicable {
+        projected.insert(name.clone(), presentation.clone());
+    }
+    Some(projected)
+}
+
+fn task_group_presentation_source(
+    source: &Value,
+    bindings: &std::collections::BTreeMap<String, Value>,
+    presentations: &std::collections::BTreeMap<String, (Value, Value)>,
+) -> Result<Option<Value>> {
+    let Some(presentation_bindings) = task_group_presentation_bindings(bindings, presentations)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        structured_source(source, &presentation_bindings)?.into_owned(),
+    ))
+}
+
+fn remember_task_group_presentation(
+    binding: &str,
+    raw: &Value,
+    presentation: &Value,
+    presentations: &mut std::collections::BTreeMap<String, (Value, Value)>,
+) {
+    if raw == presentation {
+        presentations.remove(binding);
+    } else {
+        presentations.insert(binding.to_owned(), (raw.clone(), presentation.clone()));
+    }
+}
+
+fn is_terminal_presentation_step(program: &crate::ast::Program, index: usize) -> bool {
+    !crate::ast::has_stdout_consumer(&program.steps, index + 1)
+}
+
 pub(super) fn merge_environment_overlay(
     target: &mut crate::capabilities::CommandEnvOverlay,
     update: crate::capabilities::CommandEnvOverlay,
@@ -330,6 +381,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
     let _step_ids = StepIdScope::enter(&program.steps, options.trace || observe::is_installed());
     let mut bindings = initial_bindings;
+    let mut task_group_presentations: BTreeMap<String, (Value, Value)> = BTreeMap::new();
     // Raw captures from `then capture bytes as NAME`, kept apart from text bindings.
     let mut byte_bindings: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut data = initial_input;
@@ -483,6 +535,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // failed node stays in flight and nothing after it is recorded: the run ends
     // failed, and a resume retries that node and runs the cleanup again.
     let mut journal_suspended = false;
+    // Set once a repeat interrupt during cleanup is recorded, so the diagnostic
+    // names the interruption exactly once however many statements fail fast after it.
+    let mut cleanup_interrupted_reported = false;
     macro_rules! control_context {
         () => {
             ControlContext {
@@ -542,6 +597,32 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             None
         };
         let signals = cleanup_signals.as_ref().unwrap_or(parent_signals);
+        // A repeat interrupt during cleanup aborts the cleanup at once instead
+        // of running out its budget: the running command is already being
+        // killed through the shared flag, and the remaining statements fail
+        // fast until the cleanup frames unwind.
+        if let Some(cleanup) = &cleanup_signals {
+            if !cleanup_interrupted_reported && cleanup.is_cancelled() {
+                cleanup_interrupted_reported = true;
+                let action = control_state.fail(cleanup_interrupted(), true)?;
+                match apply_control_action(action, control_context!())? {
+                    AppliedControl::Continue => {}
+                    AppliedControl::Jump(target) => {
+                        journal_suspended = true;
+                        index = target;
+                        continue;
+                    }
+                    AppliedControl::Rethrow(error) => {
+                        if let Some(journal) = journal.as_deref_mut() {
+                            if !journal.persistence_failed() {
+                                journal.fail(&format!("{error:#}"), true)?;
+                            }
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+        }
         // An interrupt that requested a drain unwinds from this statement boundary, as
         // `exit` does: finally blocks run, including `on interrupt` and `on exit`.
         // Running steps are not cancelled; the run stops before starting the next one.
@@ -552,7 +633,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             && parent_signals.begin_drain()
         {
             let exit = ProgramExit {
-                status: drain_exit_status(),
+                status: parent_signals.drain_exit_status(),
                 message: None,
             };
             let action = control_state.transfer(
@@ -623,6 +704,19 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 .as_ref()
                 .and_then(|ids| ids.get(index))
                 .cloned();
+            // Mark element nodes by kind so resolve and resume can scope
+            // decisions without the program: sequential loops replay committed
+            // output and bindings per element, parallel groups do not.
+            let element_kind = if tracks_elements {
+                match &step.kind {
+                    StepKind::TaskGroup { each: Some(_), .. } => {
+                        Some(checkpoint::ElementNodeKind::ParallelForEach)
+                    }
+                    _ => Some(checkpoint::ElementNodeKind::ForEach),
+                }
+            } else {
+                None
+            };
             journal.begin_node_record(checkpoint::NodeBegin {
                 fingerprint: &fingerprint,
                 start: index,
@@ -631,11 +725,16 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 cwd_before: &cwd,
                 retry_safe: tracks_elements || resume::retry_safe(program, index, end, registry)?,
                 step_id,
+                element_kind,
             })?;
         }
         let mut jump_to = None;
         let mut control_rethrow = None;
         let execution = (|| -> Result<()> {
+            // The shared workflow deadline is a hard bound between statements.
+            // Route it through control flow as non-catchable so a native timeout
+            // caught as an ordinary command failure cannot resume normal effects.
+            check_deadline(signals.deadline)?;
             if control_state.cleanup_active() {
                 control_state.charge_cleanup_step()?;
                 check_deadline(signals.deadline)?;
@@ -643,6 +742,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             match &step.kind {
                 StepKind::Loop { kind, end } => {
                     control_state.enter_loop(index, index + end)?;
+                    let for_each_values = match kind {
+                        crate::ast::LoopKind::ForEach { binding: _, values } => {
+                            let raw = resolve(values, &bindings)?;
+                            let presentation = task_group_presentation_source(
+                                values,
+                                &bindings,
+                                &task_group_presentations,
+                            )?;
+                            Some((raw, presentation))
+                        }
+                        _ => None,
+                    };
                     let entered = loop_frames
                         .header_with_commands(
                             index,
@@ -668,6 +779,39 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             },
                         )
                         .with_context(|| format!("line {}", step.line))?;
+                    if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
+                        if entered {
+                            let presentation_item = for_each_values.as_ref().and_then(
+                                |(raw_values, presentation_values)| {
+                                    let (
+                                        Value::List(raw_items),
+                                        Some(Value::List(presented_items)),
+                                    ) = (raw_values, presentation_values)
+                                    else {
+                                        return None;
+                                    };
+                                    let raw_item = bindings.get(binding)?;
+                                    let index =
+                                        raw_items.iter().position(|item| item == raw_item)?;
+                                    presented_items.get(index)
+                                },
+                            );
+                            if let Some(raw_item) = bindings.get(binding) {
+                                if let Some(presentation_item) = presentation_item {
+                                    remember_task_group_presentation(
+                                        binding,
+                                        raw_item,
+                                        presentation_item,
+                                        &mut task_group_presentations,
+                                    );
+                                } else {
+                                    task_group_presentations.remove(binding);
+                                }
+                            }
+                        } else {
+                            task_group_presentations.remove(binding);
+                        }
+                    }
                     lazy_event(
                         options.trace,
                         signals,
@@ -736,12 +880,6 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                     if let Some(journal) = journal.as_deref_mut() {
                         if checkpoint::elements::for_each_element_due(journal, program, header) {
-                            // The same persistence gate as a node: an element's state reaches
-                            // the journal only if the checkpoint policy allows it.
-                            authorize_checkpoint_persistence(
-                                registry,
-                                &signals.sensitivity_floor(),
-                            )?;
                             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                                 options.max_output_bytes,
                                 signals,
@@ -750,6 +888,94 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             let mut element_bindings = bindings.clone();
                             element_bindings
                                 .insert(STDOUT_ELIGIBILITY.to_owned(), Value::Bool(program_stdout));
+                            // The static floor misses loop bodies, so a secret produced
+                            // or held inside the loop would otherwise persist raw
+                            // (hex-encoded output, cleartext binding blobs). Refuse
+                            // exactly what the reports would redact, before any
+                            // binding blob is stored. Provenance covers what no
+                            // byte check can recognize: an element holding a
+                            // sensitive binding may derive its output through an
+                            // arbitrary transform, so withhold it even with no
+                            // byte match. This only names encodings the byte
+                            // check implements (exact, base64, hex); other
+                            // transforms are withheld by provenance, not identified.
+                            //
+                            // Declared manifest secrets are static values: register
+                            // every one before checking, so a literal item
+                            // duplicating a declared secret is recognized even
+                            // when the secret-owning applet never runs in this
+                            // loop. Registration alone launches nothing. A
+                            // registration failure after the element ran is
+                            // still an uncertain effect: mark it so resume
+                            // does not silently repeat the element.
+                            {
+                                let mut seen = std::collections::BTreeSet::new();
+                                if let Err(error) = tasks::pre_register_declared_manifest_secrets(
+                                    registry, &mut seen,
+                                ) {
+                                    checkpoint::elements::for_each_element_mark_uncertain(
+                                        journal,
+                                        &loop_frames,
+                                        header,
+                                    )?;
+                                    bail!(
+                                        "line {}: could not track declared secrets before checkpoint ({error:#}); it may contain an uncertain side effect, pass --retry-uncertain to retry",
+                                        step.line
+                                    );
+                                }
+                            }
+                            {
+                                let redactor = crate::security::secret_redactor(registry);
+                                let secret_output =
+                                    redactor.redact_bytes(&bytes) != bytes.as_slice();
+                                let secret_bindings = element_bindings.values().any(|value| {
+                                    tasks::value_contains_registered_secret(&redactor, value)
+                                });
+                                let sensitive_provenance = element_bindings
+                                    .keys()
+                                    .any(|name| sensitive_bindings.contains(name));
+                                if secret_output || secret_bindings || sensitive_provenance {
+                                    // The element already ran: leave an uncertain
+                                    // marker so resume requires `--retry-uncertain`,
+                                    // and say so.
+                                    checkpoint::elements::for_each_element_mark_uncertain(
+                                        journal,
+                                        &loop_frames,
+                                        header,
+                                    )?;
+                                    bail!(
+                                        "line {}: sequential for each element with secret output cannot be checkpointed; it may contain an uncertain side effect, pass --retry-uncertain to retry",
+                                        step.line
+                                    );
+                                }
+                            }
+                            // The secret check wins so its uncertain marker and retry
+                            // flag survive; the generic floor still applies to
+                            // non-secret Unknown/Secret state before any binding
+                            // blob is stored, except under the Unknown-only
+                            // deferral, where the secret check above is the
+                            // gate. This also runs after the element, so it
+                            // marks uncertain too.
+                            if !defer_unknown_checkpoint_denial(
+                                registry,
+                                &signals.sensitivity_floor(),
+                                true,
+                            ) {
+                                if let Err(error) = authorize_checkpoint_persistence(
+                                    registry,
+                                    &signals.sensitivity_floor(),
+                                ) {
+                                    checkpoint::elements::for_each_element_mark_uncertain(
+                                        journal,
+                                        &loop_frames,
+                                        header,
+                                    )?;
+                                    bail!(
+                                        "line {}: checkpoint persistence is denied by policy ({error:#}); it may contain an uncertain side effect, pass --retry-uncertain to retry",
+                                        step.line
+                                    );
+                                }
+                            }
                             checkpoint::elements::for_each_element_commit(
                                 journal,
                                 &loop_frames,
@@ -818,7 +1044,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         // The interrupt arrived after the last statement boundary: the
                         // body still runs, and the run ends with the interrupt status.
                         control_state.set_exit(ProgramExit {
-                            status: drain_exit_status(),
+                            status: signals.drain_exit_status(),
                             message: None,
                         });
                     }
@@ -1158,7 +1384,23 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::UseValue { source } => {
                     pipeline_sensitive = value_references_sensitive(source, &sensitive_bindings);
-                    let bytes = text_value_bytes(source, &bindings, step.line)?;
+                    let presentation_source = if is_terminal_presentation_step(program, index) {
+                        task_group_presentation_source(
+                            source,
+                            &bindings,
+                            &task_group_presentations,
+                        )?
+                    } else {
+                        None
+                    };
+                    let bytes = match presentation_source {
+                        Some(Value::String(text)) => text.into_bytes(),
+                        Some(_) => bail!(
+                            "line {}: use value requires text; encode structured values first with `then encode ... as json`",
+                            step.line
+                        ),
+                        None => text_value_bytes(source, &bindings, step.line)?,
+                    };
                     if pipeline_sensitive {
                         crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
@@ -1166,16 +1408,36 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::BindValue { source, binding } => {
                     let value = resolve(source, &bindings)?;
+                    let presentation_value =
+                        task_group_presentation_bindings(&bindings, &task_group_presentations)
+                            .map(|presentation_bindings| resolve(source, &presentation_bindings))
+                            .transpose()?;
+                    let is_terminal_presentation = is_terminal_presentation_step(program, index);
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_bindings.contains(binding) || sensitive_source;
                     if sensitive_bindings.contains(binding) || sensitive_source {
                         crate::security::register_sensitive_value(registry, &value)?;
                     }
-                    let bytes = bound_value_bytes(&value, options.max_output_bytes)?;
+                    let pipeline_value = if is_terminal_presentation {
+                        presentation_value.as_ref().unwrap_or(&value)
+                    } else {
+                        &value
+                    };
+                    let bytes = bound_value_bytes(pipeline_value, options.max_output_bytes)?;
                     if sensitive_bindings.contains(binding) || sensitive_source {
                         crate::security::register_sensitive_bytes(registry, &bytes)?;
                     }
                     data = Input::Bytes(bytes);
+                    if let Some(presentation_value) = presentation_value {
+                        remember_task_group_presentation(
+                            binding,
+                            &value,
+                            &presentation_value,
+                            &mut task_group_presentations,
+                        );
+                    } else {
+                        task_group_presentations.remove(binding);
+                    }
                     bindings.insert(binding.clone(), value);
                 }
                 StepKind::CaptureBytes { binding } => {
@@ -1291,12 +1553,32 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     kind,
                     binding,
                 } => {
+                    let presentation_source = task_group_presentation_source(
+                        source,
+                        &bindings,
+                        &task_group_presentations,
+                    )?;
                     let source = structured_source(source, &bindings)?;
                     let value = crate::structured::take(pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}", step.line))?;
                     let value = value.clone();
+                    let presentation_value = presentation_source
+                        .as_ref()
+                        .map(|source| crate::structured::take(pointer, source, *kind, step.line))
+                        .transpose()?
+                        .cloned();
                     if sensitive_bindings.contains(binding) {
                         crate::security::register_sensitive_value(registry, &value)?;
+                    }
+                    if let Some(presentation_value) = presentation_value {
+                        remember_task_group_presentation(
+                            binding,
+                            &value,
+                            &presentation_value,
+                            &mut task_group_presentations,
+                        );
+                    } else {
+                        task_group_presentations.remove(binding);
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1315,12 +1597,32 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let Value::String(pointer) = pointer else {
                         bail!("line {}: dynamic JSON pointer must be text", step.line);
                     };
+                    let presentation_source = task_group_presentation_source(
+                        source,
+                        &bindings,
+                        &task_group_presentations,
+                    )?;
                     let source = structured_source(source, &bindings)?;
                     let value = crate::structured::take(&pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}", step.line))?
                         .clone();
+                    let presentation_value = presentation_source
+                        .as_ref()
+                        .map(|source| crate::structured::take(&pointer, source, *kind, step.line))
+                        .transpose()?
+                        .cloned();
                     if sensitive_bindings.contains(binding) {
                         crate::security::register_sensitive_value(registry, &value)?;
+                    }
+                    if let Some(presentation_value) = presentation_value {
+                        remember_task_group_presentation(
+                            binding,
+                            &value,
+                            &presentation_value,
+                            &mut task_group_presentations,
+                        );
+                    } else {
+                        task_group_presentations.remove(binding);
                     }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
@@ -1332,7 +1634,20 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 StepKind::EncodeJson { source } => {
                     let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
                     pipeline_sensitive = sensitive_source;
-                    let source = structured_source(source, &bindings)?;
+                    let is_terminal_presentation = is_terminal_presentation_step(program, index);
+                    let presentation_source = if is_terminal_presentation {
+                        // Keep the language binding raw for explicit data flow,
+                        // while JSON serialization exposes its diagnostic view.
+                        task_group_presentation_source(
+                            source,
+                            &bindings,
+                            &task_group_presentations,
+                        )?
+                    } else {
+                        None
+                    };
+                    let source = presentation_source
+                        .unwrap_or(structured_source(source, &bindings)?.into_owned());
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
                         .with_context(|| format!("line {}", step.line))?;
                     if sensitive_source {
@@ -1373,10 +1688,21 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         config,
                                         registry,
                                         bindings: &bindings,
+                                        // Provenance: withholding must cover secret-derived
+                                        // inputs even when the output transform defeats
+                                        // every byte check, so the template's own
+                                        // sensitive references count alongside the items.
                                         sensitive_items: value_references_sensitive(
                                             &each.values,
                                             &sensitive_bindings,
-                                        ),
+                                        ) || tasks.iter().any(|task| {
+                                            task.parameters.values().any(|value| {
+                                                value_references_sensitive(
+                                                    value,
+                                                    &sensitive_bindings,
+                                                )
+                                            })
+                                        }),
                                         sensitive_environment: workflow_environment_sensitive,
                                         options,
                                         cancelled: Arc::clone(&signals.cancelled),
@@ -1398,10 +1724,21 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         config,
                                         registry,
                                         bindings: &bindings,
+                                        // Provenance: withholding must cover secret-derived
+                                        // inputs even when the output transform defeats
+                                        // every byte check, so the template's own
+                                        // sensitive references count alongside the items.
                                         sensitive_items: value_references_sensitive(
                                             &each.values,
                                             &sensitive_bindings,
-                                        ),
+                                        ) || tasks.iter().any(|task| {
+                                            task.parameters.values().any(|value| {
+                                                value_references_sensitive(
+                                                    value,
+                                                    &sensitive_bindings,
+                                                )
+                                            })
+                                        }),
                                         sensitive_environment: workflow_environment_sensitive,
                                         options,
                                         cancelled: Arc::clone(&signals.cancelled),
@@ -1449,6 +1786,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     result.launched_processes += group.launched_processes;
                     signals.account_child_process_launches(group.launched_processes);
                     let value = group.value;
+                    let presentation = group.presentation;
+                    remember_task_group_presentation(
+                        binding,
+                        &value,
+                        &presentation,
+                        &mut task_group_presentations,
+                    );
                     let pipeline_is_replaced = each.is_some()
                         && !options.trace
                         && journal.is_none()
@@ -1487,7 +1831,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let bytes = if pipeline_is_replaced {
                         Vec::new()
                     } else {
-                        crate::structured::encode(&value, output_limit)
+                        crate::structured::encode(&presentation, output_limit)
                             .with_context(|| format!("line {}: task group output", step.line))?
                     };
                     if sensitive_bindings.contains(binding) {
@@ -1899,6 +2243,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         crate::security::PersistenceKind::Save,
                         &signals.sensitivity_floor(),
                     )?;
+                    // Input materialization and authorization can consume the
+                    // remaining budget. Do not start a save if it has expired.
+                    check_deadline(signals.deadline)?;
                     atomic_write(&destination, &bytes)?;
                     if journal.is_some() {
                         sync_destination_parent(&destination, &cwd)?;
@@ -1957,13 +2304,29 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             .collect::<Result<BTreeMap<_, _>>>()?;
                         let argv = manifest.build_arguments(&parameters)?;
                         let binary = binary_path(manifest.binary_for(call), &cwd)?;
-                        let command = crate::capabilities::command_for(
+                        let mut command = crate::capabilities::command_for(
                             &binary,
                             argv.iter().map(|argument| OsStr::new(argument.as_str())),
                             registry,
                             &manifest.name,
                             &cwd,
                         )?;
+                        // A custom model endpoint is authorized like a remote
+                        // origin before the handover/detach. The parameters
+                        // are already resolved, so no bindings remain.
+                        if manifest.binary == "@execute-model" {
+                            if let Some(granted) =
+                                crate::capabilities::authorize_model_endpoint_params(
+                                    registry,
+                                    manifest,
+                                    &parameters,
+                                    &BTreeMap::new(),
+                                    &signals.sensitivity_floor(),
+                                )?
+                            {
+                                command.env(crate::capabilities::MODEL_GRANTED_ORIGIN_ENV, granted);
+                            }
+                        }
                         match request {
                             handoff::ProcessRequest::HandOver => {
                                 // Output of earlier statements is written now, before the
@@ -2306,8 +2669,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         } else {
                             // An observer needs the bytes, so a streamed step is captured
                             // and written after it completes, as streaming already does.
+                            // A TTY sink is captured for the same reason: model text
+                            // becomes an ordinary pipeline value, so the sink cannot
+                            // tell it apart later, and every TTY byte must go through
+                            // the escaped pipeline sinks. Pipes keep the inherited
+                            // fast path with exact bytes (H17).
                             let _inherit = InheritTerminalStdout::enter(
-                                streamed && !observe::captures_streamed_stdout(),
+                                streamed
+                                    && !observe::captures_streamed_stdout()
+                                    && !crate::terminal_text::stdout_is_terminal(),
                             );
                             let _handoff = terminal::Scope::enter(handoff);
                             // One native command receives a file or stdout redirect as
@@ -2563,6 +2933,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                 }
             }
+            // Detect a deadline reached while an in-process statement was
+            // executing, including when it was the final statement.
+            check_deadline(signals.deadline)?;
             Ok(())
         })();
         if execution.is_ok() {
@@ -2665,7 +3038,28 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     frame.name, frame.line
                 ))
             });
-            let cancellation = !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
+            // A repeat interrupt that landed mid-statement is reported as a
+            // cleanup interruption, with the pending failure kept as context
+            // below. Other cleanup errors (budgets, timeouts, step failures)
+            // keep their own errors so they still unwind through the frames.
+            let cleanup_cancelled = was_cleanup
+                && cleanup_signals
+                    .as_ref()
+                    .is_some_and(|cleanup| cleanup.is_cancelled())
+                && is_cancellation_error(&error);
+            let (error, cancellation) = if cleanup_cancelled && !cleanup_interrupted_reported {
+                cleanup_interrupted_reported = true;
+                (cleanup_interrupted(), true)
+            } else if cleanup_cancelled {
+                (error, true)
+            } else {
+                let cancellation = !was_cleanup
+                    && (parent_signals.cancelled.load(Ordering::Relaxed)
+                        || parent_signals
+                            .deadline
+                            .is_some_and(|deadline| Instant::now() >= deadline));
+                (error, cancellation)
+            };
             let action = if let Some(call_depth) = status_capture_depth {
                 control_state.fail_for_call(error, cancellation, call_depth)?
             } else {
@@ -2759,12 +3153,42 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         }) {
             journal_end = None;
             journal_uncertain = false;
-            authorize_checkpoint_persistence(registry, &signals.sensitivity_floor())?;
+            // The static floor is workflow-wide, so under the Unknown-only
+            // deferral it would refuse a node (for example the Public step
+            // before the loop) for a loop reference that has not persisted
+            // anything yet. Gate the commit on the bytes and bindings this
+            // node actually persists instead: refuse, before any blob is
+            // stored, when they carry a registered secret or a sensitive
+            // provenance name. Outside the deferral the floor still refuses
+            // before the node's output is even materialized.
+            let floor = signals.sensitivity_floor();
+            let defer_unknown =
+                defer_unknown_checkpoint_denial(registry, &floor, program_has_for_each(program));
+            if !defer_unknown {
+                authorize_checkpoint_persistence(registry, &floor)?;
+            }
             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                 options.max_output_bytes,
                 signals,
                 options.command_timeout,
             )?;
+            if defer_unknown {
+                let mut seen = std::collections::BTreeSet::new();
+                tasks::pre_register_declared_manifest_secrets(registry, &mut seen)?;
+                let redactor = crate::security::secret_redactor(registry);
+                let secret_output = redactor.redact_bytes(&bytes) != bytes.as_slice();
+                let secret_bindings = bindings
+                    .values()
+                    .any(|value| tasks::value_contains_registered_secret(&redactor, value));
+                let sensitive_provenance = bindings
+                    .keys()
+                    .any(|name| sensitive_bindings.contains(name));
+                if secret_output || secret_bindings || sensitive_provenance {
+                    bail!(
+                        "checkpoint persistence is denied by policy: node output contains a registered secret"
+                    );
+                }
+            }
             journal.complete_node_parts(
                 &cwd,
                 &bytes,

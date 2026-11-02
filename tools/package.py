@@ -2,6 +2,7 @@
 """Build deterministic native archives and Linux packages from release binaries."""
 import argparse
 import gzip
+import hashlib
 import io
 import os
 import re
@@ -156,6 +157,14 @@ def populate(root, binaries, target, system=False):
         dest = bindir / source.name
         shutil.copyfile(source, dest)
         dest.chmod(0o755)
+        if name != "execute":
+            # Record the shipped helper hash beside it (issue #515): the
+            # interpreter refuses a helper whose content differs from the
+            # `<helper>.sha256` sidecar packaged here.
+            digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+            (bindir / (name + ".sha256")).write_text(
+                f"{digest}  {dest.name}\n", encoding="utf-8"
+            )
     shutil.copytree(ROOT / "manifests", share / "manifests")
     for name in ["README.md", "LICENSE"]:
         shutil.copyfile(ROOT / name, share / name)

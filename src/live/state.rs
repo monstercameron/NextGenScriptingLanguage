@@ -777,11 +777,114 @@ mod secret_binding_tests {
     }
 }
 
+#[cfg(test)]
+mod flood_budget_tests {
+    use super::*;
+
+    fn at(start: std::time::Instant, millis: u64) -> std::time::Instant {
+        start + std::time::Duration::from_millis(millis)
+    }
+
+    #[test]
+    fn burst_admits_then_sheds_until_refill() {
+        let mut budget = FloodBudget::new();
+        let start = std::time::Instant::now();
+        for _ in 0..FLOOD_BURST {
+            assert!(budget.try_admit(start));
+        }
+        assert!(
+            !budget.try_admit(start),
+            "past the burst, non-priority sheds"
+        );
+        // A full second refills exactly SUSTAINED_ACCEPTS_PER_SECOND tokens.
+        let later = at(start, 1000);
+        for _ in 0..SUSTAINED_ACCEPTS_PER_SECOND {
+            assert!(budget.try_admit(later));
+        }
+        assert!(!budget.try_admit(later));
+    }
+
+    #[test]
+    fn refill_never_exceeds_the_burst() {
+        let mut budget = FloodBudget::new();
+        let start = std::time::Instant::now();
+        assert!(budget.try_admit(start));
+        // Even an hour of idleness refills only up to the burst cap.
+        let much_later = at(start, 3_600_000);
+        for _ in 0..FLOOD_BURST {
+            assert!(budget.try_admit(much_later));
+        }
+        assert!(!budget.try_admit(much_later));
+    }
+}
+
+/// Burst-tolerant flood budget for non-priority admissions on the live control
+/// endpoint. A fresh server starts with [`FLOOD_BURST`] immediate non-priority
+/// admissions — enough for a legitimate burst such as eight workers driving a
+/// thousand back-to-back CRUD operations — and the budget refills at
+/// [`SUSTAINED_ACCEPTS_PER_SECOND`] per second. Past the burst, a sustained
+/// same-user flood of non-priority traffic sheds with `busy` instead of costing
+/// a handler thread (Unix) or reaching policy/state work. Reserve-eligible
+/// priority (`read`, `control stop` that may claim the reserve lane) never
+/// spends the budget; fake-priority frames demoted to the general lane do,
+/// like any other general-lane traffic. Partial connections that never
+/// deliver a full request never spend it either.
+pub(crate) const FLOOD_BURST: usize = 2048;
+pub(crate) const SUSTAINED_ACCEPTS_PER_SECOND: u64 = 64;
+
+/// Token bucket behind [`FLOOD_BURST`]/[`SUSTAINED_ACCEPTS_PER_SECOND`].
+/// Checked under its lock in the accept loop on Unix (before any thread or
+/// slot is claimed) and in the handler on Windows (after parsing, before
+/// policy/state work). Refills lazily by the clock, so shedding lifts promptly
+/// once a burst ends, and the balance is capped so the tracker itself stays
+/// bounded however long a flood lasts.
+#[derive(Debug)]
+pub(crate) struct FloodBudget {
+    tokens: f64,
+    updated: std::time::Instant,
+}
+
+impl FloodBudget {
+    pub(crate) fn new() -> Self {
+        Self {
+            tokens: FLOOD_BURST as f64,
+            updated: std::time::Instant::now(),
+        }
+    }
+
+    fn refill(&mut self, now: std::time::Instant) {
+        let elapsed = now.saturating_duration_since(self.updated).as_secs_f64();
+        if elapsed > 0.0 {
+            self.tokens = (self.tokens + elapsed * SUSTAINED_ACCEPTS_PER_SECOND as f64)
+                .min(FLOOD_BURST as f64);
+            self.updated = now;
+        }
+    }
+
+    /// Spend one token for a non-priority admission, refilling first by the
+    /// clock. Returns false past the burst: the caller sheds with `busy`
+    /// without spawning a handler or touching policy/state.
+    pub(crate) fn try_admit(&mut self, now: std::time::Instant) -> bool {
+        self.refill(now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub(crate) struct Shared {
     pub state: Mutex<State>,
     pub wake: Condvar,
     pub stop: Arc<AtomicBool>,
     pub registry: Registry,
+    /// Burst-tolerant flood budget (see [`FloodBudget`]). Unix checks it in the
+    /// accept loop before spawning; Windows checks it in the handler after
+    /// parsing but before policy/state work. Reserve-eligible priority never
+    /// spends it; demoted fake-priority frames do.
+    pub flood: Mutex<FloodBudget>,
     pub max_bytes: usize,
     pub initial_cwd: PathBuf,
     pub initial_bindings: BTreeMap<String, Json>,
@@ -790,6 +893,10 @@ pub(crate) struct Shared {
     /// `execute run --control`: stream uncaptured stdout to this terminal and allow
     /// the program to exit.
     pub run_mode: bool,
+    /// The `--agent-policy` file the server started with, if any. `control
+    /// reload-agents` re-reads this path so revocations and new grants take
+    /// effect without restarting the server.
+    pub agent_policy_path: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -797,12 +904,48 @@ pub(crate) struct Shared {
 pub(crate) struct Request {
     pub op: String,
     pub path: Option<String>,
-    pub value: Option<Json>,
+    #[serde(default)]
+    pub value: RequestValue,
     pub operations: Option<Vec<Json>>,
     pub action: Option<String>,
     pub if_revision: Option<u64>,
     pub after: Option<u64>,
     pub timeout_ms: Option<u64>,
+}
+
+/// A request value that keeps a missing field distinct from explicit JSON
+/// null. `Option<Json>` cannot represent both because serde maps a JSON null
+/// directly to `None`.
+#[derive(Debug, Default)]
+pub(crate) enum RequestValue {
+    #[default]
+    Missing,
+    Present(Json),
+}
+
+impl RequestValue {
+    fn as_ref(&self) -> Option<&Json> {
+        match self {
+            Self::Missing => None,
+            Self::Present(value) => Some(value),
+        }
+    }
+
+    fn into_option(self) -> Option<Json> {
+        match self {
+            Self::Missing => None,
+            Self::Present(value) => Some(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RequestValue {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Json::deserialize(deserializer).map(Self::Present)
+    }
 }
 
 #[derive(Debug)]
@@ -932,6 +1075,31 @@ fn mutate(root: &mut Json, op: &str, path: &str, value: Option<Json>) -> Result<
         _ => bail!("path parent is not a container"),
     }
     Ok(())
+}
+
+/// A JSON Patch test must not compare against the stored value of a secret
+/// binding. Reject the binding map itself (an ancestor of every secret), and
+/// every path at or below a secret binding. `parts` has already been decoded
+/// as an RFC 6901 pointer, so escaped binding names are handled consistently
+/// with `mutate`.
+fn test_targets_redacted_state(
+    parts: &[String],
+    secret_names: &[String],
+    source_is_redacted: bool,
+) -> bool {
+    match parts.first().map(String::as_str) {
+        // `/bindings` is an ancestor of every secret binding. A secret name
+        // also protects the binding itself and every nested path below it.
+        Some("bindings") => match parts.get(1) {
+            None => true,
+            Some(name) => secret_names.iter().any(|secret| secret == name),
+        },
+        // Reads replace the whole input record whenever the program contains
+        // a secret binding, and source reads redact any registered secret text.
+        Some("input") => !secret_names.is_empty(),
+        Some("source") => source_is_redacted,
+        _ => false,
+    }
 }
 
 pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
@@ -1105,6 +1273,24 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                     state.producer_epoch += 1;
                     state.producer_cancel.store(true, Ordering::Relaxed);
                 }
+                "reload-agents" => {
+                    // Re-read the startup agent policy so revocations and new
+                    // grants apply to this running server. The swap is one
+                    // atomic handle replacement: in-flight handlers keep the
+                    // old policy, new requests see the new one. Fail closed:
+                    // an unreadable or invalid file keeps the old policy and
+                    // reports the error instead.
+                    let path = shared
+                        .agent_policy_path
+                        .as_ref()
+                        .context("reload-agents requires the server to run with --agent-policy")?;
+                    let policy = super::auth::AgentAuthPolicy::load(path)
+                        .with_context(|| format!("reloading agent policy {}", path.display()))?;
+                    shared.registry.set_host_state(Some(policy));
+                    // A policy reload is not a document change, so it answers
+                    // without bumping the revision or waking `wait` pollers.
+                    return Ok(state.ack());
+                }
                 _ => bail!("unknown control action"),
             }
             state.changed(request.action.as_deref().unwrap());
@@ -1122,7 +1308,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             if events.len() >= MAX_QUEUE {
                 bail!("UI event queue is full");
             }
-            events.push(request.value.context("event requires value")?);
+            events.push(
+                request
+                    .value
+                    .into_option()
+                    .context("event requires value")?,
+            );
             validate(
                 &candidate,
                 &shared.registry,
@@ -1137,8 +1328,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             if !matches!(state.plan.program.trigger, Some(Trigger::Listen { .. })) {
                 bail!("send requires a listener program");
             }
-            let record: Data =
-                serde_json::from_value(request.value.context("send requires a text/bytes value")?)?;
+            let record: Data = serde_json::from_value(
+                request
+                    .value
+                    .into_option()
+                    .context("send requires a text/bytes value")?,
+            )?;
             if record.len() > shared.max_bytes || state.doc.inbox.len() >= MAX_QUEUE {
                 return Err(fail("capacity", "inbox or record capacity exceeded"));
             }
@@ -1152,13 +1347,25 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             let operations = if request.op == "patch" {
                 request.operations.context("patch requires operations")?
             } else {
-                vec![
-                    json!({"op":request.op,"path":request.path.context("mutation requires path")?,"value":request.value}),
-                ]
+                let mut operation = json!({
+                    "op": request.op,
+                    "path": request.path.context("mutation requires path")?,
+                });
+                if let Some(value) = request.value.into_option() {
+                    operation
+                        .as_object_mut()
+                        .expect("constructed operation is an object")
+                        .insert("value".into(), value);
+                }
+                vec![operation]
             };
             if operations.is_empty() || operations.len() > 128 {
                 bail!("patch needs 1..128 operations");
             }
+            let mut secret_names = state.secret_names();
+            let mut checked_source = state.doc.source.clone();
+            let mut source_is_redacted =
+                state.redactor.redact_text(&state.doc.source) != state.doc.source;
             for operation in operations {
                 let op = operation
                     .get("op")
@@ -1169,6 +1376,37 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                     .and_then(Json::as_str)
                     .context("patch operation needs path")?;
                 let parts = tokens(path)?;
+                let current_source = candidate
+                    .get("source")
+                    .and_then(Json::as_str)
+                    .context("state source must be text")?;
+                if current_source != checked_source {
+                    // A batch may introduce a secret input before testing its
+                    // binding. Keep existing secret names too, so changing or
+                    // removing the declaration cannot declassify a value in
+                    // the middle of the same batch.
+                    let candidate_plan = Plan::parse(current_source)?;
+                    secret_names.extend(
+                        crate::runtime::sensitive_binding_names(
+                            &candidate_plan.program,
+                            &state.registry,
+                        )
+                        .into_iter(),
+                    );
+                    source_is_redacted |=
+                        candidate_plan.program.inputs.iter().any(|input| {
+                            crate::ast::is_sensitive(input) && input.default.is_some()
+                        });
+                    checked_source = current_source.to_owned();
+                }
+                if op == "test"
+                    && test_targets_redacted_state(&parts, &secret_names, source_is_redacted)
+                {
+                    return Err(fail(
+                        "secret_test_denied",
+                        "patch test cannot target redacted state",
+                    ));
+                }
                 if state.in_flight
                     && !parts.first().is_some_and(|v| {
                         v == "user"

@@ -155,7 +155,8 @@ class FeatureMatrixTests(unittest.TestCase):
                 # Only dedicated advisory suites need this requirement; other tests
                 # may deliberately check behavior when the feature is disabled.
                 if (path.name.startswith("agent_") or path.name == "what_if_confirm.rs"
-                        or path.name in {"gate_effects.rs", "graph_checkpoint_cli.rs"}):
+                        or path.name in {"gate_effects.rs", "graph_checkpoint_cli.rs",
+                                         "checkpoint_resolve_elements.rs"}):
                     needed.add("agent-advisory")
             with self.subTest(test=path.name):
                 self.assertFalse(needed - requirements.get(path.stem, set()),

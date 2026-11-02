@@ -133,7 +133,10 @@ impl std::error::Error for TaskGroupFailure {}
 /// finite workflow result.
 #[derive(Debug)]
 pub(crate) struct TaskGroupResult {
+    /// The exact task-group value retained for the language binding.
     pub value: Value,
+    /// The redacted value serialized to the observable pipeline.
+    pub presentation: Value,
     pub launched_processes: usize,
 }
 
@@ -163,6 +166,10 @@ pub(super) struct TaskGroupRequest<'a> {
 pub(in crate::runtime) trait GroupSink {
     fn begin(&mut self, index: usize) -> Result<()>;
     fn commit(&mut self, index: usize, outcome: &ElementOutcome) -> Result<()>;
+    /// Record that element `index` already ran before a post-effect checkpoint
+    /// refusal, so resume requires `--retry-uncertain`. Re-recording the begin
+    /// for the same element replaces its pending entry.
+    fn mark_uncertain(&mut self, index: usize) -> Result<()>;
 }
 
 /// Elements restored from a checkpoint, and the sink for new element records.
@@ -186,6 +193,62 @@ struct Completion {
     result: Result<AppletInvocationResult>,
     cancelled: bool,
     launched_processes: usize,
+}
+
+/// Register every policy-declared manifest secret, even for applets that never
+/// run in this scope: a literal or transformed echo can leak a declared secret
+/// with no byte match against anything registered yet. The remainder beyond
+/// `seen` is bounded by the policy's declared set. Registration alone launches
+/// nothing, so it is safe before any effect.
+pub(in crate::runtime) fn pre_register_declared_manifest_secrets(
+    registry: &Registry,
+    seen: &mut BTreeSet<String>,
+) -> Result<()> {
+    for applet in crate::security::declared_secret_applets(registry) {
+        if !seen.insert(applet.clone()) {
+            continue;
+        }
+        let snapshot = crate::capabilities::effective_environment(registry, &applet)
+            .with_context(|| format!("resolving task environment for {applet:?}"))?;
+        crate::security::capture_declared_environment_secrets(registry, &applet, &snapshot)
+            .map_err(|error| anyhow!("registering declared task secrets: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Register declared-secret environment values before any task launches, so a
+/// fail-fast sibling cannot present output before the secret-owning task
+/// registers its mask. Manifest-set secrets are captured per applet via their
+/// effective environment; ambient declared secrets via the process snapshot;
+/// workflow overlay values are themselves secrets. Fail closed on overflow.
+fn pre_register_task_group_secrets(
+    registry: &Registry,
+    applet_names: &[String],
+    environment: &Option<crate::capabilities::CommandEnvOverlay>,
+) -> Result<()> {
+    let proc_vars = std::env::vars_os().collect::<Vec<_>>();
+    crate::security::register_declared_environment_secrets(registry, &proc_vars)
+        .map_err(|error| anyhow!("registering declared task secrets: {error}"))?;
+    let mut seen = std::collections::BTreeSet::new();
+    for applet in applet_names {
+        if !seen.insert(applet.clone()) {
+            continue;
+        }
+        let snapshot = crate::capabilities::effective_environment(registry, applet)
+            .with_context(|| format!("resolving task environment for {applet:?}"))?;
+        crate::security::capture_declared_environment_secrets(registry, applet, &snapshot)
+            .map_err(|error| anyhow!("registering declared task secrets: {error}"))?;
+    }
+    pre_register_declared_manifest_secrets(registry, &mut seen)?;
+    if let Some(overlay) = environment {
+        let redactor = crate::security::secret_redactor(registry);
+        for value in overlay.set.values() {
+            redactor
+                .register(value.as_bytes())
+                .map_err(|_| anyhow!("could not register a task environment value as a secret"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Resolve and validate every task's applet, parameters, and capability grant
@@ -318,7 +381,11 @@ pub(super) fn run_group(
     .into_iter()
     .map(|(id, call)| {
         let manifest = registry.resolve_call(&call)?;
-        let sensitive = call.marks_sensitive_output()
+        // Provenance: `sensitive_binding` already folds the static mark with
+        // the task's declared secret environment; keep that fold explicit so a
+        // transformed secret-derived output is withheld even with no byte match.
+        let sensitive = call.sensitive_binding
+            || call.marks_sensitive_output()
             || sensitive_environment
             || crate::security::applet_has_declared_secret_environment(
                 registry,
@@ -348,6 +415,13 @@ pub(super) fn run_group(
     let limit = limit.min(prepared.len());
     let max_output_bytes = options.max_output_bytes;
     let secret_redactor = crate::security::secret_redactor(registry);
+    {
+        let applet_names = prepared
+            .iter()
+            .map(|task| task.applet.clone())
+            .collect::<Vec<_>>();
+        pre_register_task_group_secrets(registry, &applet_names, &environment)?;
+    }
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     let not_started = records
         .iter()
@@ -647,7 +721,9 @@ pub(super) fn run_group(
         }
         if let Some(index) = winner {
             let value = group_value(mode, &records, Some(index), &secret_redactor);
-            ensure_encoded_limit(&value, max_output_bytes).map_err(|error| {
+            let presentation =
+                group_presentation_value(mode, &records, Some(index), &secret_redactor);
+            ensure_encoded_limit(&presentation, max_output_bytes).map_err(|error| {
                 task_group_failure(TaskGroupFailureRequest {
                     mode,
                     failed_task: &prepared[index].id,
@@ -664,6 +740,7 @@ pub(super) fn run_group(
             })?;
             return Ok(TaskGroupResult {
                 value,
+                presentation,
                 launched_processes: launched_processes(&records),
             });
         }
@@ -732,9 +809,11 @@ pub(super) fn run_group(
         .into());
     }
     let value = group_value(mode, &records, None, &secret_redactor);
-    ensure_encoded_limit(&value, max_output_bytes)?;
+    let presentation = group_presentation_value(mode, &records, None, &secret_redactor);
+    ensure_encoded_limit(&presentation, max_output_bytes)?;
     Ok(TaskGroupResult {
         value,
+        presentation,
         launched_processes: launched_processes(&records),
     })
 }
@@ -747,6 +826,13 @@ pub(super) fn run_group(
 /// starts. Cancellation, the workflow deadline or the aggregate output limit
 /// stop new launches, cancel and reap running elements, and fail the group
 /// with the partial records.
+///
+/// Explicit concurrency scope: `limit` bounds how many elements are admitted
+/// at once (`at most 1` fully serializes admission order), so these paths show
+/// deterministic serialized interleavings, not true-simultaneous races.
+/// Fail-fast ordering, partial-record redaction, and checkpoint refusal hold
+/// under the bound; simultaneous-race timing is out of scope and is not
+/// claimed by the `at most 1` tests.
 pub(super) fn run_each(
     request: TaskGroupRequest<'_>,
     each: &TaskEach,
@@ -843,7 +929,11 @@ pub(super) fn run_each(
             parameters: BTreeMap::new(),
             uncertain_on_error: manifest.uncertain_on_failure,
             native_command: manifest.execution_backend() == AppletBackend::Command,
-            sensitive: call.marks_sensitive_output(),
+            // Provenance: `sensitive_binding` folds the static mark with the
+            // element's items, environment and declared secret environment, so
+            // a transformed secret-derived output is withheld even when the
+            // post-effect byte check cannot recognize it.
+            sensitive: call.sensitive_binding || call.marks_sensitive_output(),
         });
         calls.push(call);
     }
@@ -867,10 +957,22 @@ pub(super) fn run_each(
     drop(calls);
 
     let secret_redactor = crate::security::secret_redactor(registry);
+    {
+        let applet_names = prepared
+            .iter()
+            .map(|task| task.applet.clone())
+            .collect::<Vec<_>>();
+        pre_register_task_group_secrets(registry, &applet_names, &environment)?;
+        if sink.is_some() && prepared.iter().any(|task| task.sensitive) {
+            bail!("checkpoint refused for parallel for each with secret task output");
+        }
+    }
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     if prepared.is_empty() {
+        let value = each_value(&mut records, items, &secret_redactor);
         return Ok(TaskGroupResult {
-            value: each_value(&mut records, items, &secret_redactor),
+            presentation: value.clone(),
+            value,
             launched_processes: 0,
         });
     }
@@ -935,6 +1037,36 @@ pub(super) fn run_each(
     // Native element output is charged against one shared budget as it arrives, so
     // an element that would cross the aggregate limit stops then, not at completion.
     let group_budget = Arc::new(std::sync::atomic::AtomicUsize::new(total_output_bytes));
+    // `RunOptions` owns its run-input map, so cloning it per element copies
+    // every input once per element. Element workers never read those inputs:
+    // a nested invocation resolves its own parameters (moved above) and
+    // program-module children derive their inputs from them, while run inputs
+    // are consumed once by top-level run setup. The only per-element
+    // adjustments are the output cap and the deadline-derived timeout, so
+    // share one `Arc` per output variant instead of cloning the inputs per
+    // element. A run with an outer deadline still builds a per-element copy
+    // below so its timeout stays exact.
+    //
+    // Working directory is deliberately left non-canonical here. Each worker
+    // re-resolves it inside `invoke_call_with_context`, so a symlink swap or
+    // deletion after admission is observed per element instead of masked by a
+    // stale admission-time string (a TOCTOU/security regression a one-time
+    // canonicalization would introduce for this optimization).
+    //
+    // The capped variant is built only when a non-native element can use it;
+    // an all-native group would otherwise pay one extra input clone for an
+    // `Arc` that is never moved into a worker. This gate changes no value,
+    // only whether an unused clone happens.
+    let needs_capped = per_task_output_limit < options.max_output_bytes
+        && prepared.iter().any(|task| !task.native_command);
+    let shared_options: Arc<RunOptions> = Arc::new(options.clone());
+    let shared_capped_options: Option<Arc<RunOptions>> = if needs_capped {
+        let mut capped = options.clone();
+        capped.max_output_bytes = per_task_output_limit;
+        Some(Arc::new(capped))
+    } else {
+        None
+    };
     let mut next = 0usize;
     let mut active = 0usize;
     let mut stopped: Option<(usize, String)> = None;
@@ -969,28 +1101,48 @@ pub(super) fn run_each(
             let applet = std::mem::take(&mut prepared[index].applet);
             let parameters = std::mem::take(&mut prepared[index].parameters);
             let native_command = prepared[index].native_command;
+            // `Registry` is internally `Arc`-backed, so this is a refcount
+            // bump; the context clone bumps a few small `Arc` vectors while
+            // each worker still needs its own mutable context below.
             let registry = registry.clone();
             let mut context = context.clone();
             let environment = environment.clone();
             context.group_output_budget = Some((Arc::clone(&group_budget), max_output_bytes));
             let inherited_cancelled = context.outer_cancelled.clone();
             let parent_cancelled = Arc::clone(&cancelled);
-            let mut task_options = options.clone();
-            // Native stdout and retained stderr share the incremental group
-            // budget, so an individual element can use the available budget.
-            // Other backends retain their conservative per-worker cap.
-            if !native_command {
-                task_options.max_output_bytes =
-                    task_options.max_output_bytes.min(per_task_output_limit);
-            }
-            if let Some(deadline) = outer_deadline {
+            // Share the run inputs through `Arc`: without an outer deadline
+            // the options are identical for every element of a backend kind,
+            // so move a refcount bump of a prebuilt variant into the worker
+            // instead of copying the input map per element. With an outer
+            // deadline each admission snapshots its own remaining time into a
+            // per-element copy, preserving the exact admission-time timeout
+            // (`total_timeout = min(T, outer - admission_now)`); sharing the
+            // unchanged `T` and relying on the worker-start re-stamp would
+            // shift every element deadline later by its spawn delay. Native
+            // stdout and retained stderr share the incremental group budget,
+            // so a native element can use the available budget while other
+            // backends retain their conservative per-worker cap.
+            let element_options: Arc<RunOptions> = if let Some(deadline) = outer_deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                task_options.total_timeout = Some(
-                    task_options
+                let mut owned = (*shared_options).clone();
+                if !native_command {
+                    owned.max_output_bytes = owned.max_output_bytes.min(per_task_output_limit);
+                }
+                owned.total_timeout = Some(
+                    owned
                         .total_timeout
                         .map_or(remaining, |duration| duration.min(remaining)),
                 );
-            }
+                Arc::new(owned)
+            } else if !native_command {
+                if let Some(capped) = shared_capped_options.as_ref() {
+                    Arc::clone(capped)
+                } else {
+                    Arc::clone(&shared_options)
+                }
+            } else {
+                Arc::clone(&shared_options)
+            };
             let sender = sender.clone();
             let spawned = scope.spawn(move |token| {
                 let _output_scope = super::OutputScopeGuard::enter(super::OutputScope::TaskGroup);
@@ -1009,7 +1161,7 @@ pub(super) fn run_each(
                             direct,
                             parameters,
                             input: Vec::new(),
-                            options: &task_options,
+                            options: &element_options,
                         },
                         token.cancellation_flag(),
                         context,
@@ -1113,6 +1265,50 @@ pub(super) fn run_each(
                 if let Some(result) = &records[index].invocation {
                     let outcome =
                         ElementOutcome::from_result(result, records[index].launched_processes);
+                    // The upfront refusal only sees statically flagged tasks. An
+                    // overlay literal, a literal list entry duplicating a known
+                    // secret, or a binding-derived parameter can still echo a
+                    // registered secret, so refuse the commit on the raw bytes.
+                    if outcome_contains_registered_secret(&secret_redactor, &outcome) {
+                        // The element already ran: leave an uncertain marker so
+                        // resume requires `--retry-uncertain`, and say so. The
+                        // upfront refusal stays certain because nothing ran yet.
+                        sink.mark_uncertain(index)?;
+                        bail!("checkpoint refused for parallel for each with secret task output; element {index} may contain an uncertain side effect, pass --retry-uncertain to retry");
+                    }
+                    // Provenance backstop for the byte check above: the output
+                    // encoding is attacker-chosen, so a non-standard transform
+                    // (base64url, case-shifted, truncated) of a literal
+                    // duplicate evades the output bytes while the inputs still
+                    // carry the registered secret. Withhold regardless of the
+                    // output transform, with the same uncertain marker.
+                    if element_inputs_contain_registered_secret(
+                        &secret_redactor,
+                        &items[index],
+                        &prepared[index].parameters,
+                    ) {
+                        sink.mark_uncertain(index)?;
+                        bail!("checkpoint refused for parallel for each with secret task output; element {index} may contain an uncertain side effect, pass --retry-uncertain to retry");
+                    }
+                    // The secret check wins so its uncertain marker and retry
+                    // flag survive; the generic floor still applies to non-secret
+                    // Unknown/Secret output before any line is written, except
+                    // under the Unknown-only deferral, where the two secret
+                    // checks above are the gate. This runs after the element
+                    // too, so it also marks uncertain.
+                    if !super::defer_unknown_checkpoint_denial(
+                        registry,
+                        &context.sensitivity_floor,
+                        true,
+                    ) {
+                        if let Err(error) = super::authorize_checkpoint_persistence(
+                            registry,
+                            &context.sensitivity_floor,
+                        ) {
+                            sink.mark_uncertain(index)?;
+                            bail!("checkpoint refused for parallel for each element {index}: {error:#}; it may contain an uncertain side effect, pass --retry-uncertain to retry");
+                        }
+                    }
                     sink.commit(index, &outcome)?;
                 }
             }
@@ -1200,6 +1396,7 @@ pub(super) fn run_each(
         each_result_encoded_limit(max_output_bytes, item_count),
     )?;
     Ok(TaskGroupResult {
+        presentation: value.clone(),
         value,
         launched_processes: launched_processes(&records),
     })
@@ -1236,7 +1433,7 @@ fn each_value(
             let mut value = each_task_value(record, secret_redactor);
             if let Value::Record(fields) = &mut value {
                 fields.insert("index".into(), Value::Integer(index as i64));
-                fields.insert("item".into(), item);
+                fields.insert("item".into(), redact_value(secret_redactor, &item));
             }
             value
         })
@@ -1421,7 +1618,7 @@ fn group_value(
     mode: TaskGroupMode,
     records: &[TaskRecord],
     winner: Option<usize>,
-    _secret_redactor: &crate::security::SecretRedactor,
+    secret_redactor: &crate::security::SecretRedactor,
 ) -> Value {
     let mut group = std::collections::BTreeMap::from([
         (
@@ -1433,7 +1630,42 @@ fn group_value(
         ),
         (
             "tasks".into(),
-            Value::List(records.iter().map(task_value_raw).collect()),
+            Value::List(
+                records
+                    .iter()
+                    .map(|record| task_value(record, secret_redactor, false))
+                    .collect(),
+            ),
+        ),
+    ]);
+    if let Some(index) = winner {
+        group.insert("winner".into(), Value::String(records[index].id.clone()));
+    }
+    Value::Record(group)
+}
+
+fn group_presentation_value(
+    mode: TaskGroupMode,
+    records: &[TaskRecord],
+    winner: Option<usize>,
+    secret_redactor: &crate::security::SecretRedactor,
+) -> Value {
+    let mut group = std::collections::BTreeMap::from([
+        (
+            "mode".into(),
+            Value::String(match mode {
+                TaskGroupMode::Join => "join".into(),
+                TaskGroupMode::Race => "race".into(),
+            }),
+        ),
+        (
+            "tasks".into(),
+            Value::List(
+                records
+                    .iter()
+                    .map(|record| task_value(record, secret_redactor, false))
+                    .collect(),
+            ),
         ),
     ]);
     if let Some(index) = winner {
@@ -1502,40 +1734,6 @@ fn task_value(
     Value::Record(fields)
 }
 
-/// Preserve true values in the language binding. Observer and error paths use
-/// `task_value`, which redacts serialized presentations; the enclosing group
-/// binding is itself withheld when any member is sensitive.
-fn task_value_raw(record: &TaskRecord) -> Value {
-    let mut fields = std::collections::BTreeMap::from([
-        ("id".into(), Value::String(record.id.clone())),
-        ("state".into(), Value::String(record.state.as_str().into())),
-        ("uncertain".into(), Value::Bool(record.uncertain)),
-        (
-            "launched_processes".into(),
-            Value::Integer(i64::try_from(record.launched_processes).unwrap_or(i64::MAX)),
-        ),
-    ]);
-    if let Some(error) = &record.error {
-        fields.insert("error".into(), Value::String(error.clone()));
-    }
-    if let Some(result) = &record.invocation {
-        fields.insert("status".into(), Value::Integer(i64::from(result.status)));
-        fields.insert("outcome".into(), Value::String(result.outcome.name.clone()));
-        fields.insert(
-            "outcome_kind".into(),
-            Value::String(result.outcome.kind.as_str().into()),
-        );
-        fields.insert("output_encoding".into(), Value::String("u8_array".into()));
-        fields.insert("output".into(), byte_array(&result.output));
-        fields.insert("stderr_encoding".into(), Value::String("u8_array".into()));
-        fields.insert("stderr".into(), byte_array(&result.stderr));
-        if let Some(value) = &result.value {
-            fields.insert("value".into(), value.clone());
-        }
-    }
-    Value::Record(fields)
-}
-
 fn each_task_value(
     record: &mut TaskRecord,
     secret_redactor: &crate::security::SecretRedactor,
@@ -1562,7 +1760,8 @@ fn each_task_value(
             "outcome_kind".into(),
             Value::String(result.outcome.kind.as_str().into()),
         );
-        let (output_encoding, output) = match String::from_utf8(result.output) {
+        let redacted_output = secret_redactor.redact_bytes(&result.output);
+        let (output_encoding, output) = match String::from_utf8(redacted_output) {
             Ok(text) => ("utf8", Value::String(text)),
             Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()))),
         };
@@ -1582,13 +1781,56 @@ fn each_task_value(
         );
         fields.insert("stderr".into(), stderr);
         if let Some(value) = result.value.take() {
-            fields.insert("value".into(), value);
+            fields.insert("value".into(), redact_value(secret_redactor, &value));
         }
     }
     Value::Record(fields)
 }
 
-fn redact_value(redactor: &crate::security::SecretRedactor, value: &Value) -> Value {
+/// Whether presenting `value` would redact it. The checkpoint refuses exactly
+/// what the reports would redact, so no committed line can outlive its mask.
+pub(in crate::runtime) fn value_contains_registered_secret(
+    redactor: &crate::security::SecretRedactor,
+    value: &Value,
+) -> bool {
+    &redact_value(redactor, value) != value
+}
+
+/// Whether presenting `outcome` would redact any of its bytes. Hex-encoding the
+/// journal line does not hide the secret: the check runs on the raw bytes.
+fn outcome_contains_registered_secret(
+    redactor: &crate::security::SecretRedactor,
+    outcome: &ElementOutcome,
+) -> bool {
+    redactor.redact_bytes(&outcome.output) != outcome.output.as_slice()
+        || redactor.redact_bytes(&outcome.stderr) != outcome.stderr.as_slice()
+        || outcome
+            .value
+            .as_ref()
+            .is_some_and(|value| value_contains_registered_secret(redactor, value))
+}
+
+/// Whether the element's own inputs already carry a registered secret: a
+/// literal list item duplicating a declared secret, or a resolved parameter
+/// echoing one. The output encoding is attacker-chosen, so an output-only byte
+/// check misses non-standard transforms (base64url, case-shifted, truncated);
+/// the input side is transform-agnostic and withholds regardless. Fail-closed:
+/// an unused secret item still refuses the commit.
+fn element_inputs_contain_registered_secret(
+    redactor: &crate::security::SecretRedactor,
+    item: &Value,
+    parameters: &BTreeMap<String, Value>,
+) -> bool {
+    value_contains_registered_secret(redactor, item)
+        || parameters
+            .values()
+            .any(|value| value_contains_registered_secret(redactor, value))
+}
+
+pub(in crate::runtime) fn redact_value(
+    redactor: &crate::security::SecretRedactor,
+    value: &Value,
+) -> Value {
     match value {
         Value::String(value) => Value::String(redactor.redact_text(value)),
         Value::Integer(value) => {

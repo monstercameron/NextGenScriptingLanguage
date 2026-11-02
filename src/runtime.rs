@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -137,7 +137,16 @@ pub struct RunOptions {
     pub command_timeout: Option<Duration>,
     /// Maximum lifetime of the full runtime operation, including scheduler waits.
     pub total_timeout: Option<Duration>,
+    /// Grace between the polite group signal (SIGTERM, or SIGINT when the run
+    /// was interrupted by SIGINT) and the final SIGKILL. Bounds every
+    /// cancellation and timeout path so a trapping child can clean up while an
+    /// ignoring child is still reaped. Issue #525; per-command tuning stays
+    /// with #310.
+    pub kill_grace: Duration,
 }
+
+/// Grace before SIGKILL when a cancel or timeout escalates a process group.
+pub const DEFAULT_KILL_GRACE: Duration = Duration::from_secs(2);
 
 impl RunOptions {
     /// Options for a run in `working_directory` with no inputs, cache, trace or
@@ -153,6 +162,7 @@ impl RunOptions {
             loop_budget_scope: LoopBudgetScope::PerLoop,
             command_timeout: None,
             total_timeout: None,
+            kill_grace: DEFAULT_KILL_GRACE,
         }
     }
 }
@@ -222,6 +232,40 @@ fn is_timeout_error(error: &anyhow::Error) -> bool {
         || error
             .downcast_ref::<execution_result::ExecutionFailure>()
             .is_some_and(|failure| failure.result.kind == execution_result::ExecutionKind::Timeout)
+}
+
+/// Whether an error already reports an interrupt cancellation. Only these are
+/// rewritten when a repeat interrupt lands during cleanup: native
+/// `ExecutionKind::Cancelled` failures plus the plain-text cancellations the
+/// task-group, parallel fan-out, in-process applet and model backends report
+/// (`task group ...`, `parallel for each was cancelled ...`, `observed parent
+/// cancellation`, `model request cancelled ...`). Timeouts, cleanup budgets
+/// and ordinary step failures keep their own errors so they still unwind
+/// through the cleanup frames.
+fn is_cancellation_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<execution_result::ExecutionFailure>()
+            .is_some_and(|failure| {
+                failure.result.kind == execution_result::ExecutionKind::Cancelled
+            })
+    }) || error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("workflow cancelled")
+            || message.contains("cancelled by handle")
+            || message.contains("cancelled while")
+            || message.contains("task group cancelled")
+            || message.contains("was cancelled")
+            || message.contains("observed parent cancellation")
+            || message.contains("model request cancelled")
+    })
+}
+
+/// A repeat interrupt landed while cleanup was active: the cleanup stops at
+/// once and its running command is killed. The pending failure stays on the
+/// error chain as context when the control-flow machinery records this.
+fn cleanup_interrupted() -> anyhow::Error {
+    anyhow!("cleanup interrupted")
 }
 fn deadline_after(timeout: Option<Duration>, label: &str) -> Result<Option<Instant>> {
     timeout
@@ -344,6 +388,178 @@ mod program_exit_tests {
     }
 }
 
+#[cfg(test)]
+mod cleanup_interrupt_tests {
+    use super::*;
+
+    fn cancelled_failure(message: &str) -> anyhow::Error {
+        anyhow::Error::new(execution_result::ExecutionFailure::new(
+            execution_result::ExecutionResult::runtime_failure(
+                execution_result::ExecutionKind::Cancelled,
+                message,
+                execution_result::EffectCertainty::Uncertain,
+            ),
+        ))
+    }
+
+    #[test]
+    fn cleanup_interrupted_names_the_interruption() {
+        assert!(
+            format!("{:#}", cleanup_interrupted()).contains("cleanup interrupted"),
+            "repeat interrupts must report the interruption, not the abandoned cleanup step"
+        );
+    }
+
+    #[test]
+    fn cancellation_errors_are_rewritten_and_others_are_not() {
+        assert!(is_cancellation_error(&cancelled_failure(
+            "workflow cancelled by signal"
+        )));
+        // The pending failure stays recognizable through added context.
+        let chained = Err::<(), _>(cancelled_failure("workflow cancelled by signal"))
+            .context("outer step")
+            .unwrap_err();
+        assert!(is_cancellation_error(&chained));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "cancelled by handle"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "cancelled while draining"
+        )));
+        // Task-group, parallel fan-out, in-process applet and model
+        // cancellations unwound mid-statement must rewrite the same way.
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "task group cancelled"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "task group was cancelled before preflight"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "parallel for each was cancelled before element launch"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "in-process applet observed parent cancellation"
+        )));
+        assert!(is_cancellation_error(&anyhow::anyhow!(
+            "model request cancelled; its remote outcome may be uncertain"
+        )));
+        // Timeouts, cleanup budgets and ordinary step failures keep their own
+        // errors so they still unwind through the cleanup frames.
+        assert!(!is_cancellation_error(&anyhow::Error::new(
+            execution_result::ExecutionFailure::new(
+                execution_result::ExecutionResult::runtime_failure(
+                    execution_result::ExecutionKind::Timeout,
+                    "command timed out",
+                    execution_result::EffectCertainty::Uncertain,
+                ),
+            )
+        )));
+        // A task-group error without a cancellation keeps its own error: the
+        // match is on the cancellation, not on the subsystem name.
+        assert!(!is_cancellation_error(&anyhow::anyhow!(
+            "task group result metadata exceeds the configured output limit"
+        )));
+        assert!(!is_cancellation_error(&anyhow::Error::new(CommandTimedOut)));
+        assert!(!is_cancellation_error(&anyhow::Error::new(
+            control_flow::CleanupBudgetExceeded {
+                after_success: false
+            }
+        )));
+        assert!(!is_cancellation_error(&anyhow::anyhow!("boom")));
+    }
+
+    #[test]
+    fn cleanup_scope_shares_the_second_interrupt_flag() {
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let scope = signals.cleanup_scope(None);
+        assert!(Arc::ptr_eq(&scope.cancelled, &signals.cleanup_cancel));
+        assert!(Arc::ptr_eq(&scope.cleanup_cancel, &signals.cleanup_cancel));
+        assert!(!scope.is_cancelled());
+        signals.cleanup_cancel.store(true, Ordering::SeqCst);
+        assert!(scope.is_cancelled());
+    }
+
+    #[test]
+    fn entering_cleanup_does_not_inherit_the_first_interrupt() {
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(true)), false, None)
+                .unwrap();
+        let scope = signals.cleanup_scope(None);
+        assert!(
+            !scope.is_cancelled(),
+            "the first interrupt runs cleanup; only a repeat interrupt sets the shared flag"
+        );
+    }
+
+    #[test]
+    fn cleanup_scope_inherits_outer_cancellation_but_not_the_first_interrupt() {
+        let mut signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(true)), false, None)
+                .unwrap();
+        let ancestor = Arc::new(AtomicBool::new(false));
+        signals.outer_cancelled.push(Arc::clone(&ancestor));
+        let scope = signals.cleanup_scope(None);
+        assert!(
+            !scope.is_cancelled(),
+            "neither the first interrupt nor an unset ancestor cancels cleanup"
+        );
+        ancestor.store(true, Ordering::SeqCst);
+        assert!(
+            scope.is_cancelled(),
+            "an ancestor task-group cancel during cleanup must abort it"
+        );
+    }
+
+    #[test]
+    fn cleanup_scope_inherits_job_cancellation() {
+        let mut signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let job = Arc::new(AtomicBool::new(false));
+        signals.job_cancelled = Some(Arc::clone(&job));
+        let scope = signals.cleanup_scope(None);
+        assert!(!scope.is_cancelled());
+        job.store(true, Ordering::SeqCst);
+        assert!(
+            scope.is_cancelled(),
+            "a job-handle cancel during cleanup must abort it"
+        );
+    }
+
+    #[test]
+    fn expired_drain_marks_cleanup_cancel_like_a_second_interrupt() {
+        let drain = Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cleanup_cancel = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_drain_watchdog(
+            Arc::clone(&drain),
+            Arc::clone(&cancelled),
+            Arc::clone(&cleanup_cancel),
+            Duration::from_millis(50),
+            Arc::clone(&stop),
+            None,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cleanup_cancel.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            cleanup_cancel.load(Ordering::SeqCst),
+            "the expired drain never marked cleanup"
+        );
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert_eq!(
+            drain.load(Ordering::SeqCst),
+            crate::platform::DRAIN_CANCELLED
+        );
+        stop.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Result of one explicit applet invocation through its declared backend.
 /// `output` always preserves the exact stdout bytes; `value` is available only
 /// when a typed contract successfully decodes the result (or creates an
@@ -390,6 +606,7 @@ fn configured_inputs<'a>(
         loop_budget_scope: options.loop_budget_scope,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        kill_grace: options.kill_grace,
         ..RunOptions::new(options.working_directory.clone())
     };
     preflight_inputs_with_loop_limit(
@@ -522,9 +739,27 @@ pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
     /// Interrupt drain state (`platform::DRAIN_*`); shared with cleanup scopes.
     drain: Arc<AtomicU8>,
+    /// Set by a repeat interrupt (or an expired interrupt drain) while cleanup
+    /// may be active. Cleanup scopes share this flag instead of minting a fresh
+    /// one, so a second Ctrl-C aborts the cleanup at once and kills its running
+    /// command. The first interrupt never sets it, so cleanup still runs.
+    cleanup_cancel: Arc<AtomicBool>,
+    /// Signal number of the interrupt that cancelled this run; 0 when none.
+    /// Each run owns its slot, so overlapping signal-owning runs keep their
+    /// own exit codes and runs that never install handlers cannot inherit a
+    /// previous run's code. Only entry points without a run (the CLI error
+    /// reporter) read the process-wide fallback in `platform`. OS delivery is
+    /// broadcast: one process-wide signal runs every installed owner's
+    /// handler set, so overlapping owners each record that same signal while
+    /// runs without handlers stay clean.
+    cancel_signal: Arc<AtomicI32>,
     /// Stops this run's drain watchdog when the run's signals are dropped.
     drain_stop: Option<Arc<AtomicBool>>,
     registrations: Vec<signal_hook::SigId>,
+    /// True once this run installed its process-wide handler set and counted
+    /// itself in `platform::live_signal_owners`. Only owners release the count
+    /// on drop; scoped clones share the slot but never own handlers.
+    owns_signal_handlers: bool,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
     graph_service_cancellation: bool,
@@ -549,6 +784,10 @@ pub(crate) struct Signals {
     job_stage_results: Option<Arc<Mutex<Vec<Option<execution_result::StageResult>>>>>,
     job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
     output_writers: Arc<stdio::OutputWriterPool>,
+    /// Bounded grace between the polite group signal and SIGKILL on
+    /// cancellation or timeout (issue #525). Copied from `RunOptions` for
+    /// the run and its bounded group scopes.
+    pub(crate) kill_grace: Duration,
     #[cfg(test)]
     job_panic_before_ack: Option<Arc<JobAckPanicProbe>>,
 }
@@ -660,11 +899,27 @@ impl Signals {
     }
 
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
+        // A fresh per-run slot starts at zero, so a new signal-owned run can
+        // neither inherit nor erase another run's recorded interrupt.
+        // Escalation reads only that slot, so overlapping runs keep their own
+        // SIGINT-vs-SIGTERM choice. The process-wide fallback is cleared for
+        // a sequential run only (no live owners), so a SIGINT that cancelled
+        // one in-process run (tests, daemon, library reuse) cannot poison the
+        // next run's CLI fallback report, while an overlapping register never
+        // erases the live run's pending report (see issue #525, B1). The clear
+        // happens just before installing handlers so a failed install can
+        // restore the fallback (B2); handlers re-record any new interrupt in
+        // both slots.
+        let cleanup_cancel = Arc::new(AtomicBool::new(false));
+        let cancel_signal = Arc::new(AtomicI32::new(0));
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            cleanup_cancel: Arc::clone(&cleanup_cancel),
+            cancel_signal: Arc::clone(&cancel_signal),
             drain_stop: None,
             registrations: Vec::with_capacity(3),
+            owns_signal_handlers: false,
             capture_diagnostics: false,
             deadline,
             graph_service_cancellation: false,
@@ -687,6 +942,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
+            kill_grace: DEFAULT_KILL_GRACE,
             #[cfg(test)]
             job_panic_before_ack: None,
         };
@@ -697,6 +953,7 @@ impl Signals {
                 spawn_drain_watchdog(
                     Arc::clone(&guard.drain),
                     Arc::clone(&guard.cancelled),
+                    Arc::clone(&guard.cleanup_cancel),
                     budget,
                     Arc::clone(&stop),
                     Some(Arc::clone(&signal_wake)),
@@ -707,8 +964,24 @@ impl Signals {
             None => None,
         };
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations =
-            crate::platform::signals(guard.cancelled.clone(), armed, Some(signal_wake))?;
+        let cleared = crate::platform::clear_for_new_owner();
+        match crate::platform::signals(
+            guard.cancelled.clone(),
+            armed,
+            Some(signal_wake),
+            Arc::clone(&guard.cleanup_cancel),
+            Arc::clone(&guard.cancel_signal),
+        ) {
+            Ok(registrations) => {
+                guard.registrations = registrations;
+                crate::platform::note_signal_owner_installed();
+                guard.owns_signal_handlers = true;
+            }
+            Err(error) => {
+                crate::platform::restore_after_failed_install(cleared);
+                return Err(error);
+            }
+        }
         Ok(guard)
     }
 
@@ -716,13 +989,34 @@ impl Signals {
         cancelled: Arc<AtomicBool>,
         deadline: Option<Instant>,
     ) -> Result<Self> {
+        // As with `register`: the fresh per-run slot starts without a recorded
+        // interrupt, so this run can neither inherit nor erase another run's.
         // The caller can set this flag directly without notifying the signal
         // wake, so native supervisors retain the bounded cancellation check.
+        // Like `register`, this installs fresh handlers, so it owns fresh
+        // signal state too (issue #525). The fallback clear is guarded by the
+        // live-owner count and restored on install failure (B1/B2).
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
         let signal_wake = Arc::new(crate::tasks::CancellationWake::new()?);
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations =
-            crate::platform::signals(guard.cancelled.clone(), None, Some(signal_wake))?;
+        let cleared = crate::platform::clear_for_new_owner();
+        match crate::platform::signals(
+            guard.cancelled.clone(),
+            None,
+            Some(signal_wake),
+            Arc::clone(&guard.cleanup_cancel),
+            Arc::clone(&guard.cancel_signal),
+        ) {
+            Ok(registrations) => {
+                guard.registrations = registrations;
+                crate::platform::note_signal_owner_installed();
+                guard.owns_signal_handlers = true;
+            }
+            Err(error) => {
+                crate::platform::restore_after_failed_install(cleared);
+                return Err(error);
+            }
+        }
         Ok(guard)
     }
 
@@ -739,8 +1033,11 @@ impl Signals {
         Ok(Self {
             cancelled,
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            cleanup_cancel: Arc::new(AtomicBool::new(false)),
+            cancel_signal: Arc::new(AtomicI32::new(0)),
             drain_stop: None,
             registrations: Vec::new(),
+            owns_signal_handlers: false,
             capture_diagnostics,
             deadline,
             graph_service_cancellation: false,
@@ -763,20 +1060,29 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
+            kill_grace: DEFAULT_KILL_GRACE,
             #[cfg(test)]
             job_panic_before_ack: None,
         })
     }
 
-    /// Fork the execution context for bounded finally cleanup. Cleanup gets
-    /// fresh cancellation and deadline state while retaining its enclosing
+    /// Fork the execution context for bounded finally cleanup. Cleanup keeps
+    /// the shared second-interrupt flag and wakes so a repeat interrupt aborts
+    /// it at once, with a fresh deadline, while retaining its enclosing
     /// module, worker, provenance, accounting, observation, and job-run scope.
+    /// Ancestor task-group (`outer_cancelled`) and job-handle (`job_cancelled`)
+    /// flags are inherited so an outer or job cancel during cleanup still
+    /// aborts it; the run's own first-interrupt flag is deliberately not
+    /// inherited, so one interrupt still runs cleanup to completion.
     fn cleanup_scope(&self, deadline: Option<Instant>) -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::clone(&self.cleanup_cancel),
             drain: Arc::clone(&self.drain),
+            cleanup_cancel: Arc::clone(&self.cleanup_cancel),
+            cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
+            owns_signal_handlers: false,
             capture_diagnostics: self.capture_diagnostics,
             deadline,
             graph_service_cancellation: self.graph_service_cancellation,
@@ -786,10 +1092,10 @@ impl Signals {
             process_launches: Arc::clone(&self.process_launches),
             process_observer: Arc::clone(&self.process_observer),
             worker_pool: self.worker_pool.clone(),
-            outer_cancelled: Vec::new(),
-            cancel_wakes: Vec::new(),
-            unnotified_cancellation: true,
-            job_cancelled: None,
+            outer_cancelled: self.outer_cancelled.clone(),
+            cancel_wakes: self.cancel_wakes.clone(),
+            unnotified_cancellation: self.unnotified_cancellation,
+            job_cancelled: self.job_cancelled.clone(),
             job_launch_ack: None,
             job_output_budget: None,
             job_output_limit: None,
@@ -799,6 +1105,7 @@ impl Signals {
             job_stage_results: None,
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
+            kill_grace: self.kill_grace,
             #[cfg(test)]
             job_panic_before_ack: None,
         }
@@ -816,8 +1123,11 @@ impl Signals {
         Some(Self {
             cancelled: Arc::clone(&self.cancelled),
             drain: Arc::clone(&self.drain),
+            cleanup_cancel: Arc::clone(&self.cleanup_cancel),
+            cancel_signal: Arc::clone(&self.cancel_signal),
             drain_stop: None,
             registrations: Vec::new(),
+            owns_signal_handlers: false,
             capture_diagnostics: self.capture_diagnostics,
             deadline: self.deadline,
             graph_service_cancellation: self.graph_service_cancellation,
@@ -848,6 +1158,7 @@ impl Signals {
             job_stage_results: self.job_stage_results.clone(),
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
+            kill_grace: self.kill_grace,
             #[cfg(test)]
             job_panic_before_ack: self.job_panic_before_ack.clone(),
         })
@@ -971,6 +1282,32 @@ impl Signals {
                 Ordering::SeqCst,
             )
             .is_ok()
+    }
+
+    /// Record the signal that interrupted this run. Production signal handlers
+    /// store into both this slot and the process-wide fallback; tests use this
+    /// to record against one run without delivering a real signal.
+    #[cfg(test)]
+    fn record_cancel_signal(&self, signal: i32) {
+        self.cancel_signal.store(signal, Ordering::SeqCst);
+    }
+
+    /// Exit status for this run when cancelled by an interrupt: 128 plus the
+    /// recorded signal. Runs that never recorded a signal report `None`, even
+    /// when another run in this process was interrupted.
+    pub(crate) fn cancel_exit_code(&self) -> Option<i32> {
+        match self.cancel_signal.load(Ordering::SeqCst) {
+            0 => None,
+            signal => Some(crate::platform::exit_code_for_signal(signal)),
+        }
+    }
+
+    /// Exit status of this run ended by an interrupt drain: 128 plus the
+    /// recorded signal (130 for SIGINT), or 130 when no signal was recorded.
+    pub(crate) fn drain_exit_status(&self) -> u8 {
+        self.cancel_exit_code()
+            .and_then(|code| u8::try_from(code).ok())
+            .unwrap_or(130)
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
@@ -1212,10 +1549,30 @@ impl Drop for Signals {
         for registration in &self.registrations {
             signal_hook::low_level::unregister(*registration);
         }
+        if self.owns_signal_handlers {
+            crate::platform::note_signal_owner_released();
+        }
         if let Some(stop) = &self.drain_stop {
             stop.store(true, Ordering::SeqCst);
         }
     }
+}
+
+/// Clear a stale process-wide interrupt before a graph run installs its
+/// global-only cancellation handler (B5). Guarded by the live-owner count:
+/// a sequential stale record is dropped so a previous finite run's SIGINT
+/// cannot poison the graph's CLI fallback report, while a live overlapping
+/// signal-owning run keeps its pending report. Returns the cleared value so
+/// a failed handler install can restore it; `None` means nothing cleared.
+pub fn clear_stale_interrupt_for_graph() -> Option<i32> {
+    crate::platform::clear_for_new_owner()
+}
+
+/// Restore the fallback after a failed graph handler install (B5/B2). Only
+/// restores when the fallback is still cleared, so a fresh concurrent record
+/// is never overwritten.
+pub fn restore_stale_interrupt_after_failed_graph_install(cleared: Option<i32>) {
+    crate::platform::restore_after_failed_install(cleared);
 }
 
 /// The budget an interrupt drain gets before it cancels, unless the caller sets one.
@@ -1253,11 +1610,12 @@ impl DrainClock {
 }
 
 /// Polls a run's drain state and turns an expired drain into a cancel: the same
-/// state change and flag a second interrupt makes. It exits once the run cancels
+/// state change and flags a second interrupt makes. It exits once the run cancels
 /// or its signals are dropped.
 fn spawn_drain_watchdog(
     drain: Arc<AtomicU8>,
     cancelled: Arc<AtomicBool>,
+    cleanup_cancel: Arc<AtomicBool>,
     budget: Duration,
     stop: Arc<AtomicBool>,
     wake: Option<Arc<crate::tasks::CancellationWake>>,
@@ -1274,6 +1632,7 @@ fn spawn_drain_watchdog(
                 if clock.expired(state, Instant::now()) {
                     drain.store(crate::platform::DRAIN_CANCELLED, Ordering::SeqCst);
                     cancelled.store(true, Ordering::SeqCst);
+                    cleanup_cancel.store(true, Ordering::SeqCst);
                     if let Some(wake) = &wake {
                         wake.notify();
                     }
@@ -1297,6 +1656,15 @@ pub(crate) fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
 
 /// Resolve an executable using a caller-supplied PATH when present. This keeps
 /// static checks and runtime launch resolution on the same search path.
+///
+/// A manifest-selected executable decides what runs, so the selected
+/// candidate passes the same trusted-input ownership and writability gate as
+/// manifests (leaf plus ancestors, hardlink/setuid, ACLs): a trusted manifest
+/// naming a writable binary is refused instead of launched. The canonical
+/// target is verified but the selected spelling is returned, so multicall
+/// tools and symlink aliases keep dispatching on argv[0]. A replacement
+/// between this verification and the later spawn remains a race; see
+/// SECURITY.md.
 pub(crate) fn binary_path_with_path(
     binary: &str,
     cwd: &Path,
@@ -1319,6 +1687,7 @@ pub(crate) fn binary_path_with_path(
         if !metadata.is_file() || !crate::platform::executable(&metadata) {
             bail!("{} is not an executable file", candidate.display());
         }
+        verify_trusted_executable(&candidate)?;
         Ok(candidate)
     } else {
         let path = path_override
@@ -1329,38 +1698,112 @@ pub(crate) fn binary_path_with_path(
     }
 }
 
+/// Verify a manifest-selected executable against the trusted-input gate. The
+/// canonical target passes the leaf plus ancestor, hardlink/setuid and ACL
+/// checks; the caller's spelling is kept for launch. Failures name the
+/// selected path and fail closed instead of falling through to another PATH
+/// entry: the first executable hit is what would run.
+fn verify_trusted_executable(candidate: &Path) -> Result<()> {
+    let canonical = std::fs::canonicalize(candidate)
+        .with_context(|| format!("resolving executable {}", candidate.display()))?;
+    crate::security::verify_trusted_input_file(&canonical, "executable")
+        .with_context(|| format!("trusting executable {}", candidate.display()))?;
+    Ok(())
+}
+
 /// Locate the version-matched generic applet helper beside this executable.
+/// The helper decides what the `@execute-applet` applets run, so it passes
+/// the same trusted-input ownership and writability gate as manifests,
+/// including the writable-ancestor, hardlink and setuid checks: a writable
+/// helper parent would let an attacker replace the verified binary before it
+/// is executed. The path-side check cannot pin the inode through `exec`, so a
+/// replacement between this verification and the later spawn remains a race;
+/// see SECURITY.md.
 pub fn bundled_applet_helper() -> Result<PathBuf> {
-    let executable = std::env::current_exe().context("locating the running interpreter")?;
-    let helper = executable.with_file_name(if cfg!(windows) {
-        "execute-applet.exe"
-    } else {
-        "execute-applet"
-    });
-    let metadata = fs::metadata(&helper).with_context(|| {
-        "bundled execute-applet helper missing; build the interpreter and helper binaries with cargo build --release"
-    })?;
-    if !metadata.is_file() || !crate::platform::executable(&metadata) {
-        bail!("bundled execute-applet helper is not an executable file");
-    }
-    Ok(helper)
+    bundled_helper(
+        "execute-applet",
+        "bundled execute-applet helper missing; build the interpreter and helper binaries with cargo build --release",
+    )
 }
 
 /// Locate the version-matched native model applet beside this executable.
+/// The helper passes the same trusted-input gate as the applet helper,
+/// including the writable-parent check; the `exec` race note above applies.
 pub fn bundled_model_applet() -> Result<PathBuf> {
+    bundled_helper(
+        "execute-model",
+        "bundled execute-model helper missing; build both binaries with cargo build --release",
+    )
+}
+
+/// Locate a bundled helper beside this executable and prove it is the helper
+/// this build shipped before anything runs it. Sibling location alone is not
+/// trust (issue #515): the helper first passes the trusted-input ownership
+/// and writability gate in `crate::security::verify_trusted_input_file`
+/// (leaf plus ancestors, hardlink/setuid, ACLs), then the permission/hash
+/// gate in `crate::security::verify_bundled_helper` (recorded build-time
+/// hash enforced when a `.sha256` sidecar is present), then a
+/// version/identity handshake runs the helper's existing `--version`
+/// contract and requires an exact match with this build's version, so a
+/// replaced helper that does not mimic the version line is refused even in
+/// a plain `cargo build` tree that carries no recorded hash. The handshake
+/// is not authentication — any binary printing the expected line passes —
+/// and the hash/handshake bytes cannot be pinned through `exec` (see
+/// SECURITY.md); the ownership/writability gate above is what stops a
+/// cross-user replacement.
+fn bundled_helper(name: &str, missing: &'static str) -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
     let helper = executable.with_file_name(if cfg!(windows) {
-        "execute-model.exe"
+        format!("{name}.exe")
     } else {
-        "execute-model"
+        name.to_owned()
     });
-    let metadata = fs::metadata(&helper).with_context(|| {
-        "bundled execute-model helper missing; build both binaries with cargo build --release"
-    })?;
-    if !metadata.is_file() || !crate::platform::executable(&metadata) {
-        bail!("bundled execute-model helper is not an executable file");
+    if fs::symlink_metadata(&helper).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        bail!("bundled {name} helper is a symbolic link; pass the real path");
     }
+    let label = format!("bundled {name} helper");
+    let metadata = crate::security::verify_trusted_input_file(&helper, &label)
+        .with_context(|| missing.to_owned())?;
+    if !metadata.is_file() || !crate::platform::executable(&metadata) {
+        bail!("bundled {name} helper is not an executable file");
+    }
+    let recorded = crate::security::recorded_bundled_helper_sha256(&helper)?;
+    crate::security::verify_bundled_helper(&helper, recorded.as_deref())
+        .with_context(|| format!("trusting bundled {name} helper {}", helper.display()))?;
+    verify_helper_version_handshake(&helper, name)?;
     Ok(helper)
+}
+
+/// Run `helper --version` and require the exact identity line this build
+/// expects. Both bundled helpers already answer `--version` with
+/// `<name> <CARGO_PKG_VERSION>`; a replacement binary that does not mimic
+/// that line is refused before it can run any privileged operation. This
+/// executes the candidate binary once (with `--version`, stdin null), so it
+/// runs only after the trusted-input gate has passed, and it authenticates
+/// nothing: any binary printing the expected line passes. It catches
+/// stale/mismatched helpers in trees without a recorded hash, not a
+/// same-directory attacker.
+fn verify_helper_version_handshake(helper: &Path, name: &str) -> Result<()> {
+    let output = std::process::Command::new(helper)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| {
+            format!(
+                "running bundled {name} helper identity handshake {}",
+                helper.display()
+            )
+        })?;
+    let expected = format!("{name} {}", env!("CARGO_PKG_VERSION"));
+    let reported = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() || reported.trim() != expected {
+        bail!(
+            "bundled {name} helper {} failed its identity handshake: expected `{expected}`, got `{}`; refusing to run an untrusted helper",
+            helper.display(),
+            reported.trim()
+        );
+    }
+    Ok(())
 }
 
 fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Result<PathBuf> {
@@ -1385,6 +1828,7 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
             continue;
         };
         if metadata.is_file() && crate::platform::executable(&metadata) {
+            verify_trusted_executable(&candidate)?;
             return Ok(candidate);
         }
     }
@@ -1437,6 +1881,7 @@ fn binary_path_in_components(binary: &str, entries: &[PathBuf]) -> Result<PathBu
             continue;
         };
         if metadata.is_file() && crate::platform::executable(&metadata) {
+            verify_trusted_executable(&candidate)?;
             return Ok(candidate);
         }
     }
@@ -1715,12 +2160,25 @@ fn scan_child_statuses(
                         stderr,
                     )
                 } else {
-                    execution_result::StageResult::signaled(
-                        calls[index].2,
-                        calls[index].1.name_for(calls[index].0),
-                        execution_result::exit_signal(status),
-                        stderr,
-                    )
+                    let signal = execution_result::exit_signal(status);
+                    let exhausted = signal.is_some_and(|signal| {
+                        execution_result::resource_limit_signal(signal).is_some()
+                    });
+                    if exhausted {
+                        execution_result::StageResult::resource_exhausted(
+                            calls[index].2,
+                            calls[index].1.name_for(calls[index].0),
+                            signal,
+                            stderr,
+                        )
+                    } else {
+                        execution_result::StageResult::signaled(
+                            calls[index].2,
+                            calls[index].1.name_for(calls[index].0),
+                            signal,
+                            stderr,
+                        )
+                    }
                 });
                 signals.record_job_stage_result(
                     index,
@@ -1745,14 +2203,26 @@ fn scan_child_statuses(
                 }
                 if !(implicit_success || status_kept) {
                     drain_diagnostic(managed, signals)?;
+                    let signal = execution_result::exit_signal(status);
+                    let bound = signal.and_then(execution_result::resource_limit_signal);
+                    let stderr_text = String::from_utf8_lossy(&managed.diagnostic)
+                        .trim()
+                        .to_owned();
+                    let diagnostic = match (signal, bound) {
+                        (Some(signal), Some(bound)) if stderr_text.is_empty() => format!(
+                            "exceeded the {bound} resource limit and was killed by signal {signal}"
+                        ),
+                        (Some(signal), Some(bound)) => format!(
+                            "exceeded the {bound} resource limit and was killed by signal {signal}: {stderr_text}"
+                        ),
+                        _ => stderr_text,
+                    };
                     return Err(CommandFailed {
                         line: calls[index].2,
                         operation: calls[index].1.name_for(calls[index].0).to_owned(),
                         status,
                         outcome: code.map(|code| calls[index].1.outcome_for(code)),
-                        diagnostic: String::from_utf8_lossy(&managed.diagnostic)
-                            .trim()
-                            .to_owned(),
+                        diagnostic,
                         stderr: captured_stage_stderr(calls[index].0, calls[index].1, signals)
                             .then(|| managed.diagnostic.clone()),
                         stdout: None,
@@ -2009,12 +2479,18 @@ fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
 }
 
 /// Write owned output from a streamed step without copying its captured bytes.
+/// The observer record keeps the exact bytes; only a TTY sink gets the
+/// terminal-escaped rendering, so pipes keep their bytes (H17).
 fn write_streamed_stdout_owned(bytes: Vec<u8>, signals: &Signals) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
     observe::note_terminal_output(&bytes);
     if observe::writes_streamed_stdout() {
+        let bytes = crate::terminal_text::encode_pipeline_for_stdout(
+            &bytes,
+            crate::terminal_text::stdout_is_terminal(),
+        );
         stdio::write_with_deadline_owned_reusing(
             &signals.output_writers,
             1,
@@ -2268,13 +2744,6 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     result.with_context(|| format!("writing {}", path.display()))
 }
 
-/// Exit status of a run ended by an interrupt drain: the interrupt's own status, or 130.
-fn drain_exit_status() -> u8 {
-    crate::platform::cancel_exit_code()
-        .and_then(|code| u8::try_from(code).ok())
-        .unwrap_or(130)
-}
-
 /// Programs with an `on interrupt` body drain on their first interrupt.
 fn has_interrupt_handler(program: &Program) -> bool {
     program
@@ -2298,11 +2767,12 @@ pub fn run_with_drain_timeout(
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
-    let signals = if has_interrupt_handler(program) {
+    let mut signals = if has_interrupt_handler(program) {
         Signals::register_with_drain(deadline, drain_timeout)?
     } else {
         Signals::register_with_deadline(deadline)?
     };
+    signals.kill_grace = options.kill_grace;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
@@ -2336,6 +2806,42 @@ pub(super) fn authorize_checkpoint_persistence(
         sensitivities,
     )?;
     Ok(())
+}
+
+/// Whether an Unknown-only static floor may defer to the per-element
+/// checkpoint gates instead of refusing up front. Loop-item references
+/// over-approximate the floor as Unknown even for Public literal lists, so
+/// that floor alone is a possible false positive. Deferral is available only
+/// when the program has a `for each`/`parallel for each` loop whose gates
+/// will compare the actual element bytes and inputs against the declared
+/// secrets registered before any element runs, and only when no Secret label
+/// contributes: a Secret floor still fails before any effect, and non-loop
+/// programs keep the upfront denial.
+pub(super) fn defer_unknown_checkpoint_denial(
+    registry: &Registry,
+    sensitivities: &crate::security::SensitivitySet,
+    has_loop: bool,
+) -> bool {
+    use crate::contracts::Sensitivity;
+    has_loop
+        && !sensitivities.contains(&Sensitivity::Secret)
+        && sensitivities.contains(&Sensitivity::Unknown)
+        && !crate::security::declared_secret_applets(registry).is_empty()
+}
+
+/// Whether any step is a `for each`/`parallel for each` loop whose elements
+/// get their own checkpoint gates.
+pub(super) fn program_has_for_each(program: &Program) -> bool {
+    program.steps.iter().any(|step| {
+        matches!(
+            &step.kind,
+            crate::ast::StepKind::TaskGroup { each: Some(_), .. }
+                | crate::ast::StepKind::Loop {
+                    kind: crate::ast::LoopKind::ForEach { .. },
+                    ..
+                }
+        )
+    })
 }
 
 const VERSIONED_CACHE_MAGIC: &[u8] = b"FLOW-CONTRACT-CACHE\0\x01";
@@ -3386,7 +3892,12 @@ fn execute_remote_applet(
     let client = RemoteClient::new_with_credential_base(client_config, credential_base)?
         .with_secret_redactor(crate::security::secret_redactor(registry))
         .with_resolver_helper(std::env::current_exe()?)
-        .with_process_observer(signals.process_launch_callback());
+        .with_process_observer(signals.process_launch_callback())
+        .with_ssrf_grant(crate::capabilities::remote_origin_is_explicitly_granted(
+            registry,
+            &manifest.name,
+            &endpoint.endpoint,
+        ));
     if let Some(path) = client.descriptor_cache_path() {
         crate::capabilities::authorize_applet_host_path(
             registry,
@@ -5080,6 +5591,37 @@ mod opt_manifest_binary_path_tests {
         );
     }
 
+    #[test]
+    fn opt_manifest_untrusted_first_path_hit_fails_closed_without_fallthrough() {
+        // Fail-before-effect for PATH search: the first executable hit is what
+        // would run, so an untrusted first hit is refused even when a later
+        // entry holds a trusted copy. Falling through would either launch a
+        // different binary than the resolved one or mask the untrusted entry.
+        let root = tempdir().unwrap();
+        let cwd = root.path().join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let binary = "probe";
+        let untrusted = PathBuf::from("untrusted");
+        let trusted = PathBuf::from("trusted");
+        opt_manifest_write_file(&cwd.join(&untrusted).join(binary), 0o777).unwrap();
+        opt_manifest_write_file(&cwd.join(&trusted).join(binary), 0o755).unwrap();
+        let path = opt_manifest_join_path(&[untrusted, trusted]);
+        let error = format!(
+            "{:#}",
+            binary_path_from_path(binary, &cwd, &path)
+                .expect_err("untrusted first PATH hit must fail")
+        );
+        assert!(
+            error.contains("untrusted") && error.contains(binary),
+            "{error}"
+        );
+        let mut cache = LaunchPathCache::default();
+        assert!(
+            cache.lookup(binary, &cwd, &path).is_err(),
+            "cached PATH search must fail closed on the same untrusted hit"
+        );
+    }
+
     fn opt_manifest_lookup_sample(
         lookup: fn(&str, &Path, &OsStr) -> Result<PathBuf>,
         binary: &str,
@@ -5307,6 +5849,42 @@ mod input_writer_drop_tests {
                 assert!(error.is::<super::CommandTimedOut>());
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod helper_trust_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake_helper(temp: &tempfile::TempDir, version_line: &str) -> PathBuf {
+        let helper = temp.path().join("execute-applet");
+        fs::write(
+            &helper,
+            format!("#!/bin/sh\nprintf '%s\\n' '{version_line}'\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        helper
+    }
+
+    #[test]
+    fn handshake_accepts_the_matching_helper_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = fake_helper(
+            &temp,
+            &format!("execute-applet {}", env!("CARGO_PKG_VERSION")),
+        );
+        assert!(verify_helper_version_handshake(&helper, "execute-applet").is_ok());
+    }
+
+    #[test]
+    fn handshake_refuses_a_replaced_helper() {
+        let temp = tempfile::tempdir().unwrap();
+        // A replacement binary reports a different identity and is refused.
+        let helper = fake_helper(&temp, "execute-applet 0.0.0-attacker");
+        let error = verify_helper_version_handshake(&helper, "execute-applet").unwrap_err();
+        assert!(error.to_string().contains("identity handshake"), "{error}");
     }
 }
 
@@ -5821,6 +6399,8 @@ mod drain_tests {
 
     /// Runs `source` in a fresh directory with the drain state preset, without
     /// installing OS signal handlers. The directory keeps any files the run wrote.
+    /// Each run owns its interrupt slot, so no process-wide lock or clear is
+    /// needed: a concurrent probe cannot move this run off 130.
     fn run_with_drain(
         source: &str,
         state: u8,
@@ -5899,6 +6479,263 @@ mod drain_tests {
     }
 
     #[test]
+    fn overlapping_signal_owners_keep_their_own_exit_codes() {
+        // Two live signal-owning runs record different signals: with the old
+        // process-wide slot the second record overwrote the first run's code.
+        // The serial lock keeps the installed handlers' fallback writes away
+        // from concurrent tests while both runs overlap. This injects per-slot
+        // signals to prove slot independence; the real-delivery broadcast proof
+        // is `both_overlapping_owners_observe_a_real_broadcast_signal` below.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        first.record_cancel_signal(2);
+        second.record_cancel_signal(15);
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(second.cancel_exit_code(), Some(143));
+        assert_eq!(first.drain_exit_status(), 130);
+        assert_eq!(second.drain_exit_status(), 143);
+    }
+
+    #[test]
+    fn second_overlapping_register_preserves_the_live_fallback_report() {
+        // B1 end to end through real handler installation: the first live
+        // owner records a fallback SIGINT, and the second overlapping register
+        // must not erase that pending CLI report, while its own slot stays
+        // clean. Per-run escalation still reads only slots, so this guards the
+        // fallback without weakening either guarantee. Deterministic: synthetic
+        // fallback records only, serialized through the fallback lock.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        // The live run is interrupted: slot truth plus the CLI fallback.
+        first.record_cancel_signal(2);
+        crate::platform::record_cancel_signal(2);
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        // The overlapping register must keep that pending report.
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::platform::cancel_exit_code(),
+            Some(130),
+            "an overlapping register must not erase the live run's fallback report"
+        );
+        assert_eq!(second.cancel_exit_code(), None);
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        drop(first);
+        drop(second);
+    }
+
+    #[test]
+    fn sequential_register_drops_stale_fallback_for_graph_scope() {
+        // B5 sequential side: a stale fallback from a previous run is dropped
+        // for the next scope (finite register or graph start), so a timed-out
+        // run never inherits a previous SIGINT through the CLI fallback.
+        // Deterministic: synthetic records only, serialized through the lock.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        crate::platform::record_cancel_signal(2);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        let cleared = clear_stale_interrupt_for_graph();
+        assert_eq!(cleared, Some(2));
+        assert_eq!(crate::platform::cancel_exit_code(), None);
+        restore_stale_interrupt_after_failed_graph_install(cleared);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        let cleared_again = clear_stale_interrupt_for_graph();
+        assert_eq!(cleared_again, Some(2));
+        assert_eq!(crate::platform::cancel_exit_code(), None);
+    }
+
+    #[test]
+    fn a_run_without_signal_handlers_ignores_an_earlier_runs_signal() {
+        // A stale process-wide record must not leak into a later run that
+        // never owned signal handlers: nested live, service, job, and worker
+        // runs all build on `with_cancellation_and_deadline`.
+        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::platform::record_cancel_signal(15);
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        assert_eq!(signals.cancel_exit_code(), None);
+        crate::platform::clear_cancel_signal();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_handlers_record_into_their_own_run() {
+        // End to end through real OS delivery: a SIGINT addressed to this
+        // process lands in the owning run's slot and the CLI fallback, while
+        // an overlapping run without handlers stays clean. Real delivery runs
+        // in a child test process (see the invariant on
+        // `CANCEL_SIGNAL_TEST_LOCK`) so the broadcast cannot reach handlers
+        // installed by parallel tests in this process; the parent installs no
+        // handlers and touches no fallback state.
+        const HELPER_ENV: &str = "EXECUTE_TEST_INSTALLED_HANDLERS_CHILD";
+        const TEST_NAME: &str =
+            "runtime::drain_tests::installed_handlers_record_into_their_own_run";
+        if std::env::var_os(HELPER_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(HELPER_ENV, "1")
+            .output()
+            .expect("starting installed-handlers child");
+            assert!(
+                output.status.success(),
+                "installed-handlers child failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // Child process: the only place a real signal is raised for this test.
+        // The `Drop` guard clears the process-wide fallback even when an
+        // assertion below panics; the child then exits, so no fallback state
+        // can leak into parallel tests in the parent process.
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        let signals = Signals::register_with_deadline(None).unwrap();
+        let other =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        // SAFETY: the installed handler only performs atomic stores and a
+        // nonblocking wake write, so delivering a real SIGINT is safe.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+        // `signal_hook` relays through a background thread, so poll briefly.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while signals.cancel_exit_code().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(signals.cancel_exit_code(), Some(130));
+        assert_eq!(signals.drain_exit_status(), 130);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        assert_eq!(other.cancel_exit_code(), None);
+        drop(signals);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn both_overlapping_owners_observe_a_real_broadcast_signal() {
+        // Real OS delivery is process-wide broadcast: one SIGINT addressed to
+        // this process runs every installed owner's handler set, so two
+        // overlapping signal-owning runs each record the same signal in their
+        // own slot (and the CLI fallback), while an overlapping run without
+        // handlers stays clean. Real delivery runs in a child test process
+        // (see the invariant on `CANCEL_SIGNAL_TEST_LOCK`) so the broadcast
+        // cannot reach handlers installed by parallel tests in this process;
+        // the parent installs no handlers and touches no fallback state.
+        const HELPER_ENV: &str = "EXECUTE_TEST_BROADCAST_SIGNAL_CHILD";
+        const TEST_NAME: &str =
+            "runtime::drain_tests::both_overlapping_owners_observe_a_real_broadcast_signal";
+        if std::env::var_os(HELPER_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(HELPER_ENV, "1")
+            .output()
+            .expect("starting broadcast-signal child");
+            assert!(
+                output.status.success(),
+                "broadcast-signal child failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // Child process: the only place a real signal is raised for #554.
+        // The `Drop` guard clears the process-wide fallback even when an
+        // assertion below panics; the child then exits, so no fallback state
+        // can leak into parallel tests in the parent process.
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
+        crate::platform::clear_cancel_signal();
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let other =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        // SAFETY: both owners installed signal-safe handlers (atomic stores
+        // plus a nonblocking wake write), so delivering a real SIGINT is safe.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+        // `signal_hook` relays through a background thread, so poll briefly.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (first.cancel_exit_code().is_none() || second.cancel_exit_code().is_none())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(first.cancel_exit_code(), Some(130));
+        assert_eq!(second.cancel_exit_code(), Some(130));
+        assert_eq!(first.drain_exit_status(), 130);
+        assert_eq!(second.drain_exit_status(), 130);
+        assert_eq!(crate::platform::cancel_exit_code(), Some(130));
+        assert_eq!(other.cancel_exit_code(), None);
+        drop(first);
+        drop(second);
+    }
+
+    #[test]
     fn restored_parallel_elements_are_not_started_again() {
         use crate::runtime::checkpoint::elements::ElementOutcome;
         use crate::runtime::tasks::{ElementPlan, GroupSink};
@@ -5907,6 +6744,7 @@ mod drain_tests {
         struct Recorder {
             begins: Vec<usize>,
             commits: Vec<usize>,
+            uncertain: Vec<usize>,
         }
         impl GroupSink for Recorder {
             fn begin(&mut self, index: usize) -> Result<()> {
@@ -5915,6 +6753,10 @@ mod drain_tests {
             }
             fn commit(&mut self, index: usize, _outcome: &ElementOutcome) -> Result<()> {
                 self.commits.push(index);
+                Ok(())
+            }
+            fn mark_uncertain(&mut self, index: usize) -> Result<()> {
+                self.uncertain.push(index);
                 Ok(())
             }
         }
@@ -5996,6 +6838,8 @@ mod drain_tests {
         let mut commits = recorder.commits.clone();
         commits.sort_unstable();
         assert_eq!(commits, vec![1, 2]);
+        // Nothing secret ran, so no post-effect refusal marked an element uncertain.
+        assert!(recorder.uncertain.is_empty());
         let value = crate::structured::to_json(&result.value).unwrap();
         let items = value["items"].as_array().unwrap();
         assert_eq!(items[0]["output_encoding"], "utf8");
@@ -6083,6 +6927,7 @@ mod drain_tests {
         spawn_drain_watchdog(
             Arc::clone(&drain),
             Arc::clone(&cancelled),
+            Arc::new(AtomicBool::new(false)),
             Duration::from_millis(50),
             Arc::clone(&stop),
             None,
@@ -6111,6 +6956,7 @@ mod drain_tests {
         spawn_drain_watchdog(
             Arc::clone(&drain),
             Arc::clone(&cancelled),
+            Arc::new(AtomicBool::new(false)),
             Duration::from_millis(10),
             Arc::clone(&stop),
             None,

@@ -11,8 +11,9 @@ use crate::ast::{Program, Step, StepKind, Trigger, Value};
 use crate::contracts::AppletBackend;
 use crate::manifest::Registry;
 use crate::security::{
-    record_policy_decision, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk,
+    record_policy_decision, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk, SensitivitySet,
 };
+use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::Deserializer;
@@ -50,12 +51,17 @@ pub fn execution_mode(registry: &Registry) -> ExecutionMode {
     registry
         .host_state::<Option<ExecutionMode>>()
         .unwrap_or_else(|| {
-            if registry.host_state::<Option<CapabilityPolicy>>().is_some() {
+            if capability_policy_active(registry) {
                 ExecutionMode::Untrusted
             } else {
                 ExecutionMode::Trusted
             }
         })
+}
+
+/// Whether a capability policy was installed for this registry.
+pub fn capability_policy_active(registry: &Registry) -> bool {
+    registry.host_state::<Option<CapabilityPolicy>>().is_some()
 }
 
 /// Prospective enforcement for graph, screen and stream advisory renderers.
@@ -119,11 +125,47 @@ fn require_execution_policy(registry: &Registry) -> Result<()> {
     if registry.host_state::<Option<CapabilityPolicy>>().is_none()
         && execution_mode(registry) == ExecutionMode::Untrusted
     {
+        // A missing policy under untrusted execution denies the run: record
+        // it so a recorded run names the denial instead of failing silent.
+        record_policy_decision(
+            registry,
+            "<workflow>",
+            "execution.require_policy",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
         return Err(
             SandboxRefused("untrusted execution requires a capability policy".into()).into(),
         );
     }
     Ok(())
+}
+
+/// Record a structural preflight denial that carries no policy material: the
+/// subject names the applet (or `<workflow>`/host when there is none) and the
+/// action names the refused operation. Identifiers are scrubbed by
+/// `record_policy_decision`, so grants, paths and origins never reach the log.
+fn record_preflight_denial(registry: &Registry, subject: &str, action: &str) {
+    record_policy_decision(
+        registry,
+        subject,
+        action,
+        None,
+        PolicyRisk::High,
+        PolicyDecisionOutcome::Denied,
+        PolicyDecisionReason::MissingGrant,
+    );
+}
+
+/// Record an invalid-policy denial: the configured policy failed validation,
+/// so the run is denied before any grant is consulted. The reason stays
+/// `MissingGrant` because the decision enum carries no `InvalidPolicy`
+/// variant; the validation detail stays in the returned error and never
+/// reaches the persisted audit.
+fn record_invalid_policy(registry: &Registry, subject: &str, action: &str) {
+    record_preflight_denial(registry, subject, action);
 }
 
 fn validate_native_enforcement(grant: &AppletGrant, effects: &[String]) -> Result<()> {
@@ -185,6 +227,7 @@ mod execution_tests {
             network: true,
             network_origins: BTreeSet::new(),
             sandbox_required: false,
+            resource_limits: None,
         }
     }
 
@@ -210,6 +253,66 @@ mod execution_tests {
     }
 
     #[test]
+    fn confirmed_binding_refuses_a_swapped_binary_before_spawn() {
+        let directory = tempfile::tempdir().unwrap();
+        let tool = directory.path().join("tool");
+        std::fs::write(&tool, b"reviewed bytes").unwrap();
+        let digest = sha256_file(&tool).unwrap();
+        let canonical = std::fs::canonicalize(&tool).unwrap();
+        let settings = serde_json::json!({
+            "executables": {
+                "tool@line:1": {
+                    "path": canonical.to_string_lossy(),
+                    "sha256": digest,
+                },
+            },
+        });
+        let confirmed = confirmed_executables_from_settings(&settings).unwrap();
+        let registry = crate::manifest::Registry::from_sources(&[] as &[String]).unwrap();
+        registry.set_host_state(Some(confirmed));
+        let cwd = crate::working_dir::WorkingDirectory::plain(directory.path().to_path_buf());
+
+        // The reviewed bytes build a command through the real spawn path.
+        command_for(&tool, ["--version"], &registry, "tool", &cwd).unwrap();
+
+        // A binary swapped after the review never reaches a Command.
+        std::fs::write(&tool, b"swapped bytes").unwrap();
+        let error = command_for(&tool, ["--version"], &registry, "tool", &cwd).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed after the confirmed review"),
+            "{error:?}"
+        );
+
+        // An executable the review never saw fails closed too.
+        let other = directory.path().join("other");
+        std::fs::write(&other, b"unreviewed bytes").unwrap();
+        let error = command_for(&other, ["--version"], &registry, "other", &cwd).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("was not part of the confirmed review"),
+            "{error:?}"
+        );
+
+        // Runs without `--confirm` install no pinning and skip the check.
+        let plain = crate::manifest::Registry::from_sources(&[] as &[String]).unwrap();
+        command_for(&tool, ["--version"], &plain, "tool", &cwd).unwrap();
+    }
+
+    #[test]
+    fn confirmed_binding_rejects_a_review_without_executable_identities() {
+        let error = confirmed_executables_from_settings(&serde_json::json!({})).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing its executable identities"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn native_origin_restrictions_are_typed_refusals_even_with_broad_network_access() {
         let mut restricted = grant();
         restricted
@@ -219,6 +322,276 @@ mod execution_tests {
             validate_native_enforcement(&restricted, &["network.connect".into()]).unwrap_err();
         assert!(error.downcast_ref::<SandboxRefused>().is_some());
         assert!(error.to_string().contains("network origin"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod resource_limit_tests {
+    use super::*;
+
+    fn plain_grant() -> AppletGrant {
+        AppletGrant {
+            capabilities: BTreeSet::from(["process.exec".into()]),
+            binary_sha256: None,
+            environment: BTreeSet::new(),
+            filesystem: FilesystemGrant::default(),
+            network: false,
+            network_origins: BTreeSet::new(),
+            sandbox_required: false,
+            resource_limits: None,
+        }
+    }
+
+    /// The current hard ceiling for `which`, or `u64::MAX` when the kernel
+    /// does not report one. Shared by the default-clamping tests so they
+    /// stay green in constrained containers too.
+    fn hard(which: BoundedResource) -> u64 {
+        get_hard_limit(which).unwrap_or(u64::MAX)
+    }
+
+    fn untrusted_registry(grant: AppletGrant) -> Registry {
+        let registry = Registry::from_sources(&[serde_json::json!({
+            "name": "fixture", "binary": "fixture", "arguments": [],
+            "contract": {"version": 1},
+        })
+        .to_string()])
+        .unwrap();
+        let policy = CapabilityPolicy {
+            version: CAPABILITY_POLICY_VERSION,
+            applets: BTreeMap::from([("fixture".to_owned(), grant)]),
+            host: None,
+            host_environment: BTreeSet::new(),
+            deny_privileged: false,
+            allow_wrappers: BTreeSet::new(),
+        };
+        registry.set_host_state(Some(policy));
+        registry
+    }
+
+    fn grant_with(limits: ResourceLimits) -> AppletGrant {
+        AppletGrant {
+            capabilities: BTreeSet::from(["process.exec".into()]),
+            binary_sha256: None,
+            environment: BTreeSet::new(),
+            filesystem: FilesystemGrant::default(),
+            network: false,
+            network_origins: BTreeSet::new(),
+            sandbox_required: false,
+            resource_limits: Some(limits),
+        }
+    }
+
+    #[test]
+    fn untrusted_mode_defaults_every_knob_to_a_finite_bound() {
+        let registry = untrusted_registry(plain_grant());
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        let limits = resolve_resource_limits(&registry, "fixture", &grant)
+            .expect("defaults resolve")
+            .expect("untrusted mode always bounds");
+        // Defaults clamp to the inherited hard ceiling, which is infinite
+        // for every knob on ordinary developer and CI machines.
+        assert_eq!(
+            limits.cpu_secs,
+            Some(DEFAULT_CPU_SECS.min(hard(BoundedResource::Cpu)))
+        );
+        assert_eq!(
+            limits.address_space_bytes,
+            if cfg!(target_os = "macos") {
+                None
+            } else {
+                Some(
+                    (DEFAULT_ADDRESS_SPACE_MB * BYTES_PER_MIB)
+                        .min(hard(BoundedResource::AddressSpace)),
+                )
+            }
+        );
+        assert_eq!(
+            limits.file_size_bytes,
+            Some((DEFAULT_FILE_SIZE_MB * BYTES_PER_MIB).min(hard(BoundedResource::FileSize)))
+        );
+        assert_eq!(
+            limits.max_processes,
+            Some(DEFAULT_MAX_PROCESSES.min(hard(BoundedResource::MaxProcesses)))
+        );
+        assert_eq!(
+            limits.open_files,
+            Some(DEFAULT_OPEN_FILES.min(hard(BoundedResource::OpenFiles)))
+        );
+    }
+
+    #[test]
+    fn trusted_mode_stays_unbounded_unless_the_policy_asks() {
+        let registry = untrusted_registry(plain_grant());
+        registry.set_host_state(Some(ExecutionMode::Trusted));
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        assert!(resolve_resource_limits(&registry, "fixture", &grant)
+            .unwrap()
+            .is_none());
+        let asked = grant_with(ResourceLimits {
+            cpu_secs: Some(7),
+            ..ResourceLimits::default()
+        });
+        let limits = resolve_resource_limits(&registry, "fixture", &asked)
+            .unwrap()
+            .expect("explicit bounds apply in trusted mode");
+        assert_eq!(limits.cpu_secs, Some(7));
+        assert!(limits.address_space_bytes.is_none());
+        assert!(limits.file_size_bytes.is_none());
+        assert!(limits.max_processes.is_none());
+        assert!(limits.open_files.is_none());
+    }
+
+    #[test]
+    fn explicit_bounds_win_over_defaults_in_untrusted_mode() {
+        let registry = untrusted_registry(grant_with(ResourceLimits {
+            cpu_secs: Some(7),
+            file_size_mb: Some(1),
+            ..ResourceLimits::default()
+        }));
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        let limits = resolve_resource_limits(&registry, "fixture", &grant)
+            .unwrap()
+            .expect("explicit bounds resolve");
+        assert_eq!(limits.cpu_secs, Some(7));
+        assert_eq!(limits.file_size_bytes, Some(BYTES_PER_MIB));
+        assert_eq!(
+            limits.max_processes,
+            Some(DEFAULT_MAX_PROCESSES.min(hard(BoundedResource::MaxProcesses)))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_explicit_address_space_bounds_refuse() {
+        let registry = untrusted_registry(grant_with(ResourceLimits {
+            address_space_mb: Some(64),
+            ..ResourceLimits::default()
+        }));
+        let grant = registry
+            .host_state::<Option<CapabilityPolicy>>()
+            .as_ref()
+            .as_ref()
+            .unwrap()
+            .applets["fixture"]
+            .clone();
+        let error = resolve_resource_limits(&registry, "fixture", &grant).unwrap_err();
+        assert!(error.downcast_ref::<SandboxRefused>().is_some());
+        assert!(error.to_string().contains("macOS"));
+    }
+
+    /// The current virtual size of this test process, so the child below can
+    /// install a bound just above present usage. Adaptive: no hardcoded
+    /// megabyte guess that a debug build could exceed.
+    #[cfg(target_os = "linux")]
+    fn own_virtual_bytes() -> u64 {
+        let stat = std::fs::read_to_string("/proc/self/stat").expect("Linux reports stat");
+        let after_comm = stat.rsplit(')').next().expect("stat holds a comm field");
+        after_comm
+            .split_whitespace()
+            .nth(20)
+            .expect("stat holds vsize")
+            .parse()
+            .expect("vsize parses")
+    }
+
+    /// The installer runs between fork and exec in production; exercise that
+    /// exact function in a forked child. The child performs only
+    /// async-signal-safe calls before `_exit`, so forking the multithreaded
+    /// test runner is safe here.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_address_space_bound_bites_before_exec() {
+        const HEADROOM: u64 = 256 * 1024 * 1024;
+        const SMALL: libc::size_t = 64 * 1024 * 1024;
+        const BIG: libc::size_t = 4 * 1024 * 1024 * 1024;
+        let usage = own_virtual_bytes();
+        let limits = ChildResourceLimits {
+            cpu_secs: None,
+            address_space_bytes: Some(usage + HEADROOM),
+            file_size_bytes: None,
+            max_processes: None,
+            open_files: None,
+        };
+        // SAFETY: the child below calls only `install_child_resource_limits`,
+        // `mmap` and `_exit` before exiting; no allocator or lock state from
+        // the test runner is touched.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork for the rlimit installer test");
+        if pid == 0 {
+            let mut code = 40;
+            if install_child_resource_limits(&limits).is_ok() {
+                code = 41;
+                // SAFETY: anonymous private mapping with no file backing; the
+                // length and protections are valid for `mmap`.
+                let small = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        SMALL,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                        -1,
+                        0,
+                    )
+                };
+                if small != libc::MAP_FAILED {
+                    // SAFETY: `small` is the mapping just returned, with the
+                    // same length it was created with.
+                    unsafe { libc::munmap(small, SMALL) };
+                    // SAFETY: as for the small mapping, with a length far past
+                    // the installed bound.
+                    let big = unsafe {
+                        libc::mmap(
+                            std::ptr::null_mut(),
+                            BIG,
+                            libc::PROT_READ | libc::PROT_WRITE,
+                            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                            -1,
+                            0,
+                        )
+                    };
+                    code = if big == libc::MAP_FAILED { 42 } else { 43 };
+                }
+            }
+            // SAFETY: `_exit` terminates the forked child immediately without
+            // running destructors or touching runner state.
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        loop {
+            // SAFETY: `status` is a live integer and `pid` is our direct
+            // child; retry on signal interruption.
+            let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+            if waited == pid {
+                break;
+            }
+            assert!(
+                waited == -1
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted,
+                "waiting for the rlimit installer child"
+            );
+        }
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 42,
+            "the 64MiB mapping must succeed and the 4GiB mapping must fail under the bound (status {status})"
+        );
     }
 }
 
@@ -302,15 +675,39 @@ pub fn check_privileged_launch(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        // Without a policy the launch is allowed, and the audit says so
+        // explicitly instead of staying silent about the unchecked launch.
+        let shown = binary_names.first().copied().unwrap_or("host");
+        record_policy_decision(
+            registry,
+            shown,
+            "privilege.elevate",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    if !policy.deny_privileged {
-        return Ok(());
-    }
     let shown = binary_names
         .first()
         .map(|name| (*name).to_owned())
         .unwrap_or_else(|| resolved.display().to_string());
+    if !policy.deny_privileged {
+        // The policy allows privileged steps, so the launch is approved — and
+        // the audit says so instead of staying silent about the unchecked
+        // launch.
+        record_policy_decision(
+            registry,
+            shown.as_str(),
+            "privilege.elevate",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::PolicyMatched,
+        );
+        return Ok(());
+    }
     let mut names: Vec<String> = binary_names.iter().map(|name| (*name).to_owned()).collect();
     names.push(resolved.display().to_string());
     if let Ok(canonical) = std::fs::canonicalize(resolved) {
@@ -375,12 +772,377 @@ pub struct AppletGrant {
     pub filesystem: FilesystemGrant,
     #[serde(default)]
     pub network: bool,
-    /// Exact canonical HTTP(S) origins for host-managed remote applets.
-    /// An empty set with `network: true` is an explicit broad network grant.
+    /// Exact canonical HTTP(S) origins for host-managed remote applets and for
+    /// custom `@execute-model` endpoints. An empty set with `network: true` is
+    /// an explicit broad network grant.
     #[serde(default)]
     pub network_origins: BTreeSet<String>,
     #[serde(default)]
     pub sandbox_required: bool,
+    /// Optional per-child resource bounds for native children. Each bound is
+    /// a finite value in the unit its name states; an absent bound falls back
+    /// to the finite untrusted-mode default, or stays unbounded in trusted
+    /// mode. Zero is rejected by policy validation.
+    #[serde(default)]
+    pub resource_limits: Option<ResourceLimits>,
+}
+
+/// Per-child resource bounds for one native applet. All fields are optional:
+/// an absent field takes the finite untrusted-mode default, or stays
+/// unbounded in trusted mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceLimits {
+    /// CPU time in seconds (`RLIMIT_CPU`); the kernel kills the child with
+    /// `SIGXCPU` past the soft limit.
+    #[serde(default)]
+    pub cpu_secs: Option<u64>,
+    /// Address-space size in MiB (`RLIMIT_AS`). Linux-only: macOS rejects
+    /// `RLIMIT_AS` changes, so an explicit bound refuses the spawn there.
+    #[serde(default)]
+    pub address_space_mb: Option<u64>,
+    /// Largest single file the child may create, in MiB (`RLIMIT_FSIZE`);
+    /// the kernel kills an over-long write with `SIGXFSZ`.
+    #[serde(default)]
+    pub file_size_mb: Option<u64>,
+    /// Process/thread count (`RLIMIT_NPROC`). This is a per-real-uid bound,
+    /// not a per-sandbox one: it counts every process of the calling user,
+    /// inside and outside the sandbox (see `SECURITY.md`).
+    #[serde(default)]
+    pub max_processes: Option<u64>,
+    /// Open file-descriptor count (`RLIMIT_NOFILE`).
+    #[serde(default)]
+    pub open_files: Option<u64>,
+}
+
+/// Finite untrusted-mode defaults: generous enough for ordinary applets,
+/// finite so no confined child runs unbounded. The process-count default
+/// stays below the stock macOS hard limit (4000) so the default install
+/// never tries to raise a hard limit.
+#[cfg(unix)]
+pub(crate) const DEFAULT_CPU_SECS: u64 = 120;
+#[cfg(unix)]
+pub(crate) const DEFAULT_ADDRESS_SPACE_MB: u64 = 1024;
+#[cfg(unix)]
+pub(crate) const DEFAULT_FILE_SIZE_MB: u64 = 1024;
+#[cfg(unix)]
+pub(crate) const DEFAULT_MAX_PROCESSES: u64 = 2048;
+#[cfg(unix)]
+pub(crate) const DEFAULT_OPEN_FILES: u64 = 1024;
+
+const BYTES_PER_MIB: u64 = 1024 * 1024;
+
+/// Resolved per-child limits: every field is an installed bound. `None`
+/// means the child runs without extra bounds (trusted mode with no explicit
+/// configuration).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChildResourceLimits {
+    pub cpu_secs: Option<u64>,
+    pub address_space_bytes: Option<u64>,
+    pub file_size_bytes: Option<u64>,
+    pub max_processes: Option<u64>,
+    pub open_files: Option<u64>,
+}
+
+impl ChildResourceLimits {
+    #[cfg(unix)]
+    fn is_empty(self) -> bool {
+        self == Self {
+            cpu_secs: None,
+            address_space_bytes: None,
+            file_size_bytes: None,
+            max_processes: None,
+            open_files: None,
+        }
+    }
+}
+
+/// Resolve one applet's effective per-child limits. Explicit policy values
+/// win; in untrusted mode every remaining knob takes its finite default, so
+/// a confined child never runs unbounded. In trusted mode absent knobs stay
+/// unbounded unless the policy explicitly sets them. Address-space bounds are
+/// Linux-only: macOS cannot install `RLIMIT_AS`, so an explicit bound there
+/// is a fail-closed refusal instead of a silently unbounded spawn.
+///
+/// Every bound is fitted to the current hard limit: an unprivileged child
+/// cannot raise hard limits, so a default above the inherited ceiling is
+/// clamped to that ceiling (which already bounds the child), while an
+/// explicit bound above it is refused before any child exists.
+pub(crate) fn resolve_resource_limits(
+    registry: &Registry,
+    applet: &str,
+    grant: &AppletGrant,
+) -> Result<Option<ChildResourceLimits>> {
+    let untrusted = execution_mode(registry) == ExecutionMode::Untrusted;
+    let configured = grant.resource_limits.clone().unwrap_or_default();
+    if configured.address_space_mb.is_some() && cfg!(target_os = "macos") {
+        return Err(SandboxRefused(
+            "address-space resource limits are not supported on macOS: the kernel rejects RLIMIT_AS changes".into(),
+        )
+        .into());
+    }
+    if cfg!(not(unix))
+        && (configured.cpu_secs.is_some()
+            || configured.address_space_mb.is_some()
+            || configured.file_size_mb.is_some()
+            || configured.max_processes.is_some()
+            || configured.open_files.is_some())
+    {
+        return Err(SandboxRefused("resource limits require a Unix rlimit backend".into()).into());
+    }
+    #[cfg(not(unix))]
+    {
+        // Non-Unix platforms have no rlimit backend; explicit bounds were
+        // refused above, so nothing remains to install.
+        let _ = (applet, &untrusted, &configured);
+        Ok(None)
+    }
+    #[cfg(unix)]
+    {
+        resolve_unix_resource_limits(applet, &configured, untrusted)
+    }
+}
+
+/// Unix resolution: explicit values win, untrusted defaults fill the rest,
+/// and every bound is fitted to the inherited hard ceiling.
+#[cfg(unix)]
+fn resolve_unix_resource_limits(
+    applet: &str,
+    configured: &ResourceLimits,
+    untrusted: bool,
+) -> Result<Option<ChildResourceLimits>> {
+    let mib = |knob: &str,
+               which: BoundedResource,
+               value: Option<u64>,
+               default: u64|
+     -> Result<Option<u64>> {
+        match value {
+            Some(mib) => {
+                let bytes = mib
+                    .checked_mul(BYTES_PER_MIB)
+                    .with_context(|| "resource limit does not fit in bytes".to_owned())?;
+                Ok(Some(fit_to_hard_limit(applet, knob, which, bytes, true)?))
+            }
+            None if untrusted => Ok(Some(fit_to_hard_limit(
+                applet,
+                knob,
+                which,
+                default * BYTES_PER_MIB,
+                false,
+            )?)),
+            None => Ok(None),
+        }
+    };
+    let plain = |knob: &str,
+                 which: BoundedResource,
+                 value: Option<u64>,
+                 default: u64|
+     -> Result<Option<u64>> {
+        match value {
+            Some(value) => Ok(Some(fit_to_hard_limit(applet, knob, which, value, true)?)),
+            None if untrusted => Ok(Some(fit_to_hard_limit(
+                applet, knob, which, default, false,
+            )?)),
+            None => Ok(None),
+        }
+    };
+    let limits = ChildResourceLimits {
+        cpu_secs: plain(
+            "cpu_secs",
+            BoundedResource::Cpu,
+            configured.cpu_secs,
+            DEFAULT_CPU_SECS,
+        )?,
+        address_space_bytes: if cfg!(target_os = "macos") {
+            // macOS documents no RLIMIT_AS support; resolve no bound rather
+            // than installing one that could never take effect. Explicit
+            // bounds were refused above, so this only drops the default.
+            None
+        } else {
+            mib(
+                "address_space_mb",
+                BoundedResource::AddressSpace,
+                configured.address_space_mb,
+                DEFAULT_ADDRESS_SPACE_MB,
+            )?
+        },
+        file_size_bytes: mib(
+            "file_size_mb",
+            BoundedResource::FileSize,
+            configured.file_size_mb,
+            DEFAULT_FILE_SIZE_MB,
+        )?,
+        max_processes: plain(
+            "max_processes",
+            BoundedResource::MaxProcesses,
+            configured.max_processes,
+            DEFAULT_MAX_PROCESSES,
+        )?,
+        open_files: plain(
+            "open_files",
+            BoundedResource::OpenFiles,
+            configured.open_files,
+            DEFAULT_OPEN_FILES,
+        )?,
+    };
+    Ok((!limits.is_empty()).then_some(limits))
+}
+
+/// Fit `value` under the inherited hard ceiling. Defaults clamp silently:
+/// the ceiling already bounds the child, so asking for more is meaningless.
+/// Explicit values above the ceiling are refused: installing them would fail
+/// with `EPERM` in the child, and failing here names the bound instead.
+#[cfg(unix)]
+fn fit_to_hard_limit(
+    applet: &str,
+    knob: &str,
+    which: BoundedResource,
+    value: u64,
+    explicit: bool,
+) -> Result<u64> {
+    let Some(hard) = get_hard_limit(which) else {
+        return Ok(value);
+    };
+    if value <= hard {
+        return Ok(value);
+    }
+    if explicit {
+        return Err(SandboxRefused(format!(
+            "applet {applet:?} resource limit {knob:?} asks for {value}, above this process's hard limit of {hard}"
+        ))
+        .into());
+    }
+    Ok(hard)
+}
+
+/// Which kernel resource bound a limit applies to. The `libc` constant
+/// types differ per platform (`__rlimit_resource_t` on Linux, `c_int` on
+/// macOS), so callers pass this enum and the two functions below match it
+/// to the constant at the call site, where the type always fits.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BoundedResource {
+    Cpu,
+    AddressSpace,
+    FileSize,
+    MaxProcesses,
+    OpenFiles,
+}
+
+/// Install one bound with `setrlimit`. Async-signal-safe: stack values
+/// only, no allocation.
+#[cfg(unix)]
+fn set_one(which: BoundedResource, value: u64) -> std::io::Result<()> {
+    let applied = libc::rlimit {
+        rlim_cur: value as libc::rlim_t,
+        rlim_max: value as libc::rlim_t,
+    };
+    // SAFETY: `applied` is a live stack value read for the duration of each
+    // call; `setrlimit` itself is async-signal-safe.
+    let installed = unsafe {
+        match which {
+            BoundedResource::Cpu => libc::setrlimit(libc::RLIMIT_CPU, &applied),
+            BoundedResource::AddressSpace => {
+                #[cfg(target_os = "macos")]
+                {
+                    // Unreachable: resolution refuses explicit address-space
+                    // bounds on macOS and drops the default, so install never
+                    // sees this variant there.
+                    debug_assert!(false, "address-space bounds never install on macOS");
+                    return Ok(());
+                }
+                #[cfg(not(target_os = "macos"))]
+                libc::setrlimit(libc::RLIMIT_AS, &applied)
+            }
+            BoundedResource::FileSize => libc::setrlimit(libc::RLIMIT_FSIZE, &applied),
+            BoundedResource::MaxProcesses => libc::setrlimit(libc::RLIMIT_NPROC, &applied),
+            BoundedResource::OpenFiles => libc::setrlimit(libc::RLIMIT_NOFILE, &applied),
+        }
+    };
+    if installed != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Read one hard ceiling with `getrlimit`, when the kernel reports it.
+#[cfg(unix)]
+fn get_hard_limit(which: BoundedResource) -> Option<u64> {
+    // SAFETY: `limit` is a live stack struct the kernel fills on success.
+    let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    // SAFETY: `getrlimit` only writes into the provided struct.
+    let queried = unsafe {
+        match which {
+            BoundedResource::Cpu => libc::getrlimit(libc::RLIMIT_CPU, limit.as_mut_ptr()),
+            BoundedResource::AddressSpace => libc::getrlimit(libc::RLIMIT_AS, limit.as_mut_ptr()),
+            BoundedResource::FileSize => libc::getrlimit(libc::RLIMIT_FSIZE, limit.as_mut_ptr()),
+            BoundedResource::MaxProcesses => {
+                libc::getrlimit(libc::RLIMIT_NPROC, limit.as_mut_ptr())
+            }
+            BoundedResource::OpenFiles => libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()),
+        }
+    };
+    if queried != 0 {
+        return None;
+    }
+    #[allow(clippy::unnecessary_cast)]
+    // SAFETY: `getrlimit` succeeded, so the struct is initialized.
+    // `rlim_t` is 64 bits on every supported target; the widening cast
+    // keeps 32-bit unix builds working if one is ever added.
+    Some(unsafe { limit.assume_init().rlim_max as u64 })
+}
+
+/// Install resolved per-child limits with `setrlimit`. This runs between
+/// `fork` and `exec` in the child, so it may call only async-signal-safe
+/// functions: `setrlimit` on stack-resident values, and nothing that
+/// allocates. Any failure is returned as the raw OS error; the caller turns
+/// it into a spawn failure, so the child never runs unbounded.
+#[cfg(unix)]
+pub(crate) fn install_child_resource_limits(limits: &ChildResourceLimits) -> std::io::Result<()> {
+    if let Some(secs) = limits.cpu_secs {
+        set_one(BoundedResource::Cpu, secs)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Some(bytes) = limits.address_space_bytes {
+        set_one(BoundedResource::AddressSpace, bytes)?;
+    }
+    if let Some(bytes) = limits.file_size_bytes {
+        set_one(BoundedResource::FileSize, bytes)?;
+    }
+    if let Some(count) = limits.max_processes {
+        set_one(BoundedResource::MaxProcesses, count)?;
+    }
+    if let Some(count) = limits.open_files {
+        set_one(BoundedResource::OpenFiles, count)?;
+    }
+    Ok(())
+}
+
+/// Validate one applet's explicit resource bounds: every configured value
+/// must be nonzero and must fit the kernel's byte counter.
+fn validate_resource_limits(name: &str, limits: &ResourceLimits) -> Result<()> {
+    for (knob, value) in [
+        ("cpu_secs", limits.cpu_secs),
+        ("address_space_mb", limits.address_space_mb),
+        ("file_size_mb", limits.file_size_mb),
+        ("max_processes", limits.max_processes),
+        ("open_files", limits.open_files),
+    ] {
+        if value.is_some_and(|value| value == 0) {
+            bail!("applet {name:?} resource limit {knob:?} must be at least 1");
+        }
+    }
+    for (knob, value) in [
+        ("address_space_mb", limits.address_space_mb),
+        ("file_size_mb", limits.file_size_mb),
+    ] {
+        if let Some(mib) = value {
+            mib.checked_mul(BYTES_PER_MIB).with_context(|| {
+                format!("applet {name:?} resource limit {knob:?} does not fit in bytes")
+            })?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -489,6 +1251,9 @@ impl CapabilityPolicy {
             {
                 validate_policy_path(path)
                     .with_context(|| format!("applet {name:?} filesystem grant"))?;
+            }
+            if let Some(limits) = &grant.resource_limits {
+                validate_resource_limits(name, limits)?;
             }
         }
         if let Some(grant) = &self.host {
@@ -605,6 +1370,10 @@ impl CapabilityPolicy {
 
     /// Recheck a pinned binary immediately before spawn. This narrows, but
     /// cannot eliminate, replacement races between hashing and `exec`.
+    ///
+    /// A `run --confirm` review installs the same check for every reviewed
+    /// executable, including direct quoted commands, which have no policy
+    /// grant to pin them. See [`ConfirmedExecutables`].
     pub fn verify_binary(&self, name: &str, binary: &Path) -> Result<()> {
         let Some(expected) = self
             .applets
@@ -620,6 +1389,89 @@ impl CapabilityPolicy {
         }
         Ok(())
     }
+}
+
+/// Executable identities pinned by a `run --confirm` review. `--what-if`
+/// hashes every resolved native executable into the fingerprint; installing
+/// that map on the run's registry binds the bytes the review approved to the
+/// bytes each spawn launches. This reuses the same hash helper as the manifest
+/// `binary_sha256` pin, but also covers direct quoted commands, which have no
+/// policy grant to pin them.
+///
+/// This narrows, but cannot eliminate, the replacement race: the re-hash runs
+/// immediately before the child command is built, yet the child is still
+/// executed by path, so a replacement between the final hash and `exec`
+/// would run unverified bytes. See SECURITY.md. Any mismatch, unreadable
+/// file, or launch of an executable absent from the review fails closed.
+#[derive(Debug, Clone, Default)]
+pub struct ConfirmedExecutables {
+    entries: BTreeMap<String, String>,
+}
+
+/// Read the executable identities a `--what-if` review fingerprinted.
+/// A review without a readable executable map fails closed, so a run never
+/// executes against a review it cannot bind.
+pub fn confirmed_executables_from_settings(
+    settings: &serde_json::Value,
+) -> Result<ConfirmedExecutables> {
+    let Some(executables) = settings
+        .get("executables")
+        .and_then(|value| value.as_object())
+    else {
+        bail!("the confirmed review is missing its executable identities");
+    };
+    let mut entries = BTreeMap::new();
+    for entry in executables.values() {
+        let path = entry
+            .get("path")
+            .and_then(|value| value.as_str())
+            .context("the confirmed review has an executable without a path")?;
+        let digest = entry
+            .get("sha256")
+            .and_then(|value| value.as_str())
+            .with_context(|| format!("the confirmed review has no digest for {path:?}"))?;
+        validate_digest(digest)
+            .with_context(|| format!("the confirmed review has a bad digest for {path:?}"))?;
+        entries.insert(path.to_owned(), digest.to_ascii_lowercase());
+    }
+    Ok(ConfirmedExecutables { entries })
+}
+
+impl ConfirmedExecutables {
+    /// Re-hash the resolved executable and compare it with the reviewed
+    /// bytes. The caller canonicalizes through the same spelling the spawn
+    /// keeps for multicall dispatch, so a symlink swapped after the review
+    /// resolves to a different target and fails closed here.
+    pub fn verify(&self, binary: &Path) -> Result<()> {
+        let canonical = std::fs::canonicalize(binary)
+            .with_context(|| format!("resolving confirmed executable {}", binary.display()))?;
+        let key = canonical.to_string_lossy().into_owned();
+        let Some(expected) = self.entries.get(&key) else {
+            bail!(
+                "refusing to launch {}: it was not part of the confirmed review",
+                canonical.display()
+            );
+        };
+        let actual = sha256_file(&canonical)
+            .with_context(|| format!("hashing confirmed executable {}", canonical.display()))?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            bail!(
+                "refusing to launch {}: it changed after the confirmed review",
+                canonical.display()
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Enforce the `--confirm` binding for one launch. Runs without a confirmed
+/// review skip this; every other launch must name reviewed bytes.
+pub fn verify_confirmed_executable(registry: &Registry, binary: &Path) -> Result<()> {
+    let confirmed = registry.host_state::<Option<ConfirmedExecutables>>();
+    let Some(confirmed) = confirmed.as_ref().as_ref() else {
+        return Ok(());
+    };
+    confirmed.verify(binary)
 }
 
 fn record_contract_authorization(
@@ -1010,35 +1862,50 @@ fn preflight_program(
     // communicate with a remote service.
     for call in &calls {
         let manifest = registry.resolve_call(call)?;
-        validate_environment_backend(manifest)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
 
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "policy.validate");
+        return Err(error);
+    }
 
     if cwd_mode.is_dynamic()
         && calls.iter().any(|call| call.cache)
         && !cache_directory.is_some_and(Path::is_absolute)
     {
+        record_preflight_denial(registry, "<workflow>", "cache.directory");
         bail!(
             "capability policy requires an absolute cache directory when the program changes working directories"
         );
     }
 
     for name in policy.applets.keys() {
-        let manifest = registry
-            .resolve(name)
-            .with_context(|| format!("capability policy names unknown applet {name:?}"))?;
+        let manifest = match registry.resolve(name) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                record_preflight_denial(registry, name, "applet.invoke");
+                return Err(error)
+                    .with_context(|| format!("capability policy names unknown applet {name:?}"));
+            }
+        };
         if manifest.name != *name {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!("capability policy applet names must use canonical manifest names");
         }
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy grant for applet {name:?} has no version-1 contract")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy grant for applet {name:?} has no version-1 contract");
+        };
         if contract.version != 1 {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!(
                 "applet {name:?} has unsupported contract version {}",
                 contract.version
@@ -1106,13 +1973,20 @@ fn preflight_invocation_plan<'a>(
     require_execution_policy(registry)?;
     let calls = calls.into_iter().collect::<Vec<_>>();
     for call in &calls {
-        validate_environment_backend(registry.resolve_call(call)?)?;
+        let manifest = registry.resolve_call(call)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "policy.validate");
+        return Err(error);
+    }
     validate_policy_names(policy, registry)?;
     preflight_invocations_with_policy(
         calls.iter().copied(),
@@ -1142,6 +2016,7 @@ fn preflight_cache_paths(
     for call in calls.iter().filter(|call| call.cache) {
         let manifest = registry.resolve_call(call)?;
         if call.direct {
+            record_preflight_denial(registry, "direct.command", "command.execute");
             bail!("capability policy denies direct quoted commands");
         }
         // A cache entry is opened for reading and may be atomically replaced
@@ -1155,16 +2030,24 @@ fn preflight_cache_paths(
 
 fn validate_policy_names(policy: &CapabilityPolicy, registry: &Registry) -> Result<()> {
     for name in policy.applets.keys() {
-        let manifest = registry
-            .resolve(name)
-            .with_context(|| format!("capability policy names unknown applet {name:?}"))?;
+        let manifest = match registry.resolve(name) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                record_preflight_denial(registry, name, "applet.invoke");
+                return Err(error)
+                    .with_context(|| format!("capability policy names unknown applet {name:?}"));
+            }
+        };
         if manifest.name != *name {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!("capability policy applet names must use canonical manifest names");
         }
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy grant for applet {name:?} has no version-1 contract")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy grant for applet {name:?} has no version-1 contract");
+        };
         if contract.version != 1 {
+            record_preflight_denial(registry, name, "applet.invoke");
             bail!(
                 "applet {name:?} has unsupported contract version {}",
                 contract.version
@@ -1208,10 +2091,12 @@ fn preflight_invocations_with_policy<'a>(
         }
         let manifest = registry.resolve_call(call)?;
         if manifest.builtin == Some(crate::manifest::Builtin::Cd) {
-            let value = call.parameters.get("path").ok_or_else(|| {
-                anyhow!("capability policy requires a literal path for the cd builtin")
-            })?;
+            let Some(value) = call.parameters.get("path") else {
+                record_preflight_denial(registry, &manifest.name, "filesystem.read");
+                bail!("capability policy requires a literal path for the cd builtin");
+            };
             let Value::String(path) = value else {
+                record_preflight_denial(registry, &manifest.name, "filesystem.read");
                 bail!(
                     "capability policy requires literal host filesystem paths that can be checked before effects"
                 );
@@ -1236,9 +2121,10 @@ fn preflight_invocations_with_policy<'a>(
             );
             bail!("capability policy has no allowlist entry for applet {name:?}");
         };
-        let contract = manifest.execution_contract().ok_or_else(|| {
-            anyhow!("capability policy requires a version-1 contract for applet {name:?}")
-        })?;
+        let Some(contract) = manifest.execution_contract() else {
+            record_preflight_denial(registry, name, "applet.invoke");
+            bail!("capability policy requires a version-1 contract for applet {name:?}");
+        };
         if let Some(environment) = &contract.environment {
             for variable in environment.set.keys() {
                 authorize_environment_override(registry, name, variable)?;
@@ -1250,32 +2136,41 @@ fn preflight_invocations_with_policy<'a>(
             AppletBackend::Command | AppletBackend::JsonLinesWorker
         ) && sandbox_required(registry, grant);
         if native_sandbox {
-            validate_native_enforcement(grant, &contract.effects)?;
+            if let Err(error) = validate_native_enforcement(grant, &contract.effects) {
+                record_preflight_denial(registry, name, "sandbox.enforce");
+                return Err(error);
+            }
         }
         match backend {
             AppletBackend::InProcess => {
                 if grant.sandbox_required {
+                    record_preflight_denial(registry, name, "sandbox.enforce");
                     bail!("required OS sandbox cannot isolate in-process applet {name:?}");
                 }
                 if grant.binary_sha256.is_some() {
+                    record_preflight_denial(registry, name, "binary.identity");
                     bail!("binary_sha256 cannot pin an in-process applet implementation");
                 }
                 if !is_policy_safe_in_process(name) || !contract.effects.is_empty() {
+                    record_preflight_denial(registry, name, "applet.invoke");
                     bail!(
                         "capability policy denies effectful or unreviewed in-process applet {name:?}"
                     );
                 }
             }
             AppletBackend::ProgramModule => {
+                record_preflight_denial(registry, name, "applet.invoke");
                 bail!(
                     "capability policy cannot isolate or fully preflight program module applet {name:?}"
                 );
             }
             AppletBackend::Remote => {
                 if grant.sandbox_required {
+                    record_preflight_denial(registry, name, "sandbox.enforce");
                     bail!("required OS sandbox cannot isolate remote applet {name:?}");
                 }
                 if grant.binary_sha256.is_some() {
+                    record_preflight_denial(registry, name, "binary.identity");
                     bail!("binary_sha256 cannot pin a remote applet implementation");
                 }
                 authorize_backend_capability(registry, name, grant, "network.connect")?;
@@ -1285,18 +2180,31 @@ fn preflight_invocations_with_policy<'a>(
             }
         }
         if grant.sandbox_required && !grant.network_origins.is_empty() {
+            record_preflight_denial(registry, name, "sandbox.enforce");
             bail!(
                 "required OS sandbox cannot enforce network origin restrictions for applet {name:?}"
             );
         }
-        if backend != AppletBackend::Remote && !grant.network_origins.is_empty() {
+        // Origin grants also cover custom model endpoints: the bundled
+        // `@execute-model` helper is host-managed (its transport pins every
+        // resolved address), so a listed origin can preserve a non-public
+        // destination there too. Every other native backend keeps the refusal:
+        // a generic child is not pinned, and required OS sandboxing cannot
+        // enforce origin restrictions (see the `sandbox_required` check above).
+        let model_origin_grant =
+            backend != AppletBackend::Remote && manifest.binary == "@execute-model";
+        if backend != AppletBackend::Remote
+            && !model_origin_grant
+            && !grant.network_origins.is_empty()
+        {
+            record_preflight_denial(registry, name, "network.connect");
             bail!("network_origins is supported only for host-managed remote applets");
         }
         if backend == AppletBackend::Remote {
-            let remote = contract
-                .remote
-                .as_ref()
-                .ok_or_else(|| anyhow!("remote applet {name:?} has no endpoint configuration"))?;
+            let Some(remote) = contract.remote.as_ref() else {
+                record_preflight_denial(registry, name, "network.connect");
+                bail!("remote applet {name:?} has no endpoint configuration");
+            };
             authorize_network_endpoint(registry, name, &remote.endpoint)?;
             if let Some(auth) = &remote.auth {
                 match auth {
@@ -1305,6 +2213,7 @@ fn preflight_invocations_with_policy<'a>(
                     }
                     crate::contracts::RemoteAuthSource::BearerFile { path } => {
                         if !path.is_absolute() {
+                            record_preflight_denial(registry, name, "filesystem.read");
                             bail!("strict policy requires remote bearer-file paths to be absolute");
                         }
                         authorize_applet_host_path(registry, name, path, HostAccess::Read, cwd)?;
@@ -1312,6 +2221,18 @@ fn preflight_invocations_with_policy<'a>(
                 }
             }
         }
+        // Model file reads happen in the child helper, which has no registry
+        // access. Authorize literal paths now; references and relative paths
+        // after a working-directory change are re-checked where the group
+        // spawns, against the effective directory and bindings.
+        authorize_model_file_params(
+            registry,
+            manifest,
+            &call.parameters,
+            &BTreeMap::<String, Value>::new(),
+            cwd,
+            cwd_mode.is_dynamic(),
+        )?;
         let binary = if backend != AppletBackend::InProcess
             && (grant.binary_sha256.is_some() || native_sandbox)
         {
@@ -1320,12 +2241,19 @@ fn preflight_invocations_with_policy<'a>(
                 && !requested.starts_with('@')
                 && !Path::new(requested).is_absolute()
             {
+                record_preflight_denial(registry, name, "process.exec");
                 bail!(
                     "capability policy cannot resolve a relative or PATH executable after a dynamic working-directory change; use an absolute executable path"
                 );
             }
-            let resolved = crate::runtime::binary_path(requested, cwd)
-                .with_context(|| format!("resolving executable for applet {name:?}"))?;
+            let resolved = match crate::runtime::binary_path(requested, cwd) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    record_preflight_denial(registry, name, "process.exec");
+                    return Err(error)
+                        .with_context(|| format!("resolving executable for applet {name:?}"));
+                }
+            };
             Some(resolved)
         } else {
             None
@@ -1343,6 +2271,7 @@ fn preflight_invocations_with_policy<'a>(
         )?;
         if native_sandbox {
             if cwd_mode.is_dynamic() {
+                record_preflight_denial(registry, name, "sandbox.enforce");
                 bail!(
                     "required sandbox cannot preflight a program with dynamic working-directory changes"
                 );
@@ -1359,10 +2288,15 @@ fn preflight_invocations_with_policy<'a>(
     }
     // Complete declaration authorization for the whole program before probing
     // any sandbox facility, even for an earlier, otherwise authorized applet.
+    // A probe failure still denies the run, so it is recorded: otherwise a
+    // recorded run could fail with no denied entry in its audit.
     for (grant, binary, name) in sandboxes {
         if probe_sandbox {
-            preflight_native_sandbox(&grant, &binary, cwd)
-                .with_context(|| format!("preflighting required sandbox for applet {name:?}"))?;
+            if let Err(error) = preflight_native_sandbox(&grant, &binary, cwd) {
+                record_preflight_denial(registry, name, "sandbox.enforce");
+                return Err(error)
+                    .with_context(|| format!("preflighting required sandbox for applet {name:?}"));
+            }
         }
     }
     Ok(())
@@ -1382,6 +2316,12 @@ where
     S: AsRef<OsStr>,
 {
     require_execution_policy(registry)?;
+    // A confirmed review pins the exact bytes each spawn may run. Re-hash
+    // here — the one check every spawn path reaches before a Command exists,
+    // including direct quoted commands and background-job launches — so a
+    // binary swapped after the review cannot launch. Runs without `--confirm`
+    // install no pinning and skip this.
+    verify_confirmed_executable(registry, binary)?;
     #[cfg(feature = "failpoints")]
     if std::env::var("EXECUTE_TEST_PANIC_APPLET").is_ok_and(|name| name == applet_name) {
         panic!("injected native launch panic");
@@ -1399,8 +2339,17 @@ where
     // secret variable, the child environment is exactly the inherited one. The command then
     // carries no environment changes, so std passes `environ` through instead of copying
     // and rebuilding the whole environment for every child.
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            // A malformed ambient allowlist denies the launch before any
+            // child exists. Record it so a recorded run names the denial.
+            record_preflight_denial(registry, applet_name, "environment.read");
+            return Err(error);
+        }
+    };
     let inherits_environment = configured.as_ref().is_none()
-        && child_environment_allowlist()?.is_none()
+        && allowlist.is_none()
         && !command_overlay_active()
         && registry
             .resolve(applet_name)
@@ -1436,7 +2385,10 @@ where
     ) {
         bail!("command launch requested for non-process applet {applet_name:?}");
     }
-    validate_environment_backend(manifest)?;
+    if let Err(error) = validate_environment_backend(manifest) {
+        record_preflight_denial(registry, &manifest.name, "environment.overlay");
+        return Err(error);
+    }
     let Some(policy) = configured.as_ref() else {
         let mut command = Command::new(binary);
         crate::platform::add_arguments(&mut command, arguments);
@@ -1444,17 +2396,23 @@ where
         cwd.apply(&mut command);
         return Ok(command);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "applet.invoke");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     authorize_backend_capability(registry, applet_name, grant, "process.exec")?;
     if manifest.name != applet_name {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
         bail!("capability policy applet names must use canonical manifest names");
     }
-    let contract = manifest.execution_contract().ok_or_else(|| {
-        anyhow!("capability policy requires a version-1 contract for applet {applet_name:?}")
-    })?;
+    let Some(contract) = manifest.execution_contract() else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy requires a version-1 contract for applet {applet_name:?}");
+    };
     policy.authorize_validated(
         applet_name,
         false,
@@ -1474,6 +2432,9 @@ where
     } else {
         grant
     };
+    // Resolve before preflight so an uninstallable bound (for example an
+    // address-space limit on macOS) refuses fast, before any probe or child.
+    let resource_limits = resolve_resource_limits(registry, applet_name, grant)?;
     if native_sandbox {
         validate_native_enforcement(grant, &contract.effects)?;
         preflight_native_sandbox(grant, binary, cwd)
@@ -1487,6 +2448,21 @@ where
         crate::platform::add_arguments(&mut command, arguments);
         command
     };
+    #[cfg(unix)]
+    if let Some(limits) = resource_limits {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the hook captures only the resolved `Copy` limits and calls
+        // `install_child_resource_limits`, which performs only
+        // async-signal-safe `setrlimit` calls on stack values. A failed
+        // install fails the spawn, so the child never runs unbounded. Hooks
+        // stack, so later `pre_exec` closures (terminal foreground setup)
+        // still run.
+        unsafe {
+            command.pre_exec(move || install_child_resource_limits(&limits));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = resource_limits;
     apply_child_environment(registry, applet_name, &mut command, environment)?;
     cwd.apply(&mut command);
     Ok(command)
@@ -1620,10 +2596,27 @@ pub fn effective_environment(
         }
     };
     if let Some(manifest) = manifest {
-        validate_environment_backend(manifest)?;
+        if let Err(error) = validate_environment_backend(manifest) {
+            record_preflight_denial(registry, &manifest.name, "environment.overlay");
+            return Err(error);
+        }
     }
 
-    let allowlist = child_environment_allowlist()?;
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.read",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
+            return Err(error);
+        }
+    };
     let mut environment = std::env::vars_os()
         .filter(|(name, _)| {
             environment_name_allowed(configured.as_ref().as_ref(), applet_name, name)
@@ -1634,8 +2627,20 @@ pub fn effective_environment(
         })
         .collect::<Vec<_>>();
     if let Some(policy) = configured.as_ref() {
-        policy.validate()?;
+        if let Err(error) = policy.validate() {
+            record_invalid_policy(registry, applet_name, "environment.read");
+            return Err(error);
+        }
         if !policy.applets.contains_key(applet_name) {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.read",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::MissingGrant,
+            );
             bail!("capability policy has no allowlist entry for applet {applet_name:?}");
         }
     }
@@ -1696,6 +2701,8 @@ pub fn parse_child_environment_allowlist(value: &str) -> Result<Vec<String>> {
 
 /// Apply the host's optional ambient allowlist to a directly launched helper.
 /// Unlike applet launches, these helpers have no per-applet policy or overlays.
+/// A malformed allowlist fails closed without an audit entry: this helper
+/// takes no registry, so there is no policy log to record into.
 pub fn apply_host_child_environment(command: &mut Command) -> Result<()> {
     if let Some(allowlist) = child_environment_allowlist()? {
         let environment = std::env::vars_os().filter(|(name, _)| {
@@ -1756,11 +2763,41 @@ fn authorize_environment_override(
     applet_name: &str,
     variable_name: &str,
 ) -> Result<()> {
-    if let Some(allowlist) = child_environment_allowlist()? {
+    let allowlist = match child_environment_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => {
+            // A malformed ambient allowlist denies the override before any
+            // policy is consulted. Record it so a recorded run names the
+            // denial instead of failing silent.
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
+            return Err(error);
+        }
+    };
+    if let Some(allowlist) = allowlist {
         if !allowlist
             .iter()
             .any(|name| same_environment_name(OsStr::new(name), variable_name))
         {
+            // The ambient allowlist refused the override before any policy is
+            // consulted. The denial is still an audit entry, so the log states
+            // what happened instead of staying silent about it.
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
             bail!("environment override {variable_name:?} is not in EXECUTE_CHILD_ENV_ALLOW");
         }
     }
@@ -1768,15 +2805,38 @@ fn authorize_environment_override(
     let Some(policy) = configured.as_ref() else {
         // Without a policy, every other name is the author's choice (the Bash trust
         // model). The dynamic loader's variables change code that runs before the
-        // program starts, so a binding or a manifest cannot set them.
+        // program starts, so a binding or a manifest cannot set them. Both the
+        // denial and the allowance are audit entries, so the log states what
+        // happened instead of staying silent about it.
         if is_loader_variable(variable_name) {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::MissingGrant,
+            );
             bail!(
                 "{variable_name} is read by the dynamic loader before the program starts; a program cannot set it"
             );
         }
+        record_policy_decision(
+            registry,
+            applet_name,
+            "environment.set",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.set");
+        return Err(error);
+    }
     let allowed = policy
         .applets
         .get(applet_name)
@@ -1807,6 +2867,21 @@ fn authorize_environment_override(
     }
 }
 
+impl CapabilityPolicy {
+    /// Canonical content digest of the parsed policy: the SHA-256 of its
+    /// canonical JSON encoding. Run records store this digest so a reviewer
+    /// can tell which policy produced an allow/deny log. The digest records
+    /// no grant, path, or other policy content, but it is an unsalted hash:
+    /// it cannot be reversed, yet it confirms a guessed policy (cheap for a
+    /// small policy space), so it names the policy without hiding it from
+    /// someone who can guess it.
+    pub fn canonical_digest(&self) -> String {
+        let encoded =
+            serde_json::to_vec(self).expect("a validated capability policy is serializable");
+        crate::security::hex_encode(Sha256::digest(encoded).as_slice())
+    }
+}
+
 /// Stable per-applet policy identity for persistent-worker cache keys. A
 /// replaced registry grant must never reuse a worker spawned under old rights.
 pub fn policy_fingerprint(registry: &Registry, applet_name: &str) -> Result<Option<[u8; 32]>> {
@@ -1814,10 +2889,14 @@ pub fn policy_fingerprint(registry: &Registry, applet_name: &str) -> Result<Opti
     let Some(policy) = configured.as_ref() else {
         return Ok(None);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "applet.invoke");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "applet.invoke");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     let encoded = serde_json::to_vec(grant).context("encoding capability grant identity")?;
     let digest = Sha256::digest(encoded);
     Ok(Some(digest.into()))
@@ -1837,10 +2916,14 @@ where
     let Some(policy) = configured.as_ref() else {
         return Ok(None);
     };
-    policy.validate()?;
-    let grant = policy.applets.get(applet_name).ok_or_else(|| {
-        anyhow!("capability policy has no allowlist entry for applet {applet_name:?}")
-    })?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.read");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_preflight_denial(registry, applet_name, "environment.read");
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
     let mut filtered = Vec::new();
     for (name, value) in environment {
         if name
@@ -1863,9 +2946,21 @@ pub fn authorize_environment_variable(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "environment.read",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "environment.read");
+        return Err(error);
+    }
     let allowed = policy
         .applets
         .get(applet_name)
@@ -1904,9 +2999,21 @@ pub fn authorize_network_endpoint(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "network.connect");
+        return Err(error);
+    }
     let Some(grant) = policy.applets.get(applet_name) else {
         record_policy_decision(
             registry,
@@ -1923,6 +3030,17 @@ pub fn authorize_network_endpoint(
         .resolve(applet_name)
         .with_context(|| format!("resolving applet {applet_name:?} for network access"))?;
     if manifest.name != applet_name || manifest.execution_backend() != AppletBackend::Remote {
+        // No grant covers a non-canonical or non-remote applet, so the denial
+        // is recorded with the same outcome as a missing grant.
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
         bail!("network endpoint authorization applies only to canonical remote applets");
     }
     let contract = manifest.execution_contract().ok_or_else(|| {
@@ -1968,7 +3086,7 @@ pub fn authorize_network_endpoint(
         bail!("remote endpoint must not contain a fragment");
     }
     let origin = canonical_http_origin(endpoint)?;
-    let allowed = grant.network_origins.is_empty() || grant.network_origins.contains(&origin);
+    let allowed = network_origin_is_granted(grant, &origin);
     record_policy_decision(
         registry,
         applet_name,
@@ -1989,8 +3107,281 @@ pub fn authorize_network_endpoint(
     if !allowed {
         bail!("capability policy denies the remote endpoint origin");
     }
+    // Fail fast on non-public literal hosts even though the transport pins
+    // the resolved set again at connect time. Only an explicitly listed
+    // origin preserves a private destination; a broad empty-list grant does
+    // not. Hostnames that look benign pass here and are pinned at the
+    // resolver, which stops DNS rebinding.
+    let granted = if grant.network_origins.contains(&origin) {
+        BTreeSet::from([origin.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    let allow_loopback = contract
+        .remote
+        .as_ref()
+        .is_some_and(|remote| remote.allow_loopback_http_fixture);
+    if let Err(denied) =
+        ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, allow_loopback, &granted)
+    {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            Some(&origin),
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("capability policy refuses non-public remote endpoint host: {denied}");
+    }
     Ok(())
 }
+
+/// Authorize a custom `@execute-model` endpoint against the same policy grants
+/// as a remote origin: the applet's `network_origins`, the data-flow sinks for
+/// the call's sensitivity, and the fail-closed SSRF guard.
+///
+/// Only an explicitly listed origin succeeds for a non-public destination; a
+/// broad empty-list grant allows the origin for metadata-policy checks but
+/// does not preserve it, exactly as for remote applets. Unlisted public
+/// origins are denied here too: stdin plus any `api_key_env` credential would
+/// otherwise exfiltrate to an arbitrary host. The default provider endpoint
+/// (no custom `endpoint` parameter) needs no grant: reaching the provider is
+/// the applet's declared function, and default keys already stay on the
+/// default host.
+///
+/// Returns the canonical origin when the policy explicitly listed it, so the
+/// spawn site can convey the grant to the helper; `None` means allowed without
+/// an origin grant (or no policy was configured, in which case the helper's
+/// own SSRF guard still refuses non-public destinations). Runs before any
+/// child spawns and fails closed: an unparsable endpoint, a missing grant, or
+/// a resolution-shaped refusal never reaches the transport.
+///
+/// `allow_loopback` is true only for hermetic `--fixture` runs, which never
+/// open a socket: the endpoint selects no transport, so only the fail-fast
+/// SSRF by-name refusal applies and loopback literals stay usable without an
+/// origin grant, mirroring the helper. Live requests always pass false and
+/// need an explicit listing for any non-public destination.
+pub fn authorize_model_endpoint(
+    registry: &Registry,
+    applet_name: &str,
+    endpoint: &str,
+    sensitivities: &SensitivitySet,
+    allow_loopback: bool,
+) -> Result<Option<String>> {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
+        return Ok(None);
+    };
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, applet_name, "network.connect");
+        return Err(error);
+    }
+    let Some(grant) = policy.applets.get(applet_name) else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
+        bail!("capability policy has no allowlist entry for applet {applet_name:?}");
+    };
+    let manifest = registry
+        .resolve(applet_name)
+        .with_context(|| format!("resolving applet {applet_name:?} for network access"))?;
+    if manifest.name != applet_name || manifest.binary != "@execute-model" {
+        // No grant covers a non-canonical or non-model applet, so the denial
+        // is recorded with the same outcome as a missing grant.
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
+        bail!("model endpoint authorization applies only to canonical model applets");
+    }
+    if !grant.network || !grant.capabilities.contains("network.connect") {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::CapabilityNotGranted,
+        );
+        bail!("capability policy denies network access for applet {applet_name:?}");
+    }
+    let parsed_endpoint = match parse_http_url(endpoint, "model endpoint") {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "network.connect",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::NetworkOriginNotGranted,
+            );
+            return Err(error);
+        }
+    };
+    if parsed_endpoint.fragment {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("model endpoint must not contain a fragment");
+    }
+    let origin = parsed_endpoint.origin.clone();
+    if allow_loopback {
+        // Hermetic fixture mode never opens a socket: the endpoint selects no
+        // transport, so only the fail-fast SSRF by-name check applies. It
+        // still refuses non-public literals, mirroring the helper, while
+        // loopback literals stay usable without an origin grant. Network and
+        // data-flow grants govern effects that never occur here.
+        if let Err(denied) =
+            ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, true, &BTreeSet::new())
+        {
+            record_policy_decision(
+                registry,
+                applet_name,
+                "network.connect",
+                Some(&origin),
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::NetworkOriginNotGranted,
+            );
+            bail!("capability policy refuses non-public model endpoint host: {denied}");
+        }
+        return Ok(None);
+    }
+    let allowed = network_origin_is_granted(grant, &origin);
+    record_policy_decision(
+        registry,
+        applet_name,
+        "network.connect",
+        Some(&origin),
+        PolicyRisk::High,
+        if allowed {
+            PolicyDecisionOutcome::Approved
+        } else {
+            PolicyDecisionOutcome::Denied
+        },
+        if allowed {
+            PolicyDecisionReason::PolicyMatched
+        } else {
+            PolicyDecisionReason::NetworkOriginNotGranted
+        },
+    );
+    if !allowed {
+        bail!("capability policy denies the model endpoint origin");
+    }
+    // Fail fast on non-public literal hosts even though the helper pins the
+    // resolved set again at connect time. Only an explicitly listed origin
+    // preserves a private destination; a broad empty-list grant does not.
+    // Hostnames that look benign pass here and are pinned by the helper's
+    // resolver, which stops DNS rebinding.
+    let granted = if grant.network_origins.contains(&origin) {
+        BTreeSet::from([origin.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    if let Err(denied) =
+        ssrf::check_endpoint_host(&parsed_endpoint.host, &origin, allow_loopback, &granted)
+    {
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            Some(&origin),
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::NetworkOriginNotGranted,
+        );
+        bail!("capability policy refuses non-public model endpoint host: {denied}");
+    }
+    // The request body plus any explicit credential travels to this origin, so
+    // the data-flow policy must authorize the sink for the call's labels.
+    crate::security::authorize_data_flow_set(registry, applet_name, endpoint, sensitivities)?;
+    Ok(grant.network_origins.contains(&origin).then_some(origin))
+}
+
+/// Authorize the resolved custom `endpoint` parameter of an `@execute-model`
+/// applet before its child spawns. Other binaries need no check; an absent
+/// endpoint selects the provider default and needs no grant.
+///
+/// References resolve through `bindings`; unbound names return `Ok(None)` here
+/// and argument resolution rejects them before any spawn. A named `fixture`
+/// means the helper replays it without opening a socket, so loopback literals
+/// stay usable there, mirroring the helper. Returns the explicitly granted
+/// origin, if any, for the spawn site to convey to the helper.
+pub fn authorize_model_endpoint_params(
+    registry: &Registry,
+    manifest: &crate::manifest::Manifest,
+    parameters: &BTreeMap<String, Value>,
+    bindings: &BTreeMap<String, Value>,
+    sensitivities: &SensitivitySet,
+) -> Result<Option<String>> {
+    if manifest.binary != "@execute-model" {
+        return Ok(None);
+    }
+    let Some(value) = parameters.get("endpoint") else {
+        return Ok(None);
+    };
+    let text = match value {
+        Value::String(text) => text.as_str(),
+        Value::Reference(binding) => match bindings.get(binding) {
+            Some(Value::String(text)) => text.as_str(),
+            Some(_) => bail!("model parameter \"endpoint\" must be text"),
+            // Unbound here; argument resolution rejects it before spawn.
+            None => return Ok(None),
+        },
+        // Manifest validation rejects non-text values before execution.
+        _ => bail!("model parameter \"endpoint\" must be text"),
+    };
+    let allow_loopback = parameters.contains_key("fixture");
+    authorize_model_endpoint(
+        registry,
+        &manifest.name,
+        text,
+        sensitivities,
+        allow_loopback,
+    )
+}
+
+/// Environment variable carrying one explicitly granted model origin to the
+/// bundled `execute-model` helper.
+///
+/// The spawn site sets this only after [`authorize_model_endpoint`] authorized
+/// the endpoint's origin against the applet's `network_origins` grant and the
+/// data-flow policy. The helper honors only the value that equals the
+/// endpoint's own canonical origin. Under a capability policy or host
+/// environment filter the variable must additionally be allowlisted to reach
+/// the helper, mirroring `EXECUTE_MODEL_ALLOW_LOOPBACK`.
+pub(crate) const MODEL_GRANTED_ORIGIN_ENV: &str = "EXECUTE_MODEL_GRANTED_ORIGIN";
 
 /// Whether a host path is being read or written, for filesystem policy checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2010,9 +3401,30 @@ pub fn authorize_host_path(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            "host",
+            if access == HostAccess::Write {
+                "filesystem.write"
+            } else {
+                "filesystem.read"
+            },
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        let action = if access == HostAccess::Write {
+            "filesystem.write"
+        } else {
+            "filesystem.read"
+        };
+        record_invalid_policy(registry, "host", action);
+        return Err(error);
+    }
     let host = policy.host.as_ref();
     let capability = if access == HostAccess::Write {
         "filesystem.write"
@@ -2075,9 +3487,30 @@ pub fn authorize_applet_host_path(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        record_policy_decision(
+            registry,
+            applet_name,
+            if access == HostAccess::Write {
+                "filesystem.write"
+            } else {
+                "filesystem.read"
+            },
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        let action = if access == HostAccess::Write {
+            "filesystem.write"
+        } else {
+            "filesystem.read"
+        };
+        record_invalid_policy(registry, applet_name, action);
+        return Err(error);
+    }
     let Some(grant) = policy.applets.get(applet_name) else {
         record_policy_decision(
             registry,
@@ -2136,6 +3569,99 @@ pub fn authorize_applet_host_path(
     } else {
         bail!("capability policy denies applet filesystem access");
     }
+}
+
+/// File parameters of the bundled model helper that name host files read by
+/// the `execute-model` child: `fixture` replay input and `env_file`
+/// credentials. Kept for custom manifests that still declare them as
+/// `string`; the bundled manifests declare both as `path` so the generic
+/// path-parameter loop below covers them without relying on names.
+const MODEL_FILE_PARAMETERS: [&str; 2] = ["env_file", "fixture"];
+
+/// Authorize the host files a model applet will read through the bundled
+/// `execute-model` helper. The helper runs as a normal child process with no
+/// registry access, so the parent checks resolved path values against the
+/// applet's own filesystem grant before spawn; the child additionally opens
+/// the fixture without following its final link and requires a private file
+/// for `env_file`.
+///
+/// This is advisory against a concurrent ancestor swap: the parent
+/// canonicalizes (follows links) at check time while the child pins only the
+/// final component at open time. A directory renamed between the two can
+/// redirect the open. Do not treat a granted check as proof of what was
+/// opened on paths a concurrent actor can rename above. Final-component
+/// links fail closed in the child; ancestor swaps do not.
+///
+/// `bindings` resolves result references; unbound names are skipped here and
+/// rejected when the group resolves its arguments. With no capability policy
+/// this is a no-op, matching `authorize_applet_host_path`. When
+/// `defer_relative` is set, relative literals are skipped: the effective
+/// working directory is not yet known (preflight of a program that changes
+/// directories) and the spawn path re-checks every value.
+///
+/// Coverage is generic, not name-locked: every parameter the manifest declares
+/// as `path` is authorized, so a renamed helper binary or a new file
+/// parameter declared as `path` stays covered. The explicit `env_file` /
+/// `fixture` names remain as a fallback for custom manifests that still
+/// declare them as `string`.
+///
+/// A named `fixture` means the helper replays it without reading `env_file`,
+/// so only the fixture needs a grant when one is named.
+pub fn authorize_model_file_params(
+    registry: &Registry,
+    manifest: &crate::manifest::Manifest,
+    parameters: &BTreeMap<String, Value>,
+    bindings: &BTreeMap<String, Value>,
+    cwd: &Path,
+    defer_relative: bool,
+) -> Result<()> {
+    // Generic path-parameter coverage plus the legacy string-typed names for
+    // `@execute-model`. A different binary with `path` file parameters is
+    // still covered; a file parameter declared as `string` is not.
+    let mut names: BTreeSet<&str> = BTreeSet::new();
+    for name in parameters.keys() {
+        if manifest.is_path_parameter(name) {
+            names.insert(name.as_str());
+        }
+    }
+    if manifest.binary == "@execute-model" {
+        for name in MODEL_FILE_PARAMETERS {
+            if parameters.contains_key(name) {
+                names.insert(name);
+            }
+        }
+    } else if names.is_empty() {
+        return Ok(());
+    }
+    for name in names {
+        if name == "env_file" && parameters.contains_key("fixture") {
+            continue;
+        }
+        let Some(value) = parameters.get(name) else {
+            continue;
+        };
+        let text = match value {
+            Value::String(text) => text.as_str(),
+            Value::Reference(binding) => match bindings.get(binding) {
+                Some(Value::String(text)) => text.as_str(),
+                Some(_) => bail!("model parameter {name:?} must be text"),
+                // Unbound here; argument resolution rejects it before spawn.
+                None => continue,
+            },
+            // Manifest validation rejects non-text values before execution.
+            _ => bail!("model parameter {name:?} must be text"),
+        };
+        if text.is_empty() {
+            // The helper rejects empty paths fail-closed; nothing to authorize.
+            continue;
+        }
+        let path = Path::new(text);
+        if defer_relative && path.is_relative() {
+            continue;
+        }
+        authorize_applet_host_path(registry, &manifest.name, path, HostAccess::Read, cwd)?;
+    }
+    Ok(())
 }
 
 fn collect_invocations<'a>(steps: &'a [Step], calls: &mut Vec<&'a crate::ast::Invocation>) {
@@ -2233,17 +3759,25 @@ fn preflight_host_paths(
                         && registry.resolve_call(call)?.builtin
                             == Some(crate::manifest::Builtin::Cd) =>
                 {
-                    let path = call.parameters.get("path").ok_or_else(|| {
-                        anyhow!("capability policy requires a literal path for the cd builtin")
-                    })?;
+                    let Some(path) = call.parameters.get("path") else {
+                        record_preflight_denial(registry, "host", "filesystem.read");
+                        bail!("capability policy requires a literal path for the cd builtin");
+                    };
                     (path, HostAccess::Read)
                 }
                 _ => continue,
             };
             let Value::String(path) = path else {
+                record_preflight_denial(registry, "host", "filesystem.read");
                 bail!("capability policy requires literal host filesystem paths that can be checked before effects");
             };
-            let path = expand_home_path(path)?;
+            let path = match expand_home_path(path) {
+                Ok(path) => path,
+                Err(error) => {
+                    record_preflight_denial(registry, "host", "filesystem.read");
+                    return Err(error);
+                }
+            };
             if !cwd_mode.is_dynamic() || path.is_absolute() {
                 authorize_host_path(registry, &path, access, cwd)?;
             }
@@ -2266,9 +3800,23 @@ pub fn authorize_environment_inputs(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        // Without a policy every declared environment input is accepted, and
+        // the audit carries that baseline instead of implying a check ran.
+        record_policy_decision(
+            registry,
+            "<workflow>",
+            "environment.read",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::NoPolicyConfigured,
+        );
         return Ok(());
     };
-    policy.validate()?;
+    if let Err(error) = policy.validate() {
+        record_invalid_policy(registry, "<workflow>", "environment.read");
+        return Err(error);
+    }
     for declaration in declarations {
         if let Some(crate::ast::InputSource::Environment(name)) = &declaration.source {
             let allowed = policy.host_environment.contains(name);
@@ -2406,6 +3954,8 @@ fn validate_digest(value: &str) -> Result<()> {
 
 struct ParsedHttpUrl {
     origin: String,
+    /// Unbracketed, lowercased host spelling (IPv6 without brackets).
+    host: String,
     path: String,
     query: bool,
     fragment: bool,
@@ -2425,6 +3975,35 @@ pub(crate) fn canonical_http_policy_origin(value: &str) -> Result<String> {
         bail!("HTTP(S) origin must not contain a path, query, or fragment");
     }
     Ok(parsed.origin)
+}
+
+/// Whether the endpoint origin passes the grant's origin allowlist. An empty
+/// list allows broad access for metadata-policy checks; only a listed origin
+/// counts as an explicit grant for SSRF purposes.
+pub(crate) fn network_origin_is_granted(grant: &AppletGrant, origin: &str) -> bool {
+    grant.network_origins.is_empty() || grant.network_origins.contains(origin)
+}
+
+/// True only when the capability policy explicitly lists this endpoint's
+/// origin in `network_origins`. A broad empty-list grant and an absent policy
+/// do not preserve non-public destinations; only a listed origin reaches the
+/// transport as an explicit SSRF grant.
+#[cfg(feature = "remote")]
+pub(crate) fn remote_origin_is_explicitly_granted(
+    registry: &Registry,
+    applet_name: &str,
+    endpoint: &str,
+) -> bool {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        return false;
+    };
+    let Some(grant) = policy.applets.get(applet_name) else {
+        return false;
+    };
+    canonical_http_origin(endpoint)
+        .map(|origin| grant.network_origins.contains(&origin))
+        .unwrap_or(false)
 }
 
 fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
@@ -2504,7 +4083,11 @@ fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
         (host.to_ascii_lowercase(), port, false)
     };
     let default_port = if scheme == "https" { 443 } else { 80 };
-    let rendered_host = if is_ipv6 { format!("[{host}]") } else { host };
+    let rendered_host = if is_ipv6 {
+        format!("[{host}]")
+    } else {
+        host.clone()
+    };
     let origin = match port {
         Some(port) if port != default_port => format!("{scheme}://{rendered_host}:{port}"),
         _ => format!("{scheme}://{rendered_host}"),
@@ -2516,6 +4099,7 @@ fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
     let path = before_fragment.split('?').next().unwrap_or_default();
     Ok(ParsedHttpUrl {
         origin,
+        host,
         path: if path.is_empty() {
             "/".to_owned()
         } else {

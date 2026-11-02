@@ -47,12 +47,29 @@ fn port_value(report: &Value, node: &str) -> flow::ast::Value {
         .iter()
         .find(|event| event["port"]["node"] == node && event["port"]["port"] == "value")
         .unwrap();
-    let flow::graph::PortValue::Value(value) =
-        serde_json::from_value(event["payload"].clone()).unwrap()
-    else {
-        panic!("expected a typed value port");
-    };
-    value
+    assert_eq!(event["payload"]["kind"], "value");
+    ast_value_from_json(&event["payload"]["value"])
+}
+
+fn ast_value_from_json(value: &Value) -> flow::ast::Value {
+    match value {
+        Value::Null => flow::ast::Value::Null,
+        Value::Bool(value) => flow::ast::Value::Bool(*value),
+        Value::Number(value) => value
+            .as_i64()
+            .map(flow::ast::Value::Integer)
+            .unwrap_or_else(|| flow::ast::Value::Number(value.clone())),
+        Value::String(value) => flow::ast::Value::String(value.clone()),
+        Value::Array(values) => {
+            flow::ast::Value::List(values.iter().map(ast_value_from_json).collect())
+        }
+        Value::Object(values) => flow::ast::Value::Record(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), ast_value_from_json(value)))
+                .collect(),
+        ),
+    }
 }
 
 #[test]
@@ -136,6 +153,75 @@ fn inspection_describes_missing_environment_inputs_without_reading_them() {
         port_value(&run, "message_node"),
         flow::ast::Value::String("runtime value".into())
     );
+}
+
+#[test]
+fn inspection_withholds_supplied_sensitive_inputs_from_nested_parameters() {
+    let prompt = "GRAPH_PROMPT_CANARY_793";
+    let environment = "GRAPH_ENV_CANARY_793";
+    for (declaration, canary) in [
+        ("accept token as text from secret prompt \"Token?\"", prompt),
+        (
+            "accept token as text from environment \"EXECUTE_GRAPH_PRIVATE_INPUT\"",
+            environment,
+        ),
+    ] {
+        let fixture = Fixture::new(&format!(
+            "{declaration}\naccept label as text\ngraph inspectable\n  run text.concat with parts [\"prefix\", token, label] and separator \"|\" as composed\nend graph\n"
+        ));
+        let report = success(
+            fixture
+                .command("inspect")
+                .args([
+                    "--input",
+                    &format!("token={canary}"),
+                    "--input",
+                    "label=visible-control",
+                ])
+                .output()
+                .unwrap(),
+        );
+        let output = serde_json::to_string(&report).unwrap();
+        assert!(!output.contains(canary), "secret leaked in {output}");
+        assert_eq!(report["interface"]["inputs"][0]["value_withheld"], true);
+        assert!(
+            output.contains("visible-control"),
+            "non-secret value was lost: {output}"
+        );
+        assert!(
+            output.contains("token"),
+            "sensitive reference was lost: {output}"
+        );
+    }
+}
+
+#[test]
+fn invalid_sensitive_graph_input_is_redacted_for_every_static_and_runtime_command() {
+    let canary = "GRAPH_ENUM_CANARY_793";
+    let fixture = Fixture::new(
+        "accept mode as text from secret prompt \"Mode?\"\ngraph invalid\n  run text.trim with text \"safe\" and mode mode as trimmed\nend graph\n",
+    );
+    for action in ["check", "inspect", "explain", "run"] {
+        let output = fixture
+            .command(action)
+            .args(["--input", &format!("mode={canary}")])
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{action} accepted invalid enum input"
+        );
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !combined.contains(canary),
+            "{action} leaked sensitive input: {combined}"
+        );
+        assert!(combined.contains("must be one of"), "{action}: {combined}");
+    }
 }
 
 #[test]

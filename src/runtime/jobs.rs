@@ -551,6 +551,9 @@ impl Supervisor {
                 format!("line {}: validating resolved job arguments", stage.line)
             })?;
             call.parameters = parameters;
+            // References resolve here, before preflight: `preflight_invocations`
+            // below and the worker's `execute_group` both authorize the
+            // resolved model file paths. Unbound references fail closed here.
             // Workers collect every stage result so a later await can decide
             // whether to retain a nonzero terminal status.
             call.status_binding = Some("__execute_job_stage_status".into());
@@ -709,6 +712,9 @@ impl Supervisor {
                     let mut launched = 0;
                     let _output_scope =
                         super::OutputScopeGuard::enter(super::OutputScope::BackgroundJob);
+                    // `calls` were resolved in `prepare_pipeline`, so the empty
+                    // bindings here are correct: `execute_group` re-authorizes
+                    // the already-resolved model file paths before spawn.
                     match execute_group(GroupRequest {
                         registry: &registry,
                         calls: &refs,

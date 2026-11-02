@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/graph-event.v1.schema.json",
+  "title": "Execute graph event, protocol execute.graph-event/1",
+  "description": "One terminal event from `execute run GRAPH --events jsonl`, printed as a single JSON line per event as it arrives. The port, sequence, sensitivity, and payload fields match one entry of the closing execute.graph-run/1 document's outputs array.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "graph", "generation", "revision", "port", "sequence", "sensitivity", "payload"],
+  "properties": {
+    "protocol": { "const": "execute.graph-event/1" },
+    "graph": { "type": "string" },
+    "generation": { "type": "integer", "minimum": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "port"],
+      "properties": {
+        "node": { "type": "string" },
+        "port": { "type": "string" }
+      }
+    },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "sensitivity": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["public", "internal", "confidential", "secret", "unknown"] }
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "bytes" },
+            "value": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "value" },
+            "value": {}
+          }
+        }
+      ]
+    }
+  }
+}

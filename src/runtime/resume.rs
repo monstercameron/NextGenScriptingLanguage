@@ -1115,6 +1115,21 @@ pub(super) fn prepare_with_modules(
     if journal.is_finished() && !terminal && start != program.steps.len() {
         bail!("completed checkpoint program changed: use a fresh checkpoint for additional steps");
     }
+    // Program-aware pre-marking guard: on a journal without the version 6
+    // marker, the marker and element log cannot tell a plain node from a loop
+    // killed before its first begin. When the program says the in-flight node
+    // is a loop, a node-level record is refused here instead of authorizing
+    // the re-begin below or skipping the loop later.
+    if let Some(start) = journal.in_flight_start() {
+        let is_element_step = program.steps.get(start).is_some_and(|step| {
+            matches!(step.kind, crate::ast::StepKind::Loop { .. })
+                || matches!(
+                    step.kind,
+                    crate::ast::StepKind::TaskGroup { ref each, .. } if each.is_some()
+                )
+        });
+        journal.refuse_node_level_resolution_for_element_step(is_element_step)?;
+    }
     journal.ensure_retry_allowed()
 }
 pub(super) fn trigger_fingerprint(
@@ -1192,7 +1207,29 @@ pub fn run_checkpointed(
     let sensitivity_floor =
         workflow_sensitivity_floor(program, registry, &module_session, &cwd, None)?;
     signals.set_sensitivity_floor(sensitivity_floor.clone());
-    authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+    // Fail before any effect when the static floor already denies persistence:
+    // running loop bodies or task elements first would execute external side
+    // effects solely to reproduce a refusal that was knowable up front. The
+    // per-element commit gates stay in place for refusals that only become
+    // known after execution (runtime-revealed secret content), and those keep
+    // their uncertain marker (`--retry-uncertain`).
+    //
+    // Loop-item references over-approximate the floor as Unknown: a `parallel
+    // for each`/`for each` template referencing its loop binding contributes
+    // Unknown even when the list holds Public literals, so an Unknown-only
+    // floor for a loop program is a possible false positive. When declared
+    // manifest secrets exist, defer that Unknown-only denial to the
+    // per-element gates, which compare the actual element bytes/inputs against
+    // the pre-registered secrets (fail-closed, uncertain marker, journal stays
+    // clean). Secret floors still fail here before any effect; non-loop
+    // programs keep the upfront denial so no effect precedes the refusal.
+    if !super::defer_unknown_checkpoint_denial(
+        registry,
+        &sensitivity_floor,
+        super::program_has_for_each(program),
+    ) {
+        authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+    }
     let mut checkpoint = checkpoint.clone();
     checkpoint.directory = cwd.join(&checkpoint.directory);
     crate::capabilities::authorize_host_path(
@@ -1209,6 +1246,9 @@ pub fn run_checkpointed(
         &|key| input_signature(program, &options.inputs, key),
     )?;
     prepare_with_modules(program, registry, &journal, module_session.fingerprints())?;
+    // Issue #536: a node-level `committed` resolution completes the in-flight
+    // node with operator-supplied output before execution resumes.
+    journal.apply_committed_node_resolution()?;
     let already_finished = journal.is_finished();
     let result = run_finite_inner(
         FiniteRun {
@@ -1222,7 +1262,16 @@ pub fn run_checkpointed(
         Some(&mut journal),
     )?;
     if !already_finished {
-        authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+        // Under the Unknown-only deferral every node commit was already
+        // gated on its actual persisted bytes and bindings, so the static
+        // floor must not re-impose the deferred denial after a clean run.
+        if !super::defer_unknown_checkpoint_denial(
+            registry,
+            &sensitivity_floor,
+            super::program_has_for_each(program),
+        ) {
+            authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
+        }
         journal.finish()?;
     }
     Ok(result)

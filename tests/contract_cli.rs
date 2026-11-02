@@ -392,13 +392,36 @@ fn live_policy_rejects_a_source_patch_before_committing_it() {
 }
 
 #[cfg(all(unix, feature = "live"))]
+fn private_token_text(path: &Path) -> String {
+    fs::read_to_string(path)
+        .expect("read private token file")
+        .trim_end()
+        .to_owned()
+}
+
+#[cfg(all(unix, feature = "live"))]
 #[test]
 fn live_agent_policy_requires_credentials_and_never_returns_them() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let program = root.path().join("live.program");
-    fs::write(&program, "run printf with message \"ready\"\n").unwrap();
+    let manifests = root.path().join("manifests");
+    fs::create_dir(&manifests).unwrap();
+    fs::write(
+        manifests.join("sleep.json"),
+        serde_json::to_vec(&json!({
+            "name":"sleep",
+            "binary":"/bin/sleep",
+            "parameters":{"seconds":{"type":"string","required":true}},
+            "arguments":[{"parameter":"seconds"}],
+            "contract":{"version":1}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(&program, "run sleep with seconds \"3\"\n").unwrap();
     let token_file = root.path().join("reader.token");
     let reader_created = cli(
         root.path(),
@@ -413,8 +436,14 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
     );
     assert!(reader_created.status.success());
     let reader_created = decoded(&reader_created);
-    let token = reader_created["token"].as_str().unwrap().to_owned();
+    // The new token-create contract prints metadata only: no `token` member.
+    assert!(reader_created.get("token").is_none());
     let digest = reader_created["token_sha256"].as_str().unwrap().to_owned();
+    // The token value reaches the test through the new private channel: the
+    // 0600 file, never stdout. Boolean assertions below echo no values, so a
+    // failure cannot leak the token into test output.
+    let token = private_token_text(&token_file);
+    assert_eq!(token.len(), 64);
     assert_eq!(
         fs::metadata(&token_file).unwrap().permissions().mode() & 0o777,
         0o600
@@ -433,11 +462,30 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
     );
     assert!(operator_created.status.success());
     let operator_created = decoded(&operator_created);
-    let operator_token = operator_created["token"].as_str().unwrap().to_owned();
+    assert!(operator_created.get("token").is_none());
+    let operator_token = private_token_text(&operator_file);
     let operator_hash = operator_created["token_sha256"]
         .as_str()
         .unwrap()
         .to_owned();
+    let editor_file = root.path().join("editor.token");
+    let editor_created = cli(
+        root.path(),
+        &[
+            "live",
+            "token-create",
+            "--agent",
+            "editor",
+            "--token-file",
+            editor_file.to_str().unwrap(),
+        ],
+    );
+    assert!(editor_created.status.success());
+    let editor_hash = decoded(&editor_created)["token_sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let editor_token = private_token_text(&editor_file);
     let policy_file = root.path().join("agents.json");
     fs::write(
         &policy_file,
@@ -445,7 +493,246 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
             "version": 1,
             "agents": {
                 "reader": {"token_sha256": digest, "permissions": ["read"]},
-                "operator": {"token_sha256": operator_hash, "permissions": ["stop"]}
+                "editor": {"token_sha256": editor_hash, "permissions": ["edit"]},
+                "operator": {"token_sha256": operator_hash, "permissions": ["stop", "edit", "input", "control"]}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    set_private_policy_fixture_permissions(&policy_file);
+    let socket = root.path().join("control.sock");
+    let child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args([
+            "live",
+            "serve",
+            program.to_str().unwrap(),
+            "--socket",
+            socket.to_str().unwrap(),
+            "--agent-policy",
+            policy_file.to_str().unwrap(),
+            "--manifest-dir",
+            manifests.to_str().unwrap(),
+            "--paused",
+        ])
+        .current_dir(root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child = ChildCleanup(child);
+    let mut stdout = BufReader::new(child.0.stdout.take().unwrap());
+    let mut ready = String::new();
+    stdout.read_line(&mut ready).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&ready).unwrap()["event"],
+        "ready",
+        "unexpected live serve response: {ready}"
+    );
+
+    let denied = live_request(&socket, json!({"op":"read"}));
+    assert_eq!(denied["ok"], false);
+    let allowed = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args([
+            "live",
+            "read",
+            "--socket",
+            socket.to_str().unwrap(),
+            "--agent",
+            "reader",
+            "--token-file",
+            token_file.to_str().unwrap(),
+        ])
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        allowed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&allowed.stdout).contains(token.as_str()));
+
+    // A paused session is idle at a safe boundary. An edit-only agent may
+    // change ordinary metadata, but a mixed patch touching /inbox needs both
+    // grants and is rejected before its ordinary edit can commit.
+    let ordinary_edit = live_request(
+        &socket,
+        json!({"op":"create","path":"/user/note","value":"still editable","auth":{"agent":"editor","token":editor_token}}),
+    );
+    assert_eq!(ordinary_edit["ok"], true);
+    let denied_input_patch = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "operations":[
+                {"op":"add","path":"/user/uncommitted","value":true},
+                {"op":"add","path":"/inbox/-","value":{"text":"queued"}}
+            ],
+            "auth":{"agent":"editor","token":editor_token}
+        }),
+    );
+    assert_eq!(denied_input_patch["ok"], false);
+    let after_denial = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"reader","token":token}}),
+    );
+    assert_eq!(
+        after_denial["result"]["state"]["user"].get("uncommitted"),
+        None
+    );
+    assert_eq!(after_denial["result"]["state"]["inbox"], json!([]));
+    let revision = after_denial["revision"].as_u64().unwrap();
+    let stale_input_patch = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "if_revision":revision.saturating_sub(1),
+            "operations":[{"op":"add","path":"/inbox/-","value":{"text":"stale"}}],
+            "auth":{"agent":"operator","token":operator_token}
+        }),
+    );
+    assert_eq!(stale_input_patch["ok"], false);
+    assert_eq!(stale_input_patch["error"]["code"], "conflict");
+    let after_stale = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"reader","token":token}}),
+    );
+    assert_eq!(after_stale["result"]["state"]["inbox"], json!([]));
+    let authorized_input_patch = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "if_revision":revision,
+            "operations":[
+                {"op":"add","path":"/user/committed","value":true},
+                {"op":"add","path":"/inbox/-","value":{"text":"queued"}}
+            ],
+            "auth":{"agent":"operator","token":operator_token}
+        }),
+    );
+    assert_eq!(authorized_input_patch["ok"], true);
+    let after_authorized = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"reader","token":token}}),
+    );
+    assert_eq!(
+        after_authorized["result"]["state"]["user"]["committed"],
+        true
+    );
+    assert_eq!(
+        after_authorized["result"]["state"]["inbox"][0]["text"],
+        "queued"
+    );
+
+    let resumed = live_request(
+        &socket,
+        json!({"op":"control","action":"resume","auth":{"agent":"operator","token":operator_token}}),
+    );
+    assert_eq!(resumed["ok"], true);
+    let mut active = false;
+    for _ in 0..100 {
+        let snapshot = live_request(
+            &socket,
+            json!({"op":"read","auth":{"agent":"reader","token":token}}),
+        );
+        if snapshot["result"]["runtime"]["status"] == "running" {
+            active = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(active, "sleep applet did not enter the active state");
+    let active_denial = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "operations":[{"op":"add","path":"/inbox/-","value":{"text":"active"}}],
+            "auth":{"agent":"editor","token":editor_token}
+        }),
+    );
+    assert_eq!(active_denial["ok"], false);
+
+    let stopped = live_request(
+        &socket,
+        json!({"op":"control","action":"stop","auth":{"agent":"operator","token":operator_token}}),
+    );
+    assert_eq!(stopped["ok"], true);
+    assert!(child.0.wait().unwrap().success());
+}
+
+#[cfg(all(unix, feature = "live"))]
+#[test]
+fn live_expired_agent_tokens_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let program = root.path().join("live.program");
+    fs::write(&program, "run printf with message \"ready\"\n").unwrap();
+
+    // `--expires-in` reports the policy `expires_at` as metadata without
+    // ever printing the token itself.
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let fresh_file = root.path().join("fresh.token");
+    let fresh_created = cli(
+        root.path(),
+        &[
+            "live",
+            "token-create",
+            "--agent",
+            "fresh",
+            "--token-file",
+            fresh_file.to_str().unwrap(),
+            "--expires-in",
+            "3600",
+        ],
+    );
+    assert!(fresh_created.status.success());
+    let fresh_created = decoded(&fresh_created);
+    assert!(fresh_created.get("token").is_none());
+    let fresh_expires = fresh_created["expires_at"].as_u64().unwrap();
+    assert!(fresh_expires >= before + 3590 && fresh_expires <= before + 3700);
+
+    let stale_file = root.path().join("stale.token");
+    let stale_created = cli(
+        root.path(),
+        &[
+            "live",
+            "token-create",
+            "--agent",
+            "stale",
+            "--token-file",
+            stale_file.to_str().unwrap(),
+        ],
+    );
+    assert!(stale_created.status.success());
+    let stale_created = decoded(&stale_created);
+    assert!(stale_created.get("token").is_none());
+    let stale_digest = stale_created["token_sha256"].as_str().unwrap().to_owned();
+
+    let policy_file = root.path().join("agents.json");
+    fs::write(
+        &policy_file,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "agents": {
+                "fresh": {
+                    "token_sha256": fresh_created["token_sha256"],
+                    "permissions": ["read"],
+                    "expires_at": fresh_expires,
+                },
+                "stale": {
+                    "token_sha256": stale_digest,
+                    "permissions": ["read"],
+                    "expires_at": 1,
+                },
+                "operator": {
+                    "token_sha256": fresh_created["token_sha256"],
+                    "permissions": ["stop"],
+                    "expires_at": fresh_expires,
+                },
             }
         }))
         .unwrap(),
@@ -479,32 +766,201 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
         "ready"
     );
 
-    let denied = live_request(&socket, json!({"op":"read"}));
-    assert_eq!(denied["ok"], false);
-    let allowed = Command::new(env!("CARGO_BIN_EXE_execute"))
-        .args([
-            "live",
-            "read",
-            "--socket",
-            socket.to_str().unwrap(),
-            "--agent",
-            "reader",
-            "--token-file",
-            token_file.to_str().unwrap(),
-        ])
-        .current_dir(root.path())
-        .output()
-        .unwrap();
-    assert!(
-        allowed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&allowed.stderr)
+    // The unexpired grant authorizes; the long-expired grant denies even
+    // though its token and permission are otherwise valid.
+    let fresh = private_token_text(&fresh_file);
+    let fresh_read = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"fresh","token":fresh}}),
     );
-    assert!(!String::from_utf8_lossy(&allowed.stdout).contains(token.as_str()));
+    assert_eq!(fresh_read["ok"], true);
+    let stale = private_token_text(&stale_file);
+    let stale_read = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"stale","token":stale}}),
+    );
+    assert_eq!(stale_read["ok"], false);
 
     let stopped = live_request(
         &socket,
-        json!({"op":"control","action":"stop","auth":{"agent":"operator","token":operator_token}}),
+        json!({"op":"control","action":"stop","auth":{"agent":"operator","token":fresh}}),
+    );
+    assert_eq!(stopped["ok"], true);
+    assert!(child.0.wait().unwrap().success());
+}
+
+#[cfg(all(unix, feature = "live"))]
+#[test]
+fn live_reload_agents_revokes_tokens_without_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let program = root.path().join("live.program");
+    fs::write(&program, "run printf with message \"ready\"\n").unwrap();
+    let reader_arg = root
+        .path()
+        .join("reader.token")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let admin_arg = root.path().join("admin.token").to_str().unwrap().to_owned();
+    let reader_created = cli(
+        root.path(),
+        &[
+            "live",
+            "token-create",
+            "--agent",
+            "reader",
+            "--token-file",
+            reader_arg.as_str(),
+        ],
+    );
+    assert!(reader_created.status.success());
+    let reader_created = decoded(&reader_created);
+    assert!(reader_created.get("token").is_none());
+    let admin_created = cli(
+        root.path(),
+        &[
+            "live",
+            "token-create",
+            "--agent",
+            "admin",
+            "--token-file",
+            admin_arg.as_str(),
+        ],
+    );
+    assert!(admin_created.status.success());
+    let admin_created = decoded(&admin_created);
+    assert!(admin_created.get("token").is_none());
+    // The policy stores hashes only, so digests are safe to compare: they are
+    // already printed by token-create itself.
+    let reader_digest = reader_created["token_sha256"].as_str().unwrap();
+    let admin_digest = admin_created["token_sha256"].as_str().unwrap();
+    let policy_file = root.path().join("agents.json");
+    let write_policy = |agents: &Value| {
+        fs::write(&policy_file, serde_json::to_vec(agents).unwrap()).unwrap();
+        set_private_policy_fixture_permissions(&policy_file);
+    };
+    write_policy(&json!({
+        "version": 1,
+        "agents": {
+            "reader": {"token_sha256": reader_digest, "permissions": ["read"]},
+            "admin": {
+                "token_sha256": admin_digest,
+                "permissions": ["read", "control", "stop"],
+            },
+        }
+    }));
+    let socket = root.path().join("control.sock");
+    let socket_arg = socket.to_str().unwrap().to_owned();
+    let child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args([
+            "live",
+            "serve",
+            program.to_str().unwrap(),
+            "--socket",
+            socket_arg.as_str(),
+            "--agent-policy",
+            policy_file.to_str().unwrap(),
+            "--paused",
+        ])
+        .current_dir(root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child = ChildCleanup(child);
+    let mut stdout = BufReader::new(child.0.stdout.take().unwrap());
+    let mut ready = String::new();
+    stdout.read_line(&mut ready).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&ready).unwrap()["event"],
+        "ready"
+    );
+
+    // Both grants work before the revocation.
+    let read_as = |agent: &str, file: &str| {
+        cli(
+            root.path(),
+            &[
+                "live",
+                "read",
+                "--socket",
+                socket_arg.as_str(),
+                "--agent",
+                agent,
+                "--token-file",
+                file,
+            ],
+        )
+    };
+    let before = read_as("reader", reader_arg.as_str());
+    assert!(before.status.success());
+    let revision = decoded(&before)["revision"].as_u64().unwrap();
+
+    // Revoke the reader in the policy file, then reload the running server
+    // through the existing control channel. The reload itself is authorized
+    // by the surviving admin grant.
+    write_policy(&json!({
+        "version": 1,
+        "agents": {
+            "admin": {
+                "token_sha256": admin_digest,
+                "permissions": ["read", "control", "stop"],
+            },
+        }
+    }));
+    let reloaded = cli(
+        root.path(),
+        &[
+            "live",
+            "control",
+            "reload-agents",
+            "--socket",
+            socket_arg.as_str(),
+            "--agent",
+            "admin",
+            "--token-file",
+            admin_arg.as_str(),
+        ],
+    );
+    assert!(reloaded.status.success());
+    let reloaded = decoded(&reloaded);
+    assert_eq!(reloaded["ok"], true);
+    // A policy reload is not a document change: the revision does not move.
+    assert_eq!(reloaded["revision"], revision);
+
+    // The revoked token now fails on the same running server; the admin grant
+    // still works, proving the server never restarted.
+    let denied = read_as("reader", reader_arg.as_str());
+    assert!(!denied.status.success());
+    assert_eq!(decoded(&denied)["ok"], false);
+    let admin_read = read_as("admin", admin_arg.as_str());
+    assert!(admin_read.status.success());
+    assert!(child.0.try_wait().unwrap().is_none());
+
+    // A broken policy file fails the reload closed: the running policy stays.
+    fs::write(&policy_file, b"{\"version\":1,\"agents\":{}}").unwrap();
+    let refused = cli(
+        root.path(),
+        &[
+            "live",
+            "control",
+            "reload-agents",
+            "--socket",
+            socket_arg.as_str(),
+            "--agent",
+            "admin",
+            "--token-file",
+            admin_arg.as_str(),
+        ],
+    );
+    assert!(!refused.status.success());
+    let admin_read = read_as("admin", admin_arg.as_str());
+    assert!(admin_read.status.success());
+
+    let stopped = live_request(
+        &socket,
+        json!({"op":"control","action":"stop","auth":{"agent":"admin","token":private_token_text(&root.path().join("admin.token"))}}),
     );
     assert_eq!(stopped["ok"], true);
     assert!(child.0.wait().unwrap().success());
@@ -625,6 +1081,101 @@ fn total_timeout_is_enforced_for_finite_run() {
             workflow.to_str().unwrap(),
             "--total-timeout-ms",
             "40",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn total_timeout_after_caught_native_timeout_blocks_save_in_catch() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("caught-timeout.program");
+    let saved = root.path().join("after-deadline.txt");
+    fs::write(
+        &workflow,
+        format!(
+            "try\n  run \"sleep\" with arguments [\"1\"]\ncatch failure\n  use value \"late effect\"\n  then save to {:?}\n",
+            saved
+        ),
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--total-timeout-ms",
+            "40",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!saved.exists(), "save ran after the workflow deadline");
+}
+
+#[cfg(unix)]
+#[test]
+fn per_command_timeout_remains_catchable_before_total_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("command-timeout.program");
+    let saved = root.path().join("caught-command-timeout.txt");
+    fs::write(
+        &workflow,
+        format!(
+            "try\n  run \"sleep\" with arguments [\"1\"]\ncatch failure\n  use value \"caught command timeout\"\n  then save to {:?}\n",
+            saved
+        ),
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--command-timeout-ms",
+            "40",
+            "--total-timeout-ms",
+            "1000",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(saved).unwrap(), "caught command timeout");
+}
+
+#[cfg(unix)]
+#[test]
+fn total_timeout_stops_a_pure_in_process_loop() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("in-process-loop.program");
+    fs::write(
+        &workflow,
+        "while true is true\n  use value \"still running\"\n",
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--total-timeout-ms",
+            "250",
         ],
     );
     assert!(!output.status.success());

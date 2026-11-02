@@ -252,10 +252,10 @@ pub fn execute_with_context(
         "text.join" => text::concat(args, context),
         "text.render" => template::render(args, cwd, context),
         "text.format" => template::format(args, context),
-        "fs.ensure_file" => ensure::ensure_file(args, cwd),
-        "fs.ensure_line" => ensure::ensure_line(args, cwd),
-        "fs.ensure_symlink" => ensure::ensure_symlink(args, cwd),
-        "fs.ensure_dir" => ensure::ensure_dir(args, cwd),
+        "fs.ensure_file" => ensure::ensure_file(args, cwd, context),
+        "fs.ensure_line" => ensure::ensure_line(args, cwd, context),
+        "fs.ensure_symlink" => ensure::ensure_symlink(args, cwd, context),
+        "fs.ensure_dir" => ensure::ensure_dir(args, cwd, context),
         "yaml.parse" => yaml::parse(args, input, context),
         "yaml.stringify" => yaml::stringify(args),
         "toml.parse" => toml::parse(args, input, context),
@@ -266,7 +266,7 @@ pub fn execute_with_context(
         "path.join" => path::join(args),
         "text.lines" => text::lines(args, input, context),
         "text.split" => text::split(args, input, context),
-        "fs.test" => file_test::test(args, cwd),
+        "fs.test" => file_test::test(args, cwd, context),
         "fs.glob" => glob::glob(args, cwd, context),
         "number.add" | "number.subtract" | "number.multiply" | "number.divide"
         | "number.compare" | "number.int_divide" | "number.modulo" | "number.divmod"
@@ -307,18 +307,18 @@ pub fn execute_with_context(
         "json.sort_by" => structured::sort_by(args, input, context),
         "hash.sha256" | "hash.sha512" | "encode.base64" | "decode.base64" | "encode.hex"
         | "decode.hex" | "encode.url" | "decode.url" | "encode.form" => {
-            hash::run(operation, args, input)
+            hash::run(operation, args, input, context)
         }
         "time.now" | "time.format" | "time.parse" | "time.add" | "time.diff" => {
             time::run(operation, args, context)
         }
         "time.sleep" | "wait.until" => wait::run(operation, args, cwd, context),
         "jsonc.edit_content" => jsonc::edit_content(args, input, context),
-        "fs.transaction" => transaction::apply(args, cwd),
-        "fs.transaction.recover" => transaction::recover(args, cwd),
-        "fs.read" | "fs.snapshot" => filesystem::read(args, cwd),
-        "fs.write_atomic" => filesystem::write_atomic(args, input, cwd),
-        "fs.unlink_checked" => filesystem::unlink_checked(args, cwd),
+        "fs.transaction" => transaction::apply(args, cwd, context),
+        "fs.transaction.recover" => transaction::recover(args, cwd, context),
+        "fs.read" | "fs.snapshot" => filesystem::read(args, cwd, context),
+        "fs.write_atomic" => filesystem::write_atomic(args, input, cwd, context),
+        "fs.unlink_checked" => filesystem::unlink_checked(args, cwd, context),
         "jsonc.set" => jsonc::set(args, cwd, context),
         "jsonc.remove" => jsonc::remove(args, cwd, context),
         _ => Err(AppletError::failed(

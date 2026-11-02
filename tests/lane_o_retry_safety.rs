@@ -15,8 +15,15 @@ fn execute(args: &[&str], directory: &Path) -> Output {
         .unwrap()
 }
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
+/// Staged as a private single-link copy: the trusted-executable gate refuses
+/// the hardlinked `target/` original.
 fn fixture() -> String {
-    env!("CARGO_BIN_EXE_native-fixture").replace('\\', "/")
+    staged_helpers::native_fixture()
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn elements_log(checkpoint: &Path) -> String {

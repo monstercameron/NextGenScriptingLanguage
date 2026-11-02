@@ -398,6 +398,38 @@ impl GraphPlan {
         } else {
             crate::inputs::known_values(&self.inputs, supplied)?
         };
+        self.with_resolved_values(values, true)
+    }
+
+    /// Return an inspection plan with non-sensitive values resolved and all
+    /// sensitive values withheld. Sensitive references remain references so
+    /// nested parameters still show where their value comes from.
+    pub fn with_input_values_for_inspection(
+        &self,
+        supplied: &BTreeMap<String, Value>,
+    ) -> Result<Self> {
+        let mut values = crate::inputs::known_values(&self.inputs, supplied)?;
+        for input in &self.inputs {
+            if crate::ast::is_sensitive(input) {
+                values.remove(&input.name);
+            }
+        }
+        let mut plan = self.with_resolved_values(values, false)?;
+        // Defaults are part of serialized declarations too; withhold them in
+        // case a sensitive input has a source-controlled default value.
+        for input in &mut plan.inputs {
+            if crate::ast::is_sensitive(input) {
+                input.default = None;
+            }
+        }
+        Ok(plan)
+    }
+
+    fn with_resolved_values(
+        &self,
+        values: BTreeMap<String, Value>,
+        reject_unresolved_native_stream_inputs: bool,
+    ) -> Result<Self> {
         let mut plan = self.clone();
         for node in &mut plan.nodes {
             match &mut node.kind {
@@ -409,9 +441,10 @@ impl GraphPlan {
                     ..
                 } => resolve_call_inputs(call, &values),
                 GraphNodeKind::NativeStream { calls, .. }
-                    if calls
-                        .iter()
-                        .any(|call| call.parameters.values().any(contains_reference)) =>
+                    if reject_unresolved_native_stream_inputs
+                        && calls
+                            .iter()
+                            .any(|call| call.parameters.values().any(contains_reference)) =>
                 {
                     bail!(
                         "graph inputs can be used only in `run` applet parameters; native stream parameters must be literal"
@@ -1520,6 +1553,23 @@ impl GraphPlan {
         };
         let manifest = registry.resolve_call(call)?;
         Ok(manifest.builtin.is_some() || manifest.cacheable_with_read_only_effects())
+    }
+
+    /// Whether any node runs indefinitely (timer, listener, native stream,
+    /// program service, or renderer). Such graphs are long-lived services:
+    /// their terminal events should stream as they arrive instead of being
+    /// collected into one closing document.
+    pub fn has_persistent_nodes(&self) -> bool {
+        self.nodes.iter().any(|node| {
+            matches!(
+                &node.kind,
+                GraphNodeKind::ProgramService { .. }
+                    | GraphNodeKind::Timer { .. }
+                    | GraphNodeKind::Listener { .. }
+                    | GraphNodeKind::NativeStream { .. }
+                    | GraphNodeKind::Renderer { .. }
+            )
+        })
     }
 
     pub fn output_terminals(&self) -> Vec<PortRef> {

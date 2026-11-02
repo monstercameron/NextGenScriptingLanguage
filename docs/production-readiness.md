@@ -46,8 +46,8 @@ pipeline.
   or start the service; TTY handoff and universal detached-descendant cleanup
   are not provided. See [the practical guide](guide.md#generate-a-reviewable-service-definition).
 
-* Daemon run forwarding defaults to local execution because the client's OS confinement cannot be preserved. `EXECUTE_DAEMON_ACCEPT_CONTEXT=1` explicitly
-  accepts the daemon context and enables forwarding.
+* Daemon run forwarding defaults to local execution because the client's OS confinement cannot be preserved. `EXECUTE_DAEMON_ACCEPT_CONTEXT=1`
+  on the client and on the daemon explicitly accepts the daemon context and enables forwarding.
   See [the daemon section](runtime-reference.md#warm-daemon---daemon).
 * Checkpoints record top-level `for each` loops element by element, match resume
   nodes by step id, and use journal version 5 with a keyed input digest. Retry
@@ -209,21 +209,73 @@ pipeline equivalent for the dash arm.
 
 Each timed scenario has 2 warmups and 20 samples (10 for the spawn, 10,000-line,
 command-substitution cases; 5 for the 100 MB pipe and 1 MB capture; 4 for the 1,000-file
-file-test case), reported as medians.
+file-test case), reported as medians. Each median carries a deterministic bootstrap
+95% confidence interval computed from its own samples (1,000 resamples, fixed seed),
+retained per arm in the JSON report.
 Bash uses --norc --noprofile; dash runs for all 22 scenarios. Execute runs
 execute run FILE with the workflow's explicit manifest directory. Peak RSS uses GNU
 /usr/bin/time -f %M, at most three runs per arm, with the same temporary working
-directory and fresh output/checkpoint fixtures. Every child has a 30-second timeout and
-the harness stops at a 285-second end-to-end budget (hard maximum 300 seconds).
+directory and fresh output/checkpoint fixtures. The wall-time comparison runs
+counter-free (`--instructions-backend none`) so counting never perturbs its
+medians or spends its budget; its instruction columns report `-` by design.
+Instruction counts come from a dedicated gate pair: the eight gated CPU-bound
+scenarios measured once per build, back-to-back on the same runner (3 runs, no
+warmup, 2 instruction samples), pinned to cachegrind (`I refs` via valgrind,
+which needs no PMU), both with the head-revision tool so a base predating
+newer flags still gates and both reports share one tool hash
+(`--source-revision` stamps each report with its built revision). Each focused
+report records which backend produced the
+counts plus one-line counter diagnostics (kernel `perf_event_paranoid` level,
+perf/valgrind probe outcomes), the measurement-tool hash, and the
+`valgrind --version` provider string, and the log and step
+summary state how many execute arms report counts. Every child has a
+30-second timeout and the harness stops at a 285-second end-to-end budget (hard maximum
+300 seconds).
 [bash-compare.yml](../.github/workflows/bash-compare.yml) runs the workload-contract
-test and comparison for each release/profile variant on ubuntu-24.04 and
-ubuntu-24.04-arm, retaining a grouped JSON report. The local macOS expanded table above
+test, the synthetic instruction-gate contract test, the revision-policy contract
+test, and the comparison for each
+release/profile variant on ubuntu-24.04 and
+ubuntu-24.04-arm, retaining a grouped JSON report. The workflow then builds two
+distinct binaries on the same runner -- the baseline at the base revision and
+the candidate at the head revision -- measures the focused pair, and runs the
+real gate on it:
+[tools/check_instruction_regression.py](../tools/check_instruction_regression.py)
+with `--fail-closed --require-provenance` compares the baseline report against
+the candidate report, which must agree within +2%. Revisions come from
+[tools/resolve_gate_revisions.py](../tools/resolve_gate_revisions.py): pull
+requests compare base SHA versus head SHA; pushes compare `before` versus the
+pushed SHA (a zero `before` on a new branch falls back to the parent of the
+head commit); manual dispatches accept explicit base/head inputs and otherwise
+compare the parent of HEAD versus HEAD. Any unresolved revision is incomplete,
+never acceptance. A canary
+derives a synthetic baseline with gated counts deflated by 3% and requires the
+wired gate to fail on the measured candidate; the canary proves the wiring is
+live but is not itself a regression gate -- only the base-versus-head pair can
+report a real regression. An inconclusive canary (no gated
+instruction data) or an incomplete pair fails the job; there is no
+incomplete-green. Missing counter
+data fails the fail-closed gate as incomplete rather than passing silently. The local
+macOS expanded table above
 is diagnostic; the Linux eight-scenario table below is a historical snapshot. The
-latest Linux workflow artifacts remain the source for per-profile CI results.
+latest Linux workflow artifacts (including both focused instruction reports) remain
+the source for per-profile CI results.
+The counter fallback is cachegrind via valgrind (instruction counts from its
+virtual CPU, the same approach the Rust ecosystem uses for CI benchmarking on
+virtualized runners), installed on every gate runner; perf stays best-effort for
+diagnostics only. Still awaiting Linux CI validation, so unverified: cachegrind
+overhead for the two focused runs against their shared 10-minute step timeout
+(same sample counts as the former same-binary pair, so the measurement budget
+is unchanged), behavior on static musl binaries, and the doubled build cost of
+compiling both revisions per matrix variant. The gate rejects any backend
+mismatch (including a missing backend against a recorded one) as incomparable
+units, and likewise rejects a differing measurement-tool hash, a differing
+`valgrind --version`, or differing sample counts. Same-runner is procedural
+(one job measures both binaries); the hashes attest the tool and provider,
+not the runner identity.
 What it does not show. The pairs use each runtime's natural operation, so they compare
 jobs rather than isolating interpreter overhead. The runners are shared machines, files
-are warm in the page cache, and the 20-run medians have no confidence intervals; small
-differences are within noise. The 100 MB case checks the byte count through a pipe; the
+are warm in the page cache, and wall-time point estimates stay noisy; use the retained
+bootstrap intervals before reading a few-percent gap as a win or a regression. The 100 MB case checks the byte count through a pipe; the
 1 MB case compares command substitution with a captured Execute binding. The checkpoint
 case compares checkpoint creation for a finite Execute loop with shell recomputation.
 These workloads do not measure Omarchy scripts, network or disk-bound work, Windows or

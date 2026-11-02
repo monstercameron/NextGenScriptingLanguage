@@ -16,9 +16,11 @@ sys.path.insert(0, str(ROOT))
 from benchmarks import source_pair as harness
 
 
-# Captured directly from the saved 0c57e22 baseline binary as a correctness
-# fixture (not as timing evidence). Its terminal output omits the nonterminal
-# joined.value event, so the sequence numbers intentionally contain a gap.
+# Shape captured from the saved 0c57e22 baseline binary as a correctness
+# fixture (not as timing evidence), updated for the issue #558 contract that
+# value payloads render as natural JSON (`0`, not `{"Integer": 0}`). Its
+# terminal output omits the nonterminal joined.value event, so the sequence
+# numbers intentionally contain a gap.
 ACTUAL_BASELINE_GRAPH_REPORT = b'''{
   "dropped_messages": 0,
   "generation": 1,
@@ -26,7 +28,7 @@ ACTUAL_BASELINE_GRAPH_REPORT = b'''{
   "outputs": [
     {
       "generation": 1,
-      "payload": {"kind": "value", "value": {"Integer": 0}},
+      "payload": {"kind": "value", "value": 0},
       "port": {"node": "joined", "port": "status"},
       "revision": 1,
       "sensitivity": ["unknown"],
@@ -34,7 +36,7 @@ ACTUAL_BASELINE_GRAPH_REPORT = b'''{
     },
     {
       "generation": 1,
-      "payload": {"kind": "value", "value": {"Integer": 0}},
+      "payload": {"kind": "value", "value": 0},
       "port": {"node": "cleaned", "port": "status"},
       "revision": 1,
       "sensitivity": ["unknown"],
@@ -42,7 +44,7 @@ ACTUAL_BASELINE_GRAPH_REPORT = b'''{
     },
     {
       "generation": 1,
-      "payload": {"kind": "value", "value": {"String": "paired graph"}},
+      "payload": {"kind": "value", "value": "paired graph"},
       "port": {"node": "cleaned", "port": "value"},
       "revision": 1,
       "sensitivity": ["unknown"],
@@ -226,15 +228,15 @@ class SourcePairHarnessTests(unittest.TestCase):
         baseline_normalized = harness._graph_oracle(ACTUAL_BASELINE_GRAPH_REPORT)
         expected_ports = {
             "joined.status": {
-                "payload": {"kind": "value", "value": {"Integer": 0}},
+                "payload": {"kind": "value", "value": 0},
                 "sensitivity": ["unknown"],
             },
             "cleaned.status": {
-                "payload": {"kind": "value", "value": {"Integer": 0}},
+                "payload": {"kind": "value", "value": 0},
                 "sensitivity": ["unknown"],
             },
             "cleaned.value": {
-                "payload": {"kind": "value", "value": {"String": "paired graph"}},
+                "payload": {"kind": "value", "value": "paired graph"},
                 "sensitivity": ["unknown"],
             },
         }

@@ -946,19 +946,36 @@ fn open_regular_manifest(path: &Path, nofollow: bool) -> std::io::Result<fs::Fil
     Ok(file)
 }
 
-fn read_manifest_file(path: &Path) -> std::io::Result<String> {
-    let file = open_regular_manifest(path, false)?;
-    let size = file.metadata()?.len();
-    let limit = size.checked_add(1).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "manifest is too large")
-    })?;
+/// Read a trusted manifest through its already-verified canonical path: open
+/// without following a trailing link, re-verify ownership/mode/links/ACLs on
+/// the opened descriptor (`fstat` plus descriptor ACL/ACE checks), then read
+/// with a growth check. The descriptor re-check narrows the race between the
+/// path-side trust verification and this read, but a replacement after the
+/// final byte is still read remains possible; see SECURITY.md.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_trusted_manifest_file(path: &Path, label: &str) -> Result<String> {
+    let file = open_regular_manifest(path, true)
+        .with_context(|| format!("reading {label} {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("reading {label} metadata {}", path.display()))?;
+    crate::security::verify_trusted_fd(
+        path,
+        &file,
+        &metadata,
+        crate::security::TrustedInputKind::File,
+        label,
+    )?;
+    let size = metadata.len();
+    let limit = size
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("{label} {} is too large", path.display()))?;
     let mut raw = String::new();
-    file.take(limit).read_to_string(&mut raw)?;
+    file.take(limit)
+        .read_to_string(&mut raw)
+        .with_context(|| format!("reading {label} {}", path.display()))?;
     if raw.len() as u64 != size {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "manifest changed while being read",
-        ));
+        bail!("{label} {} changed while being read", path.display());
     }
     Ok(raw)
 }
@@ -1154,13 +1171,31 @@ impl Registry {
         }))
     }
 
-    /// Load one JSON manifest file or all `.json` files in a directory.
+    /// Load one JSON manifest file or all `.json` files in a directory. The
+    /// manifest directory (or the single file's parent module root) and every
+    /// manifest file must pass the trusted-input ownership and writability
+    /// gate, including writable-ancestor, hardlink and setuid checks.
+    /// Directory scans list the verified canonical directory (not the
+    /// caller-supplied alias) and refuse embedded symlinked or reparse-point
+    /// entries outright: a link would let an untrusted target decide what runs
+    /// under a trusted name. An explicitly named single file or catalog may
+    /// name a symlink alias; the alias is resolved and the canonical target
+    /// passes the same gate before anything is read. Every entry is verified
+    /// before it is read, and the read re-verifies the opened descriptor, but
+    /// a replacement after the final check remains a race; see SECURITY.md.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load(path: &Path) -> Result<Self> {
-        // Each entry records whether it is a plain file (not a symlink or a
-        // directory). Such a file inside the canonical directory is its own
-        // canonical path, so it needs no separate canonicalize call.
+        // Each entry records whether it is a plain file. Directory symlinks
+        // are resolved through canonicalization and verified at their target;
+        // embedded file symlinks are refused below, before anything is read.
         let paths = if path.is_dir() {
-            let mut entries = fs::read_dir(path)
+            let canonical = fs::canonicalize(path)
+                .with_context(|| format!("canonicalizing manifest root {}", path.display()))?;
+            crate::security::verify_trusted_input_dir(&canonical, "manifest directory")
+                .with_context(|| format!("trusting manifest directory {}", path.display()))?;
+            // List the verified canonical directory so the entries match the
+            // directory that passed the gate, not a swapped alias.
+            let mut entries = fs::read_dir(&canonical)
                 .with_context(|| format!("reading manifest directory {}", path.display()))?
                 .map(|entry| {
                     entry.map(|e| {
@@ -1173,7 +1208,12 @@ impl Registry {
             entries.sort();
             entries
         } else {
-            vec![(path.to_path_buf(), false)]
+            // An explicit file may be a symlink alias to a trusted target
+            // (stow-style layouts); resolve it and verify the target below.
+            // Directory scans keep refusing embedded links outright.
+            let origin = fs::canonicalize(path)
+                .with_context(|| format!("canonicalizing manifest {}", path.display()))?;
+            vec![(origin, false)]
         };
         if paths.is_empty() {
             bail!("no JSON manifests found in {}", path.display());
@@ -1189,25 +1229,51 @@ impl Registry {
         };
         let module_root = Some(match &canonical_dir {
             Some(root) => root.clone(),
-            None => fs::canonicalize(path)
-                .with_context(|| format!("canonicalizing manifest {}", path.display()))?
+            None => paths[0]
+                .0
                 .parent()
                 .ok_or_else(|| anyhow!("manifest path has no parent directory"))?
                 .to_path_buf(),
         });
+        if let Some(root) = &module_root {
+            crate::security::verify_trusted_input_dir(root, "module root")
+                .with_context(|| format!("trusting module root {}", root.display()))?;
+        }
         let mut data = RegistryData {
             module_root,
             ..RegistryData::default()
         };
         let mut fingerprint = Vec::new();
         for (path, plain) in paths {
-            let raw = read_manifest_file(&path)
-                .with_context(|| format!("reading manifest {}", path.display()))?;
+            if !plain {
+                if fs::symlink_metadata(&path)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                {
+                    bail!(
+                        "manifest {} is a symbolic link; symlinked manifests are refused, pass the real file",
+                        path.display()
+                    );
+                }
+                #[cfg(windows)]
+                if fs::symlink_metadata(&path)
+                    .is_ok_and(|metadata| crate::platform::windows::is_reparse(&metadata))
+                {
+                    bail!(
+                        "manifest {} is a reparse point; pass the real file",
+                        path.display()
+                    );
+                }
+            }
+            // Resolve the trust origin first and verify it before reading any
+            // content through it; the read then re-verifies the descriptor.
             let origin = match (&canonical_dir, path.file_name(), plain) {
                 (Some(root), Some(name), true) => root.join(name),
-                _ => fs::canonicalize(&path)
-                    .with_context(|| format!("canonicalizing manifest {}", path.display()))?,
+                _ => path.clone(),
             };
+            crate::security::verify_trusted_input_file(&origin, "manifest")
+                .with_context(|| format!("trusting manifest {}", path.display()))?;
+            let raw = read_trusted_manifest_file(&origin, "manifest")
+                .with_context(|| format!("reading manifest {}", path.display()))?;
             fingerprint.push((
                 path.file_name().unwrap_or_default().to_owned(),
                 origin.clone(),
@@ -1222,21 +1288,40 @@ impl Registry {
         })
     }
 
+    /// Fail closed on wasm: without host ownership/permission checks,
+    /// file-backed manifest loading is refused.
+    #[cfg(target_arch = "wasm32")]
+    pub fn load(path: &Path) -> Result<Self> {
+        bail!(
+            "trusted manifest loading is unavailable on wasm: host ownership and permission checks have no browser equivalent, refusing {}",
+            path.display()
+        );
+    }
+
     /// Load one explicit, versioned catalog file containing an ordered array
     /// of manifest objects. Every entry receives the catalog's canonical path
     /// as its origin, and its parent directory is the module root. The whole
     /// envelope's JSON syntax is parsed first; semantic manifest validation
     /// then runs in array order. A later syntax error therefore takes
     /// precedence over an earlier semantic manifest error.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_catalog(path: &Path) -> Result<Self> {
-        let raw = read_manifest_file(path)
-            .with_context(|| format!("reading manifest catalog {}", path.display()))?;
+        // An explicit catalog path may name a symlink alias, like a single
+        // manifest file: it is resolved first and the canonical catalog and
+        // its module root pass the same trusted-input gate as directory loads
+        // before anything is read. The read then re-verifies the descriptor.
         let origin = fs::canonicalize(path)
             .with_context(|| format!("canonicalizing manifest catalog {}", path.display()))?;
+        crate::security::verify_trusted_input_file(&origin, "manifest catalog")
+            .with_context(|| format!("trusting manifest catalog {}", path.display()))?;
         let module_root = origin
             .parent()
             .ok_or_else(|| anyhow!("manifest catalog path has no parent directory"))?
             .to_path_buf();
+        crate::security::verify_trusted_input_dir(&module_root, "module root")
+            .with_context(|| format!("trusting module root {}", module_root.display()))?;
+        let raw = read_trusted_manifest_file(&origin, "manifest catalog")
+            .with_context(|| format!("reading manifest catalog {}", path.display()))?;
         let catalog: RawManifestCatalog<'_> = serde_json::from_str(&raw)
             .with_context(|| format!("parsing manifest catalog {}", path.display()))?;
         if catalog.format != MANIFEST_CATALOG_FORMAT {
@@ -1279,6 +1364,16 @@ impl Registry {
         Ok(Self {
             data: Arc::new(data),
         })
+    }
+
+    /// Fail closed on wasm: without host ownership/permission checks,
+    /// file-backed manifest loading is refused.
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_catalog(path: &Path) -> Result<Self> {
+        bail!(
+            "trusted manifest catalog loading is unavailable on wasm: host ownership and permission checks have no browser equivalent, refusing {}",
+            path.display()
+        );
     }
 
     /// Parse embedded manifests with the same schema and duplicate checks as files.
@@ -1371,10 +1466,17 @@ impl Registry {
         Self::from_bundled_canonical(root, index)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn from_bundled_canonical(
         root: PathBuf,
         index: &'static bundled_manifests::BundledIndex,
     ) -> Result<Self> {
+        // Installed default roots decide what runs when no explicit manifest
+        // source is given, so they pass the same ownership and writability
+        // gate as explicit directories. Per-entry content is still verified
+        // against the bundled index on first use.
+        crate::security::verify_trusted_input_dir(&root, "manifest directory")
+            .with_context(|| format!("trusting manifest directory {}", root.display()))?;
         let cells = (0..index.entries().len())
             .map(|_| OnceLock::new())
             .collect();
@@ -1390,6 +1492,19 @@ impl Registry {
                 ..RegistryData::default()
             }),
         })
+    }
+
+    /// Fail closed on wasm: without host ownership/permission checks,
+    /// bundled-root trust cannot be established.
+    #[cfg(target_arch = "wasm32")]
+    fn from_bundled_canonical(
+        root: PathBuf,
+        _index: &'static bundled_manifests::BundledIndex,
+    ) -> Result<Self> {
+        bail!(
+            "trusted bundled manifest loading is unavailable on wasm: host ownership and permission checks have no browser equivalent, refusing {}",
+            root.display()
+        );
     }
 
     /// Load the default manifest directory. When it holds the bundled file names (and,
@@ -2748,9 +2863,13 @@ fn parameter_accepts_reference(
                 ParameterType::Json,
                 InputType::Text
                     | InputType::Integer
+                    | InputType::UnsignedInteger
+                    | InputType::Usize
                     | InputType::Boolean
                     | InputType::TextList
                     | InputType::IntegerList
+                    | InputType::UnsignedIntegerList
+                    | InputType::UsizeList
                     | InputType::JsonList
             )
             | (ParameterType::Record, InputType::Json)
@@ -2789,6 +2908,16 @@ fn parameter_accepts_reference(
         || (expected == ParameterType::List
             && actual == InputType::JsonList
             && matches!(item_type, Some(ParameterType::Json | ParameterType::Number)))
+        || (expected == ParameterType::List
+            && item_type == Some(ParameterType::Json)
+            && matches!(
+                actual,
+                InputType::TextList
+                    | InputType::IntegerList
+                    | InputType::UnsignedIntegerList
+                    | InputType::UsizeList
+                    | InputType::JsonList
+            ))
 }
 
 /// A reference used as one list item must resolve to a single scalar of the
@@ -4616,7 +4745,12 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
                 && (!schema.scalar_only
                     || matches!(
                         kind,
-                        InputType::Text | InputType::Integer | InputType::Boolean | InputType::Json
+                        InputType::Text
+                            | InputType::Integer
+                            | InputType::UnsignedInteger
+                            | InputType::Usize
+                            | InputType::Boolean
+                            | InputType::Json
                     ))
         }
         OutputType::Record => kind == InputType::Json,
@@ -4643,6 +4777,16 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
                         .items
                         .as_deref()
                         .is_some_and(|item| item.kind == OutputType::Json))
+                || (matches!(
+                    kind,
+                    InputType::TextList
+                        | InputType::IntegerList
+                        | InputType::UnsignedIntegerList
+                        | InputType::UsizeList
+                ) && schema
+                    .items
+                    .as_deref()
+                    .is_some_and(|item| item.kind == OutputType::Json))
         }
     }
 }
@@ -5444,6 +5588,109 @@ mod tests {
             Some(ParameterType::UnsignedInteger),
             InputType::UnsignedIntegerList
         ));
+    }
+
+    #[test]
+    fn json_parameter_references_accept_unsigned_and_platform_sized_values() {
+        for kind in [
+            InputType::Text,
+            InputType::Integer,
+            InputType::UnsignedInteger,
+            InputType::Usize,
+            InputType::Boolean,
+            InputType::TextList,
+            InputType::IntegerList,
+            InputType::UnsignedIntegerList,
+            InputType::UsizeList,
+            InputType::JsonList,
+            InputType::Json,
+            InputType::Never,
+        ] {
+            assert!(
+                parameter_accepts_reference(ParameterType::Json, None, kind),
+                "JSON parameters should accept JSON-representable {kind} references"
+            );
+        }
+        assert!(!parameter_accepts_reference(
+            ParameterType::Json,
+            None,
+            InputType::Bytes
+        ));
+
+        for kind in [InputType::UnsignedIntegerList, InputType::UsizeList] {
+            assert!(parameter_accepts_reference(
+                ParameterType::List,
+                Some(ParameterType::Json),
+                kind
+            ));
+        }
+        assert!(!parameter_accepts_reference(
+            ParameterType::List,
+            Some(ParameterType::Json),
+            InputType::Bytes
+        ));
+        assert!(!parameter_accepts_reference(
+            ParameterType::Integer,
+            None,
+            InputType::UnsignedInteger
+        ));
+    }
+
+    #[test]
+    fn json_schemas_accept_unsigned_scalars_and_json_compatible_lists() {
+        let mut scalar_schema = leaf_value_schema(OutputType::Json);
+        scalar_schema.scalar_only = true;
+        for kind in [
+            InputType::Text,
+            InputType::Integer,
+            InputType::UnsignedInteger,
+            InputType::Usize,
+            InputType::Boolean,
+            InputType::Json,
+        ] {
+            assert!(
+                schema_accepts_input_kind(&scalar_schema, kind),
+                "scalar JSON schema should accept {kind}"
+            );
+        }
+        for kind in [
+            InputType::TextList,
+            InputType::IntegerList,
+            InputType::UnsignedIntegerList,
+            InputType::UsizeList,
+            InputType::JsonList,
+            InputType::Bytes,
+        ] {
+            assert!(
+                !schema_accepts_input_kind(&scalar_schema, kind),
+                "scalar-only JSON schema should reject {kind}"
+            );
+        }
+
+        let list_schema = ValueSchema {
+            min_items: None,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            kind: OutputType::List,
+            nullable: false,
+            items: Some(Box::new(leaf_value_schema(OutputType::Json))),
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            single_line: false,
+            minimum: None,
+            pattern: None,
+        };
+        for kind in [InputType::UnsignedIntegerList, InputType::UsizeList] {
+            assert!(
+                schema_accepts_input_kind(&list_schema, kind),
+                "JSON array schema should accept {kind}"
+            );
+        }
+        assert!(!schema_accepts_input_kind(&list_schema, InputType::Bytes));
     }
 
     #[test]

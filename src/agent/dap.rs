@@ -343,6 +343,10 @@ impl Session {
             .arg("run")
             .arg(&launch.program)
             .arg("--control")
+            // DAP drives its child over the live endpoint without agent
+            // credentials, so it explicitly opts in until launch can carry
+            // an `--agent-policy` and token files for its live calls.
+            .arg("--allow-unauthenticated")
             .current_dir(&launch.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

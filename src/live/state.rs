@@ -936,6 +936,9 @@ pub(crate) struct Shared {
     /// reload-agents` re-reads this path so revocations and new grants take
     /// effect without restarting the server.
     pub agent_policy_path: Option<PathBuf>,
+    /// Explicit `serve --allow-unauthenticated` opt-in. When false and no
+    /// agent policy is installed, mutating live operations are refused.
+    pub allow_unauthenticated: bool,
 }
 
 #[derive(Deserialize)]

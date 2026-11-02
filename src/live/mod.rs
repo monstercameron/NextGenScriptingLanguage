@@ -58,6 +58,13 @@ pub struct HostRun {
     pub manifest_catalog: Option<PathBuf>,
     pub capability_policy: Option<PathBuf>,
     pub data_flow_policy: Option<PathBuf>,
+    /// Agent authorization policy for the control endpoint (`--agent-policy`).
+    /// Without one, mutating live operations are refused unless
+    /// `allow_unauthenticated` is set.
+    pub agent_policy: Option<PathBuf>,
+    /// Explicit opt-in to the legacy same-user mode with no agent policy
+    /// (`--allow-unauthenticated`). Mutually exclusive with `agent_policy`.
+    pub allow_unauthenticated: bool,
     pub cache_dir: Option<PathBuf>,
     pub command_timeout_ms: Option<u64>,
     pub max_output_bytes: usize,
@@ -111,6 +118,13 @@ pub fn host_run(
     if let Some(policy) = &run.data_flow_policy {
         args.push("--data-flow-policy".to_owned());
         args.push(policy.to_string_lossy().into_owned());
+    }
+    if let Some(policy) = &run.agent_policy {
+        args.push("--agent-policy".to_owned());
+        args.push(policy.to_string_lossy().into_owned());
+    }
+    if run.allow_unauthenticated {
+        args.push("--allow-unauthenticated".to_owned());
     }
     if let Some(timeout) = run.command_timeout_ms {
         args.push("--command-timeout-ms".to_owned());
@@ -305,10 +319,11 @@ fn is_priority_bytes(line: &[u8]) -> bool {
 }
 
 /// Whether raw priority bytes may claim a reserve slot. When no agent policy
-/// is configured the socket stays same-user trusted, so every well-formed
-/// priority claim without an `auth` field stays reserve-eligible and `stop`
-/// availability is unchanged; a no-policy claim carrying `auth` is demoted
-/// because the handler rejects any `auth` without a policy. When a policy is
+/// is configured, a well-formed `read` claim without an `auth` field stays
+/// reserve-eligible, and `stop` does too only under the explicit
+/// `--allow-unauthenticated` opt-in (otherwise the handler refuses it); a
+/// no-policy claim carrying `auth` is demoted because the handler rejects
+/// any `auth` without a policy. When a policy is
 /// configured, only a request already authorized for its priority operation
 /// (`read`, or `control stop`) is reserve-eligible: an unauthenticated,
 /// under-permissioned, or malformed-`auth` fake-priority frame is demoted to
@@ -323,6 +338,15 @@ fn is_priority_bytes(line: &[u8]) -> bool {
 /// touching state, and this predicate never grants access on its own.
 #[cfg(unix)]
 fn reserve_eligible(line: &[u8], policy: Option<&AgentAuthPolicy>) -> bool {
+    reserve_eligible_allowing(line, policy, false)
+}
+
+#[cfg(unix)]
+fn reserve_eligible_allowing(
+    line: &[u8],
+    policy: Option<&AgentAuthPolicy>,
+    allow_unauthenticated: bool,
+) -> bool {
     let value: Json = match serde_json::from_slice(line) {
         Ok(value) => value,
         Err(_) => return false,
@@ -337,8 +361,10 @@ fn reserve_eligible(line: &[u8], policy: Option<&AgentAuthPolicy>) -> bool {
     }
     let Some(policy) = policy else {
         // Mirrors `handle_request`: without a policy any `auth` field is
-        // rejected, so it must not claim the reserve.
-        return value.get("auth").is_none();
+        // rejected, so it must not claim the reserve. A no-policy `stop`
+        // is refused by the handler unless the server opted in with
+        // `--allow-unauthenticated`, so only `read` stays eligible.
+        return value.get("auth").is_none() && (op == "read" || allow_unauthenticated);
     };
     // Mirrors the handler's strict `auth` parse: malformed `auth`
     // (missing/extra fields, wrong types) fails the request there, so it is
@@ -545,7 +571,7 @@ fn error_response(error: &anyhow::Error) -> Json {
 /// `general_clients` + `priority_spare`.
 fn schema() -> Json {
     json!({"ok":true,"protocol":"execute.live/1","execute_version":env!("CARGO_PKG_VERSION"),"commands":{
-        "serve":"execute live serve FILE --socket PATH [--paused] [--breakpoints LINES] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR | --manifest-catalog FILE] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
+        "serve":"execute live serve FILE --socket PATH [--paused] [--breakpoints LINES] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR | --manifest-catalog FILE] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE | --allow-unauthenticated] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
         "token-create":"execute live token-create --agent ID --token-file FILE [--expires-in SECS] [--show-token] (writes the token to a new private file; prints only metadata unless --show-token is given)",
         "read":"execute live read [JSON_POINTER] --socket PATH [--agent ID --token-file FILE]",
         "create":"execute live create JSON_POINTER --json JSON --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
@@ -562,7 +588,7 @@ fn schema() -> Json {
         "declared_inputs":"top-level accept declarations constrain /bindings: required inputs must exist, defaults materialize at startup, typed values cannot be deleted or changed to another type; inspect FILE discovers the contract",
         "state":{"source":".program text, <=64 KiB; replace source and cursor atomically to change the pending workflow","cwd":"existing absolute working directory","bindings":"real named values; string/bool/integer/list map to native parameters; objects/null/floats become JSON text in argv","input":"next pipeline input: {text:UTF8} or {bytes:[0..255]}","cursor":"zero-based next statement; native pipeline groups, conditionals, reusable calls and whole loops are indivisible","inbox":"bounded listener input queue; listen to stdin uses this queue in managed mode","user":"arbitrary JSON metadata object","ui":"live component inputs, widget state, focus, and queued UI events for a screen program"},
         "read_only":["/runtime","/events"],"runtime_fields":["status","in_flight","active_node","effects_may_be_incomplete","error","runs_completed","nodes_completed","completed_native_launches","cache_hits","last_output","frame","ui_applied_revision","ui_errors"],
-        "authorization":{"mode":"same_user_trusted_without_policy","opt_in":"serve --agent-policy FILE requires every request to carry an authorized --agent ID --token-file FILE credential; policy stores token hashes; credentials are not persisted or echoed","boundary":"same-UID clients remain inside the existing OS ownership boundary; bearer-token scopes are cooperative client authorization and do not isolate a hostile same-UID process that can read private token files","permissions":["read","edit","control","input","stop"]},
+        "authorization":{"mode":"mutating_ops_require_agent_policy_by_default","opt_in":"serve --agent-policy FILE requires every request to carry an authorized --agent ID --token-file FILE credential; policy stores token hashes; credentials are not persisted or echoed; without a policy, mutating operations are refused unless serve --allow-unauthenticated explicitly restores the legacy same-user mode; read-only operations stay same-user","boundary":"same-UID clients remain inside the existing OS ownership boundary; bearer-token scopes are cooperative client authorization and do not isolate a hostile same-UID process that can read private token files","permissions":["read","edit","control","input","stop"]},
         "capability_policy_scope":"--capability-policy grants applet capabilities only; use --data-flow-policy to enforce remote-origin and persistence data-flow grants",
         "semantics":{"revision":"monotonic; if_revision protects atomic writes against concurrent edits and execution","create":"requires absent object key; arrays insert at index or -","update":"requires existing path","delete":"requires existing path; required document fields cannot be removed","patch":"atomic RFC 6902 add/replace/remove/test operations; all changes validate before commit","breakpoint":"control breakpoint LINE... pauses before those source lines; with no lines it clears them; a paused run shows /runtime/debug (line and bindings)","continue":"while paused at a breakpoint, run to the next breakpoint; otherwise refused","step":"while paused at a breakpoint, run one statement and pause before the next; otherwise run one native node","pause":"finish the current native group, then pause; streams pause at their next emitted record","cancel":"cancel/reap the active native group; retry explicitly acknowledges possibly incomplete effects","source":"in-memory replacement only; source file is not rewritten; changing the native listener source/cwd restarts its producer and may replay input; handler-only edits preserve it","reset":"reset cursor/cwd/input and local result bindings; preserves external bindings and user metadata; does not undo effects","restart":"reset and run; may repeat effects","completed":"the control server remains alive for inspection and edits until stop","stream":"native argv is fixed for the lifetime of a stream; cancel and wait before editing/restarting its pipeline","ui":"actual renderer state under /ui/programs/NAME/widgets/ID; edit text, items/selection, table rows, bars, chart series and focus; component input changes invoke .program handlers; event dispatch supports press/submit/choose/open; source replacement changes layout and widget identities","durability":"ephemeral live state; separate from durable checkpoints; completed effects are never rolled back"},
         "limits":{"request_bytes":MAX_MESSAGE,"state_bytes":MAX_STATE,"inbox_records":MAX_QUEUE,"event_history":64,"concurrent_clients":MAX_CLIENTS,"general_clients":MAX_CLIENTS,"priority_spare":PRIORITY_SPARE,"pending_connections":PENDING_MAX,"priority_classify_bytes":CLASSIFY_CAP,"pending_timeout_ms":transport::IO_TIMEOUT.as_millis(),"burst_accepts":FLOOD_BURST,"sustained_accepts_per_second":SUSTAINED_ACCEPTS_PER_SECOND,"priority_requests":["read","control stop"],"wait_timeout_ms":10000,"request_read_timeout_ms":2000,"response_write_timeout_ms":2000,"client_response_timeout_ms":12000},
@@ -575,6 +601,7 @@ struct Options {
     paused: bool,
     headless: bool,
     show_token: bool,
+    allow_unauthenticated: bool,
 }
 fn options(args: &[String]) -> Result<Options> {
     let mut result = Options {
@@ -583,6 +610,7 @@ fn options(args: &[String]) -> Result<Options> {
         paused: false,
         headless: false,
         show_token: false,
+        allow_unauthenticated: false,
     };
     let mut index = 0;
     while index < args.len() {
@@ -597,6 +625,11 @@ fn options(args: &[String]) -> Result<Options> {
                 bail!("duplicate --show-token");
             }
             result.show_token = true;
+        } else if value == "--allow-unauthenticated" {
+            if result.allow_unauthenticated {
+                bail!("duplicate --allow-unauthenticated");
+            }
+            result.allow_unauthenticated = true;
         } else if value == "--paused" {
             if result.paused {
                 bail!("duplicate --paused");
@@ -715,6 +748,9 @@ fn only(opts: &Options, names: &[&str], allow_paused: bool) -> Result<()> {
     if opts.paused && !allow_paused {
         bail!("--paused applies only to serve");
     }
+    if opts.allow_unauthenticated && !allow_paused {
+        bail!("--allow-unauthenticated applies only to serve");
+    }
     for flag in opts.flags.keys() {
         if !names.contains(&flag.as_str()) {
             bail!("unsupported option {flag} for this command");
@@ -820,6 +856,9 @@ fn dispatch(
             && opts.flags.contains_key("--manifest-catalog")
         {
             bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+        }
+        if opts.allow_unauthenticated && opts.flags.contains_key("--agent-policy") {
+            bail!("--allow-unauthenticated and --agent-policy are mutually exclusive");
         }
         if opts.positional.len() != 1 {
             bail!("serve requires one .program file");
@@ -1022,6 +1061,7 @@ fn dispatch(
             run_mode: mode == Mode::Run,
             flood: Mutex::new(FloodBudget::new()),
             agent_policy_path: opts.flags.get("--agent-policy").map(PathBuf::from),
+            allow_unauthenticated: opts.allow_unauthenticated,
         });
         let options = RunOptions {
             cache_directory: opts
@@ -1493,7 +1533,8 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                     // cannot occupy reserve slots however fast they connect.
                     let eligible = line_end.is_some_and(|end| {
                         let line = &conn.buf[..=end];
-                        is_priority_bytes(line) && reserve_eligible(line, policy)
+                        is_priority_bytes(line)
+                            && reserve_eligible_allowing(line, policy, shared.allow_unauthenticated)
                     });
                     let request = match line_end {
                         Some(end) => conn.buf[..=end].to_vec(),
@@ -1732,6 +1773,71 @@ fn handle(mut stream: UnixStream, shared: &Shared, gate: Gate, prefix: Vec<u8>) 
     }
 }
 
+/// The live-control authorization gate, pure apart from the `record` audit
+/// callback so it is unit-testable without a socket. With a policy, every
+/// request needs its required grants, as before. Without a policy, mutating
+/// operations (edit, control, input, stop) are refused unless the server was
+/// started with the explicit `--allow-unauthenticated` opt-in; read-only
+/// operations stay available to the same OS user. An operation with no
+/// permission mapping falls through to the caller's validation, which
+/// rejects it before any state work.
+fn authorize_live_request(
+    policy: Option<&AgentAuthPolicy>,
+    allow_unauthenticated: bool,
+    op: &str,
+    action: Option<&str>,
+    auth: Option<&RequestAuth>,
+    value: &Json,
+    record: &mut dyn FnMut(auth::AgentPermission, bool),
+) -> Result<()> {
+    let mut required = auth::required_permission(op, action)
+        .map(|permission| vec![permission])
+        .unwrap_or_default();
+    if required == [auth::AgentPermission::Edit] && auth::edit_injects_input(op, value) {
+        required.push(auth::AgentPermission::Input);
+    }
+    let Some(policy) = policy else {
+        if auth.is_some() {
+            bail!("live agent credentials require serve --agent-policy");
+        }
+        if !allow_unauthenticated
+            && required
+                .iter()
+                .any(|permission| *permission != auth::AgentPermission::Read)
+        {
+            bail!(
+                "live request is unauthorized: no agent policy is configured; \
+                 mutating live operations require serve --agent-policy \
+                 (or the explicit serve --allow-unauthenticated opt-in)"
+            );
+        }
+        return Ok(());
+    };
+    let authorization = if required.is_empty() {
+        auth::required_permission(op, action)
+            .and_then(|permission| policy.authorize_permissions(auth, &[permission]))
+    } else {
+        policy.authorize_permissions(auth, &required)
+    };
+    for permission in &required {
+        record(
+            *permission,
+            policy.authorize_permissions(auth, &[*permission]).is_ok(),
+        );
+    }
+    authorization.map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+    if state::patch_contains_test(op, value) {
+        // `test` is read-only, but its success or failure reveals equality
+        // for any state path. Require the same grant as a direct read
+        // before evaluating the patch, including queued listener/UI input.
+        let read_authorization = policy.authorize(auth, "read", None);
+        record(auth::AgentPermission::Read, read_authorization.is_ok());
+        read_authorization
+            .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+    }
+    Ok(())
+}
+
 /// Authorize and apply one parsed request. Split from `handle` so every lane
 /// shares the same policy and validation: lane admission never bypasses
 /// authentication, it only decides scheduling.
@@ -1743,87 +1849,47 @@ fn handle_request(
     shared: &Shared,
 ) -> Result<Json> {
     let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
-    if let Some(policy) = agent_policy.as_ref() {
-        let mut required = auth::required_permission(&op, action.as_deref())
-            .map(|permission| vec![permission])
-            .unwrap_or_default();
-        if required == [auth::AgentPermission::Edit] && auth::edit_injects_input(&op, &value) {
-            required.push(auth::AgentPermission::Input);
-        }
-        let authorization = if required.is_empty() {
-            auth::required_permission(&op, action.as_deref())
-                .and_then(|permission| policy.authorize_permissions(auth.as_ref(), &[permission]))
-        } else {
-            policy.authorize_permissions(auth.as_ref(), &required)
+    let subject = auth
+        .as_ref()
+        .map_or("unknown", |credential| credential.agent.as_str());
+    let mut record = |permission: auth::AgentPermission, approved: bool| {
+        let (permission_name, risk) = match permission {
+            auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
+            auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
+            auth::AgentPermission::Control => ("control", crate::security::PolicyRisk::High),
+            auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
+            auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
         };
-        for permission in &required {
-            let (permission_name, risk) = match permission {
-                auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
-                auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
-                auth::AgentPermission::Control => ("control", crate::security::PolicyRisk::High),
-                auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
-                auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
-            };
-            let one_authorization = policy.authorize_permissions(auth.as_ref(), &[*permission]);
-            let (outcome, reason) = if one_authorization.is_ok() {
-                (
-                    crate::security::PolicyDecisionOutcome::Approved,
-                    crate::security::PolicyDecisionReason::PolicyMatched,
-                )
-            } else {
-                (
-                    crate::security::PolicyDecisionOutcome::Denied,
-                    crate::security::PolicyDecisionReason::MissingGrant,
-                )
-            };
-            let subject = auth
-                .as_ref()
-                .map_or("unknown", |credential| credential.agent.as_str());
-            crate::security::record_policy_decision(
-                &shared.registry,
-                subject,
-                &format!("live.{permission_name}"),
-                None,
-                risk,
-                outcome,
-                reason,
-            );
-        }
-        authorization.map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
-        if state::patch_contains_test(&op, &value) {
-            // `test` is read-only, but its success or failure reveals equality
-            // for any state path. Require the same grant as a direct read
-            // before evaluating the patch, including queued listener/UI input.
-            let read_authorization = policy.authorize(auth.as_ref(), "read", None);
-            let (outcome, reason) = if read_authorization.is_ok() {
-                (
-                    crate::security::PolicyDecisionOutcome::Approved,
-                    crate::security::PolicyDecisionReason::PolicyMatched,
-                )
-            } else {
-                (
-                    crate::security::PolicyDecisionOutcome::Denied,
-                    crate::security::PolicyDecisionReason::MissingGrant,
-                )
-            };
-            let subject = auth
-                .as_ref()
-                .map_or("unknown", |credential| credential.agent.as_str());
-            crate::security::record_policy_decision(
-                &shared.registry,
-                subject,
-                "live.read",
-                None,
-                crate::security::PolicyRisk::Low,
-                outcome,
-                reason,
-            );
-            read_authorization
-                .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
-        }
-    } else if auth.is_some() {
-        bail!("live agent credentials require serve --agent-policy");
-    }
+        let (outcome, reason) = if approved {
+            (
+                crate::security::PolicyDecisionOutcome::Approved,
+                crate::security::PolicyDecisionReason::PolicyMatched,
+            )
+        } else {
+            (
+                crate::security::PolicyDecisionOutcome::Denied,
+                crate::security::PolicyDecisionReason::MissingGrant,
+            )
+        };
+        crate::security::record_policy_decision(
+            &shared.registry,
+            subject,
+            &format!("live.{permission_name}"),
+            None,
+            risk,
+            outcome,
+            reason,
+        );
+    };
+    authorize_live_request(
+        agent_policy.as_ref().as_ref(),
+        shared.allow_unauthenticated,
+        &op,
+        action.as_deref(),
+        auth.as_ref(),
+        &value,
+        &mut record,
+    )?;
     value
         .as_object_mut()
         .context("request must be an object")?
@@ -1855,6 +1921,108 @@ fn handle_request(
     }
     let request: Request = serde_json::from_value(value)?;
     state::request(shared, request)
+}
+
+#[cfg(test)]
+mod auth_gate_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn token_hash(token: &str) -> String {
+        let digest = Sha256::digest(token.as_bytes());
+        let mut output = String::with_capacity(64);
+        for byte in digest {
+            use std::fmt::Write as _;
+            write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        output
+    }
+
+    fn gate(
+        policy: Option<&AgentAuthPolicy>,
+        allow_unauthenticated: bool,
+        op: &str,
+        action: Option<&str>,
+        auth: Option<&RequestAuth>,
+    ) -> Result<()> {
+        let value = serde_json::json!({"op": op, "path": "/source"});
+        let mut noop = |_: auth::AgentPermission, _: bool| {};
+        authorize_live_request(
+            policy,
+            allow_unauthenticated,
+            op,
+            action,
+            auth,
+            &value,
+            &mut noop,
+        )
+    }
+
+    #[test]
+    fn no_policy_refuses_mutating_requests_by_default() {
+        for (op, action) in [
+            ("update", None),
+            ("create", None),
+            ("delete", None),
+            ("patch", None),
+            ("send", None),
+            ("event", None),
+            ("control", Some("stop")),
+            ("control", Some("pause")),
+            ("control", Some("restart")),
+        ] {
+            assert!(
+                gate(None, false, op, action, None).is_err(),
+                "{op} {action:?} must be refused without an agent policy",
+            );
+        }
+        // Read-only operations stay available to the same OS user.
+        assert!(gate(None, false, "read", None, None).is_ok());
+        assert!(gate(None, false, "wait", None, None).is_ok());
+    }
+
+    #[test]
+    fn no_policy_mutating_requests_need_the_explicit_opt_in() {
+        assert!(gate(None, true, "update", None, None).is_ok());
+        assert!(gate(None, true, "control", Some("stop"), None).is_ok());
+        // Credentials without a policy are still rejected, opt-in or not.
+        let credential = RequestAuth {
+            agent: "editor".into(),
+            token: "t".repeat(32),
+        };
+        assert!(gate(None, true, "update", None, Some(&credential)).is_err());
+        assert!(gate(None, false, "read", None, Some(&credential)).is_err());
+    }
+
+    #[test]
+    fn valid_policy_accepts_and_wrong_token_is_refused() {
+        let token = "e".repeat(32);
+        let document = serde_json::json!({
+            "version": 1,
+            "agents": {
+                "editor": {
+                    "token_sha256": token_hash(&token),
+                    "permissions": ["read", "edit", "stop"],
+                },
+            },
+        });
+        let policy = AgentAuthPolicy::from_json(document.to_string().as_bytes())
+            .expect("test policy parses");
+        let good = RequestAuth {
+            agent: "editor".into(),
+            token: token.clone(),
+        };
+        assert!(gate(Some(&policy), false, "update", None, Some(&good)).is_ok());
+        assert!(gate(Some(&policy), false, "read", None, Some(&good)).is_ok());
+        let wrong = RequestAuth {
+            agent: "editor".into(),
+            token: "x".repeat(32),
+        };
+        assert!(gate(Some(&policy), false, "update", None, Some(&wrong)).is_err());
+        // No credential, and a grant the agent does not hold, both refuse.
+        assert!(gate(Some(&policy), false, "update", None, None).is_err());
+        assert!(gate(Some(&policy), false, "control", Some("pause"), Some(&good)).is_err());
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -1894,14 +2062,22 @@ mod admission_tests {
     }
 
     #[test]
-    fn reserve_stays_open_without_policy_so_stop_availability_is_unchanged() {
+    fn reserve_without_policy_keeps_read_but_not_stop() {
+        // Mutating ops need a policy by default (#445), so a no-policy
+        // `stop` no longer claims the reserve; `read` still does.
         assert!(reserve_eligible(
             &line(serde_json::json!({"op": "read"})),
             None
         ));
-        assert!(reserve_eligible(
+        assert!(!reserve_eligible(
             &line(serde_json::json!({"op": "control", "action": "stop"})),
             None,
+        ));
+        // The explicit `--allow-unauthenticated` opt-in restores it.
+        assert!(reserve_eligible_allowing(
+            &line(serde_json::json!({"op": "control", "action": "stop"})),
+            None,
+            true,
         ));
         assert!(!reserve_eligible(
             &line(serde_json::json!({"op": "wait"})),
@@ -1940,18 +2116,28 @@ mod admission_tests {
                 "no-policy stop with auth must not claim reserve: {auth}",
             );
         }
-        // Without `auth` the trusted same-user fast path is unchanged.
+        // Without `auth`, `read` keeps the same-user fast path; `stop`
+        // claims the reserve only under `--allow-unauthenticated`.
         assert!(reserve_eligible(
             &line(serde_json::json!({"op": "read", "path": "/bindings"})),
             None
         ));
-        assert!(reserve_eligible(
+        assert!(!reserve_eligible(
             &line(serde_json::json!({
                 "op": "control",
                 "action": "stop",
                 "if_revision": 7,
             })),
             None
+        ));
+        assert!(reserve_eligible_allowing(
+            &line(serde_json::json!({
+                "op": "control",
+                "action": "stop",
+                "if_revision": 7,
+            })),
+            None,
+            true,
         ));
     }
 

@@ -77,6 +77,8 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut max_record_bytes_seen = false;
     let mut control = false;
     let mut break_at: Vec<usize> = Vec::new();
+    let mut agent_policy = None;
+    let mut allow_unauthenticated = false;
     let mut events: Option<String> = None;
     let mut index = first_argument;
     while index < arguments.len() {
@@ -509,6 +511,23 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                 let line = parse_positive_usize(arguments, &mut index, "--break-at")?;
                 break_at.push(line);
             }
+            "--agent-policy" if command == "run" => {
+                if agent_policy.is_some() {
+                    bail!("--agent-policy may be specified only once");
+                }
+                agent_policy = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--agent-policy",
+                    "a policy file",
+                )?));
+            }
+            "--allow-unauthenticated" if command == "run" => {
+                if allow_unauthenticated {
+                    bail!("--allow-unauthenticated may be specified only once");
+                }
+                allow_unauthenticated = true;
+            }
             "--events" if matches!(command, "run" | "resume") => {
                 if events.is_some() {
                     bail!("--events may be specified only once");
@@ -546,6 +565,15 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     }
     if !break_at.is_empty() && !control {
         bail!("--break-at requires --control");
+    }
+    if agent_policy.is_some() && !control {
+        bail!("--agent-policy requires --control");
+    }
+    if allow_unauthenticated && !control {
+        bail!("--allow-unauthenticated requires --control");
+    }
+    if agent_policy.is_some() && allow_unauthenticated {
+        bail!("--allow-unauthenticated and --agent-policy are mutually exclusive");
     }
     if explain_version.is_some()
         && !(command == "explain" && json || command == "run" && (what_if || confirm.is_some()))
@@ -598,6 +626,8 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         record_dir,
         control,
         break_at,
+        agent_policy,
+        allow_unauthenticated,
         events,
     }))
 }

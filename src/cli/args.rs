@@ -39,6 +39,8 @@ pub(crate) struct Args {
     pub(crate) data_flow_policy: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
     pub(crate) checkpoint_dir: Option<PathBuf>,
+    /// `resume --from-record DIR`: replay the record's completed prefix.
+    pub(crate) from_record_dir: Option<PathBuf>,
     pub(crate) retry_uncertain: bool,
     pub(crate) once: bool,
     pub(crate) trace: bool,

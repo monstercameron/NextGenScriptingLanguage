@@ -15,6 +15,7 @@ _arguments -s \
   '--data-flow-policy[origin and persistence grants]:file:_files' \
   '--cache-dir[cache directory]:directory:_directories' \
   '--checkpoint[durable checkpoint directory]:directory:_directories' \
+  '--from-record[replay record prefix]:directory:_directories' \
   '--retry-uncertain[retry uncertain invocation]' \
   '--answers[test answer file]:file:_files' \
   '--record[record run]:directory:_directories' \

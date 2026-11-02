@@ -159,7 +159,8 @@ fn safe_first_command_expansion_fix_declares_environment_and_formats_value() {
 
 #[test]
 fn braced_expansion_fix_reuses_a_declared_input() {
-    let source = "accept name as text\nrun \"printf\" with arguments [\"hello ${name}\\n\"]\n";
+    let source =
+        "accept name as text from environment \"name\"\nrun \"printf\" with arguments [\"hello ${name}\\n\"]\n";
     let registry = format_registry();
     let diagnostics = analyze_source(source, &registry);
     let warning = diagnostics
@@ -171,8 +172,8 @@ fn braced_expansion_fix_reuses_a_declared_input() {
         .first()
         .expect("declared input can be formatted safely");
     let repaired = apply_fix(source, fix);
-    assert!(repaired.contains("accept name as text\n"));
-    assert!(!repaired.contains("from environment \"name\""));
+    assert!(repaired.contains("accept name as text from environment \"name\"\n"));
+    assert_eq!(repaired.matches("from environment \"name\"").count(), 1);
     assert!(repaired.contains("values {\"v0\": name}"));
     assert!(repaired.contains("template \"hello {{v0}}\\n\""));
     assert!(!analyze_source(&repaired, &registry)
@@ -183,8 +184,8 @@ fn braced_expansion_fix_reuses_a_declared_input() {
 #[test]
 fn braced_expansion_fix_is_withheld_for_non_scalar_declared_inputs() {
     for source in [
-        "accept name as json\nrun \"printf\" with arguments [\"${name}\"]\n",
-        "accept name as list of text\nrun \"printf\" with arguments [\"${name}\"]\n",
+        "accept name as json from environment \"name\"\nrun \"printf\" with arguments [\"${name}\"]\n",
+        "accept name as list of text from environment \"name\"\nrun \"printf\" with arguments [\"${name}\"]\n",
     ] {
         let diagnostics = analyze_source(source, &format_registry());
         let warning = diagnostics
@@ -193,6 +194,123 @@ fn braced_expansion_fix_is_withheld_for_non_scalar_declared_inputs() {
             .expect("literal expansion warning remains");
         assert!(warning.fixes.is_empty(), "{source}: {warning:#?}");
     }
+}
+
+#[test]
+fn expansion_fix_does_not_reuse_same_named_non_environment_input() {
+    let registry = format_registry();
+    for source in [
+        "accept HOME as text with default \"/fake\"\nrun \"printf\" with arguments [\"$HOME\"]\n",
+        "accept HOME as text\nrun \"printf\" with arguments [\"$HOME\"]\n",
+        "accept HOME as text from argument 1\nrun \"printf\" with arguments [\"$HOME\"]\n",
+        "accept HOME as text from option \"--home\"\nrun \"printf\" with arguments [\"$HOME\"]\n",
+        "accept HOME as text from environment \"OTHER_HOME\"\nrun \"printf\" with arguments [\"$HOME\"]\n",
+    ] {
+        let diagnostics = analyze_source(source, &registry);
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+            .expect("shell expansion warning");
+        let fix = warning.fixes.first().expect("fresh environment fix");
+        let repaired = apply_fix(source, fix);
+        assert!(
+            repaired.contains("accept execute_home as text from environment \"HOME\""),
+            "{source}: {repaired}"
+        );
+        assert!(repaired.contains("\"v0\": execute_home"), "{source}: {repaired}");
+        assert!(!repaired.contains("\"v0\": HOME"), "{source}: {repaired}");
+        let repaired_diagnostics = analyze_source(&repaired, &registry);
+        assert!(
+            !repaired_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"
+                    || diagnostic.severity == DiagnosticSeverity::Error),
+            "{source}: {repaired_diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
+fn expansion_fix_reuses_correctly_environment_sourced_input() {
+    let registry = format_registry();
+    for (source, binding) in [
+        (
+            "accept HOME as text from environment \"HOME\"\nrun \"printf\" with arguments [\"$HOME\"]\n",
+            "HOME",
+        ),
+        (
+            "accept my_home as text from environment \"HOME\"\nrun \"printf\" with arguments [\"$HOME\"]\n",
+            "my_home",
+        ),
+    ] {
+        let diagnostics = analyze_source(source, &registry);
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+            .expect("shell expansion warning");
+        let fix = warning.fixes.first().expect("reuse fix");
+        let repaired = apply_fix(source, fix);
+        assert!(
+            repaired.contains(&format!("\"v0\": {binding}")),
+            "{source}: {repaired}"
+        );
+        assert_eq!(
+            repaired.matches("from environment \"HOME\"").count(),
+            1,
+            "{source}: {repaired}"
+        );
+        assert!(!analyze_source(&repaired, &registry)
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"
+                || diagnostic.severity == DiagnosticSeverity::Error));
+    }
+}
+
+#[test]
+fn path_expansion_fix_respects_input_source() {
+    let registry = Registry::from_sources(&[
+        include_str!("../manifests/core.text_format.json").to_owned(),
+        include_str!("../manifests/core.fs_read.json").to_owned(),
+    ])
+    .unwrap();
+    for source in [
+        "accept HOME as text with default \"/fake\"\nrun fs.read with path \"$HOME/input.txt\"\n",
+        "accept HOME as text from argument 1\nrun fs.read with path \"$HOME/input.txt\"\n",
+        "accept HOME as text from option \"--home\"\nrun fs.read with path \"$HOME/input.txt\"\n",
+    ] {
+        let diagnostics = analyze_source(source, &registry);
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+            .expect("path expansion warning");
+        let fix = warning.fixes.first().expect("fresh environment path fix");
+        let repaired = apply_fix(source, fix);
+        assert!(
+            repaired.contains("accept execute_home as text from environment \"HOME\""),
+            "{source}: {repaired}"
+        );
+        assert!(
+            repaired.contains("\"v0\": execute_home"),
+            "{source}: {repaired}"
+        );
+        assert!(!repaired.contains("\"v0\": HOME"), "{source}: {repaired}");
+        assert!(!analyze_source(&repaired, &registry)
+            .iter()
+            .any(
+                |diagnostic| diagnostic.code == "lint.shell_expansion_literal"
+                    || diagnostic.severity == DiagnosticSeverity::Error
+            ));
+    }
+    let source = "accept HOME as text from environment \"HOME\"\nrun fs.read with path \"$HOME/input.txt\"\n";
+    let diagnostics = analyze_source(source, &registry);
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("path expansion warning");
+    let fix = warning.fixes.first().expect("reuse path fix");
+    let repaired = apply_fix(source, fix);
+    assert!(repaired.contains("\"v0\": HOME"), "{repaired}");
+    assert_eq!(repaired.matches("from environment \"HOME\"").count(), 1);
 }
 
 #[test]

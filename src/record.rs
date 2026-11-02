@@ -1748,15 +1748,19 @@ fn read_regular_no_follow(path: &Path) -> std::io::Result<Vec<u8>> {
     }
     #[cfg(windows)]
     {
-        if fs::symlink_metadata(path)?.file_type().is_symlink() {
-            return Err(std::io::Error::other(format!(
-                "{} is a link, not a record file",
-                path.display()
-            )));
-        }
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
+    let metadata = file.metadata()?;
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(&metadata) {
+        return Err(std::io::Error::other(format!(
+            "{} is a link, not a record file",
+            path.display()
+        )));
+    }
+    if !metadata.is_file() {
         return Err(std::io::Error::other(format!(
             "{} is not a regular file",
             path.display()
@@ -2738,6 +2742,30 @@ mod blob_name_tests {
             "a".repeat(32),
             "b".repeat(31)
         )));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod no_follow_windows_tests {
+    #[test]
+    fn record_reads_refuse_a_reparse_point_in_the_final_component() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("target.json"), b"secret").unwrap();
+        if std::os::windows::fs::symlink_file(
+            directory.path().join("target.json"),
+            directory.path().join("run.json"),
+        )
+        .is_err()
+        {
+            // Creating a file symlink needs a privilege this host may not grant.
+            return;
+        }
+        assert!(super::read_regular_no_follow(&directory.path().join("run.json")).is_err());
+        std::fs::write(directory.path().join("plain.json"), b"ok").unwrap();
+        assert_eq!(
+            super::read_regular_no_follow(&directory.path().join("plain.json")).unwrap(),
+            b"ok"
+        );
     }
 }
 

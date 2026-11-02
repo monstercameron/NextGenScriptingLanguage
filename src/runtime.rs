@@ -4175,11 +4175,17 @@ fn execute_remote_applet(
         .as_ref()
         .context("remote backend requires an endpoint configuration")?;
     crate::capabilities::authorize_network_endpoint(registry, &manifest.name, &endpoint.endpoint)?;
+    // A configured Bearer [REDACTED] is secret data sent to this origin,
+    // so its egress needs the same grant as any other secret input.
+    let mut sensitivities = signals.sensitivity_floor();
+    if endpoint.auth.is_some() {
+        sensitivities.insert(crate::contracts::Sensitivity::Secret);
+    }
     crate::security::authorize_data_flow_set(
         registry,
         &manifest.name,
         &endpoint.endpoint,
-        &signals.sensitivity_floor(),
+        &sensitivities,
     )?;
 
     let credential_base = manifest

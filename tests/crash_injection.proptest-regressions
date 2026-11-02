@@ -1,0 +1,14 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9426dfa1e875c72633500057e7009153fa1ae6871980c64919a03867f941aa22 # shrinks to shape_index = 3, items = ["p", "nwi", "lxxot"], delay_permille = 813
+cc 32535f73c55968bea626b04737af824409e7552af4005393756ca41c4183cc5b # shrinks to shape_index = 3, items = ["ozl", "rq", "ee"], extra = ["hu"], replacement = "bsq", edit_append = false, delay_permille = 506
+cc 30d634a155c66e7473e2ea30c83aa61d94e9e2b17d39f833de3ab0665e6d3ff9 # shrinks to shape_index = 3, items = ["f"], kill_permille = 387
+cc 5962f3d6a9db0cd3435c1966ee7ef1b4458aec2073acf5b338e4bedfc0c2f7d8 # shrinks to shape_index = 6, items = ["ldnff", "eeo", "txw"], extra = ["lcknc"], replacement = "z", edit_append = true, kill_permille = 313
+cc e16051f00fa6adf6f49402dba4b6b311cf80a7c2252b83d8542a77cb9fb17c99 # shrinks to shape_index = 3, items = ["pv", "qv"], extra = ["cnd"], replacement = "gognw", edit_append = true, kill_permille = 538
+cc 20417e96c66f651974c9894fbccb95e2b472b6bfcc0422248bd1ea00b232b5ed # shrinks to shape_index = 4, items = ["xfurx", "tjl"], extra = ["e", "evlv"], replacement = "rpcyb", edit_append = true, kill_permille = 510
+cc 03e7d60be93bb80be7c249ae0816aa7584ee4d56cd4308ad1ad6028569786806 # shrinks to shape_index = 3, items = ["e", "a"], kill_permille = 334
+cc 1bacab17760a8427b55e481da712781f894ca73d4e823ee1cadc4153b5d47619 # shrinks to shape_index = 3, items = ["a", "b"], extra = ["a"], replacement = "c", edit_append = false, kill_permille = 334

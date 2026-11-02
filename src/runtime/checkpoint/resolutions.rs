@@ -291,9 +291,32 @@ fn validate_record(record: &ResolutionRecord, max_output_bytes: usize) -> Result
 pub(crate) fn append_resolution_locked(
     directory: &Path,
     record: &ResolutionRecord,
+    lock: &crate::runtime::checkpoint::ResolveLock,
+) -> Result<()> {
+    // Making a newly created ledger's directory entry durable is the Linux
+    // fix for #814; Windows publication stays as it is (#530, #661).
+    #[cfg(unix)]
+    {
+        append_resolution_locked_with_sync(directory, record, lock, super::sync_directory)
+    }
+    #[cfg(not(unix))]
+    {
+        append_resolution_locked_with_sync(directory, record, lock, |_| Ok(()))
+    }
+}
+
+#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+fn append_resolution_locked_with_sync(
+    directory: &Path,
+    record: &ResolutionRecord,
     _lock: &crate::runtime::checkpoint::ResolveLock,
+    sync: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
     let existing = read_resolutions(directory, usize::MAX)?;
+    // A missing or still-empty ledger has no durable first entry yet. The
+    // empty case also covers a prior attempt that created the file but
+    // failed before its directory entry was synced.
+    let first_record = existing.is_empty();
     if existing.len() >= MAX_RESOLUTIONS {
         bail!("checkpoint has too many resolutions");
     }
@@ -350,6 +373,12 @@ pub(crate) fn append_resolution_locked(
         bail!("checkpoint resolutions must be a regular file");
     }
     crate::runtime::checkpoint::restrict_file(&file)?;
+    // Syncing the file alone does not make a newly created name durable on
+    // Linux. Sync the containing directory before writing or acknowledging
+    // the first decision, and propagate any failure (#814).
+    if first_record {
+        sync(directory)?;
+    }
     #[cfg(windows)]
     {
         use std::io::Seek;
@@ -663,6 +692,48 @@ mod tests {
         let mut bad = record("node:1", None, ResolutionDecision::Committed);
         bad.output = None;
         assert!(validate_record(&bad, 1024).is_err());
+    }
+
+    /// First creation syncs the checkpoint directory before any decision
+    /// bytes are written, later appends do not sync again, and a sync
+    /// failure is propagated without recording a decision (#814). The
+    /// injected sync mirrors the element-log test hook; on Unix production
+    /// passes `super::sync_directory`, on Windows a no-op.
+    #[test]
+    fn first_resolution_syncs_checkpoint_directory_before_writing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let lock = crate::runtime::checkpoint::acquire_resolve_lock(&path).unwrap();
+        let first = record("step:abc#1", Some(0), ResolutionDecision::Retry);
+        let mut sync_called = false;
+        append_resolution_locked_with_sync(&path, &first, &lock, |synced| {
+            assert_eq!(synced, path);
+            assert_eq!(fs::metadata(synced.join(RESOLUTIONS_LOG)).unwrap().len(), 0);
+            sync_called = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(sync_called);
+        assert_eq!(read_resolutions(&path, 1024 * 1024).unwrap().len(), 1);
+
+        let second = record("step:def#2", Some(0), ResolutionDecision::Retry);
+        append_resolution_locked_with_sync(&path, &second, &lock, |_| {
+            anyhow::bail!("later appends must not sync the directory again")
+        })
+        .unwrap();
+        assert_eq!(read_resolutions(&path, 1024 * 1024).unwrap().len(), 2);
+        drop(lock);
+
+        let directory = tempfile::tempdir().unwrap();
+        let lock = crate::runtime::checkpoint::acquire_resolve_lock(directory.path()).unwrap();
+        let error = append_resolution_locked_with_sync(directory.path(), &first, &lock, |_| {
+            anyhow::bail!("sync failed")
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("sync failed"), "got {error:#}");
+        assert!(read_resolutions(directory.path(), 1024 * 1024)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

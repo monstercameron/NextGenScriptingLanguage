@@ -11,7 +11,7 @@ the catalog records byte-exact stdout and output-file oracles.
 From the repository root:
 
 ```sh
-cargo build --locked --release
+cargo build --locked --release --features model
 python3 examples/models/run.py --binary target/release/execute --report target/model-workflows.json
 ```
 

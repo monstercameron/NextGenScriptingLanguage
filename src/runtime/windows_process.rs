@@ -125,7 +125,12 @@ fn windows_escalate_unreaped_for_abort(children: &Children, signals: &Signals) {
     // `Children` drop that owns the final wait. Poll in slices so a trapping
     // child can flush output and exit early; the drop then reaps, and the job
     // object ends any ignorer. Bounded by `grace` plus one slice.
-    let deadline = std::time::Instant::now() + grace;
+    // Checked addition: an unrepresentable grace is refused at run entry
+    // (issue #752), but abort cleanup must never panic — skip the wait and
+    // let the `Children` drop terminate the jobs at once.
+    let Some(deadline) = std::time::Instant::now().checked_add(grace) else {
+        return;
+    };
     loop {
         if children
             .0
@@ -358,6 +363,7 @@ fn execute_group_with_sink(
         launched,
         signals,
     } = request;
+    validate_kill_grace(options.kill_grace)?;
     let launch_cwd = cwd;
     let cwd: &Path = cwd;
     let mut children = Children(

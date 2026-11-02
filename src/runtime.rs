@@ -285,6 +285,51 @@ fn deadline_after(timeout: Option<Duration>, label: &str) -> Result<Option<Insta
         })
         .transpose()
 }
+
+/// Refuse a kill grace whose deadline cannot be represented, so the
+/// cancellation escalators never panic adding it to `Instant::now()`
+/// (issue #752). The CLI checks the same bound; public API callers get it
+/// here, before any effect.
+fn validate_kill_grace(kill_grace: Duration) -> Result<()> {
+    deadline_after(Some(kill_grace), "kill grace")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod kill_grace_tests {
+    use super::*;
+
+    #[test]
+    fn unrepresentable_kill_grace_is_refused_not_panicked() {
+        let error = validate_kill_grace(Duration::MAX).unwrap_err();
+        assert!(format!("{error:#}").contains("kill grace"), "{error:#}");
+    }
+
+    #[test]
+    fn zero_and_normal_kill_grace_are_accepted() {
+        validate_kill_grace(Duration::ZERO).unwrap();
+        validate_kill_grace(DEFAULT_KILL_GRACE).unwrap();
+        validate_kill_grace(Duration::from_millis(300)).unwrap();
+    }
+
+    #[test]
+    fn public_run_refuses_unrepresentable_kill_grace() {
+        let directory = tempfile::tempdir().unwrap();
+        // Validation runs before the registry is consulted, so an empty
+        // registry still proves the public entry refuses the option.
+        let registry = Registry::default();
+        let program = crate::parser::parse("run printf with message \"x\"\n").unwrap();
+        let options = RunOptions {
+            kill_grace: Duration::MAX,
+            ..RunOptions::new(directory.path().to_owned())
+        };
+        let error = run(&program, &registry, &options)
+            .err()
+            .expect("an unrepresentable kill grace must be refused");
+        assert!(format!("{error:#}").contains("kill grace"), "{error:#}");
+    }
+}
+
 #[cfg(unix)]
 fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> libc::c_int {
     deadline.map_or(maximum_ms, |deadline| {
@@ -3054,6 +3099,7 @@ pub fn run_with_drain_timeout(
 ) -> Result<RunResult> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
+    validate_kill_grace(options.kill_grace)?;
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
     let mut signals = if has_interrupt_handler(program) {
         Signals::register_with_drain(deadline, drain_timeout)?
@@ -4835,6 +4881,7 @@ pub(crate) fn invoke_call_with_context(
         options,
     } = request;
     let module_session = Arc::clone(&context.module_session);
+    validate_kill_grace(options.kill_grace)?;
     let working_directory = fs::canonicalize(&options.working_directory)?;
     let mut canonicalized_options = None;
     if working_directory != options.working_directory {
@@ -5105,6 +5152,7 @@ pub fn run_with_context(
 ) -> Result<RunResult> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
+    validate_kill_grace(options.kill_grace)?;
     if program.trigger.is_some() {
         bail!("triggered programs require run_service");
     }

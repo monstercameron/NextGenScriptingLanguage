@@ -80,7 +80,15 @@ fn escalate_unreaped_for_abort(children: &Children, signals: &Signals) {
     for pid in &live {
         signal_group(*pid, first);
     }
-    if grace.is_zero() {
+    // Checked addition: an unrepresentable grace is refused at run entry
+    // (issue #752), but abort cleanup must never panic — skip the wait and
+    // SIGKILL at once, exactly like a zero grace.
+    let deadline = if grace.is_zero() {
+        None
+    } else {
+        std::time::Instant::now().checked_add(grace)
+    };
+    let Some(deadline) = deadline else {
         for pid in &live {
             // Re-check: a child that exited on the polite signal since the
             // snapshot must keep its status instead of taking a SIGKILL.
@@ -89,8 +97,7 @@ fn escalate_unreaped_for_abort(children: &Children, signals: &Signals) {
             }
         }
         return;
-    }
-    let deadline = std::time::Instant::now() + grace;
+    };
     loop {
         if live.iter().all(|pid| group_exited(*pid)) {
             return;

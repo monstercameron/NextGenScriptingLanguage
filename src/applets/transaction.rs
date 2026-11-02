@@ -1038,6 +1038,7 @@ fn create_journal_stage(final_path: &Path) -> Result<(PathBuf, PathBuf), AppletE
     let name = final_path
         .file_name()
         .ok_or_else(|| invalid("journal path must name a directory"))?;
+    reclaim_abandoned_stages(parent, name);
     for _ in 0..100 {
         let sequence = TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let mut stage_name = std::ffi::OsString::from(".");
@@ -1050,7 +1051,9 @@ fn create_journal_stage(final_path: &Path) -> Result<(PathBuf, PathBuf), AppletE
         builder.mode(0o700);
         match builder.create(&stage) {
             Ok(()) => {
+                let mut cleanup = DirectoryCleanup(Some(stage.clone()));
                 restrict_directory(&stage)?;
+                cleanup.0 = None;
                 return Ok((stage, final_path.to_path_buf()));
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -1066,6 +1069,92 @@ fn create_journal_stage(final_path: &Path) -> Result<(PathBuf, PathBuf), AppletE
         "temporary_path_exhausted",
         "could not allocate a transaction journal staging directory",
     ))
+}
+
+/// Remove unpublished staging directories for this journal whose creating
+/// process no longer exists. `DirectoryCleanup` cannot run after a hard
+/// interruption (SIGKILL or power loss), so the next attempt for the same
+/// journal reclaims those orphans here. Anything that cannot be proven
+/// abandoned is kept: names that do not parse as `.<journal>.prepare.<pid>.<seq>`,
+/// stages owned by this or another live process, links, non-directories, and
+/// (on Unix) directories owned by someone else. The published journal has a
+/// different name, so a committed or recoverable journal is never touched.
+/// Removal is best-effort through the same `DirectoryCleanup` the ordinary
+/// failure path uses.
+fn reclaim_abandoned_stages(parent: &Path, name: &std::ffi::OsStr) {
+    let prefix = format!(".{}.prepare.", name.to_string_lossy());
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(suffix) = file_name.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let Some((pid, sequence)) = suffix.split_once('.') else {
+            continue;
+        };
+        let (Ok(pid), Ok(_)) = (pid.parse::<u32>(), sequence.parse::<u64>()) else {
+            continue;
+        };
+        if pid == std::process::id() || process_alive(pid) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            continue;
+        }
+        #[cfg(unix)]
+        if metadata.uid() != crate::platform::unix_ffi::effective_uid() {
+            continue;
+        }
+        drop(DirectoryCleanup(Some(path)));
+    }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return true;
+    }
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    // EPERM means the process exists but belongs to someone else.
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: OpenProcess with a numeric pid has no pointer arguments; a returned
+    // handle is closed exactly once below.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        // SAFETY: GetLastError reads this thread's last-error value, which OpenProcess set when it
+        // returned NULL. The is_null check is plain Rust and makes no Win32 call, so no later call
+        // has overwritten that value before GetLastError runs.
+        // Access denied means the process exists.
+        return unsafe { GetLastError() } == ERROR_ACCESS_DENIED;
+    }
+    // SAFETY: handle is non-null, so OpenProcess succeeded and returned a handle that this
+    // function owns. It is closed exactly once here and not used after this call.
+    unsafe { CloseHandle(handle) };
+    true
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_alive(_pid: u32) -> bool {
+    true
 }
 
 #[cfg(windows)]
@@ -2302,5 +2391,58 @@ mod tests {
             fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
             0o600
         );
+    }
+
+    #[test]
+    fn abandoned_preparation_stage_is_reclaimed_by_the_next_attempt() {
+        fn dead_pid() -> u32 {
+            #[cfg(windows)]
+            let mut child = std::process::Command::new("cmd")
+                .args(["/C", "exit", "0"])
+                .spawn()
+                .unwrap();
+            #[cfg(not(windows))]
+            let mut child = std::process::Command::new("true").spawn().unwrap();
+            let pid = child.id();
+            child.wait().unwrap();
+            pid
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("config.json");
+        let journal = temp.path().join("journal");
+        fs::write(&target, b"before").unwrap();
+
+        // Simulate a hard interruption during preparation: a real stage with
+        // a blob in it, left behind by a process that no longer exists.
+        let (stage, _) = create_journal_stage(&journal).unwrap();
+        fs::write(stage.join("00.before"), b"before").unwrap();
+        let abandoned = temp
+            .path()
+            .join(format!(".journal.prepare.{}.0", dead_pid()));
+        fs::rename(&stage, &abandoned).unwrap();
+
+        // A stage belonging to this live process and an unrelated directory
+        // must survive the reclaim.
+        let active = temp
+            .path()
+            .join(format!(".journal.prepare.{}.999", std::process::id()));
+        fs::create_dir(&active).unwrap();
+        fs::write(active.join("00.before"), b"before").unwrap();
+        let unrelated = temp.path().join("unrelated");
+        fs::create_dir(&unrelated).unwrap();
+
+        let plan = args(&journal, &[(&target, "before", "after")]);
+        let context = ExecutionContext::unrestricted();
+        let applied = apply(&plan, temp.path(), &context).unwrap();
+        assert_eq!(applied["status"], "committed");
+        assert!(!abandoned.exists(), "abandoned stage must be reclaimed");
+        assert!(active.join("00.before").exists(), "live stage must be kept");
+        assert!(unrelated.is_dir());
+        assert_eq!(
+            read_journal(&journal, &context).unwrap().state,
+            TransactionState::Committed
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"after");
     }
 }

@@ -65,13 +65,24 @@ pub(super) fn get(
     let document = document_ref(args, input, context)?;
     let selected = get_from_pointers(document.as_ref(), args)?;
     match selected {
-        Some(Value::Null) => Ok(args.get("default").cloned().unwrap_or(Value::Null)),
+        Some(Value::Null) => Ok(checked_default(args, context)?.unwrap_or(Value::Null)),
         Some(value) => Ok(value),
-        None => args
-            .get("default")
-            .cloned()
+        None => checked_default(args, context)?
             .ok_or_else(|| absence("not_found", "no JSON Pointer identifies a value")),
     }
+}
+
+/// A returned `args.default` becomes applet output, so it must satisfy the same
+/// size and depth limits as a value selected from a checked document.
+fn checked_default(
+    args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Option<Value>, AppletError> {
+    let Some(value) = args.get("default") else {
+        return Ok(None);
+    };
+    check_size_and_depth(value, context)?;
+    Ok(Some(value.clone()))
 }
 
 /// `json.get` fast path for a parsed runtime binding. It still checks the complete
@@ -95,8 +106,7 @@ pub(super) fn get_typed(
                 .map_err(|error| invalid(format!("JSON value cannot be converted: {error}")));
         }
     }
-    args.get("default")
-        .cloned()
+    checked_default(args, context)?
         .or_else(|| saw_null.then_some(Value::Null))
         .ok_or_else(|| absence("not_found", "no JSON Pointer identifies a value"))
 }
@@ -391,7 +401,11 @@ pub(super) fn entries(
         checkpoint_work(context, index)?;
         entries.push(serde_json::json!({"key":key,"value":value}));
     }
-    Ok(Value::Array(entries))
+    // Wrapping each value in an entry object makes the output deeper and
+    // larger than the checked input, so check the transformed result.
+    let result = Value::Array(entries);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
 }
 
 pub(super) fn has(
@@ -1284,5 +1298,109 @@ mod tests {
         assert_eq!(text, serde_json::to_string(&value).unwrap());
         assert_eq!(text.len(), check_size_and_depth(&value, &context).unwrap());
         assert_eq!(text.capacity(), text.len());
+    }
+
+    fn nested_array(wraps: usize) -> Value {
+        (0..wraps).fold(Value::Null, |value, _| Value::Array(vec![value]))
+    }
+
+    #[test]
+    fn entries_output_is_checked_against_depth_and_size_limits() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        // The object value sits one level deeper in `[ {"key":..,"value":..} ]`
+        // than in the input object, so an input one level below the limit
+        // produces an output at the limit, and an input at the limit exceeds it.
+        for (wraps, accepted) in [(MAX_DEPTH - 2, true), (MAX_DEPTH - 1, false)] {
+            let document = serde_json::json!({"k": nested_array(wraps)});
+            check_size_and_depth(&document, &context).expect("input is within the limits");
+            let args = Map::from_iter([("document".into(), document)]);
+            let result = entries(&args, &[], &context);
+            if accepted {
+                let output = result.expect("entries output at the depth limit is accepted");
+                let get_args = Map::from_iter([
+                    ("document".into(), output),
+                    ("pointer".into(), Value::String("/0/key".into())),
+                ]);
+                assert_eq!(
+                    get(&get_args, &[], &context).expect("shallow get on entries output"),
+                    Value::String("k".into())
+                );
+            } else {
+                assert!(result
+                    .expect_err("entries output beyond the depth limit is refused")
+                    .message
+                    .contains(&format!("{MAX_DEPTH}-level depth limit")),);
+            }
+        }
+
+        // Wrapping one near-limit field adds `[{"key":"k","value":..}]` overhead
+        // beyond the input `{"k":..}` encoding, pushing the output over the size limit.
+        let document = serde_json::json!({"k": "x".repeat(MAX_JSON_BYTES - 8)});
+        assert_eq!(
+            check_size_and_depth(&document, &context).expect("input is within the limits"),
+            MAX_JSON_BYTES
+        );
+        let args = Map::from_iter([("document".into(), document)]);
+        assert!(entries(&args, &[], &context)
+            .expect_err("entries output beyond the size limit is refused")
+            .message
+            .contains(&format!("{MAX_JSON_BYTES}-byte limit")),);
+    }
+
+    #[test]
+    fn get_default_is_checked_against_depth_and_size_limits() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let typed = crate::structured::parse(br#"{"present":null}"#).expect("typed JSON parses");
+        // Both the absent-pointer and null-selection fallbacks return args.default.
+        for pointer in ["/missing", "/present"] {
+            for wraps in [MAX_DEPTH, MAX_DEPTH + 1] {
+                let default = nested_array(wraps);
+                let mut args = Map::from_iter([
+                    ("pointer".into(), Value::String(pointer.into())),
+                    ("default".into(), default.clone()),
+                ]);
+                let typed_result = get_typed(&args, &typed, &context);
+                args.insert("document".into(), serde_json::json!({"present": null}));
+                let result = get(&args, &[], &context);
+                if wraps == MAX_DEPTH {
+                    assert_eq!(
+                        result.expect("default at the depth limit is accepted"),
+                        default
+                    );
+                    assert_eq!(
+                        typed_result.expect("typed default at the depth limit is accepted"),
+                        default
+                    );
+                } else {
+                    for error in [
+                        result.expect_err("default beyond the depth limit is refused"),
+                        typed_result.expect_err("typed default beyond the depth limit is refused"),
+                    ] {
+                        assert!(
+                            error
+                                .message
+                                .contains(&format!("{MAX_DEPTH}-level depth limit")),
+                            "{}",
+                            error.message
+                        );
+                    }
+                }
+            }
+        }
+
+        let oversized = Value::String("x".repeat(MAX_JSON_BYTES));
+        let mut args = Map::from_iter([
+            ("pointer".into(), Value::String("/missing".into())),
+            ("default".into(), oversized),
+        ]);
+        assert!(get_typed(&args, &typed, &context)
+            .expect_err("typed default beyond the size limit is refused")
+            .message
+            .contains(&format!("{MAX_JSON_BYTES}-byte limit")),);
+        args.insert("document".into(), serde_json::json!({"present": null}));
+        assert!(get(&args, &[], &context)
+            .expect_err("default beyond the size limit is refused")
+            .message
+            .contains(&format!("{MAX_JSON_BYTES}-byte limit")),);
     }
 }

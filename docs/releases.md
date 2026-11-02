@@ -31,18 +31,29 @@ Arch Linux packaging (`packaging/aur/execute-bin` for the release tarball and
 `tools/aur.py` to render the version and checksums. It is not submitted to the AUR
 automatically, and the Arch build job in the packages workflow runs on tags.
 
-Download from [GitHub Releases](https://github.com/monstercameron/NextGenScriptingLanguage/releases).
-Verify the checksum before extracting or installing:
+Download from [GitHub Releases](https://github.com/monstercameron/NextGenScriptingLanguage/releases),
+including `SHA256SUMS` and its Sigstore bundle `SHA256SUMS.sigstore.json`.
+Verify the signature on `SHA256SUMS`, then the checksum, before extracting or
+installing anything. The signature establishes that the checksum file came
+from this repository's release workflow; the checksum itself only detects
+corruption of a downloaded artifact. This step requires
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/); replace
+`VERSION` with the release version. See [Verifying a release](#verifying-a-release)
+for the full procedure, including build provenance.
 
 ```sh
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/monstercameron/NextGenScriptingLanguage/.github/workflows/release.yml@refs/tags/vVERSION" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum --check SHA256SUMS --ignore-missing
 # macOS: shasum -a 256 execute-VERSION-macos-arm64.tar.gz
 # Compare with that exact filename in SHA256SUMS.
 ```
 
-PowerShell:
+PowerShell (verify first, extract only after both checks pass):
 
 ```powershell
+cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity "https://github.com/monstercameron/NextGenScriptingLanguage/.github/workflows/release.yml@refs/tags/vVERSION" --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 Get-FileHash .\execute-VERSION-windows-arm64.zip -Algorithm SHA256
 # Compare with that exact filename in SHA256SUMS.
 Expand-Archive .\execute-VERSION-windows-arm64.zip -DestinationPath .

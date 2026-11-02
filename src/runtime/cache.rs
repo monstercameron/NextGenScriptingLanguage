@@ -285,6 +285,57 @@ fn remove_checksum(path: &Path) -> Result<()> {
     }
 }
 
+/// The pid embedded in a cache temporary name, when the name is one this
+/// cache's writers create: `.{key}.bin-{pid}-{attempt}.tmp` or
+/// `.{key}.hmac-{pid}-{attempt}.tmp` from the Unix writer, or
+/// `.flow-{pid}-{counter}.tmp` from the non-Unix atomic writer. Any other
+/// name is not a cache temporary and is never reclaimed or counted.
+fn temporary_owner_pid(name: &str) -> Option<u32> {
+    let stem = name.strip_suffix(".tmp")?;
+    let (head, sequence) = stem.rsplit_once('-')?;
+    sequence.parse::<u64>().ok()?;
+    let (head, pid) = head.rsplit_once('-')?;
+    let pid = pid.parse::<u32>().ok()?;
+    if head == ".flow" {
+        return Some(pid);
+    }
+    let entry = head.strip_prefix('.')?;
+    let key = entry
+        .strip_suffix(".bin")
+        .or_else(|| entry.strip_suffix(".hmac"))?;
+    (key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(pid)
+}
+
+/// A temporary is abandoned only when its creating process is provably gone.
+/// This process and any live process keep theirs, so a concurrent writer is
+/// never disturbed; an unparseable pid was already rejected by the caller.
+fn temporary_abandoned(pid: u32) -> bool {
+    pid != std::process::id() && !crate::applets::process_alive(pid)
+}
+
+/// Best-effort reclaim of one path-based temporary. Returns the bytes still
+/// occupying the cache directory afterwards, so the eviction scan can count
+/// a live writer's (or an unremovable) temporary against the byte budget.
+/// Anything that is not a private regular file is left untouched and
+/// uncounted, matching how eviction treats entries it cannot validate.
+#[cfg_attr(unix, allow(dead_code))]
+fn reclaim_temporary(path: &Path, pid: u32) -> u64 {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if regular(&metadata).is_err() {
+        return 0;
+    }
+    if temporary_abandoned(pid) {
+        match fs::remove_file(path) {
+            Ok(()) => return 0,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return 0,
+            Err(_) => {}
+        }
+    }
+    metadata.len()
+}
+
 fn digest_hex(digest: &[u8]) -> String {
     let mut result = String::with_capacity(digest.len() * 2);
     for byte in digest {
@@ -783,6 +834,43 @@ fn evict_pinned(
     let mut candidates = Vec::new();
     let mut total = 0u64;
     for name in names {
+        // Reclaim temporaries a dead writer left behind; count any that
+        // remain (a live writer's, or one that could not be removed)
+        // against the byte budget instead of letting them accumulate
+        // outside it.
+        if let Some(pid) = temporary_owner_pid(&name) {
+            let Ok(file) = open_child(
+                directory,
+                &name,
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
+                0,
+            ) else {
+                continue;
+            };
+            let Ok(metadata) = file.metadata() else {
+                continue;
+            };
+            if regular(&metadata).is_err() {
+                continue;
+            }
+            drop(file);
+            let mut remaining = metadata.len();
+            if temporary_abandoned(pid) {
+                if let Ok(temp) = std::ffi::CString::new(name.as_bytes()) {
+                    // SAFETY: the name is a single path component copied from
+                    // this directory's listing and the pinned descriptor
+                    // remains open through unlinkat.
+                    if unsafe { libc::unlinkat(directory.as_raw_fd(), temp.as_ptr(), 0) } == 0 {
+                        remaining = 0;
+                    } else if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound
+                    {
+                        remaining = 0;
+                    }
+                }
+            }
+            total = total.saturating_add(remaining);
+            continue;
+        }
         let Some(key) = name.strip_suffix(".bin") else {
             continue;
         };
@@ -883,6 +971,12 @@ fn evict_with_limits(
         let Some(name) = name.to_str() else {
             continue;
         };
+        // Reclaim temporaries a dead writer left behind; count any that
+        // remain against the byte budget (see evict_pinned).
+        if let Some(pid) = temporary_owner_pid(name) {
+            total = total.saturating_add(reclaim_temporary(&entry.path(), pid));
+            continue;
+        }
         let Some(key) = name.strip_suffix(".bin") else {
             continue;
         };
@@ -1231,5 +1325,93 @@ mod tests {
         fs::write(&current, b"too large").unwrap();
         assert!(!evict_with_limits(&directory, &current, 3, 4).unwrap());
         assert!(!current.exists());
+    }
+
+    fn dead_pid() -> u32 {
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    fn write_temporary(directory: &Path, name: &str) -> PathBuf {
+        let path = directory.join(name);
+        fs::write(&path, b"interrupted").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    #[test]
+    fn abandoned_temporaries_are_reclaimed_and_live_ones_kept() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("cache");
+        write(&directory, KEY, b"first result").unwrap();
+
+        // Temporaries left by a process that no longer exists, in both the
+        // Unix writer's and the non-Unix writer's naming.
+        let dead = dead_pid();
+        let orphaned = [
+            write_temporary(&directory, &format!(".{KEY}.bin-{dead}-0.tmp")),
+            write_temporary(&directory, &format!(".{KEY}.hmac-{dead}-1.tmp")),
+            write_temporary(&directory, &format!(".flow-{dead}-2.tmp")),
+        ];
+        // This live process's temporaries, a name with no parseable pid, and
+        // an unrelated file must all survive.
+        let live_pid = std::process::id();
+        let kept = [
+            write_temporary(&directory, &format!(".{KEY}.bin-{live_pid}-0.tmp")),
+            write_temporary(&directory, &format!(".flow-{live_pid}-1.tmp")),
+            write_temporary(&directory, &format!(".{KEY}.bin-notapid-0.tmp")),
+            write_temporary(&directory, "unrelated.tmp"),
+        ];
+
+        // The next write's eviction scan performs the reclaim.
+        write(&directory, KEY, b"second result").unwrap();
+
+        for path in orphaned {
+            assert!(
+                !path.exists(),
+                "orphan {} must be reclaimed",
+                path.display()
+            );
+        }
+        for path in kept {
+            assert!(path.exists(), "{} must be kept", path.display());
+        }
+        assert_eq!(
+            capture(open(&directory, KEY).unwrap().unwrap(), 64).unwrap(),
+            b"second result"
+        );
+    }
+
+    #[test]
+    fn live_temporary_bytes_count_against_the_eviction_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("cache");
+        fs::create_dir(&directory).unwrap();
+        let old_key = "0000000000000000000000000000000000000000000000000000000000000000";
+        let new_key = "2222222222222222222222222222222222222222222222222222222222222222";
+        for key in [old_key, new_key] {
+            let path = entry(&directory, key);
+            fs::write(&path, b"abc").unwrap();
+            #[cfg(unix)]
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        // Entries alone total 6 bytes, under a 10-byte budget. The live
+        // temporary's bytes push the scan over budget, so the older entry
+        // is evicted while the temporary itself is kept.
+        let live = write_temporary(&directory, &format!(".flow-{}-0.tmp", std::process::id()));
+        let current = entry(&directory, new_key);
+        assert!(evict_with_limits(&directory, &current, 3, 10).unwrap());
+        assert!(!entry(&directory, old_key).exists());
+        assert!(current.exists());
+        assert!(live.exists());
     }
 }

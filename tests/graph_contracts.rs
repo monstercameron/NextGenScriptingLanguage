@@ -842,3 +842,153 @@ fn authenticated_remote_applet_requires_secret_egress_grant() {
         plan.validate_with_registry(&registry).unwrap();
     }
 }
+
+#[test]
+fn reconfigure_session_refuses_whole_plan_policy_denial_before_replacement_effects() {
+    use flow::capabilities::{AppletGrant, CapabilityPolicy, FilesystemGrant};
+    use flow::graph::{
+        GraphContext, GraphExecutor, GraphRunOptions, GraphSession, NodeIo, PortValue,
+    };
+    use flow::runtime::RunOptions;
+    use std::collections::BTreeSet;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct TickingExecutor;
+    impl GraphExecutor for TickingExecutor {
+        fn execute(&self, _: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> anyhow::Result<()> {
+            while !io.is_cancelled() {
+                if let Err(error) = io.emit("tick", PortValue::Value(flow::ast::Value::Integer(1)))
+                {
+                    if io.is_cancelled() {
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Ok(())
+        }
+    }
+
+    let mut live_plan = GraphPlan::new("live_generation");
+    live_plan
+        .add_node(GraphNode {
+            id: "timer".into(),
+            kind: GraphNodeKind::Timer { interval_ms: 1 },
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            events: BTreeMap::from([(
+                "tick".into(),
+                PortSchema::events(leaf(OutputType::Integer)),
+            )]),
+            line: None,
+        })
+        .unwrap();
+    let mut session = GraphSession::start(
+        live_plan,
+        Arc::new(TickingExecutor),
+        GraphRunOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(session.recv_output().unwrap().unwrap().generation, 1);
+
+    // The replacement is topologically fine and its first node is allowed,
+    // but the whole plan fails capability preflight: `bytes.sink` has no
+    // allowlist entry. Refusal must happen before the old generation stops,
+    // so no replacement node can start.
+    // Absolute, resolvable binaries so the allowed node passes preflight on
+    // any host; neither ever runs because the whole plan is refused first.
+    let binary = std::env::current_exe().unwrap();
+    let allowed = serde_json::json!({
+        "name": "text.source",
+        "binary": binary.clone(),
+        "arguments": [{"literal": "hello"}],
+        "contract": {"version": 1, "output": {"type": "bytes", "encoding": "raw"}}
+    })
+    .to_string();
+    let denied = serde_json::json!({
+        "name": "bytes.sink",
+        "binary": binary,
+        "accepts_stdin": true,
+        "arguments": [],
+        "contract": {"version": 1, "output": {"type": "bytes", "encoding": "raw"}}
+    })
+    .to_string();
+    let registry = Registry::from_sources(&[&allowed, &denied]).unwrap();
+    // Trusted mode keeps this test on the allowlist rule, not OS sandbox
+    // probing of the stand-in binaries.
+    registry.set_host_state(Some(flow::capabilities::ExecutionMode::Trusted));
+    registry.set_host_state(Some(CapabilityPolicy {
+        version: 1,
+        applets: BTreeMap::from([(
+            "text.source".into(),
+            AppletGrant {
+                capabilities: BTreeSet::from(["process.exec".into()]),
+                binary_sha256: None,
+                environment: BTreeSet::new(),
+                filesystem: FilesystemGrant::default(),
+                network: false,
+                network_origins: BTreeSet::new(),
+                sandbox_required: false,
+                resource_limits: None,
+            },
+        )]),
+        host: None,
+        host_environment: BTreeSet::new(),
+        deny_privileged: false,
+        allow_wrappers: BTreeSet::new(),
+    }));
+    let replacement = graph::parse(
+        "graph replacement\nrun text.source as allowed\nrun bytes.sink as denied\nbind allowed.stdout to denied.stdin with capacity 1 lossless\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    let error = graph::reconfigure_session(
+        &mut session,
+        replacement,
+        &registry,
+        &RunOptions::new(std::env::current_dir().unwrap()),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("whole-plan policy preflight"), "{message}");
+    assert!(
+        message.contains("capability policy has no allowlist entry for applet \"bytes.sink\""),
+        "{message}"
+    );
+    assert!(
+        message.contains("current generation was left live"),
+        "{message}"
+    );
+
+    assert_eq!(session.context().generation, 1);
+    let after = session.recv_output().unwrap().unwrap();
+    assert_eq!(after.port.node, "timer");
+    assert_eq!(after.generation, 1);
+
+    // A replacement that passes whole-plan preflight activates as the next
+    // generation.
+    let next = graph::parse(
+        "graph next_gen\nevery 1 second as clock\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    let name = graph::reconfigure_session(
+        &mut session,
+        next,
+        &registry,
+        &RunOptions::new(std::env::current_dir().unwrap()),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(name, "next_gen");
+    assert_eq!(session.context().generation, 2);
+    assert_eq!(session.context().revision, 2);
+    let tick = session.recv_output().unwrap().unwrap();
+    assert_eq!(tick.port.node, "clock");
+    assert_eq!(tick.generation, 2);
+    session.cancel_and_join().unwrap();
+}

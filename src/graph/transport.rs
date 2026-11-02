@@ -1357,6 +1357,9 @@ impl GraphSession {
     /// Static admission errors are checked first; because this method consumes
     /// the session, an error drops the old generation. Use `try_reconfigure`
     /// when the caller needs it to remain live after a preflight rejection.
+    /// This low-level path checks only topology and runtime limits: the host
+    /// must run whole-plan registry, capability, data-flow, and module
+    /// preflight itself, or use [`reconfigure_session`] instead.
     pub fn reconfigure(
         mut self,
         plan: GraphPlan,
@@ -1383,7 +1386,10 @@ impl GraphSession {
     /// Reconfigure this session in place. A static preflight error leaves the
     /// current generation live. After admission succeeds, the current
     /// generation is cancelled and reaped before replacement activation; an
-    /// activation failure after that point is not transactional.
+    /// activation failure after that point is not transactional. This
+    /// low-level path checks only topology and runtime limits: the host must
+    /// run whole-plan registry, capability, data-flow, and module preflight
+    /// itself, or use [`reconfigure_session`] instead.
     pub fn try_reconfigure(
         &mut self,
         plan: GraphPlan,
@@ -3243,6 +3249,51 @@ pub fn start_session(
     Ok((name, session))
 }
 
+/// Reconfigure a live session with the same whole-plan registry, capability,
+/// data-flow, and module preflight as [`start_session`], run against the
+/// whole resulting plan before the current generation is stopped. A
+/// preflight refusal therefore leaves the current generation live and starts
+/// no replacement node, including allowed ones; the error keeps the
+/// underlying rule (for example the applet with no capability allowlist
+/// entry) so the caller knows what to grant, remove, or replace. Generation
+/// and revision advance by one, as in [`GraphSession::try_reconfigure`].
+/// After preflight and admission succeed, activation stays nontransactional:
+/// the current generation is cancelled and reaped before the replacement
+/// starts, so a failure from that point does not restore it.
+pub fn reconfigure_session(
+    session: &mut GraphSession,
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+) -> Result<String> {
+    let graph_name = plan.name.clone();
+    let mut prepared =
+        preflight_session(plan, registry, options, cancelled, None).with_context(|| {
+            format!(
+                "graph reconfiguration refused by whole-plan policy preflight for graph \
+                 {graph_name:?}: the replacement plan as a whole failed registry, \
+                 capability, data-flow, or module preflight (see the underlying rule \
+                 below); grant, remove, or replace the named node or applet and retry \
+                 — no replacement node was started and the current generation was left live"
+            )
+        })?;
+    prepared.graph_options.generation = session
+        .context()
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("graph generation exhausted"))?;
+    prepared.graph_options.revision = session
+        .context()
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("graph revision exhausted"))?;
+    preflight_graph_admission(&prepared.plan, &prepared.graph_options)?;
+    session.cancel_and_join()?;
+    *session = GraphSession::start(prepared.plan, prepared.executor, prepared.graph_options)?;
+    Ok(session.context().graph_name.clone())
+}
+
 /// Run a finite applet graph with its node completions recorded in `store` (#71
 /// phase 1). Terminal outputs come in node completion order. A node recorded by an
 /// earlier run replays its outputs instead of running. `retry_uncertain` lets a node
@@ -3280,6 +3331,15 @@ fn run_plan(
     Ok(result)
 }
 
+/// A replacement plan that passed whole-plan preflight but has not started
+/// any worker yet, so a refusal cannot have replacement effects.
+struct PreparedSession {
+    plan: GraphPlan,
+    executor: Arc<dyn GraphExecutor>,
+    graph_options: GraphRunOptions,
+    ordering_store: Option<Arc<dyn GraphCheckpointStore>>,
+}
+
 /// Shared activation path for [`run`] and [`start_session`]: budget, input,
 /// registry, capability, data-flow, and module preflight, then worker start.
 /// Returns the live session plus the checkpoint ordering store, if any.
@@ -3290,6 +3350,21 @@ fn prepare_session(
     cancelled: Arc<AtomicBool>,
     checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
 ) -> Result<(GraphSession, Option<Arc<dyn GraphCheckpointStore>>)> {
+    let prepared = preflight_session(plan, registry, options, cancelled, checkpoint)?;
+    let session = GraphSession::start(prepared.plan, prepared.executor, prepared.graph_options)?;
+    Ok((session, prepared.ordering_store))
+}
+
+/// Whole-plan preflight shared by [`prepare_session`] and
+/// [`reconfigure_session`]: budget, input, registry, capability, data-flow,
+/// and module checks, plus executor construction. Starts no workers.
+fn preflight_session(
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
+) -> Result<PreparedSession> {
     #[cfg(target_os = "linux")]
     let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
     let deadline = options
@@ -3405,8 +3480,12 @@ fn prepare_session(
         deadline,
         ..GraphRunOptions::default()
     };
-    let session = GraphSession::start(plan, executor, graph_options)?;
-    Ok((session, ordering_store))
+    Ok(PreparedSession {
+        plan,
+        executor,
+        graph_options,
+        ordering_store,
+    })
 }
 
 pub(super) fn graph_module_sensitivity_floor(

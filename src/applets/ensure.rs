@@ -13,7 +13,11 @@
 //! and the mode is not changed. File and line writes follow an existing symbolic
 //! link to its target, as `tee` does. `fs.ensure_symlink` replaces only an
 //! existing link, never a regular file or directory, and the replacement is a
-//! temporary link renamed over the old one. It takes no advisory lock.
+//! temporary link renamed over the old one. That rename runs under the same
+//! sibling advisory lock as `fs.write_atomic`, held across a recheck that the
+//! path is still a link, so a cooperating applet cannot install a regular
+//! file between the check and the rename. The lock is advisory only: writers
+//! that do not take it are not excluded.
 
 use super::filesystem::{
     atomic_replace_locked, default_lock_path, hash, resolve_path, with_path_lock,
@@ -181,31 +185,33 @@ pub(super) fn ensure_symlink(
                 let temp = temporary_link_path(&link);
                 let mut temp_cleanup = TempLinkCleanup(Some(temp.clone()));
                 make_link(target, &temp, &link)?;
-                // Recheck the type just before the rename: a regular file or directory that
-                // appeared since the first check must not be replaced.
+                // Hold the sibling lock `fs.write_atomic` takes across the
+                // recheck and the rename (#723). Without it a cooperating
+                // caller could install a regular file after the recheck and
+                // the rename would replace it. On any error the cleanup
+                // guard removes the temporary link.
                 context.checkpoint()?;
-                if let Ok(current) = fs::symlink_metadata(&link) {
-                    if !current.file_type().is_symlink() {
-                        temp_cleanup.done();
-                        let _ = fs::remove_file(&temp);
-                        return Err(io_error(
-                            std::io::Error::new(
-                                ErrorKind::AlreadyExists,
-                                "link path is no longer a symbolic link",
-                            ),
-                            format!("replacing link {}", link.display()),
-                        ));
+                let lock = default_lock_path(&link)?;
+                with_path_lock(&lock, LOCK_TIMEOUT, context, || {
+                    context.checkpoint()?;
+                    // Recheck immediately before the rename: a regular file
+                    // or directory that appeared since the first check must
+                    // not be replaced.
+                    if let Ok(current) = fs::symlink_metadata(&link) {
+                        if !current.file_type().is_symlink() {
+                            return Err(io_error(
+                                std::io::Error::new(
+                                    ErrorKind::AlreadyExists,
+                                    "link path is no longer a symbolic link",
+                                ),
+                                format!("replacing link {}", link.display()),
+                            ));
+                        }
                     }
-                }
-                context.checkpoint()?;
-                if let Err(error) = fs::rename(&temp, &link) {
-                    temp_cleanup.done();
-                    let _ = fs::remove_file(&temp);
-                    return Err(io_error(
-                        error,
-                        format!("replacing link {}", link.display()),
-                    ));
-                }
+                    fs::rename(&temp, &link).map_err(|error| {
+                        io_error(error, format!("replacing link {}", link.display()))
+                    })
+                })?;
                 temp_cleanup.done();
                 context.checkpoint()?;
                 (true, previous)

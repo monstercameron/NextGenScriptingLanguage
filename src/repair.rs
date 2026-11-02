@@ -482,10 +482,7 @@ pub fn commit(
         write_private(&copy, plan.before.as_bytes())?;
     }
     let temporary = program_path.with_extension("repair-tmp");
-    fs::write(&temporary, plan.after.as_bytes())
-        .with_context(|| format!("writing {}", temporary.display()))?;
-    fs::rename(&temporary, program_path)
-        .with_context(|| format!("replacing {}", program_path.display()))?;
+    replace_with_temporary(program_path, &temporary, plan.after.as_bytes())?;
 
     let log = checkpoint.join(REPAIRS_FILE);
     let sequence = match fs::read_to_string(&log) {
@@ -535,6 +532,122 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
         .with_context(|| format!("creating {}", path.display()))?;
     file.write_all(bytes)?;
     Ok(())
+}
+
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        crate::platform::windows::is_reparse(metadata)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Remove a temporary this process created. A planted link is left in place:
+/// only a regular, non-link file at the path can be the one just written.
+fn remove_temporary_if_regular(path: &Path) {
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.is_file() && !is_link_or_reparse(&metadata) {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// Publish repaired bytes over `program_path` through its sibling temporary.
+/// The temporary name is predictable, so it is created exclusively with
+/// no-follow semantics: a pre-existing entry there, planted as a symbolic
+/// link/reparse point or otherwise, is refused rather than written through,
+/// and its target is never modified.
+fn replace_with_temporary(program_path: &Path, temporary: &Path, bytes: &[u8]) -> Result<()> {
+    let permissions = match fs::symlink_metadata(program_path) {
+        Ok(metadata) if is_link_or_reparse(&metadata) => {
+            bail!(
+                "refusing to replace a symbolic link or reparse point: {}",
+                program_path.display()
+            );
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            bail!(
+                "refusing to replace a non-regular file: {}",
+                program_path.display()
+            );
+        }
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| format!("checking {}", program_path.display()));
+        }
+    };
+    if let Ok(metadata) = fs::symlink_metadata(temporary) {
+        if is_link_or_reparse(&metadata) {
+            bail!(
+                "refusing to write the repair temporary file through a symbolic link or reparse point: {}",
+                temporary.display()
+            );
+        }
+    }
+    let mut options = crate::platform::private_options();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options
+        .open(temporary)
+        .with_context(|| format!("creating {}", temporary.display()))?;
+    let written = (|| -> Result<()> {
+        file.write_all(bytes)?;
+        if let Some(permissions) = &permissions {
+            file.set_permissions(permissions.clone())?;
+        }
+        file.sync_all()?;
+        Ok(())
+    })();
+    // Close before publishing or unlinking so both also work on Windows.
+    drop(file);
+    if let Err(error) = written {
+        remove_temporary_if_regular(temporary);
+        return Err(error).with_context(|| format!("writing {}", temporary.display()));
+    }
+    // Validate the file being published and its destination once more, so a
+    // link swapped in after the create is refused instead of renamed over
+    // the program or followed onto an external target.
+    let published = (|| -> Result<()> {
+        let metadata = fs::symlink_metadata(temporary)
+            .with_context(|| format!("checking {}", temporary.display()))?;
+        if is_link_or_reparse(&metadata) || !metadata.is_file() {
+            bail!(
+                "refusing to publish a repair temporary file that is a symbolic link or reparse point: {}",
+                temporary.display()
+            );
+        }
+        if let Ok(metadata) = fs::symlink_metadata(program_path) {
+            if is_link_or_reparse(&metadata) {
+                bail!(
+                    "refusing to replace a symbolic link or reparse point: {}",
+                    program_path.display()
+                );
+            }
+        }
+        crate::platform::replace_file(temporary, program_path)
+            .with_context(|| format!("replacing {}", program_path.display()))
+    })();
+    if published.is_err() {
+        remove_temporary_if_regular(temporary);
+    }
+    published
 }
 
 /// The program path a checkpoint was started from, or an error if it cannot be
@@ -1341,5 +1454,71 @@ mod tests {
         assert!(diff.contains("-    2 | b"), "{diff}");
         assert!(diff.contains("+    2 | x"), "{diff}");
         assert!(!diff.contains("| a"), "{diff}");
+    }
+
+    fn commit_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, Plan) {
+        let directory = tempfile::tempdir().unwrap();
+        let checkpoint = directory.path().join("checkpoint");
+        std::fs::create_dir(&checkpoint).unwrap();
+        let program = directory.path().join("main.program");
+        let source = "run fixture.count with count 1\n";
+        std::fs::write(&program, source).unwrap();
+        let plan = apply(
+            source,
+            &Operation::parse("set-parameter 1 count 2").unwrap(),
+            1,
+            &registry(),
+        )
+        .unwrap();
+        (directory, checkpoint, program, plan)
+    }
+
+    #[test]
+    fn commit_replaces_the_program_and_removes_the_temporary() {
+        let (_directory, checkpoint, program, plan) = commit_fixture();
+        commit(&checkpoint, &program, &plan, "set-parameter 1 count 2").unwrap();
+        assert_eq!(std::fs::read_to_string(&program).unwrap(), plan.after);
+        assert!(std::fs::symlink_metadata(program.with_extension("repair-tmp")).is_err());
+        assert!(checkpoint.join(REPAIRS_FILE).is_file());
+    }
+
+    #[test]
+    fn commit_refuses_a_pre_existing_repair_temporary_file() {
+        let (_directory, checkpoint, program, plan) = commit_fixture();
+        let temporary = program.with_extension("repair-tmp");
+        std::fs::write(&temporary, "planted").unwrap();
+        let before = std::fs::read_to_string(&program).unwrap();
+
+        assert!(commit(&checkpoint, &program, &plan, "set-parameter 1 count 2").is_err());
+
+        assert_eq!(std::fs::read_to_string(&program).unwrap(), before);
+        assert_eq!(std::fs::read_to_string(&temporary).unwrap(), "planted");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn commit_refuses_a_planted_symlink_at_the_repair_temporary_path() {
+        let (directory, checkpoint, program, plan) = commit_fixture();
+        let external = directory.path().join("external.txt");
+        std::fs::write(&external, "old").unwrap();
+        let temporary = program.with_extension("repair-tmp");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&external, &temporary).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&external, &temporary).is_err() {
+            // Creating a file symlink needs a privilege this host may not grant.
+            return;
+        }
+        let before = std::fs::read_to_string(&program).unwrap();
+
+        let error = commit(&checkpoint, &program, &plan, "set-parameter 1 count 2").unwrap_err();
+
+        assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+        assert_eq!(std::fs::read_to_string(&external).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&program).unwrap(), before);
+        assert!(std::fs::symlink_metadata(&temporary)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }

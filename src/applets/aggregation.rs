@@ -153,6 +153,11 @@ pub(super) fn run(
         }
         "list.sort" | "list.top" => {
             let pointer = optional_string(args, "key", "")?;
+            super::validate_json_pointer(pointer).map_err(|reason| {
+                invalid(format!(
+                    "invalid JSON Pointer in args.key {pointer:?}: {reason}"
+                ))
+            })?;
             let comparisons = std::cell::Cell::new(0usize);
             let checkpoint_error = std::cell::RefCell::new(None);
             values.sort_by(|left, right| {
@@ -327,4 +332,81 @@ fn count_lines_by(
             .map(|(key, count)| serde_json::json!({"key":key,"count":count}))
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_applet(name: &str, args: Value) -> Result<Value, AppletError> {
+        let args = args.as_object().expect("args object").clone();
+        let context = ExecutionContext::unrestricted();
+        run(name, &args, &[], &context)
+    }
+
+    #[test]
+    fn sort_and_top_refuse_invalid_json_pointer_keys() {
+        for key in ["rank", "/~", "/~2"] {
+            for (name, args) in [
+                (
+                    "list.sort",
+                    serde_json::json!({"items":[{"rank":2},{"rank":1}],"key":key}),
+                ),
+                (
+                    "list.top",
+                    serde_json::json!({"items":[{"rank":2},{"rank":1}],"key":key,"n":1}),
+                ),
+                // Validation must not depend on a comparison happening.
+                ("list.sort", serde_json::json!({"items":[],"key":key})),
+                (
+                    "list.sort",
+                    serde_json::json!({"items":[{"rank":1}],"key":key}),
+                ),
+            ] {
+                let error = match run_applet(name, args) {
+                    Err(error) => error,
+                    Ok(value) => panic!("{name} must refuse key {key:?}, got {value}"),
+                };
+                assert_eq!(error.code, "invalid_request", "{name} key {key:?}");
+                assert!(
+                    error.message.contains(key),
+                    "{name} error must name key {key:?}: {}",
+                    error.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sort_and_top_still_accept_valid_json_pointer_keys() {
+        assert_eq!(
+            run_applet(
+                "list.sort",
+                serde_json::json!({"items":[{"rank":2},{"rank":1}],"key":"/rank"})
+            )
+            .unwrap(),
+            serde_json::json!([{"rank":1},{"rank":2}])
+        );
+        assert_eq!(
+            run_applet(
+                "list.sort",
+                serde_json::json!({"items":[{"a":{"rank":2}},{"a":{"rank":1}}],"key":"/a/rank"})
+            )
+            .unwrap(),
+            serde_json::json!([{"a":{"rank":1}},{"a":{"rank":2}}])
+        );
+        assert_eq!(
+            run_applet(
+                "list.top",
+                serde_json::json!({"items":[{"rank":2},{"rank":1}],"key":"/rank","n":1})
+            )
+            .unwrap(),
+            serde_json::json!([{"rank":2}])
+        );
+        // Empty key still sorts the items themselves.
+        assert_eq!(
+            run_applet("list.sort", serde_json::json!({"items":[3,1,2]})).unwrap(),
+            serde_json::json!([1, 2, 3])
+        );
+    }
 }

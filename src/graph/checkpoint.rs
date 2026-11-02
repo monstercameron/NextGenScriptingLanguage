@@ -275,8 +275,30 @@ pub fn open_checkpoint_directory(
 /// The identity a graph checkpoint is written with: the canonical plan (inputs
 /// included) and the working directory. A resume must present the same identity.
 pub fn checkpoint_identity(plan: &GraphPlan, cwd: &Path) -> Result<String> {
-    let key = crate::agent::what_if_key::load_or_create()
-        .context("a graph checkpoint needs the per-user input key")?;
+    checkpoint_identity_for(plan, cwd, false)
+}
+
+/// Like [`checkpoint_identity`], but for a resume (`resume` is true) the
+/// per-user key must already exist: a fresh key cannot reproduce the identity
+/// a journal was written with, so a missing key is refused with its path and
+/// recovery guidance instead of being silently recreated.
+pub fn checkpoint_identity_for(plan: &GraphPlan, cwd: &Path, resume: bool) -> Result<String> {
+    let key_path = crate::agent::what_if_key::key_path()?;
+    checkpoint_identity_at(plan, cwd, &key_path, resume)
+}
+
+fn checkpoint_identity_at(
+    plan: &GraphPlan,
+    cwd: &Path,
+    key_path: &Path,
+    resume: bool,
+) -> Result<String> {
+    let key = if resume {
+        crate::agent::what_if_key::load_existing_at(key_path)
+    } else {
+        crate::agent::what_if_key::load_or_create_at(key_path)
+    }
+    .context("a graph checkpoint needs the per-user input key")?;
     let mut canonical = serde_json::to_value(plan)?;
     remove_source_lines(&mut canonical);
     let mut message = b"execute-graph-checkpoint-identity/v6\n".to_vec();
@@ -287,6 +309,38 @@ pub fn checkpoint_identity(plan: &GraphPlan, cwd: &Path) -> Result<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_identity_never_creates_a_missing_key_but_a_fresh_run_does() {
+        let directory = tempfile::tempdir().unwrap();
+        let key_path = directory.path().join("execute").join("what-if.key");
+        let plan = GraphPlan::new("resume-key");
+
+        let error = checkpoint_identity_at(&plan, directory.path(), &key_path, true)
+            .expect_err("a resume with a missing key must be refused");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(&key_path.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            message.contains("restore that key from backup"),
+            "{message}"
+        );
+        assert!(!key_path.exists(), "a resume must not create a new key");
+
+        // A fresh run creates the key, and a later resume with that restored
+        // key reproduces the same identity.
+        let fresh = checkpoint_identity_at(&plan, directory.path(), &key_path, false).unwrap();
+        assert!(key_path.exists(), "a fresh run must create the key");
+        let resumed = checkpoint_identity_at(&plan, directory.path(), &key_path, true).unwrap();
+        assert_eq!(fresh, resumed);
+    }
 }
 
 fn remove_source_lines(value: &mut serde_json::Value) {

@@ -1400,8 +1400,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         let cwd = resolved_cwd
                             .as_deref()
                             .context("could not resolve current directory")?;
-                        let identity = flow::graph::checkpoint_identity(&graph, cwd)?;
                         let resume = args.command == "resume";
+                        let identity = flow::graph::checkpoint_identity_for(&graph, cwd, resume)?;
                         let store = flow::graph::open_checkpoint_directory(
                             directory, resume, &identity, &registry,
                         )?;

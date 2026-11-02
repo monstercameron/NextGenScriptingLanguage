@@ -405,8 +405,23 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let program = root.path().join("live.program");
-    fs::write(&program, "run printf with message \"ready\"\n").unwrap();
+    let manifests = root.path().join("manifests");
+    fs::create_dir(&manifests).unwrap();
+    fs::write(
+        manifests.join("sleep.json"),
+        serde_json::to_vec(&json!({
+            "name":"sleep",
+            "binary":"/bin/sleep",
+            "parameters":{"seconds":{"type":"string","required":true}},
+            "arguments":[{"parameter":"seconds"}],
+            "contract":{"version":1}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(&program, "run sleep with seconds \"3\"\n").unwrap();
     let token_file = root.path().join("reader.token");
     let reader_created = cli(
         root.path(),
@@ -453,6 +468,24 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
         .as_str()
         .unwrap()
         .to_owned();
+    let editor_file = root.path().join("editor.token");
+    let editor_created = cli(
+        root.path(),
+        &[
+            "live",
+            "token-create",
+            "--agent",
+            "editor",
+            "--token-file",
+            editor_file.to_str().unwrap(),
+        ],
+    );
+    assert!(editor_created.status.success());
+    let editor_hash = decoded(&editor_created)["token_sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let editor_token = private_token_text(&editor_file);
     let policy_file = root.path().join("agents.json");
     fs::write(
         &policy_file,
@@ -460,7 +493,8 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
             "version": 1,
             "agents": {
                 "reader": {"token_sha256": digest, "permissions": ["read"]},
-                "operator": {"token_sha256": operator_hash, "permissions": ["stop"]}
+                "editor": {"token_sha256": editor_hash, "permissions": ["edit"]},
+                "operator": {"token_sha256": operator_hash, "permissions": ["stop", "edit", "input", "control"]}
             }
         }))
         .unwrap(),
@@ -477,6 +511,8 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
             socket.to_str().unwrap(),
             "--agent-policy",
             policy_file.to_str().unwrap(),
+            "--manifest-dir",
+            manifests.to_str().unwrap(),
             "--paused",
         ])
         .current_dir(root.path())
@@ -491,7 +527,8 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
     stdout.read_line(&mut ready).unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&ready).unwrap()["event"],
-        "ready"
+        "ready",
+        "unexpected live serve response: {ready}"
     );
 
     let denied = live_request(&socket, json!({"op":"read"}));
@@ -516,6 +553,106 @@ fn live_agent_policy_requires_credentials_and_never_returns_them() {
         String::from_utf8_lossy(&allowed.stderr)
     );
     assert!(!String::from_utf8_lossy(&allowed.stdout).contains(token.as_str()));
+
+    // A paused session is idle at a safe boundary. An edit-only agent may
+    // change ordinary metadata, but a mixed patch touching /inbox needs both
+    // grants and is rejected before its ordinary edit can commit.
+    let ordinary_edit = live_request(
+        &socket,
+        json!({"op":"create","path":"/user/note","value":"still editable","auth":{"agent":"editor","token":editor_token}}),
+    );
+    assert_eq!(ordinary_edit["ok"], true);
+    let denied_input_patch = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "operations":[
+                {"op":"add","path":"/user/uncommitted","value":true},
+                {"op":"add","path":"/inbox/-","value":{"text":"queued"}}
+            ],
+            "auth":{"agent":"editor","token":editor_token}
+        }),
+    );
+    assert_eq!(denied_input_patch["ok"], false);
+    let after_denial = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"reader","token":token}}),
+    );
+    assert_eq!(
+        after_denial["result"]["state"]["user"].get("uncommitted"),
+        None
+    );
+    assert_eq!(after_denial["result"]["state"]["inbox"], json!([]));
+    let revision = after_denial["revision"].as_u64().unwrap();
+    let stale_input_patch = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "if_revision":revision.saturating_sub(1),
+            "operations":[{"op":"add","path":"/inbox/-","value":{"text":"stale"}}],
+            "auth":{"agent":"operator","token":operator_token}
+        }),
+    );
+    assert_eq!(stale_input_patch["ok"], false);
+    assert_eq!(stale_input_patch["error"]["code"], "conflict");
+    let after_stale = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"reader","token":token}}),
+    );
+    assert_eq!(after_stale["result"]["state"]["inbox"], json!([]));
+    let authorized_input_patch = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "if_revision":revision,
+            "operations":[
+                {"op":"add","path":"/user/committed","value":true},
+                {"op":"add","path":"/inbox/-","value":{"text":"queued"}}
+            ],
+            "auth":{"agent":"operator","token":operator_token}
+        }),
+    );
+    assert_eq!(authorized_input_patch["ok"], true);
+    let after_authorized = live_request(
+        &socket,
+        json!({"op":"read","auth":{"agent":"reader","token":token}}),
+    );
+    assert_eq!(
+        after_authorized["result"]["state"]["user"]["committed"],
+        true
+    );
+    assert_eq!(
+        after_authorized["result"]["state"]["inbox"][0]["text"],
+        "queued"
+    );
+
+    let resumed = live_request(
+        &socket,
+        json!({"op":"control","action":"resume","auth":{"agent":"operator","token":operator_token}}),
+    );
+    assert_eq!(resumed["ok"], true);
+    let mut active = false;
+    for _ in 0..100 {
+        let snapshot = live_request(
+            &socket,
+            json!({"op":"read","auth":{"agent":"reader","token":token}}),
+        );
+        if snapshot["result"]["runtime"]["status"] == "running" {
+            active = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(active, "sleep applet did not enter the active state");
+    let active_denial = live_request(
+        &socket,
+        json!({
+            "op":"patch",
+            "operations":[{"op":"add","path":"/inbox/-","value":{"text":"active"}}],
+            "auth":{"agent":"editor","token":editor_token}
+        }),
+    );
+    assert_eq!(active_denial["ok"], false);
 
     let stopped = live_request(
         &socket,
@@ -944,6 +1081,101 @@ fn total_timeout_is_enforced_for_finite_run() {
             workflow.to_str().unwrap(),
             "--total-timeout-ms",
             "40",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn total_timeout_after_caught_native_timeout_blocks_save_in_catch() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("caught-timeout.program");
+    let saved = root.path().join("after-deadline.txt");
+    fs::write(
+        &workflow,
+        format!(
+            "try\n  run \"sleep\" with arguments [\"1\"]\ncatch failure\n  use value \"late effect\"\n  then save to {:?}\n",
+            saved
+        ),
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--total-timeout-ms",
+            "40",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!saved.exists(), "save ran after the workflow deadline");
+}
+
+#[cfg(unix)]
+#[test]
+fn per_command_timeout_remains_catchable_before_total_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("command-timeout.program");
+    let saved = root.path().join("caught-command-timeout.txt");
+    fs::write(
+        &workflow,
+        format!(
+            "try\n  run \"sleep\" with arguments [\"1\"]\ncatch failure\n  use value \"caught command timeout\"\n  then save to {:?}\n",
+            saved
+        ),
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--command-timeout-ms",
+            "40",
+            "--total-timeout-ms",
+            "1000",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(saved).unwrap(), "caught command timeout");
+}
+
+#[cfg(unix)]
+#[test]
+fn total_timeout_stops_a_pure_in_process_loop() {
+    let root = tempfile::tempdir().unwrap();
+    let workflow = root.path().join("in-process-loop.program");
+    fs::write(
+        &workflow,
+        "while true is true\n  use value \"still running\"\n",
+    )
+    .unwrap();
+
+    let output = cli(
+        root.path(),
+        &[
+            "run",
+            workflow.to_str().unwrap(),
+            "--total-timeout-ms",
+            "250",
         ],
     );
     assert!(!output.status.success());

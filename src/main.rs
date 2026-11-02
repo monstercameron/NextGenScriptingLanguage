@@ -170,15 +170,26 @@ fn register_cancellation_signal(
     let reported = signal_hook::consts::SIGINT;
     #[cfg(not(windows))]
     let reported = signal;
+    // Drop a sequential stale record before installing the global-only handler,
+    // so a previous finite run's interrupt cannot poison this graph run's CLI
+    // fallback report (B5). Guarded by live signal owners: an overlapping
+    // signal-owning run keeps its pending report. Restored when this install
+    // fails so the fallback the graph never started with survives (B2).
+    let cleared = runtime::clear_stale_interrupt_for_graph();
     // SAFETY: the action only performs atomic stores, which are async-signal-safe.
-    unsafe {
+    let registered = unsafe {
         signal_hook::low_level::register(signal, move || {
             runtime::record_interrupt(reported);
             cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
         })
+    };
+    match registered {
+        Ok(id) => Ok(SignalRegistration(id)),
+        Err(error) => {
+            runtime::restore_stale_interrupt_after_failed_graph_install(cleared);
+            Err(error).context("registering graph cancellation handler")
+        }
     }
-    .map(SignalRegistration)
-    .context("registering graph cancellation handler")
 }
 
 fn main() {
@@ -475,12 +486,36 @@ fn program_takes_terminal(arguments: &[String]) -> bool {
 }
 
 fn execute() -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    startup_latency_hook();
     let raw_arguments = env::args_os().skip(1).collect::<Vec<_>>();
     let arguments = apply_child_environment_options(parse_os_arguments(raw_arguments)?)?;
     if let Some(status) = daemon_forward(&arguments) {
         std::process::exit(status);
     }
     execute_arguments(arguments)
+}
+
+/// Test-only startup floor for the #518 latency canary. When the `failpoints`
+/// feature is enabled, `EXECUTE_LATENCY_TEST_DELAY_MS=N` sleeps N milliseconds
+/// before argument handling, delaying every entry point of this process
+/// including `--version`, so the latency gate can prove it rejects a startup
+/// regression in the real binary. The hook is compiled in only with
+/// `failpoints`, which no default, full, or release build enables, so release
+/// behavior is unchanged; like the other `EXECUTE_TEST_*` hooks it is ambient
+/// to children, so the canary sets it for one gate invocation only. An absent
+/// or unparsable value means no delay.
+#[cfg(feature = "failpoints")]
+fn startup_latency_hook() {
+    if let Some(millis) = startup_latency_delay_ms() {
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
+}
+
+/// Parse the test-only startup delay in milliseconds. `None` means no hook.
+#[cfg(feature = "failpoints")]
+fn startup_latency_delay_ms() -> Option<u64> {
+    env::var("EXECUTE_LATENCY_TEST_DELAY_MS").ok()?.parse().ok()
 }
 
 /// Consume host-level child-environment options before dispatch. Keeping this
@@ -1153,9 +1188,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         if args.execution_mode.is_some() {
             registry.set_host_state(args.execution_mode);
         }
-        let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
+        let parsed_graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
         if args.checkpoint_dir.is_some()
-            && graph
+            && parsed_graph
                 .input_declarations()
                 .iter()
                 .any(flow::ast::is_sensitive)
@@ -1176,20 +1211,30 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         // A capability policy decides which environment variables a graph may read,
         // before any input is resolved.
-        flow::capabilities::authorize_environment_inputs(graph.input_declarations(), &registry)?;
+        flow::capabilities::authorize_environment_inputs(
+            parsed_graph.input_declarations(),
+            &registry,
+        )?;
         let supplied_inputs = flow::inputs::parse_cli_arguments(
-            graph.input_declarations(),
+            parsed_graph.input_declarations(),
             &args.inputs,
             &args.program_arguments,
         )?;
         let inputs = if args.command == "run" {
-            flow::inputs::resolve(graph.input_declarations(), &supplied_inputs, false)?
+            flow::inputs::resolve(parsed_graph.input_declarations(), &supplied_inputs, false)?
         } else {
             supplied_inputs
         };
-        let interface = flow::inputs::describe(graph.input_declarations(), &inputs)?;
-        let graph = graph.with_input_values(&inputs, false)?;
-        graph.validate_with_registry(&registry)?;
+        let interface = flow::inputs::describe(parsed_graph.input_declarations(), &inputs)?;
+        flow::security::register_sensitive_inputs(
+            &registry,
+            parsed_graph.input_declarations(),
+            &inputs,
+        )?;
+        let graph = parsed_graph.with_input_values(&inputs, false)?;
+        graph
+            .validate_with_registry(&registry)
+            .map_err(|error| redact_runtime_error(&registry, error))?;
         let cwd = if capability_policy.is_some() || matches!(args.command, "run" | "resume") {
             Some(env::current_dir()?)
         } else {
@@ -1225,7 +1270,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 "protocol": "execute.graph/1",
                 "validation": "static",
                 "interface": interface,
-                "graph": serde_json::to_value(&graph)?
+                "graph": serde_json::to_value(
+                    &parsed_graph.with_input_values_for_inspection(&inputs)?
+                )?
             })),
             "explain" => {
                 writeln!(
@@ -1254,6 +1301,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     max_loop_iterations: args.max_loop_iterations,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
+                    kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
                     ..RunOptions::new(
                         cwd.clone()
                             .context("could not determine current directory")?,
@@ -1446,6 +1494,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             max_loop_iterations: args.max_loop_iterations,
             command_timeout: args.command_timeout,
             total_timeout: args.total_timeout,
+            kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
             ..RunOptions::new(cwd.clone())
         };
         return match args.command {
@@ -1630,6 +1679,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     max_loop_iterations: args.max_loop_iterations,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
+                    kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
                     ..RunOptions::new(cwd.clone())
                 };
                 let mut emit =
@@ -2014,6 +2064,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 max_loop_iterations: args.max_loop_iterations,
                 command_timeout: args.command_timeout,
                 total_timeout: args.total_timeout,
+                kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
                 ..RunOptions::new(cwd.clone())
             };
             if args.once {
@@ -2224,6 +2275,7 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
         (args.max_catch_up.is_some(), "--max-catch-up"),
         (args.calendar_dedup.is_some(), "--calendar-dedup"),
         (args.total_timeout.is_some(), "--total-timeout-ms"),
+        (args.kill_grace.is_some(), "--kill-grace-ms"),
         (args.retry_uncertain, "--retry-uncertain"),
         (args.max_record_bytes_set, "--max-record-bytes"),
         (args.record_dir.is_some(), "--record"),
@@ -2265,6 +2317,25 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
     let status = flow::live::host_run(&run, default_manifest_dir()?, workflow_path)?;
     if status != 0 {
         std::process::exit(status);
+    }
+    Ok(())
+}
+
+/// Refuses manifest-dependent work before any registry load when no installed
+/// manifest directory is discoverable and no explicit selector was given. A
+/// detached release binary reaches this with only non-existent install-relative
+/// candidates, so it fails with a clear message instead of probing the build
+/// machine's source tree or silently listing an empty registry.
+fn check_installed_manifests(
+    manifest_dir: &Option<PathBuf>,
+    manifest_catalog: &Option<PathBuf>,
+    candidates: &[PathBuf],
+) -> Result<()> {
+    if manifest_dir.is_none()
+        && manifest_catalog.is_none()
+        && !candidates.iter().any(|path| path.is_dir())
+    {
+        bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
     }
     Ok(())
 }
@@ -2408,14 +2479,11 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             "commands": flow::discovery::inventory_commands()?
         }));
     }
-    if manifest_dir.is_none()
-        && manifest_catalog.is_none()
-        && !default_manifest_candidates()
-            .iter()
-            .any(|path| path.is_dir())
-    {
-        bail!("no installed manifest directory found; pass --manifest-dir or --manifest-catalog");
-    }
+    check_installed_manifests(
+        &manifest_dir,
+        &manifest_catalog,
+        &default_manifest_candidates(),
+    )?;
     // Listing and matching read every manifest, so compare the whole directory first.
     let registry = load_registry(manifest_dir, manifest_catalog, ManifestCheck::Full)?;
     #[cfg(feature = "tooling")]
@@ -3536,7 +3604,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {
@@ -3616,6 +3684,44 @@ mod startup_path_tests {
     }
 
     #[test]
+    fn detached_applets_without_manifests_must_refuse_before_any_load() {
+        let missing = Path::new("no-such-manifests-451").to_path_buf();
+        let error = super::check_installed_manifests(&None, &None, &[missing])
+            .expect_err("a detached binary must refuse instead of loading an empty registry");
+        assert!(
+            error
+                .to_string()
+                .contains("no installed manifest directory found"),
+            "unexpected refusal: {error:#}"
+        );
+    }
+
+    #[test]
+    fn installed_manifest_gate_keeps_explicit_and_installed_sources_working() {
+        let directory = tempfile::tempdir().unwrap();
+        let installed = directory.path().join("manifests");
+        std::fs::create_dir(&installed).unwrap();
+        let missing = directory.path().join("missing");
+        // An installed directory proceeds without explicit selectors.
+        super::check_installed_manifests(&None, &None, &[missing.clone(), installed.clone()])
+            .expect("installed manifests proceed");
+        // Explicit selectors proceed even when no installed directory exists.
+        super::check_installed_manifests(
+            &Some(directory.path().join("custom")),
+            &None,
+            std::slice::from_ref(&missing),
+        )
+        .expect("explicit --manifest-dir proceeds");
+        super::check_installed_manifests(
+            &None,
+            &Some(directory.path().join("catalog.json")),
+            &[missing],
+        )
+        .expect("explicit --manifest-catalog proceeds");
+        let _ = installed;
+    }
+
+    #[test]
     fn argument_conversion_keeps_json_errors_after_separator_literal() {
         let arguments = ["run", "workflow.program", "--", "--json-errors"]
             .into_iter()
@@ -3638,6 +3744,17 @@ mod startup_path_tests {
             error.to_string(),
             "argument 1 is not valid UTF-8; use a percent-encoded file:// URI for non-UTF-8 workflow paths"
         );
+    }
+
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn latency_hook_parses_millis_and_ignores_other_values() {
+        std::env::set_var("EXECUTE_LATENCY_TEST_DELAY_MS", "150");
+        assert_eq!(super::startup_latency_delay_ms(), Some(150));
+        std::env::set_var("EXECUTE_LATENCY_TEST_DELAY_MS", "not-a-number");
+        assert_eq!(super::startup_latency_delay_ms(), None);
+        std::env::remove_var("EXECUTE_LATENCY_TEST_DELAY_MS");
+        assert_eq!(super::startup_latency_delay_ms(), None);
     }
 
     #[test]

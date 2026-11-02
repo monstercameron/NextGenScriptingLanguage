@@ -31,6 +31,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
 const CHILD_BYTES: usize = 1024 * 1024;
 const FRAME_LEN: usize = 8192;
 const EXPECTED_FRAMES: usize = CHILD_BYTES / FRAME_LEN;
@@ -73,7 +76,11 @@ fn native_child_writes_megabyte_to_inherited_stderr_while_execute_streams() {
         "framed records must divide the probe volume exactly"
     );
     let directory = tempfile::tempdir().unwrap();
-    let fixture = env!("CARGO_BIN_EXE_native-fixture").to_owned();
+    // Staged as a private single-link copy: the trusted-executable gate refuses
+    // the hardlinked `target/` original.
+    let fixture = staged_helpers::native_fixture()
+        .to_string_lossy()
+        .into_owned();
     let status_path = directory.path().join("stream-probe.status");
     let workflow = directory.path().join("inherited-stderr.program");
     // The probe status path travels as `$1` (a separate argv element), never

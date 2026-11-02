@@ -342,6 +342,46 @@ fn executable_name_with_glob_syntax_warns_with_a_repair() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_executable_path_with_spaces_stays_one_path_without_a_split_fix() {
+    let source = "run \"C:\\\\Program Files\\\\Tool.exe\" as out\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.executable_name_whitespace")
+        .expect("lint diagnostic");
+    assert!(warning.fixes.is_empty(), "{warning:#?}");
+    assert_eq!(
+        &source[warning.span.start_byte..warning.span.end_byte],
+        "\"C:\\\\Program Files\\\\Tool.exe\""
+    );
+}
+
+#[test]
+fn executable_split_fix_preserves_surrounding_statement_syntax() {
+    let source = "run \"ls *.txt\" as out\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.executable_name_whitespace")
+        .expect("lint diagnostic");
+    assert_eq!(
+        apply_fix(source, &warning.fixes[0]),
+        "run \"ls\" with arguments [\"*.txt\"] as out\n"
+    );
+}
+
+#[test]
+fn executable_name_with_quoted_argument_gets_no_split_fix() {
+    let diagnostics = analyze_source("run \"echo \\\"hi there\\\"\"\n", &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.executable_name_whitespace")
+        .expect("lint diagnostic");
+    assert!(warning.fixes.is_empty(), "{warning:#?}");
+}
+
 #[test]
 fn zero_repeat_loop_warns() {
     let diagnostics = analyze_source("repeat 0 times\n  run \"true\"\n", &Registry::default());

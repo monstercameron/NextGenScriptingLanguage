@@ -188,6 +188,10 @@ impl GraphExecutor for CheckpointedExecutor {
     fn execute(&self, node: &GraphNode, io: &mut NodeIo, context: &GraphContext) -> Result<()> {
         let state = &self.checkpointing;
         if let Some(record) = state.completed.get(&node.id) {
+            // This node replays instead of consuming its inputs, so detach
+            // them first: an upstream replay must not block on a full
+            // lossless edge that nobody will drain (#818).
+            io.detach_inputs();
             for output in &record.outputs {
                 io.emit_recorded(
                     &output.port,

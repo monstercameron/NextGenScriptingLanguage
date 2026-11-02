@@ -172,6 +172,10 @@ pub struct PortEmitReport {
 struct QueueState {
     items: VecDeque<EventEnvelope>,
     closed: bool,
+    /// The consumer will never read again (a checkpointed node replaying its
+    /// recorded outputs instead of consuming its inputs, #818). Sends drop
+    /// instead of waiting for space that no reader will free.
+    consumer_detached: bool,
 }
 
 struct BoundedQueue {
@@ -190,6 +194,7 @@ impl BoundedQueue {
             state: Mutex::new(QueueState {
                 items: VecDeque::new(),
                 closed: false,
+                consumer_detached: false,
             }),
             changed: Condvar::new(),
             dropped: AtomicUsize::new(0),
@@ -209,6 +214,9 @@ impl BoundedQueue {
                 .state
                 .lock()
                 .map_err(|_| anyhow!("graph queue lock poisoned"))?;
+            if state.consumer_detached {
+                return Ok(false);
+            }
             if state.closed {
                 bail!("graph edge was closed while its producer was active");
             }
@@ -305,6 +313,17 @@ impl BoundedQueue {
     fn close(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.closed = true;
+            self.changed.notify_all();
+        }
+    }
+
+    /// Mark that no consumer will read from this queue again. Buffered items
+    /// are discarded and producers, including one already waiting for space
+    /// on a full lossless queue, drop instead of blocking (#818).
+    fn detach_consumer(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.consumer_detached = true;
+            state.items.clear();
             self.changed.notify_all();
         }
     }
@@ -780,6 +799,18 @@ impl NodeIo {
         sensitivity: SensitivitySet,
     ) -> Result<PortEmitReport> {
         self.emit_with_remote_metadata(port, payload, None, Some(sensitivity))
+    }
+
+    /// Discard this node's input edges: it will never consume them, so their
+    /// producers must not wait for space on them. A checkpointed node that
+    /// replays recorded outputs does this (#818). Each edge queue has this
+    /// node as its only consumer, so no other reader loses deliveries.
+    pub(crate) fn detach_inputs(&self) {
+        for queues in self.inputs.values() {
+            for queue in queues {
+                queue.detach_consumer();
+            }
+        }
     }
 
     /// Hold back this node's outputs instead of delivering them, until the
@@ -3857,6 +3888,48 @@ mod input_cursor_tests {
             .unwrap_err()
             .to_string()
             .contains("graph execution deadline exceeded"));
+    }
+
+    #[test]
+    fn detaching_inputs_unblocks_a_sender_waiting_on_a_full_lossless_queue() {
+        let task_scope = TaskScope::new(1, None).unwrap();
+        let token = task_scope.cancellation_token();
+        let queue = lossless_queue();
+        enqueue(&queue, "source".into(), "events", 1, &token);
+        let io = node_io(
+            BTreeMap::from([("events".into(), vec![Arc::clone(&queue)])]),
+            token.clone(),
+        );
+
+        // The capacity-one queue is full, so this send waits for a reader.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        {
+            let queue = Arc::clone(&queue);
+            let token = token.clone();
+            thread::spawn(move || {
+                let delivered = queue.send(
+                    queued_event("source".into(), 2),
+                    Some(PortRef::new("collector", "events")),
+                    &token,
+                );
+                let _ = sender.send(delivered);
+            });
+        }
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+            "the second send should wait while the lossless queue is full"
+        );
+
+        io.detach_inputs();
+        let delivered = receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("detaching the consumer did not unblock the sender")
+            .unwrap();
+        assert!(!delivered, "a send to a detached consumer drops");
+        assert!(
+            queue.try_recv().unwrap().is_none(),
+            "buffered items for a detached consumer are discarded"
+        );
     }
 
     #[test]

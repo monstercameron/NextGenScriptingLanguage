@@ -2997,14 +2997,25 @@ fn value_size(value: &Value) -> usize {
         Value::Bool(_) => 1,
         Value::Null => 0,
         Value::Number(value) => value.to_string().len(),
-        Value::Record(values) => values.iter().fold(0usize, |size, (key, value)| {
-            let field_size =
-                encoded_byte_field_size(values, key).unwrap_or_else(|| value_size(value));
-            size.saturating_add(key.len()).saturating_add(field_size)
-        }),
-        Value::List(values) => values
-            .iter()
-            .fold(0usize, |size, item| size.saturating_add(value_size(item))),
+        Value::Record(values) => values.iter().fold(
+            std::mem::size_of::<BTreeMap<String, Value>>(),
+            |size, (key, value)| {
+                let field_size =
+                    encoded_byte_field_size(values, key).unwrap_or_else(|| value_size(value));
+                size.saturating_add(std::mem::size_of::<String>())
+                    .saturating_add(std::mem::size_of::<Value>())
+                    .saturating_add(key.len())
+                    .saturating_add(field_size)
+            },
+        ),
+        Value::List(values) => {
+            values
+                .iter()
+                .fold(std::mem::size_of::<Vec<Value>>(), |size, item| {
+                    size.saturating_add(std::mem::size_of::<Value>())
+                        .saturating_add(value_size(item))
+                })
+        }
     }
 }
 
@@ -5176,12 +5187,16 @@ mod record_size_and_log_bound_tests {
                 Value::List(vec![Value::Integer(1), Value::Integer(2)]),
             ),
         ]));
-        let expected = "output".len()
+        let expected = std::mem::size_of::<BTreeMap<String, Value>>()
+            + 3 * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
+            + "output".len()
             + 1024
             + 1
             + "output_encoding".len()
             + "u8_array".len()
             + "stderr".len()
+            + std::mem::size_of::<Vec<Value>>()
+            + 2 * std::mem::size_of::<Value>()
             + 2 * std::mem::size_of::<i64>();
         assert_eq!(value_size(&record), expected);
     }
@@ -5202,7 +5217,9 @@ mod record_size_and_log_bound_tests {
         ]));
         assert_eq!(
             value_size(&record),
-            "output".len()
+            std::mem::size_of::<BTreeMap<String, Value>>()
+                + 4 * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
+                + "output".len()
                 + 5
                 + "output_encoding".len()
                 + "utf8".len()
@@ -5224,8 +5241,31 @@ mod record_size_and_log_bound_tests {
         ]));
         assert_eq!(
             value_size(&record),
-            "output".len() + "not base64".len() + "output_encoding".len() + "base64".len()
+            std::mem::size_of::<BTreeMap<String, Value>>()
+                + 2 * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
+                + "output".len()
+                + "not base64".len()
+                + "output_encoding".len()
+                + "base64".len()
         );
+    }
+
+    #[test]
+    fn container_heavy_binding_exceeds_the_size_limit() {
+        let limit = 1024usize;
+        let nulls = Value::List(vec![Value::Null; 1024]);
+        assert!(value_size(&nulls) > limit);
+
+        let nested = Value::List((0..512).map(|_| Value::Record(BTreeMap::new())).collect());
+        assert!(value_size(&nested) > limit);
+    }
+
+    #[test]
+    fn scalar_only_binding_size_is_unchanged() {
+        assert_eq!(value_size(&Value::String("hello".to_owned())), 5);
+        assert_eq!(value_size(&Value::Integer(7)), std::mem::size_of::<i64>());
+        assert_eq!(value_size(&Value::Bool(true)), 1);
+        assert_eq!(value_size(&Value::Null), 0);
     }
 
     #[test]

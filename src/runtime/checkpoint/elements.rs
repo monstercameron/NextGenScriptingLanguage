@@ -2062,4 +2062,45 @@ mod tests {
             "stale element records survived a new node: {text}"
         );
     }
+
+    #[test]
+    fn loop_deferral_keeps_checkpoint_policy_for_known_labels() {
+        use crate::contracts::Sensitivity;
+        use crate::security::{DataFlowPolicy, SensitivitySet};
+
+        // Public-only checkpoint policy (no persistence grants) with an
+        // unrelated declared-secret applet: the setup that used to defer.
+        let registry = Registry::default();
+        registry.set_host_state(
+            DataFlowPolicy::from_json(
+                br#"{"version":1,"secrets":{"environment":{"remote.call":["API_TOKEN"]}}}"#,
+            )
+            .unwrap(),
+        );
+        // A Secret (or otherwise ungranted known) label beside the loop
+        // reference's Unknown must not defer: the full checkpoint policy
+        // still runs at the gate and denies before any element persists.
+        for floor in [
+            SensitivitySet::from_labels([Sensitivity::Unknown, Sensitivity::Secret]),
+            SensitivitySet::from_labels([Sensitivity::Unknown, Sensitivity::Internal]),
+            SensitivitySet::from_labels([Sensitivity::Unknown, Sensitivity::Confidential]),
+        ] {
+            assert!(
+                !crate::runtime::defer_unknown_checkpoint_denial(&registry, &floor, true),
+                "known labels beside Unknown must not defer: {floor:?}"
+            );
+            assert!(
+                crate::runtime::authorize_checkpoint_persistence(&registry, &floor).is_err(),
+                "full checkpoint policy must deny: {floor:?}"
+            );
+        }
+        // The case deferral was meant for stays deferred: a loop reference
+        // over-approximates Public literals as Unknown beside Public.
+        let public_floor = SensitivitySet::from_labels([Sensitivity::Unknown, Sensitivity::Public]);
+        assert!(crate::runtime::defer_unknown_checkpoint_denial(
+            &registry,
+            &public_floor,
+            true
+        ));
+    }
 }

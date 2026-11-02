@@ -225,6 +225,8 @@ fn pre_register_task_group_secrets(
     registry: &Registry,
     applet_names: &[String],
     environment: &Option<crate::capabilities::CommandEnvOverlay>,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let proc_vars = std::env::vars_os().collect::<Vec<_>>();
     crate::security::register_declared_environment_secrets(registry, &proc_vars)
@@ -243,8 +245,10 @@ fn pre_register_task_group_secrets(
     if let Some(overlay) = environment {
         let redactor = crate::security::secret_redactor(registry);
         for value in overlay.set.values() {
+            // Mid-run registration: observe the run's cancel/deadline so a
+            // wedged terminal reports instead of hanging (fail closed).
             redactor
-                .register(value.as_bytes())
+                .register(value.as_bytes(), cancelled, deadline)
                 .map_err(|_| anyhow!("could not register a task environment value as a secret"))?;
         }
     }
@@ -420,7 +424,13 @@ pub(super) fn run_group(
             .iter()
             .map(|task| task.applet.clone())
             .collect::<Vec<_>>();
-        pre_register_task_group_secrets(registry, &applet_names, &environment)?;
+        pre_register_task_group_secrets(
+            registry,
+            &applet_names,
+            &environment,
+            &cancelled,
+            context.deadline,
+        )?;
     }
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     let not_started = records
@@ -604,8 +614,13 @@ pub(super) fn run_group(
         }
         match completion.result {
             Ok(result) => {
-                if let Err(error) = register_task_result(&secret_redactor, task.sensitive, &result)
-                {
+                if let Err(error) = register_task_result(
+                    &secret_redactor,
+                    task.sensitive,
+                    &result,
+                    &cancelled,
+                    deadline,
+                ) {
                     let message =
                         format!("could not safely redact sensitive task output: {error:#}");
                     records[index].state = TaskState::Failed;
@@ -660,11 +675,17 @@ pub(super) fn run_group(
                 } else {
                     TaskState::Failed
                 };
-                let error_text = register_task_error(&secret_redactor, task.sensitive, &error)
-                    .unwrap_or_else(|_| {
-                        "sensitive task failure was withheld because redaction could not be secured"
-                            .into()
-                    });
+                let error_text = register_task_error(
+                    &secret_redactor,
+                    task.sensitive,
+                    &error,
+                    &cancelled,
+                    deadline,
+                )
+                .unwrap_or_else(|_| {
+                    "sensitive task failure was withheld because redaction could not be secured"
+                        .into()
+                });
                 records[index].error = Some(error_text.clone());
                 let uncertain = task_error_uncertain(&error, task.uncertain_on_error);
                 records[index].uncertain = uncertain;
@@ -712,6 +733,8 @@ pub(super) fn run_group(
                 &prepared,
                 &mut total_output_bytes,
                 &secret_redactor,
+                &cancelled,
+                outer_deadline,
             );
         }
         for record in &mut records {
@@ -962,7 +985,13 @@ pub(super) fn run_each(
             .iter()
             .map(|task| task.applet.clone())
             .collect::<Vec<_>>();
-        pre_register_task_group_secrets(registry, &applet_names, &environment)?;
+        pre_register_task_group_secrets(
+            registry,
+            &applet_names,
+            &environment,
+            &cancelled,
+            context.deadline,
+        )?;
         if sink.is_some() && prepared.iter().any(|task| task.sensitive) {
             bail!("checkpoint refused for parallel for each with secret task output");
         }
@@ -1238,6 +1267,8 @@ pub(super) fn run_each(
             &prepared,
             &mut total_output_bytes,
             &secret_redactor,
+            &cancelled,
+            outer_deadline,
         );
         if records[index]
             .error
@@ -1343,6 +1374,8 @@ pub(super) fn run_each(
                 &prepared,
                 &mut total_output_bytes,
                 &secret_redactor,
+                &cancelled,
+                outer_deadline,
             );
         }
         for (slot, record) in records.iter_mut().enumerate() {
@@ -1470,11 +1503,13 @@ fn update_record(
     tasks: &[PreparedTask],
     total_output_bytes: &mut usize,
     secret_redactor: &crate::security::SecretRedactor,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) {
     let Completion {
         index,
         result,
-        cancelled,
+        cancelled: completion_cancelled,
         launched_processes,
     } = completion;
     let Some(record) = records.get_mut(index) else {
@@ -1482,7 +1517,15 @@ fn update_record(
     };
     match result {
         Ok(result) => {
-            if register_task_result(secret_redactor, record.sensitive, &result).is_err() {
+            if register_task_result(
+                secret_redactor,
+                record.sensitive,
+                &result,
+                cancelled,
+                deadline,
+            )
+            .is_err()
+            {
                 record.state = TaskState::Failed;
                 record.error = Some(
                     "sensitive task output was withheld because redaction could not be secured"
@@ -1506,18 +1549,23 @@ fn update_record(
             record.invocation = Some(Box::new(result));
         }
         Err(error) => {
-            record.state = if cancelled {
+            record.state = if completion_cancelled {
                 TaskState::Cancelled
             } else {
                 TaskState::Failed
             };
             record.error = Some(
-                register_task_error(secret_redactor, record.sensitive, &error).unwrap_or_else(
-                    |_| {
-                        "sensitive task failure was withheld because redaction could not be secured"
-                            .into()
-                    },
-                ),
+                register_task_error(
+                    secret_redactor,
+                    record.sensitive,
+                    &error,
+                    cancelled,
+                    deadline,
+                )
+                .unwrap_or_else(|_| {
+                    "sensitive task failure was withheld because redaction could not be secured"
+                        .into()
+                }),
             );
             record.uncertain = task_error_uncertain(&error, tasks[index].uncertain_on_error);
             record.launched_processes = launched_processes;
@@ -1525,34 +1573,39 @@ fn update_record(
     }
 }
 
-fn register_secret_value(redactor: &crate::security::SecretRedactor, value: &Value) -> Result<()> {
+fn register_secret_value(
+    redactor: &crate::security::SecretRedactor,
+    value: &Value,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<()> {
     match value {
         Value::String(value) => {
             redactor
-                .register(value.as_bytes())
+                .register(value.as_bytes(), cancelled, deadline)
                 .map_err(|error| anyhow!("registering sensitive value: {error}"))?;
         }
         Value::Integer(value) => {
             redactor
-                .register(value.to_string().as_bytes())
+                .register(value.to_string().as_bytes(), cancelled, deadline)
                 .map_err(|error| anyhow!("registering sensitive value: {error}"))?;
         }
         Value::Number(value) => {
             redactor
-                .register(value.to_string().as_bytes())
+                .register(value.to_string().as_bytes(), cancelled, deadline)
                 .map_err(|error| anyhow!("registering sensitive value: {error}"))?;
         }
         Value::List(values) => {
             for value in values {
-                register_secret_value(redactor, value)?;
+                register_secret_value(redactor, value, cancelled, deadline)?;
             }
         }
         Value::Record(values) => {
             for (key, value) in values {
                 redactor
-                    .register(key.as_bytes())
+                    .register(key.as_bytes(), cancelled, deadline)
                     .map_err(|error| anyhow!("registering sensitive value key: {error}"))?;
-                register_secret_value(redactor, value)?;
+                register_secret_value(redactor, value, cancelled, deadline)?;
             }
         }
         Value::Bool(_) | Value::Null | Value::Reference(_) => {}
@@ -1564,18 +1617,20 @@ fn register_task_result(
     redactor: &crate::security::SecretRedactor,
     sensitive: bool,
     result: &AppletInvocationResult,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     if !sensitive {
         return Ok(());
     }
     redactor
-        .register(&result.output)
+        .register(&result.output, cancelled, deadline)
         .map_err(|error| anyhow!("registering sensitive task output: {error}"))?;
     redactor
-        .register(&result.stderr)
+        .register(&result.stderr, cancelled, deadline)
         .map_err(|error| anyhow!("registering sensitive task stderr: {error}"))?;
     if let Some(value) = &result.value {
-        register_secret_value(redactor, value)?;
+        register_secret_value(redactor, value, cancelled, deadline)?;
     }
     Ok(())
 }
@@ -1584,6 +1639,8 @@ fn register_task_error(
     redactor: &crate::security::SecretRedactor,
     sensitive: bool,
     error: &anyhow::Error,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<String> {
     let text = format!("{error:#}");
     if !sensitive {
@@ -1602,14 +1659,14 @@ fn register_task_error(
         )
     {
         redactor
-            .register(output)
+            .register(output, cancelled, deadline)
             .map_err(|error| anyhow!("registering sensitive task failure bytes: {error}"))?;
     }
     if let Some(value) = &result.value {
-        register_secret_value(redactor, value)?;
+        register_secret_value(redactor, value, cancelled, deadline)?;
     }
     redactor
-        .register(text.as_bytes())
+        .register(text.as_bytes(), cancelled, deadline)
         .map_err(|error| anyhow!("registering sensitive task failure: {error}"))?;
     Ok(text)
 }
@@ -2011,6 +2068,8 @@ mod cancellation_tests {
             &tasks,
             &mut total_output_bytes,
             &crate::security::SecretRedactor::default(),
+            &AtomicBool::new(false),
+            None,
         );
 
         assert_eq!(records[0].state, TaskState::Cancelled);

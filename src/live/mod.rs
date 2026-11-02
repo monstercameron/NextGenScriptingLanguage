@@ -943,6 +943,10 @@ fn dispatch(
             }
         }
         let plan = validate(&doc, &registry, max_bytes, mode == Mode::Run)?;
+        // Session setup runs before any control loop exists to cancel it, so
+        // there is no stop flag to observe: the blocking emission keeps
+        // setup-time completeness (fail-closed) instead of skipping the mask.
+        let idle = AtomicBool::new(false);
         for input in plan
             .program
             .inputs
@@ -950,10 +954,15 @@ fn dispatch(
             .filter(|input| crate::ast::is_sensitive(input))
         {
             if let Some(value) = doc.bindings.get(&input.name) {
-                crate::security::register_sensitive_value(&registry, &state::argument(value))?;
+                crate::security::register_sensitive_value(
+                    &registry,
+                    &state::argument(value),
+                    &idle,
+                    None,
+                )?;
             }
         }
-        crate::security::register_sensitive_program(&registry, &plan.program)?;
+        crate::security::register_sensitive_program(&registry, &plan.program, &idle, None)?;
         if plan.screen.is_some()
             && !opts.headless
             && (!std::io::stdin().is_terminal() || !std::io::stdout().is_terminal())
@@ -1209,6 +1218,17 @@ impl Drop for SignalGuard {
     }
 }
 fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) -> Result<Json> {
+    if mode == Mode::Run {
+        // A finite `run --control` run hardens exactly like `run`: mask
+        // pre-registered secrets (usually none yet; hooks cover the rest)
+        // before any step can echo them. Interactive `serve` stays raw: its
+        // stdout owns the control protocol and an operator is present. Only
+        // ever enable here, never disable: the switch is process-global, so
+        // a non-CI control run must not flip hardening off while a
+        // concurrent session is streaming.
+        crate::github_actions::enable_if_ci_no_disable();
+        crate::github_actions::emit_masks_for_registry(&shared.registry);
+    }
     #[cfg(unix)]
     check_socket_parent(socket)?;
     let listener = UnixListener::bind(socket)
@@ -1244,11 +1264,28 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
         }
         // In run mode, stdout is reserved for the program's output.
         Mode::Run => {
-            writeln!(
-                std::io::stderr(),
-                "execute: control endpoint {}",
-                socket.display()
-            )?;
+            let notice = format!("execute: control endpoint {}\n", socket.display());
+            if crate::github_actions::enabled() {
+                // The socket path is operator-supplied and stderr shares the
+                // merged runner log: filter it under the sink lock like any
+                // other hardened stderr write so a crafted path cannot forge
+                // a workflow command. The merged claim orders it behind any
+                // in-flight pooled write, including one whose cancel drain
+                // already expired. The write phase itself is bounded through
+                // the direct worker's progress-gated drain, so a stop that
+                // lands mid-write reports instead of hanging a wedged write
+                // in-kernel. (Stdout above stays raw on purpose: in serve
+                // mode it owns the control protocol.)
+                crate::github_actions::write_direct_stderr_with_cancel(
+                    notice.as_bytes(),
+                    &shared.stop,
+                    None,
+                )?;
+            } else {
+                use std::io::Write as _;
+                std::io::stderr().write_all(notice.as_bytes())?;
+                std::io::stderr().flush()?;
+            }
         }
     }
     let mut run_end: Option<RunEnd> = None;
@@ -1552,23 +1589,32 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     };
     // Uncaptured stdout has already streamed. Write what plain run writes last: the
     // pipeline output of a completed run, then its diagnostic, then the status.
+    // Under Actions hardening the final bytes share the stdout sanitizer with
+    // the streamed bytes, so a forged command split across that boundary is
+    // still neutralized. The diagnostic below filters and flushes via
+    // `write_exit_diagnostic`: nothing from this run follows on stderr.
     if let Some(output) = end.output {
+        let bytes: Vec<u8> = match output {
+            Data::Text { text } => text.into_bytes(),
+            Data::Bytes { bytes } => bytes,
+        };
         // The live host is the program's stdout here, so the same TTY rule as
         // plain run applies: pipes keep exact bytes, TTY sinks get escaped text.
-        let terminal = crate::terminal_text::stdout_is_terminal();
-        let mut stdout = std::io::stdout().lock();
-        match output {
-            Data::Text { text } => stdout.write_all(
-                &crate::terminal_text::encode_pipeline_for_stdout(text.as_bytes(), terminal),
-            )?,
-            Data::Bytes { bytes } => stdout.write_all(
-                &crate::terminal_text::encode_pipeline_for_stdout(&bytes, terminal),
-            )?,
-        }
-        stdout.flush()?;
+        // Encode first, then write through the Actions final writer (the same
+        // order as the streamed path), so TTY escaping and `::` neutralization
+        // both apply. Sink-serialized like every other hardened terminal write
+        // so a concurrent mask cannot land between classification and write.
+        // The worker thread is joined above, so no run remains to cancel: the
+        // blocking wait is fail-closed delivery of a completed run's output,
+        // not an unbounded wait under cancellation.
+        let bytes = crate::terminal_text::encode_pipeline_for_stdout(
+            &bytes,
+            crate::terminal_text::stdout_is_terminal(),
+        );
+        crate::github_actions::write_stdout_final(&bytes)?;
     }
     if let Some(diagnostic) = &end.diagnostic {
-        crate::runtime::write_diagnostic(diagnostic.as_bytes());
+        crate::runtime::write_exit_diagnostic(diagnostic.as_bytes());
     }
     Ok(json!({"ok":true,"event":"run_finished","exit_status":end.status}))
 }

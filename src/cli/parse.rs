@@ -54,6 +54,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut data_flow_policy = None;
     let mut cache_dir = None;
     let mut checkpoint_dir = None;
+    let mut from_record_dir = None;
     let mut record_dir = None;
     let mut retry_uncertain = false;
     let mut once = false;
@@ -68,6 +69,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut max_catch_up = None;
     let mut calendar_dedup = None;
     let mut command_timeout = None;
+    let mut fs_timeout = None;
     let mut drain_timeout = None;
     let mut total_timeout = None;
     let mut kill_grace = None;
@@ -321,6 +323,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     "a directory",
                 )?));
             }
+            "--from-record" if command == "resume" => {
+                if from_record_dir.is_some() {
+                    bail!("--from-record may be specified only once");
+                }
+                from_record_dir = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--from-record",
+                    "a record directory",
+                )?));
+            }
             "--retry-uncertain" if command == "resume" => {
                 if retry_uncertain {
                     bail!("--retry-uncertain may be specified only once");
@@ -378,6 +391,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     .checked_add(duration)
                     .context("command timeout is too large")?;
                 command_timeout = Some(duration);
+            }
+            "--fs-timeout-ms" if matches!(command, "run" | "resume") => {
+                if fs_timeout.is_some() {
+                    bail!("--fs-timeout-ms may be specified only once");
+                }
+                let value = parse_positive_usize(arguments, &mut index, "--fs-timeout-ms")?;
+                let duration = std::time::Duration::from_millis(u64::try_from(value)?);
+                std::time::Instant::now()
+                    .checked_add(duration)
+                    .context("filesystem timeout is too large")?;
+                fs_timeout = Some(duration);
             }
             "--drain-timeout-ms" if command == "run" => {
                 if drain_timeout.is_some() {
@@ -514,8 +538,11 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         (None, true) => PathBuf::new(),
         (None, false) => return Err(anyhow!("missing workflow file\n{}", usage())),
     };
-    if command == "resume" && checkpoint_dir.is_none() {
-        bail!("resume requires --checkpoint DIR");
+    if command == "resume" && checkpoint_dir.is_none() && from_record_dir.is_none() {
+        bail!("resume requires --checkpoint DIR or --from-record DIR");
+    }
+    if checkpoint_dir.is_some() && from_record_dir.is_some() {
+        bail!("--from-record cannot be combined with --checkpoint");
     }
     if !break_at.is_empty() && !control {
         bail!("--break-at requires --control");
@@ -550,6 +577,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         data_flow_policy,
         cache_dir,
         checkpoint_dir,
+        from_record_dir,
         retry_uncertain,
         once,
         trace,
@@ -561,6 +589,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         max_catch_up,
         calendar_dedup,
         command_timeout,
+        fs_timeout,
         drain_timeout,
         total_timeout,
         kill_grace,

@@ -51,7 +51,8 @@ use spawn::{
 // Used by the Windows process path (windows_process.rs) through this module.
 #[cfg(windows)]
 use spawn::{
-    check_native_abort, native_output_limit_failure, native_spawn_failure, resolved_call_stdio,
+    attach_abort_stdout, check_native_abort, native_output_limit_failure, native_spawn_failure,
+    resolved_call_stdio,
 };
 use step_loop::{
     run_finite, run_finite_inner, run_finite_inner_with_state_source, run_finite_state, FiniteRun,
@@ -75,6 +76,8 @@ pub mod worker_backend;
 #[cfg(feature = "graph")]
 pub(crate) use checkpoint::graph::{open_graph_checkpoint, PersistenceAuthorizer};
 pub use checkpoint::{read_repair_state, CheckpointOptions, RepairState};
+#[cfg(feature = "records")]
+pub(crate) use resume::node_end;
 pub use resume::run_checkpointed;
 
 /// Mark descriptors inherited by this process close-on-exec before starting runtime work.
@@ -104,7 +107,7 @@ pub use service::{
     run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
     MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
 };
-pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
+pub use stdio::{write_cancellable, write_diagnostic, write_exit_diagnostic, write_with_deadline};
 
 pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
 type PreparedJobCommands = Vec<(PathBuf, Vec<String>)>;
@@ -135,6 +138,11 @@ pub struct RunOptions {
     /// cooperative checkpoints in an in-process applet. It cannot interrupt a
     /// synchronous OS or library call.
     pub command_timeout: Option<Duration>,
+    /// Budget for one filesystem open/read operation on host paths and
+    /// in-process applets (threat model H7). `None` selects the shared
+    /// default, which is always finite: FIFO targets fail with a typed
+    /// timeout instead of hanging, and non-regular targets are refused.
+    pub fs_timeout: Option<Duration>,
     /// Maximum lifetime of the full runtime operation, including scheduler waits.
     pub total_timeout: Option<Duration>,
     /// Grace between the polite group signal (SIGTERM, or SIGINT when the run
@@ -161,6 +169,7 @@ impl RunOptions {
             max_loop_iterations: loops::MAX_LOOP_ITERATIONS,
             loop_budget_scope: LoopBudgetScope::PerLoop,
             command_timeout: None,
+            fs_timeout: None,
             total_timeout: None,
             kill_grace: DEFAULT_KILL_GRACE,
         }
@@ -724,7 +733,43 @@ impl Input {
         match self {
             Self::Empty => Ok(Vec::new()),
             Self::Bytes(bytes) => Ok(bytes),
-            Self::File(file) => capture(file, limit),
+            Self::File(file) => {
+                // Bounded read (threat model H7): the handle was classified
+                // as a regular file at open time, and this poll/read loop
+                // bounds a stalled mount within the filesystem-operation
+                // deadline instead of hanging.
+                let deadline = crate::fs_io::fs_deadline(signals.fs_timeout, signals.deadline);
+                let checkpoint = || {
+                    if signals.cancelled.load(Ordering::Relaxed) {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "workflow cancelled by signal",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                };
+                crate::fs_io::read_input_file(&file, limit, deadline, &checkpoint).map_err(
+                    |error| {
+                        // Keep the long-standing over-limit rendering: a
+                        // plain message with no I/O error in the chain,
+                        // exactly as the unbounded reader reported it.
+                        if error.kind() == std::io::ErrorKind::QuotaExceeded {
+                            anyhow!("output exceeds maximum of {limit} bytes")
+                        } else {
+                            let failure = anyhow::Error::from(error);
+                            if failure
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|cause| cause.kind() == std::io::ErrorKind::TimedOut)
+                            {
+                                failure.context(CommandTimedOut)
+                            } else {
+                                failure
+                            }
+                        }
+                    },
+                )
+            }
             Self::Stdin => stdio::capture_stdin(limit, signals, timeout),
         }
     }
@@ -762,6 +807,10 @@ pub(crate) struct Signals {
     owns_signal_handlers: bool,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
+    /// Run-wide filesystem-operation budget for host opens/reads and
+    /// in-process applet file access (threat model H7). `None` selects the
+    /// shared default, which is always finite.
+    pub(crate) fs_timeout: Option<Duration>,
     graph_service_cancellation: bool,
     background_jobs_allowed: bool,
     program_modules: Arc<Mutex<Option<Arc<crate::modules::ProgramModuleSession>>>>,
@@ -922,6 +971,7 @@ impl Signals {
             owns_signal_handlers: false,
             capture_diagnostics: false,
             deadline,
+            fs_timeout: None,
             graph_service_cancellation: false,
             background_jobs_allowed: true,
             program_modules: Arc::new(Mutex::new(None)),
@@ -1040,6 +1090,7 @@ impl Signals {
             owns_signal_handlers: false,
             capture_diagnostics,
             deadline,
+            fs_timeout: None,
             graph_service_cancellation: false,
             background_jobs_allowed: true,
             program_modules: Arc::new(Mutex::new(None)),
@@ -1085,6 +1136,7 @@ impl Signals {
             owns_signal_handlers: false,
             capture_diagnostics: self.capture_diagnostics,
             deadline,
+            fs_timeout: self.fs_timeout,
             graph_service_cancellation: self.graph_service_cancellation,
             background_jobs_allowed: self.background_jobs_allowed,
             program_modules: Arc::clone(&self.program_modules),
@@ -1130,6 +1182,7 @@ impl Signals {
             owns_signal_handlers: false,
             capture_diagnostics: self.capture_diagnostics,
             deadline: self.deadline,
+            fs_timeout: self.fs_timeout,
             graph_service_cancellation: self.graph_service_cancellation,
             background_jobs_allowed: self.background_jobs_allowed,
             program_modules: Arc::clone(&self.program_modules),
@@ -3007,6 +3060,7 @@ pub fn run_with_drain_timeout(
     } else {
         Signals::register_with_deadline(deadline)?
     };
+    signals.fs_timeout = options.fs_timeout;
     signals.kill_grace = options.kill_grace;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
@@ -3423,7 +3477,11 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
             Ok(())
         }
     };
-    let context = crate::applets::ExecutionContext::new(&checkpoint);
+    // The run's filesystem-operation budget travels with the applet
+    // context so `fs.*` opens and readiness waits honor `--fs-timeout-ms`
+    // (threat model H7); the checkpoint above still enforces the run budget.
+    let context =
+        crate::applets::ExecutionContext::new(&checkpoint).with_fs_timeout(signals.fs_timeout);
     let result = match typed_json {
         Some((_, typed)) => crate::applets::execute_with_typed_json(
             manifest.name_for(call),
@@ -3811,9 +3869,25 @@ fn execute_call_group_unobserved(group: GroupRequest<'_>) -> Result<GroupOutput>
         launched,
         signals,
     });
+    // Sensitive-output registration emits mask lines, so it observes the
+    // run's cancel/deadline instead of hanging on a wedged terminal; a
+    // cancelled registration fails the group instead of echoing unmasked.
     match &output {
-        Ok(output) => register_sensitive_group_output(registry, calls, bindings, output)?,
-        Err(error) => register_sensitive_group_failure(registry, calls, error)?,
+        Ok(output) => register_sensitive_group_output(
+            registry,
+            calls,
+            bindings,
+            output,
+            &signals.cancelled,
+            signals.deadline,
+        )?,
+        Err(error) => register_sensitive_group_failure(
+            registry,
+            calls,
+            error,
+            &signals.cancelled,
+            signals.deadline,
+        )?,
     }
     output
 }
@@ -3957,6 +4031,8 @@ fn register_sensitive_group_output(
     calls: &[(&Invocation, &Manifest, usize)],
     bindings: &BTreeMap<String, Value>,
     output: &GroupOutput,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     // Only the terminal pipeline stage may bind output; in-process env.load
     // cannot join a native pipeline, so every valid sensitive binding is last.
@@ -3987,7 +4063,7 @@ fn register_sensitive_group_output(
         let redactor = crate::security::secret_redactor(registry);
         for value in values {
             redactor
-                .register(value.as_bytes())
+                .register(value.as_bytes(), cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register env.load secret values"))?;
         }
         return Ok(());
@@ -4003,11 +4079,11 @@ fn register_sensitive_group_output(
         )
     {
         redactor
-            .register(bytes)
+            .register(bytes, cancelled, deadline)
             .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         if bytes.ends_with(b"\n") {
             redactor
-                .register(&bytes[..bytes.len() - 1])
+                .register(&bytes[..bytes.len() - 1], cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         }
     }
@@ -4015,6 +4091,8 @@ fn register_sensitive_group_output(
         crate::security::register_sensitive_value(
             registry,
             &crate::structured::from_json(value.clone()),
+            cancelled,
+            deadline,
         )?;
     }
     Ok(())
@@ -4024,6 +4102,8 @@ fn register_sensitive_group_failure(
     registry: &Registry,
     calls: &[(&Invocation, &Manifest, usize)],
     error: &anyhow::Error,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let Some((_, _, line)) = calls.last().copied() else {
         return Ok(());
@@ -4053,16 +4133,16 @@ fn register_sensitive_group_failure(
         )
     {
         redactor
-            .register(output)
+            .register(output, cancelled, deadline)
             .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         if output.ends_with(b"\n") {
             redactor
-                .register(&output[..output.len() - 1])
+                .register(&output[..output.len() - 1], cancelled, deadline)
                 .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
         }
     }
     if let Some(value) = &result.value {
-        crate::security::register_sensitive_value(registry, value)?;
+        crate::security::register_sensitive_value(registry, value, cancelled, deadline)?;
     }
     Ok(())
 }
@@ -5139,7 +5219,9 @@ fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
                 break;
             }
             Ok(count) => {
-                let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
+                let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get)
+                    || crate::github_actions::enabled()
+                {
                     FORCED_STDERR_CAPTURE_LIMIT
                 } else {
                     MAX_DIAGNOSTIC_BYTES_PER_STAGE
@@ -5177,6 +5259,83 @@ mod child_observer_tests {
         let flags = unsafe { libc::fcntl(observer.raw_fd(), libc::F_GETFD) };
         assert_ne!(flags, -1);
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_exited_child_wakes_observer_before_it_is_reaped() {
+        let observer = ChildObserver::new().expect("creating test kqueue");
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .expect("spawning child");
+        observer.observe(child.id()).expect("observing child");
+        // The child is a zombie until waited on, so the kqueue is already readable.
+        let mut descriptor = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the kqueue
+        // owned by `observer`, which lives until the end of this test.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
+        assert_eq!(ready, 1);
+        observer.drain().expect("draining exit notification");
+        let mut quiet = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(
+            // SAFETY: `quiet` is a live pollfd on the kqueue owned by `observer`, with a
+            // count of 1 and a zero timeout, so the call returns without blocking.
+            unsafe { libc::poll(&mut quiet, 1, 0) },
+            0,
+            "a drained observer must not stay readable"
+        );
+        // The observer did not reap the zombie. Killing its group is still safe;
+        // Child::wait, rather than readiness, remains the exit-status authority.
+        assert!(exited_unreaped(child.id()).expect("probing child without reaping"));
+        kill_group(child.id());
+        assert!(child.wait().expect("reaping child").success());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_repeated_short_lived_children_wake_observer() {
+        // Short-lived `sh` children are the hang report's shape: each must wake
+        // its own kqueue and reap promptly, with an outer deadline bounding the
+        // whole sequence. This covers the wake path, not any proven root cause.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        for iteration in 0..32 {
+            assert!(
+                Instant::now() < deadline,
+                "short-lived children stalled at iteration {iteration}"
+            );
+            let observer = ChildObserver::new().expect("creating test kqueue");
+            let mut child = Command::new("sh")
+                .args(["-c", "printf 'fast\n'"])
+                .process_group(0)
+                .spawn()
+                .expect("spawning child");
+            observer.observe(child.id()).expect("observing child");
+            let mut descriptor = libc::pollfd {
+                fd: observer.raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the
+            // kqueue owned by `observer`, which lives until the end of this iteration.
+            let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
+            assert_eq!(
+                ready, 1,
+                "observer missed short-lived child at iteration {iteration}"
+            );
+            observer.drain().expect("draining exit notification");
+            kill_group(child.id());
+            assert!(child.wait().expect("reaping child").success());
+        }
     }
 
     struct RestoreSigchld(libc::sigaction);

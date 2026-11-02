@@ -39,6 +39,8 @@ pub(crate) struct Args {
     pub(crate) data_flow_policy: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
     pub(crate) checkpoint_dir: Option<PathBuf>,
+    /// `resume --from-record DIR`: replay the record's completed prefix.
+    pub(crate) from_record_dir: Option<PathBuf>,
     pub(crate) retry_uncertain: bool,
     pub(crate) once: bool,
     pub(crate) trace: bool,
@@ -50,6 +52,7 @@ pub(crate) struct Args {
     pub(crate) max_catch_up: Option<usize>,
     pub(crate) calendar_dedup: Option<String>,
     pub(crate) command_timeout: Option<std::time::Duration>,
+    pub(crate) fs_timeout: Option<std::time::Duration>,
     pub(crate) drain_timeout: Option<std::time::Duration>,
     pub(crate) total_timeout: Option<std::time::Duration>,
     /// `run --kill-grace-ms N`: polite-signal grace before SIGKILL on

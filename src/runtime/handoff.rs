@@ -38,6 +38,22 @@ pub(crate) enum ProcessRequest {
 /// The parser already limits each marker to one fresh native command; this adds
 /// the mode and placement rules that need the whole program.
 pub(crate) fn validate(program: &Program, checkpointed: bool) -> Result<()> {
+    // Under Actions hardening the handed-over program inherits the terminal and
+    // writes to the job log after `exec`, bypassing sanitization. Fail closed
+    // before any step runs: the program must `run` the command instead. The
+    // handover contract itself is unchanged without hardening.
+    if crate::github_actions::enabled() {
+        if let Some(step) = program
+            .steps
+            .iter()
+            .find(|step| matches!(step.kind, StepKind::HandOver))
+        {
+            bail!(
+                "line {}: `hand over to` is refused while GitHub Actions hardening is enabled (GITHUB_ACTIONS=true): the handed-over program inherits the terminal and its output cannot be sanitized; run the command instead",
+                step.line
+            );
+        }
+    }
     // Temporary scopes hold paths that a checkpoint cannot replay, so they are refused
     // under one, as hand-over and detached launch are.
     if checkpointed {

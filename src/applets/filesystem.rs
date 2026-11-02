@@ -100,6 +100,7 @@ pub(super) fn write_atomic(
 ) -> Result<Value, AppletError> {
     context.checkpoint()?;
     let path = resolve_path(required_string(args, "path")?, cwd);
+    let _ = result_path(&path)?;
     let content = match args.get("content") {
         Some(Value::String(value)) => value.as_bytes().to_vec(),
         Some(_) => return Err(invalid("args.content must be a string")),
@@ -140,6 +141,7 @@ pub(super) fn unlink_checked(
 ) -> Result<Value, AppletError> {
     context.checkpoint()?;
     let path = resolve_path(required_string(args, "path")?, cwd);
+    let _ = result_path(&path)?;
     let expected_snapshot = required_string(args, "expected_snapshot")?;
     let lock_path = lock_path(args, &path, cwd)?;
     validate_lock_path(&lock_path, &path)?;
@@ -214,7 +216,7 @@ pub(super) fn unlink_checked(
             }
         }
         Ok(serde_json::json!({
-            "path": path.to_string_lossy(),
+            "path": result_path(&path)?,
             "removed": true,
             "symlink": symlink,
         }))
@@ -332,6 +334,7 @@ fn write_atomic_locked(
     permission_policy: PermissionPolicy,
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
+    let _ = result_path(path)?;
     if symlink_policy == SymlinkPolicy::Reject {
         match fs::symlink_metadata(path) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -393,7 +396,7 @@ fn write_atomic_locked(
     if matches!(permission_policy, PermissionPolicy::Preserve) {
         if let Some(unchanged) = initial.as_ref().filter(|state| state.content == content) {
             return Ok(serde_json::json!({
-                "path": path.to_string_lossy(),
+                "path": result_path(path)?,
                 "content_hash": unchanged.content_hash,
                 "snapshot": unchanged.snapshot,
                 "changed": false,
@@ -571,7 +574,7 @@ fn write_atomic_locked(
             )
         })?;
     Ok(serde_json::json!({
-        "path": path.to_string_lossy(),
+        "path": result_path(path)?,
         "content_hash": written.content_hash,
         "snapshot": written.snapshot,
         "changed": true,
@@ -586,6 +589,7 @@ pub(crate) fn write_jsonc_update(
 ) -> Result<Value, AppletError> {
     context.checkpoint()?;
     let path = resolve_path(required_string(args, "path")?, cwd);
+    let _ = result_path(&path)?;
     let expected_hash = required_string(args, "expected_content_hash")?;
     let symlink_policy = parse_symlink_policy(args)?;
     let permission_policy = parse_permission_policy(args)?;
@@ -622,7 +626,7 @@ pub(crate) fn write_jsonc_update(
                 ));
             }
             return Ok(serde_json::json!({
-                "path": path.to_string_lossy(),
+                "path": result_path(&path)?,
                 "content_hash": initial.content_hash,
                 "snapshot": initial.snapshot,
                 "changed": false,
@@ -646,6 +650,20 @@ pub(crate) fn resolve_path(path: &str, cwd: &Path) -> PathBuf {
     } else {
         cwd.join(path)
     }
+}
+
+/// The exact text to return for a filesystem result path. Callers feed a
+/// returned path into later operations, and a lossy rendering of a
+/// non-UTF-8 path (for example a relative path joined to a non-UTF-8
+/// working directory) can name a different existing file. Refuse such a
+/// path before any mutation instead of returning a misleading result.
+fn result_path(path: &Path) -> Result<&str, AppletError> {
+    path.to_str().ok_or_else(|| {
+        invalid(format!(
+            "path is not valid UTF-8 and cannot be returned losslessly; refusing to operate so the result path cannot name a different file (use a UTF-8 working directory or an absolute UTF-8 path): {}",
+            path.display()
+        ))
+    })
 }
 
 fn broken_symlink(path: &Path) -> Result<Option<BrokenSymlink>, AppletError> {
@@ -1115,5 +1133,83 @@ impl Drop for TempCleanup {
         if let Some(path) = self.0.take() {
             let _ = fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_args() -> Map<String, Value> {
+        serde_json::json!({
+            "path": "out.txt",
+            "expected_content_hash": "missing",
+            "symlink_policy": "reject",
+            "permissions_policy": "preserve",
+            "content": "written",
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    #[test]
+    fn write_atomic_result_path_names_the_file_it_wrote() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let result = write_atomic(&write_args(), b"", directory.path(), &context).unwrap();
+        let expected = directory.path().join("out.txt");
+        assert_eq!(result["path"], expected.to_str().unwrap());
+        let returned = Path::new(result["path"].as_str().unwrap());
+        assert_eq!(fs::read(returned).unwrap(), b"written");
+    }
+
+    /// A relative path in a non-UTF-8 working directory resolves to a path
+    /// whose lossy rendering names a sibling directory. The applet must
+    /// refuse before mutating instead of returning that sibling's path.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_cwd_fails_before_mutation_so_result_cannot_name_sibling() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let actual = directory
+            .path()
+            .join(OsString::from_vec(b"bad-\xff".to_vec()));
+        let lossy_name = actual.file_name().unwrap().to_string_lossy().into_owned();
+        let sibling = directory.path().join(&lossy_name);
+        assert_ne!(actual, sibling);
+        fs::create_dir(&actual).unwrap();
+        fs::create_dir(&sibling).unwrap();
+        fs::write(sibling.join("out.txt"), b"sibling").unwrap();
+        let context = ExecutionContext::unrestricted();
+
+        let error = write_atomic(&write_args(), b"", &actual, &context).unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("cannot be returned losslessly"));
+        assert!(!actual.join("out.txt").exists());
+        assert_eq!(fs::read(sibling.join("out.txt")).unwrap(), b"sibling");
+
+        fs::write(actual.join("victim.txt"), b"actual").unwrap();
+        fs::write(sibling.join("victim.txt"), b"sibling-victim").unwrap();
+        let snapshot = inspect(&actual.join("victim.txt"), &context)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        let args = serde_json::json!({
+            "path": "victim.txt",
+            "expected_snapshot": snapshot,
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let error = unlink_checked(&args, &actual, &context).unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("cannot be returned losslessly"));
+        assert_eq!(fs::read(actual.join("victim.txt")).unwrap(), b"actual");
+        assert_eq!(
+            fs::read(sibling.join("victim.txt")).unwrap(),
+            b"sibling-victim"
+        );
     }
 }

@@ -313,6 +313,46 @@ mod execution_tests {
     }
 
     #[test]
+    fn relative_host_filesystem_grant_roots_are_refused_and_absolute_roots_still_authorize() {
+        let error = CapabilityPolicy::from_json(
+            r#"{"version":1,"host":{"capabilities":["filesystem.read"],"filesystem":{"read":["out"]}},"applets":{}}"#,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("absolute"), "{error:#}");
+        let error = CapabilityPolicy::from_json(
+            r#"{"version":1,"host":{"capabilities":["filesystem.write"],"filesystem":{"write":["out"]}},"applets":{}}"#,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("absolute"), "{error:#}");
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("allowed");
+        std::fs::create_dir(&root).unwrap();
+        let registry = crate::manifest::Registry::from_sources(&[] as &[String]).unwrap();
+        registry.set_host_state(Some(CapabilityPolicy {
+            version: CAPABILITY_POLICY_VERSION,
+            applets: BTreeMap::new(),
+            host: Some(HostGrant {
+                capabilities: BTreeSet::from(["filesystem.read".into()]),
+                filesystem: FilesystemGrant {
+                    read: vec![root.clone()],
+                    write: Vec::new(),
+                },
+            }),
+            host_environment: BTreeSet::new(),
+            deny_privileged: false,
+            allow_wrappers: BTreeSet::new(),
+        }));
+        authorize_host_path(
+            &registry,
+            &root.join("inside.txt"),
+            HostAccess::Read,
+            directory.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn native_origin_restrictions_are_typed_refusals_even_with_broad_network_access() {
         let mut restricted = grant();
         restricted
@@ -1276,6 +1316,11 @@ impl CapabilityPolicy {
                 .chain(grant.filesystem.write.iter())
             {
                 validate_policy_path(path).context("host filesystem grant")?;
+                if !path.is_absolute() && !path.has_root() {
+                    bail!(
+                        "host filesystem grant roots must be absolute paths; relative roots are not supported because they would move with the workflow working directory"
+                    );
+                }
             }
         }
         for variable in &self.host_environment {

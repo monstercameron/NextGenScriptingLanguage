@@ -2301,8 +2301,9 @@ fn schedule_options(args: &Args) -> Result<Option<flow::runtime::ScheduleOptions
     }))
 }
 
-/// The gate and the what-if/confirm checks cover finite programs only. Refuse them
-/// on graph, screen, and stream programs rather than printing an unchecked plan.
+/// The gate, the what-if/confirm checks, recording, and answers files cover finite
+/// programs only. Refuse them on graph, screen, and stream programs rather than
+/// printing an unchecked plan or silently dropping the option.
 fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
     if !args.allow.is_empty() {
         bail!("--allow applies only to finite programs, not {program_kind} programs");
@@ -2321,6 +2322,12 @@ fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
     }
     if args.from_record_dir.is_some() {
         bail!("--from-record applies only to finite programs, not {program_kind} programs");
+    }
+    if args.record_dir.is_some() {
+        bail!("--record applies only to finite programs, not {program_kind} programs");
+    }
+    if args.answers.is_some() {
+        bail!("--answers applies only to finite programs, not {program_kind} programs");
     }
     Ok(())
 }

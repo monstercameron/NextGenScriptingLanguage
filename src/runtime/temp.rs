@@ -76,10 +76,7 @@ impl ScopeStack {
         let path = root.join(ITEM);
         match kind {
             TempKind::File => {
-                crate::platform::private_options()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
+                create_private_file(&path)
                     .with_context(|| format!("creating temporary file {}", path.display()))?;
             }
             TempKind::Directory => create_private_dir(&path)?,
@@ -102,10 +99,7 @@ impl ScopeStack {
 }
 
 fn write_owner(root: &Path) -> Result<()> {
-    let mut file = crate::platform::private_options()
-        .write(true)
-        .create_new(true)
-        .open(root.join(OWNER_FILE))
+    let mut file = create_private_file(&root.join(OWNER_FILE))
         .context("recording the temporary scope owner")?;
     #[cfg(target_os = "linux")]
     {
@@ -149,9 +143,47 @@ fn create_private_dir(path: &Path) -> Result<()> {
         .with_context(|| format!("creating temporary directory {}", path.display()))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn create_private_dir(path: &Path) -> Result<()> {
+    fs::create_dir(path)
+        .with_context(|| format!("creating temporary directory {}", path.display()))?;
+    // A plain create inherits the temp parent's ACL, which may grant other
+    // local principals access. Replace it with the shared protected
+    // owner-only DACL, and fail closed (removing the directory) when that
+    // privacy cannot be established.
+    if let Err(error) = crate::platform::windows::restrict_directory(path).with_context(|| {
+        format!(
+            "restricting temporary directory {} to the current user",
+            path.display()
+        )
+    }) {
+        let _ = fs::remove_dir(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
 fn create_private_dir(path: &Path) -> Result<()> {
     fs::create_dir(path).with_context(|| format!("creating temporary directory {}", path.display()))
+}
+
+/// Create a new empty private file. Windows creation is atomic with the
+/// shared protected owner-only DACL; other platforms keep the existing
+/// owner-only mode from `platform::private_options`.
+fn create_private_file(path: &Path) -> Result<fs::File> {
+    #[cfg(windows)]
+    {
+        crate::platform::windows::create_private_file(path)
+    }
+    #[cfg(not(windows))]
+    {
+        crate::platform::private_options()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(anyhow::Error::from)
+    }
 }
 
 /// Remove scope directories left by processes that no longer exist. Only directories
@@ -392,6 +424,38 @@ mod tests {
                 0o600
             );
         }
+        stack.close(0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_scope_has_a_protected_owner_only_dacl() {
+        fn assert_private_directory(path: &Path) {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+                FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+            };
+            let handle = fs::OpenOptions::new()
+                .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(path)
+                .unwrap();
+            crate::security::validate_private_windows_acl(&handle, path).unwrap();
+        }
+        let mut stack = ScopeStack::default();
+        let directory = stack.open(0, TempKind::Directory).unwrap();
+        let root = directory.parent().unwrap().to_path_buf();
+        assert_private_directory(&root);
+        assert_private_directory(&directory);
+        let owner_path = root.join(OWNER_FILE);
+        let owner = fs::File::open(&owner_path).unwrap();
+        crate::security::validate_private_windows_acl(&owner, &owner_path).unwrap();
+        stack.close(0);
+        let file_path = stack.open(0, TempKind::File).unwrap();
+        let file = fs::File::open(&file_path).unwrap();
+        crate::security::validate_private_windows_acl(&file, &file_path).unwrap();
         stack.close(0);
     }
 

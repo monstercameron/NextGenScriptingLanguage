@@ -159,10 +159,24 @@ pub(super) fn ensure_symlink(
             context.checkpoint()?;
             let current = fs::read_link(&link)
                 .map_err(|error| io_error(error, format!("reading {}", link.display())))?;
-            let previous = current.to_string_lossy().into_owned();
+            // `previous` must restore this link exactly, as the stored target
+            // text. A lossy conversion would point a rollback at a different
+            // path, so refuse to replace a target it cannot represent.
+            let previous = match current.to_str() {
+                Some(text) => text.to_owned(),
+                None if current == Path::new(target) => current.to_string_lossy().into_owned(),
+                None => {
+                    return Err(invalid(format!(
+                        "refusing to replace symlink {}: its current target is not UTF-8 \
+                         text, so `previous` could not restore it exactly",
+                        link.display()
+                    )))
+                }
+            };
             if current == Path::new(target) {
                 (false, previous)
             } else {
+                check_previous_restores_link_kind(&metadata, &link, &current)?;
                 context.checkpoint()?;
                 let temp = temporary_link_path(&link);
                 let mut temp_cleanup = TempLinkCleanup(Some(temp.clone()));
@@ -452,6 +466,50 @@ impl Drop for TempLinkCleanup {
             let _ = fs::remove_file(path);
         }
     }
+}
+
+/// Refuse to replace a link whose kind a rollback through `previous` would
+/// not recreate. Windows chooses between file and directory links by whether
+/// the target currently resolves as a directory, so a dangling directory
+/// link would come back as a file link; its original kind is read from the
+/// link's own attributes, which survive a missing target. Unix links carry
+/// no kind, so the same stored target always recreates the same link there.
+#[cfg(windows)]
+fn check_previous_restores_link_kind(
+    metadata: &fs::Metadata,
+    link: &Path,
+    current: &Path,
+) -> Result<(), AppletError> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    let was_directory = metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0;
+    let resolved = if current.is_absolute() {
+        current.to_path_buf()
+    } else {
+        link.parent().unwrap_or(Path::new(".")).join(current)
+    };
+    if was_directory == resolved.is_dir() {
+        return Ok(());
+    }
+    let (kind, wanted) = if was_directory {
+        ("directory", "a directory")
+    } else {
+        ("file", "a file")
+    };
+    Err(invalid(format!(
+        "refusing to replace symlink {}: it is a {kind} link, but its target does not \
+         currently resolve as {wanted}, so `previous` could not restore its link kind",
+        link.display()
+    )))
+}
+
+#[cfg(not(windows))]
+fn check_previous_restores_link_kind(
+    _metadata: &fs::Metadata,
+    _link: &Path,
+    _current: &Path,
+) -> Result<(), AppletError> {
+    Ok(())
 }
 
 /// Create a symbolic link at `at`. `link` locates the link for relative target

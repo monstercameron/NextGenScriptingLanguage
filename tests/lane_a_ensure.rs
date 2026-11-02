@@ -308,6 +308,74 @@ fn ensure_symlink_creates_keeps_and_replaces_only_links() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn ensure_symlink_rollback_restores_relative_directory_target_exactly() {
+    // Symlink creation is gated to Unix: this Windows host lacks the
+    // privilege to create links. Rollback is a second `fs.ensure_symlink`
+    // call aimed at the `previous` target reported by the swap.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("real-dir-a")).unwrap();
+    fs::create_dir(dir.path().join("real-dir-b")).unwrap();
+    let link = dir.path().join("link");
+
+    run(
+        "fs.ensure_symlink",
+        json!({"path": "link", "target": "real-dir-a"}),
+        dir.path(),
+    )
+    .unwrap();
+    let swapped = run(
+        "fs.ensure_symlink",
+        json!({"path": "link", "target": "real-dir-b"}),
+        dir.path(),
+    )
+    .unwrap();
+    assert!(changed(&swapped));
+    // The recorded previous target is the exact stored text: still relative,
+    // not resolved against the link's directory.
+    assert_eq!(swapped["previous"], json!("real-dir-a"));
+
+    // The original directory vanishes before the rollback, so the restored
+    // link dangles until it reappears; then it is a directory link again.
+    fs::remove_dir(dir.path().join("real-dir-a")).unwrap();
+    let previous = swapped["previous"].as_str().unwrap();
+    let rolled_back = run(
+        "fs.ensure_symlink",
+        json!({"path": "link", "target": previous}),
+        dir.path(),
+    )
+    .unwrap();
+    assert!(changed(&rolled_back));
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("real-dir-a"));
+    fs::create_dir(dir.path().join("real-dir-a")).unwrap();
+    assert!(fs::metadata(&link).unwrap().is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_symlink_refuses_a_non_utf8_target_it_cannot_restore() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("real-a"), "a").unwrap();
+    let original = OsString::from_vec(b"bad-\xff-target".to_vec());
+    let link = dir.path().join("link");
+    symlink(&original, &link).unwrap();
+
+    // `previous` could only report this target lossily, so the replacement
+    // is refused before anything changes and the original link is intact.
+    let error = run(
+        "fs.ensure_symlink",
+        json!({"path": "link", "target": "real-a"}),
+        dir.path(),
+    )
+    .unwrap_err();
+    assert_eq!(error.exit_status(), 2);
+    assert_eq!(fs::read_link(&link).unwrap().as_os_str(), original);
+}
+
 #[test]
 fn ensure_dir_creates_parents_and_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();

@@ -4,7 +4,9 @@
 //! columns. A `line` span is intentionally broad when the parser only identifies
 //! a line; token spans are emitted only when the token can be located reliably.
 
-use crate::ast::{Connection, Invocation, Program, Step, StepKind, Value};
+use crate::ast::{
+    Connection, InputDeclaration, InputSource, Invocation, Program, Step, StepKind, Value,
+};
 use crate::contracts::{
     text_schema_guarantees_nonempty, text_schema_guarantees_single_line, AppletBackend, OutputType,
     StringPattern, ValueSchema,
@@ -1743,6 +1745,15 @@ fn mini_language_program_arguments(
     }
 }
 
+/// The existing input that actually reads environment variable `variable`, if any.
+/// A same-named input from another source (default, argument, option, ...) does not
+/// hold the environment value, so it must never be substituted for `$variable`.
+fn environment_input_for<'a>(program: &'a Program, variable: &str) -> Option<&'a InputDeclaration> {
+    program.inputs.iter().find(
+        |input| matches!(&input.source, Some(InputSource::Environment(name)) if name == variable),
+    )
+}
+
 fn shell_expansion_argument_fix(
     source: &str,
     program: &Program,
@@ -1771,10 +1782,7 @@ fn shell_expansion_argument_fix(
     }
     let (template, variables) = shell_variable_template(value)?;
     if variables.iter().any(|variable| {
-        program
-            .inputs
-            .iter()
-            .find(|input| input.name == *variable)
+        environment_input_for(program, variable)
             .is_some_and(|input| !format_input_is_scalar(input.kind))
     }) {
         return None;
@@ -1788,19 +1796,17 @@ fn shell_expansion_argument_fix(
     let mut variable_bindings = BTreeMap::new();
     for (index, variable) in variables.iter().enumerate() {
         let field = format!("v{index}");
+        let reusable = environment_input_for(program, variable);
         let binding = variable_bindings
             .entry(variable.clone())
-            .or_insert_with(|| {
-                if program.inputs.iter().any(|input| input.name == *variable) {
-                    variable.clone()
-                } else {
-                    fresh_binding_name(
-                        source,
-                        &format!("execute_{}", variable.to_ascii_lowercase()),
-                    )
-                }
+            .or_insert_with(|| match reusable {
+                Some(input) => input.name.clone(),
+                None => fresh_binding_name(
+                    source,
+                    &format!("execute_{}", variable.to_ascii_lowercase()),
+                ),
             });
-        if !program.inputs.iter().any(|input| input.name == *variable) {
+        if reusable.is_none() {
             declarations.push(format!(
                 "accept {binding} as text from environment {} with default \"\"\n",
                 serde_json::to_string(variable).ok()?
@@ -2052,10 +2058,7 @@ fn shell_expansion_value_fix(
     }
     let (template, variables) = shell_variable_template(value)?;
     if variables.iter().any(|variable| {
-        program
-            .inputs
-            .iter()
-            .find(|input| input.name == *variable)
+        environment_input_for(program, variable)
             .is_some_and(|input| !format_input_is_scalar(input.kind))
     }) {
         return None;
@@ -2071,19 +2074,17 @@ fn shell_expansion_value_fix(
     let mut variable_bindings = BTreeMap::new();
     for (index, variable) in variables.iter().enumerate() {
         let field = format!("v{index}");
+        let reusable = environment_input_for(program, variable);
         let binding = variable_bindings
             .entry(variable.clone())
-            .or_insert_with(|| {
-                if program.inputs.iter().any(|input| input.name == *variable) {
-                    variable.clone()
-                } else {
-                    fresh_binding_name(
-                        source,
-                        &format!("execute_{}", variable.to_ascii_lowercase()),
-                    )
-                }
+            .or_insert_with(|| match reusable {
+                Some(input) => input.name.clone(),
+                None => fresh_binding_name(
+                    source,
+                    &format!("execute_{}", variable.to_ascii_lowercase()),
+                ),
             });
-        if !program.inputs.iter().any(|input| input.name == *variable) {
+        if reusable.is_none() {
             declarations.push(format!(
                 "accept {binding} as text from environment {} with default \"\"\n",
                 serde_json::to_string(variable).ok()?

@@ -660,12 +660,35 @@ struct RepairRecord<'a> {
     diff: &'a str,
 }
 
+/// The checkpoint's exclusive lock, held for one whole repair. This is the
+/// same `lock` file resume holds through its journal and resolve holds
+/// through its read-check-append, so holding it from before
+/// [`repairable_program`] until after [`commit`] serializes the repair's
+/// read, check and commit against live checkpoint use and other repairs.
+/// Dropping the guard releases the lock.
+pub struct RepairLock {
+    _lock: crate::runtime::checkpoint::ResolveLock,
+}
+
+/// Acquire the checkpoint's exclusive lock for one repair. Fails with the
+/// busy `locked` error when a resume, a resolve or another repair already
+/// holds it, instead of letting this repair read, plan or commit
+/// concurrently.
+pub fn acquire_repair_lock(checkpoint: &Path) -> Result<RepairLock> {
+    Ok(RepairLock {
+        _lock: crate::runtime::checkpoint::acquire_resolve_lock(checkpoint)?,
+    })
+}
+
 /// Write an applied plan: keep a copy of the program as it was, append the record
 /// to `repairs.jsonl` and sync it, and only then replace the program file
 /// atomically. The audit record is durable before the program changes, so a
 /// crash or a failed replace can leave a record for a repair that was not
 /// applied, but never an applied repair with no record. Returns the record's
-/// sequence number.
+/// sequence number. The caller must hold the [`RepairLock`] from
+/// [`acquire_repair_lock`] across reading the checkpoint and program,
+/// planning, and this commit, so no other repair or live checkpoint use can
+/// interleave with the sequence choice, audit append and program replace.
 pub fn commit(
     checkpoint: &Path,
     program_path: &Path,
@@ -1898,5 +1921,36 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
+    }
+
+    /// While one repair holds the checkpoint lock, a second repair on the
+    /// same checkpoint is refused with the busy error instead of racing the
+    /// first repair's read-plan-commit. The same lock also excludes resolve,
+    /// which shares the checkpoint `lock` file with resume. Same-process
+    /// separate handles conflict on both `flock` (Unix) and `LockFileEx`
+    /// (Windows), so this is deterministic in-process.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn repair_lock_refuses_a_second_repair_while_held() {
+        let (_directory, checkpoint, _program, _plan) = commit_fixture();
+        let held = acquire_repair_lock(&checkpoint).unwrap();
+
+        let error = acquire_repair_lock(&checkpoint)
+            .err()
+            .expect("a second repair must be rejected while the first holds the lock");
+        assert!(
+            error.to_string().contains("locked"),
+            "unexpected concurrent error: {error:#}"
+        );
+        let error = crate::runtime::checkpoint::acquire_resolve_lock(&checkpoint)
+            .err()
+            .expect("resolve must be rejected while a repair holds the lock");
+        assert!(
+            error.to_string().contains("locked"),
+            "unexpected concurrent error: {error:#}"
+        );
+
+        drop(held);
+        let _reacquired = acquire_repair_lock(&checkpoint).unwrap();
     }
 }

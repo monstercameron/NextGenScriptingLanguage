@@ -103,6 +103,15 @@ pub fn repair(arguments: &[String]) -> Result<()> {
     }
     let directory = directory.with_context(|| USAGE.to_owned())?;
 
+    // Hold the checkpoint lock across the whole read, check and commit, so a
+    // live resume, a resolve or another repair cannot interleave with this
+    // repair; a held lock fails here with the busy error. A dry run writes
+    // nothing, so it takes no lock and leaves the checkpoint untouched.
+    let _repair_lock = if dry_run {
+        None
+    } else {
+        Some(repair::acquire_repair_lock(&directory)?)
+    };
     let (program_path, completed_steps) = repair::repairable_program(&directory)?;
     let source = fs::read_to_string(&program_path)
         .with_context(|| format!("reading {}", program_path.display()))?;

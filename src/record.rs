@@ -59,7 +59,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(any(not(unix), test))]
 use std::fs;
 use std::fs::File;
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -2335,6 +2335,13 @@ fn create_private_directory(path: &Path) -> Result<()> {
                     path.display()
                 );
             }
+            #[cfg(windows)]
+            crate::platform::windows::restrict_directory(path).with_context(|| {
+                format!(
+                    "restricting record directory {} to the current user",
+                    path.display()
+                )
+            })?;
             Ok(())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -2350,6 +2357,13 @@ fn create_private_directory(path: &Path) -> Result<()> {
             #[cfg(not(unix))]
             fs::create_dir_all(path)
                 .with_context(|| format!("creating record directory {}", path.display()))?;
+            #[cfg(windows)]
+            crate::platform::windows::restrict_directory(path).with_context(|| {
+                format!(
+                    "restricting record directory {} to the current user",
+                    path.display()
+                )
+            })?;
             Ok(())
         }
         Err(error) => {
@@ -2360,16 +2374,18 @@ fn create_private_directory(path: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn create_private(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        crate::platform::windows::create_private_file(path)
     }
-    options
-        .open(path)
-        .with_context(|| format!("creating {}", path.display()))
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        options
+            .open(path)
+            .with_context(|| format!("creating {}", path.display()))
+    }
 }
 
 #[cfg(not(unix))]
@@ -2439,6 +2455,41 @@ mod tests {
             b"pinned record"
         );
         assert!(!directory.join(RUN_FILE).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_record_directory_and_files_have_protected_owner_only_dacl() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let directory = temp.path().join("record");
+        create_private_directory(&directory).unwrap();
+        let metadata = fs::symlink_metadata(&directory).unwrap();
+        crate::security::verify_private_checkpoint_directory(&directory, &metadata)
+            .expect("new record directory must have a protected owner-only DACL");
+
+        let existing = temp.path().join("existing");
+        fs::create_dir_all(&existing).unwrap();
+        create_private_directory(&existing).unwrap();
+        let metadata = fs::symlink_metadata(&existing).unwrap();
+        crate::security::verify_private_checkpoint_directory(&existing, &metadata)
+            .expect("existing empty record directory must be restricted to the owner");
+
+        let blobs = directory.join(BLOB_DIR);
+        create_private_directory(&blobs).unwrap();
+        let metadata = fs::symlink_metadata(&blobs).unwrap();
+        crate::security::verify_private_checkpoint_directory(&blobs, &metadata)
+            .expect("record blob directory must have a protected owner-only DACL");
+
+        let trace_path = directory.join(TRACE_FILE);
+        drop(create_private(&trace_path).unwrap());
+        crate::security::open_private_file(&trace_path)
+            .expect("record file must have a protected owner-only DACL");
+
+        let run_path = directory.join(RUN_FILE);
+        atomic_write_private(&run_path, b"{}").unwrap();
+        crate::security::open_private_file(&run_path)
+            .expect("atomically replaced record file must have a protected owner-only DACL");
     }
 
     #[test]

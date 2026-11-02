@@ -1,7 +1,8 @@
 //! Optional per-agent authorization for the local live-control protocol.
 //!
-//! The live socket remains a trusted same-user interface when no policy is
-//! configured. With a policy installed, each request must carry a named agent
+//! Without a policy, only read-only live operations stay same-user trusted;
+//! mutating operations are refused unless the server explicitly opts in with
+//! `--allow-unauthenticated`. With a policy installed, each request must carry a named agent
 //! credential and the agent must hold the permission required by that
 //! operation. Policy files contain token hashes, never bearer tokens. This is
 //! cooperative-client authorization: it does not isolate credentials from a
@@ -235,7 +236,8 @@ struct PolicyDocument {
 }
 
 /// Validated per-agent live-control policy. A policy can be installed at
-/// server startup; absent policy preserves the existing same-user socket mode.
+/// server startup; absent a policy, mutating operations are refused unless
+/// the server explicitly opted in with `--allow-unauthenticated`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AgentAuthPolicy {
     agents: BTreeMap<String, AgentGrant>,

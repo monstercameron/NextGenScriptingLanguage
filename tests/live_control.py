@@ -52,6 +52,13 @@ class Session:
             self.policy.write_text(json.dumps(agent_policy))
             self.policy.chmod(0o600)
             args += ['--agent-policy', str(self.policy)]
+        else:
+            # Mutating live ops (edit, control, input, stop) now require an
+            # agent policy by default (#445). The non-policy tests in this
+            # file drive those ops without credentials, so they explicitly
+            # opt in to the legacy unauthenticated mode. Policy tests above
+            # keep their policy and never pass both flags (mutually exclusive).
+            args += ['--allow-unauthenticated']
         self.child = subprocess.Popen(args, cwd=self.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if not select.select([self.child.stdout], [], [], 8)[0]:
             self.close()
@@ -1155,7 +1162,7 @@ define a program named panel
                         os.write(master, b'\x1b[1;1R')
             reader = threading.Thread(target=drain)
             reader.start()
-            child = subprocess.Popen([str(BINARY), 'live', 'serve', str(script), '--socket', str(address), '--paused', '--manifest-dir', str(PROJECT / 'manifests')], cwd=root, stdin=slave, stdout=slave, stderr=slave, env={**os.environ, 'TERM': 'xterm-256color'})
+            child = subprocess.Popen([str(BINARY), 'live', 'serve', str(script), '--socket', str(address), '--paused', '--allow-unauthenticated', '--manifest-dir', str(PROJECT / 'manifests')], cwd=root, stdin=slave, stdout=slave, stderr=slave, env={**os.environ, 'TERM': 'xterm-256color'})
             def cli(*args):
                 result = subprocess.run([str(BINARY), 'live', *args, '--socket', str(address)], capture_output=True, timeout=5)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -218,6 +218,7 @@ mod tests {
             run_mode: false,
             flood: Mutex::new(FloodBudget::new()),
             agent_policy_path: None,
+            allow_unauthenticated: false,
         });
         let (sender, receiver) = mpsc::channel();
         let release = Arc::clone(&shared);

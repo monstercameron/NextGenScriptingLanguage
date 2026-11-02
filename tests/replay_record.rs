@@ -167,6 +167,74 @@ fn a_recorded_failure_replays_as_the_same_failure() {
     assert_eq!(text(&replayed.stdout), text(&original.stdout));
 }
 
+#[test]
+fn replay_reports_the_recorded_explicit_exit_status_and_message() {
+    for (source, expected_status, expected_message) in [
+        (
+            "run printf with message \"partial\"\n\
+             fail with message \"bad input\" and status 7\n",
+            7,
+            Some("bad input"),
+        ),
+        (
+            "run printf with message \"partial\"\nexit with status 7\n",
+            7,
+            None,
+        ),
+        (
+            "run printf with message \"done\"\nexit with status 0\n",
+            0,
+            None,
+        ),
+        ("run printf with message \"done\"\n", 0, None),
+    ] {
+        let work = tempfile::tempdir().unwrap();
+        fs::write(work.path().join("workflow.program"), source).unwrap();
+        let record = work.path().join("record");
+        let original = execute(
+            work.path(),
+            &[
+                "run",
+                "workflow.program",
+                "--record",
+                record.to_str().unwrap(),
+                "--manifest-dir",
+                manifests().to_str().unwrap(),
+            ],
+        );
+        assert_eq!(
+            original.status.code(),
+            Some(expected_status),
+            "{source}: {}",
+            text(&original.stderr)
+        );
+        if let Some(message) = expected_message {
+            assert!(text(&original.stderr).contains(message), "{source}");
+        }
+
+        let replayed = replay(work.path(), &record, &[]);
+        assert_eq!(
+            replayed.status.code(),
+            Some(expected_status),
+            "{source}: {}",
+            text(&replayed.stderr)
+        );
+        assert_eq!(text(&replayed.stdout), text(&original.stdout), "{source}");
+        let stderr = text(&replayed.stderr);
+        assert!(
+            stderr.contains("steps replayed, no divergence"),
+            "{source}: {stderr}"
+        );
+        assert!(
+            stderr.contains("0 processes launched"),
+            "{source}: {stderr}"
+        );
+        if let Some(message) = expected_message {
+            assert!(stderr.contains(message), "{source}: {stderr}");
+        }
+    }
+}
+
 #[cfg(feature = "tooling")]
 #[test]
 fn as_test_writes_a_fixture_that_execute_test_accepts() {

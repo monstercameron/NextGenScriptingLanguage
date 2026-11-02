@@ -311,6 +311,10 @@ pub fn replay(arguments: &[String]) -> Result<()> {
         replayer.finish_check();
     }
     let stop = replayer.stop();
+    let exit = replay::completed_exit(
+        &stop,
+        result.as_ref().ok().and_then(|result| result.exit.clone()),
+    );
     if edited {
         eprintln!(
             "replay: the program differs from the recorded one; the first divergence is reported"
@@ -329,6 +333,18 @@ pub fn replay(arguments: &[String]) -> Result<()> {
             if let Some(target) = as_test {
                 write_test_fixture(&target, &source, replayer.record())?;
                 eprintln!("replay: wrote a test fixture to {}", target.display());
+            }
+            // Report the replayed program's explicit exit the same way a
+            // normal run does, after the replay diagnostics above.
+            if let Some(exit) = exit {
+                io::stdout()
+                    .flush()
+                    .context("could not write workflow output")?;
+                if let Some(message) = &exit.message {
+                    let message = flow::security::secret_redactor(&registry).redact_text(message);
+                    runtime::write_exit_diagnostic(format!("{message}\n").as_bytes());
+                }
+                std::process::exit(i32::from(exit.status));
             }
             Ok(())
         }

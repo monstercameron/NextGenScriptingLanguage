@@ -1579,6 +1579,28 @@ impl Journal {
         Ok(())
     }
 
+    /// Revoke the in-flight node's retry safety before cleanup outside it
+    /// performs an effect (#707). The cleanup is not journaled, so a resume
+    /// runs it again; the node's own retry safety must not vouch for it.
+    /// Persisting first also gates a crash during the cleanup. No in-flight
+    /// node, or one already not retry-safe, needs no write.
+    pub fn mark_in_flight_not_retry_safe(&mut self) -> Result<()> {
+        let Some(node) = self.data.in_flight.as_mut() else {
+            return Ok(());
+        };
+        if !node.retry_safe {
+            return Ok(());
+        }
+        node.retry_safe = false;
+        if let Err(error) = self.persist() {
+            if let Some(node) = self.data.in_flight.as_mut() {
+                node.retry_safe = true;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// An explicit resume may remove the unfinished suffix entirely. The
     /// completed prefix was validated by the runtime before calling this.
     pub fn discard_removed_tail(&mut self) -> Result<()> {

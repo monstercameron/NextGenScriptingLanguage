@@ -18,6 +18,9 @@ use std::process::{Child, Command, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
 fn execute_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_execute"))
 }
@@ -772,7 +775,8 @@ fn parallel_retry_resume_reruns_only_the_resolved_element() {
     use std::process::Stdio;
 
     fn fixture() -> String {
-        PathBuf::from(env!("CARGO_BIN_EXE_native-fixture"))
+        staged_helpers::native_fixture()
+            .to_path_buf()
             .to_string_lossy()
             .replace('\\', "/")
     }
@@ -1140,7 +1144,8 @@ fn forged_parallel_committed_is_refused_at_resume() {
     fs::create_dir(root.join("counters")).unwrap();
     fs::create_dir(root.join("gates")).unwrap();
     fs::write(root.join("gates").join("c.hold"), b"").unwrap();
-    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_native-fixture"))
+    let fixture = staged_helpers::native_fixture()
+        .to_path_buf()
         .to_string_lossy()
         .replace('\\', "/");
     fs::write(
@@ -1422,7 +1427,8 @@ fn live_run_holds_lock_against_resolve_and_status() {
     fs::create_dir(root.join("counters")).unwrap();
     fs::create_dir(root.join("gates")).unwrap();
     fs::write(root.join("gates").join("c.hold"), b"").unwrap();
-    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_native-fixture"))
+    let fixture = staged_helpers::native_fixture()
+        .to_path_buf()
         .to_string_lossy()
         .replace('\\', "/");
     fs::write(

@@ -25,11 +25,15 @@ undetected. Other Unix systems do not expose ACLs to this gate. The opened
 descriptor is re-checked on the descriptor itself (Linux `fgetxattr`, Windows
 handle ACL), so an ACL or owner attached between the path check and the open
 fails closed. On Windows each leaf and ancestor must be owned by the
-current user, SYSTEM or Administrators and must grant write, delete, and
-extended-attribute-write access to no other principal (data/attribute writes,
-delete, child add/delete, DACL/owner takeover, and the generic umbrellas);
-read grants to others stay allowed so shared installs keep working, and an
-unreadable ACL fails closed. Manifest-selected executables pass the same
+current user, SYSTEM, Administrators or TrustedInstaller. The leaf must grant
+write, delete, and extended-attribute-write access to no other principal
+(data/attribute writes, delete, child add/delete, DACL/owner takeover, and
+the generic umbrellas); ancestors use a narrowed mask that passes create-only
+rights (file/subdirectory add, EA/attribute writes), which cannot rename or
+replace an existing verified entry, while still refusing delete-child,
+delete, DACL/owner takeover, and the generic umbrellas. Every DACL refusal
+names the trustee SID and the granted mask. Read grants to others stay
+allowed so shared installs keep working, and an unreadable ACL fails closed. Manifest-selected executables pass the same
 leaf-plus-ancestor, hardlink/setuid and ACL gate as manifests: a trusted
 manifest naming a writable binary is refused at resolution time. Install or
 extract release archives only into locations writable solely by their owner
@@ -68,6 +72,17 @@ published relative to pinned directory descriptors after the configured leaf
 directory is validated. This prevents a parent replacement after pinning from
 redirecting those operations. Checkpoint state also has no-follow/regular-file
 checks, private permissions, checksummed state and an exclusive writer lock.
+Before resuming, Execute validates the existing checkpoint root itself: Unix
+roots must be owned by the current user and have no group/other permission
+bits. Linux POSIX ACLs and listed NFSv4/RichACL xattrs, plus macOS extended
+ACLs, are refused. Windows roots must have an explicit, protected private DACL
+for the current user, SYSTEM and Administrators. A rejected root is left
+untouched so its permissions or ACL can be reviewed and repaired.
+Linux refuses filesystems that cannot answer the POSIX ACL xattr query and
+checks the pinned descriptor's xattr names for known NFSv4 and RichACL entries.
+This does not attest ACL models that the filesystem keeps opaque or omits from
+its xattr list. Do not resume Linux checkpoints on filesystems using an ACL
+dialect that is not exposed by these checks.
 Replay parses the program bytes captured from the pinned record descriptor and
 uses the canonical source identity captured while opening that directory; it
 does not re-resolve a replaced record pathname or gain access to called files.
@@ -210,13 +225,16 @@ covers module sources and packages. Replay refuses detached launches and handove
 
 Optional `network_origins` lists canonical HTTP(S) origins, without a path,
 query, fragment, credentials or wildcard. The list requires `network: true`
-and the `network.connect` grant, and is supported only for host-managed remote
-applets. An absent or empty list allows broad network access for metadata-policy
-checks. Required OS sandboxing rejects a nonempty origin list because the
-available native sandbox backends can enforce only all-or-none network access.
-Remote endpoint authorization runs before discovery or invocation; redirects
-and environment proxies are disabled. A remote applet's bearer-file path is
-checked against that applet's own filesystem read grant.
+and the `network.connect` grant, and is supported for host-managed remote
+applets and for custom `@execute-model` endpoints. An absent or empty list
+allows broad network access for metadata-policy checks. Required OS sandboxing
+rejects a nonempty origin list because the available native sandbox backends
+can enforce only all-or-none network access. Remote endpoint authorization runs
+before discovery or invocation; redirects and environment proxies are disabled.
+A remote applet's bearer-file path is checked against that applet's own
+filesystem read grant. A custom model endpoint is authorized the same way
+before its child spawns, including the data-flow sink check for the call's
+sensitivity; the default provider endpoint needs no grant.
 
 SSRF protection is fail-closed at two layers for host-managed remote applets
 and the model helper. Before any resolution or socket use, a non-public
@@ -225,22 +243,23 @@ including 169.254.169.254, ULA, multicast, and IPv4-mapped IPv6 forms) is
 refused by name; at connect time the resolver pins the whole resolved address
 set, so a hostname that first resolves to a public address cannot rebind to a
 private one. Only an origin explicitly listed in `network_origins` preserves a
-private destination, and only for remote applets; a broad empty-list grant
-does not. The model helper accepts no origin grants (dependency #375 keeps
-model endpoints outside `network_origins`, which `Command`-backend applets
-cannot declare): its endpoints stay restricted to HTTPS, or HTTP to loopback,
-with the same guard. A script-controlled `--endpoint` therefore cannot reach
-metadata or private destinations, and live loopback endpoints additionally
-require the explicit `EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's
-environment — without it the request fails as configuration before any
-credential read or connection, so an unauthenticated local service is never
-reachable by default. Hermetic `--fixture` runs never open a socket and do
-not need the grant. The self-grant prevention holds only when the ambient
-environment is constrained: under a capability policy, or a host
-`--clear-env`/`--env-allow` filter, a program cannot grant the variable to
-itself via `use environment` or `and environment` unless the applet's
-`environment` grant lists it. In default trusted mode with full ambient
-inheritance, a program can set the variable itself.
+private destination, for remote applets and for custom model endpoints; a
+broad empty-list grant does not. The model helper additionally accepts the
+listed origin through `EXECUTE_MODEL_GRANTED_ORIGIN`, conveyed by the runtime
+parent after it authorizes the endpoint, and honors only the value that equals
+the endpoint's own canonical origin. A script-controlled `--endpoint`
+therefore cannot reach metadata or private destinations, and live loopback
+endpoints without a listed origin additionally require the explicit
+`EXECUTE_MODEL_ALLOW_LOOPBACK` grant in the helper's environment — without it
+the request fails as configuration before any credential read or connection,
+so an unauthenticated local service is never reachable by default. Hermetic
+`--fixture` runs never open a socket and do not need the grant. The self-grant
+prevention holds only when the ambient environment is constrained: under a
+capability policy, or a host `--clear-env`/`--env-allow` filter, a program
+cannot grant either variable to itself via `use environment` or
+`and environment` unless the applet's `environment` grant lists it. In default
+trusted mode with full ambient inheritance, a program can set the variable
+itself.
 
 `--execution-mode trusted|untrusted` selects native-child confinement. With no
 policy the default is `trusted`; a capability policy defaults to `untrusted`.
@@ -262,7 +281,47 @@ native effect or native origin restriction is refused with `SandboxRefused`.
 Linux currently uses the existing bubblewrap backend; it does not install
 Landlock or seccomp filters. Read access to system runtime files and execution
 of tools within that runtime remain available. This is filesystem/network
-confinement, not a hostile-kernel-code or resource-exhaustion boundary.
+confinement, not a hostile-kernel-code boundary; resource exhaustion is
+bounded separately, per mechanism, as follows.
+
+Every native child spawned under a capability policy carries finite resource
+bounds. Each applet grant may set `resource_limits` with `cpu_secs`,
+`address_space_mb` (Linux only), `file_size_mb`, `max_processes` and
+`open_files`; absent knobs take finite untrusted-mode defaults (120 CPU
+seconds, 1024 MiB of address space on Linux, 1024 MiB single files, 2048
+processes, 1024 open files, each fitted down to the inherited hard ceiling
+which already bounds the child) and stay unbounded in trusted mode unless the
+policy sets them. Bounds install in the child between fork and exec; a bound
+that cannot be installed refuses the spawn instead of running unbounded, and
+an explicit bound above the inherited hard limit is refused before any child
+exists. A child killed for breaching its CPU-time (`SIGXCPU`) or file-size
+(`SIGXFSZ`) bound surfaces the typed `resource_exhaust` result, not a bare
+signal death.
+
+What each bound actually constrains: CPU time is per process; file size caps
+each file's logical size, so one file cannot grow past the cap, but many
+small files, directory entries, and block consumption in aggregate are not
+bounded — including sparse files, whose logical size is capped per file while
+their blocks across many files are not. The address-space bound (Linux only;
+macOS rejects `RLIMIT_AS` changes, so an explicit bound there refuses the
+spawn instead of running unbounded) makes allocations past the cap fail inside
+the child, which then fails on its own terms; only the kernel-signal kills
+above are typed. `max_processes` (`RLIMIT_NPROC`) counts every process and
+thread of the calling real user ID, inside and outside the sandbox, so it
+bounds a fork bomb's total processes without isolating the sandbox's share;
+it is not a per-sandbox task cap, and cgroup `pids.max` management is not
+implemented. Descriptor exhaustion past the open-file bound fails closed at
+the denied call. RSS is not enforced as a kill signal on either platform, and
+an OOM-killer `SIGKILL` cannot be attributed to a bound, so it keeps its
+generic signal classification. Windows has no rlimit backend: explicit
+limits are refused there.
+
+Daemon forwarded runs are bounded separately: `EXECUTE_DAEMON_MAX_RUNS`
+(default twice the available parallelism, clamped to 1..64, at most 4096)
+caps concurrent forked runs; runs past the cap are refused with a fallback
+event naming the limit, never queued and never silently dropped. Exited
+children free their slot on the next reap, including a reap that runs before
+admission, so capacity returns as runs finish.
 `explain` and `--what-if` report `execution_mode` and each step's `enforcement`.
 `os_sandbox_required` is prospective: a real run must still pass OS preflight;
 `refused` means the current platform cannot provide the required confinement.
@@ -345,9 +404,17 @@ while one that leaves it is refused, and a symlink — final-component or
 intermediate — that resolves outside the manifest directory is refused before
 hashing or execution; links resolving inside the directory still run. The
 review (`--what-if`) fingerprint binds the explain plan's manifest-anchored
-resolved path, and refuses separator-bearing or absolute applet binaries when
-that path is missing rather than fingerprinting a review-cwd file the launch
-would never run. The
+resolved path, and refuses separator-bearing applet binaries when that path
+is missing rather than fingerprinting a review-cwd file the launch would
+never run. A `run --confirm` review additionally pins every reviewed
+executable: the hashes from the confirmed fingerprint are installed on the
+run, and each native launch re-hashes its resolved executable against that
+map immediately before its command is built, refusing on any mismatch or on
+an executable the review never saw. This closes the review-to-launch gap
+down to the residual hash-to-`exec` window on every platform; no platform
+closes that last window, because no spawn path executes from a held
+descriptor (`fexecve`/`execveat` is not implemented, and macOS offers
+neither). The
 macOS profile uses Apple's undocumented, deprecated `sandbox-exec` interface.
 The sandbox applies to the launched applet and descendants that inherit it; a
 descendant that deliberately detaches may outlive its parent, so parent
@@ -390,13 +457,34 @@ via the open handle),
 but a replacement between the final check and use remains a race — the gate
 narrows check-then-use races without eliminating them, and a replacement
 between helper or executable verification and `exec` in particular cannot be
-pinned from userspace. A same-user process can rewrite what it owns (as with
+pinned from userspace. A `run --confirm` run narrows that executable race
+further: every reviewed executable is re-hashed at each launch through the
+single command-construction check (direct commands, manifest commands, and
+background-job launches at both prepare and spawn time, including persistent
+workers), and any mismatch or unreviewed executable refuses the run. The
+remaining window is the re-hash-to-`exec` interval on all platforms — Linux,
+macOS, and Windows narrow it but none eliminates it. Still path-based and
+outside the confirmed binding: the remote-DNS resolver helper, the workflow
+worker re-exec used for supervision, and the `execute model` CLI helper, which
+keep only the existing verify-before-resolve gate. A same-user process can rewrite what it owns (as with
 the cache key). POSIX `system.posix_acl_access` ACLs fail closed on Linux;
 NFSv4, RichACL and macOS ACLs are not probed and would pass the mode check
 undetected, and other Unix systems do not expose ACLs to this gate at all.
 Windows enforces owner plus no-foreign-write/delete/EA-ACE on leaves
 and ancestors with fail-closed unreadable ACLs, re-checked on the open
-handle, but a replacement after that handle check still races. Real CLI tests require no output,
+handle, but a replacement after that handle check still races. Bundled
+helpers (`execute-applet`/`execute-model`) pass that same gate on every
+launch, plus a build-time SHA-256 sidecar check when packaged and a
+`--version` identity handshake. Residual limits specific to the helpers:
+the sidecar ships in the same directory it protects, so whoever can
+replace the helper can also rewrite the sidecar — the recorded hash binds
+the packaged artifact against stale or mismatched helpers, not against a
+same-directory attacker. The handshake is not authentication either: any
+binary printing `<name> <CARGO_PKG_VERSION>` passes it, and the handshake
+itself executes the candidate binary once (`--version`, stdin closed),
+after the ownership/writability gate but before the worker spawn. On
+Windows without a packaged sidecar, a replaced helper is refused only by
+the ACL gate and the handshake. Real CLI tests require no output,
 no later save and no native launch when an invalid cache is encountered. Unit
 regressions also cover same-user cache-byte tampering, malformed integrity tags,
 and a parent replacement after the Unix cache directory descriptor is pinned.

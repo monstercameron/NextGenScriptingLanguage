@@ -25,6 +25,7 @@ pub enum ExecutionKind {
     IoError,
     OutputLimit,
     CapacityError,
+    ResourceExhaust,
     UnknownError,
 }
 
@@ -44,6 +45,7 @@ impl ExecutionKind {
             Self::IoError => "io_error",
             Self::OutputLimit => "output_limit",
             Self::CapacityError => "capacity_error",
+            Self::ResourceExhaust => "resource_exhaust",
             Self::UnknownError => "unknown_error",
         }
     }
@@ -186,6 +188,30 @@ impl StageResult {
             signal,
             outcome: None,
             kind: Some(ExecutionKind::Signaled),
+            effect_certainty: EffectCertainty::Uncertain,
+            broken_pipe: false,
+            stderr,
+        }
+    }
+
+    /// A stage the kernel killed for exceeding an installed resource bound
+    /// (`SIGXCPU` past the CPU-time limit, `SIGXFSZ` past the file-size
+    /// limit). The state stays `signaled` — the child was signaled — while
+    /// the kind names the exhausted resource instead of a bare signal death.
+    pub fn resource_exhausted(
+        line: usize,
+        applet: impl Into<String>,
+        signal: Option<i32>,
+        stderr: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            line,
+            applet: applet.into(),
+            state: StageState::Signaled,
+            status: None,
+            signal,
+            outcome: None,
+            kind: Some(ExecutionKind::ResourceExhaust),
             effect_certainty: EffectCertainty::Uncertain,
             broken_pipe: false,
             stderr,
@@ -1031,8 +1057,11 @@ fn command_failure_result(error: &super::CommandFailed) -> ExecutionResult {
         result
     } else {
         let signal = exit_signal(error.status);
+        let exhausted = signal.and_then(resource_limit_signal);
         let mut result = ExecutionResult::runtime_failure(
-            if signal.is_some() {
+            if exhausted.is_some() {
+                ExecutionKind::ResourceExhaust
+            } else if signal.is_some() {
                 ExecutionKind::Signaled
             } else {
                 ExecutionKind::UnknownError
@@ -1047,15 +1076,20 @@ fn command_failure_result(error: &super::CommandFailed) -> ExecutionResult {
             result.message = Some(error.to_string());
         }
         result.stages = if error.stages.is_empty() {
-            vec![if let Some(signal) = signal {
-                StageResult::signaled(
+            vec![match (signal, exhausted) {
+                (Some(signal), Some(_)) => StageResult::resource_exhausted(
                     error.line,
                     error.operation.clone(),
                     Some(signal),
                     error.stderr.clone(),
-                )
-            } else {
-                StageResult::unknown(error.line, error.operation.clone())
+                ),
+                (Some(signal), None) => StageResult::signaled(
+                    error.line,
+                    error.operation.clone(),
+                    Some(signal),
+                    error.stderr.clone(),
+                ),
+                (None, _) => StageResult::unknown(error.line, error.operation.clone()),
             }]
         } else {
             error.stages.clone()
@@ -1090,6 +1124,28 @@ pub(crate) fn exit_signal(status: std::process::ExitStatus) -> Option<i32> {
 
 #[cfg(not(unix))]
 pub(crate) fn exit_signal(_status: std::process::ExitStatus) -> Option<i32> {
+    None
+}
+
+/// Name the resource bound whose breach kills with `signal`, when the kernel
+/// reports the breach as a signal at all. `SIGXCPU` past `RLIMIT_CPU` and
+/// `SIGXFSZ` past `RLIMIT_FSIZE` are deterministic kernel kills; other
+/// deaths under installed limits (address-space allocation failures,
+/// `RLIMIT_NPROC` fork denials, the OOM killer's `SIGKILL`) keep their
+/// natural classification because the status cannot attribute them.
+#[cfg(unix)]
+pub(crate) fn resource_limit_signal(signal: i32) -> Option<&'static str> {
+    if signal == libc::SIGXCPU {
+        Some("CPU time")
+    } else if signal == libc::SIGXFSZ {
+        Some("file size")
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn resource_limit_signal(_signal: i32) -> Option<&'static str> {
     None
 }
 

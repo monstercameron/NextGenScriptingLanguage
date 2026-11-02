@@ -163,12 +163,20 @@ path = "tests/fixtures/native_fixture.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "kill_grace"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "checkpoint_resolve_elements"
 required-features = ["test-fixtures", "agent-advisory"]
 
 [[test]]
 name = "execution_results"
 required-features = ["test-fixtures", "remote"]
+
+[[test]]
+name = "manifest_json_reference_regressions"
+required-features = ["test-fixtures"]
 
 [[test]]
 name = "graph_program_services"
@@ -216,6 +224,10 @@ required-features = ["test-fixtures"]
 
 [[test]]
 name = "inherited_stdio_nonblocking"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "staged_helpers"
 required-features = ["test-fixtures"]
 
 [[test]]

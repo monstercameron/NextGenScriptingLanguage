@@ -971,7 +971,10 @@ fn render_text(summary: &Value) -> String {
         "blobs: {} files, {} bytes\n",
         summary["blobs"]["count"], summary["blobs"]["bytes"]
     ));
-    text.push_str("checksum: present, not verified by this command\n");
+    text.push_str(&format!(
+        "checksum: {}, not verified by this command\n",
+        journal["checksum"].as_str().unwrap_or("missing")
+    ));
     text.push_str(&format!(
         "resume action: {}\n",
         summary["resume_action"].as_str().unwrap_or("")
@@ -1083,6 +1086,37 @@ mod resume_action_tests {
         );
         assert!(text.contains(r"\u{202e}"), "{text:?}");
         assert!(text.contains(r"\u{9b}"), "{text:?}");
+    }
+
+    #[test]
+    fn status_text_reports_checksum_presence_matching_json() {
+        for (checksum, expected) in [(None, "missing"), (Some("abc123"), "present")] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut journal = json!({
+                "data": {
+                    "status": "completed",
+                    "completed": [],
+                    "in_flight": null,
+                },
+            });
+            if let Some(value) = checksum {
+                journal["checksum"] = json!(value);
+            }
+            fs::write(
+                directory.path().join("journal.json"),
+                serde_json::to_vec(&journal).unwrap(),
+            )
+            .unwrap();
+            let summary = summarize(directory.path()).unwrap();
+            assert_eq!(summary["journal"]["checksum"], json!(expected));
+            let text = render_text(&summary);
+            assert!(
+                text.contains(&format!(
+                    "checksum: {expected}, not verified by this command"
+                )),
+                "checksum {expected} in JSON but text was: {text:?}"
+            );
+        }
     }
 
     #[cfg(unix)]

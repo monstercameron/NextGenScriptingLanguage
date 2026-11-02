@@ -54,7 +54,7 @@ fn listen(
                 manifest,
                 &signals.sensitivity_floor(),
             )?;
-            let binary = binary_path(manifest.binary_for(call), &options.working_directory)?;
+            let binary = binary_path_for_applet(manifest, call, &options.working_directory)?;
             let argv = arguments_for_call(call, manifest, &options.inputs)?;
             stopped(signals)?;
             let mut command = crate::capabilities::command_for(

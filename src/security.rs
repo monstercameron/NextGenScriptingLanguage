@@ -3151,6 +3151,52 @@ mod tests {
     }
 
     #[test]
+    fn windows_ancestor_mask_allows_create_only_rights_but_refuses_replacement() {
+        // `C:\Users` grants Authenticated Users create-subdirectory rights so
+        // profiles can be created. That right (and its create-only siblings)
+        // cannot rename, delete or replace an existing child directory, so the
+        // ancestor gate must allow it while the leaf gate still refuses it.
+        for mask in [0x2u32, 0x4, 0x10, 0x100] {
+            assert!(
+                !windows_ancestor_mask_is_disqualifying(mask),
+                "ancestor must allow create-only mask {mask:#x}"
+            );
+            assert!(
+                windows_allow_ace_grants_write(mask),
+                "leaf must still refuse create-only mask {mask:#x}"
+            );
+        }
+        // The combined create-only shape plus read-only rights also pass as
+        // an ancestor: none of these bits lets another principal replace an
+        // existing child entry.
+        assert!(!windows_ancestor_mask_is_disqualifying(
+            0x2 | 0x4 | 0x10 | 0x100
+        ));
+        for mask in [0x0u32, 0x1, 0x8, 0x20, 0x80] {
+            assert!(
+                !windows_ancestor_mask_is_disqualifying(mask),
+                "ancestor must allow read-only mask {mask:#x}"
+            );
+            assert!(
+                !windows_allow_ace_grants_write(mask),
+                "leaf must allow read-only mask {mask:#x}"
+            );
+        }
+        // Fail-closed: any replacement-power right stays disqualifying on
+        // both the ancestor and the leaf.
+        for mask in [0x40u32, 0x10000, 0x40000, 0x80000, 0x40000000, 0x10000000] {
+            assert!(
+                windows_ancestor_mask_is_disqualifying(mask),
+                "ancestor must refuse replacement mask {mask:#x}"
+            );
+            assert!(
+                windows_allow_ace_grants_write(mask),
+                "leaf must refuse replacement mask {mask:#x}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_is_not_public_and_labels_join_without_declassification() {
         assert_eq!(join_sensitivities([]), Sensitivity::Unknown);
         assert_eq!(

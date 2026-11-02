@@ -37,6 +37,7 @@ fn model_registry_with_grant(origins: &[&str], network: bool, capabilities: &[&s
         network,
         network_origins: origins.iter().map(|origin| (*origin).to_owned()).collect(),
         sandbox_required: false,
+        resource_limits: None,
     };
     registry.set_host_state(Some(CapabilityPolicy {
         host: None,

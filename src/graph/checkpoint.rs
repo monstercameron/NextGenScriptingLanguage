@@ -128,6 +128,8 @@ pub(crate) fn prepare(
     retry_uncertain: bool,
 ) -> Result<Checkpointing> {
     plan.checkpoint_refusal(registry, modules)?;
+    let sensitivity_floor = super::transport::graph_module_sensitivity_floor(plan, registry, cwd)?;
+    crate::runtime::authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
     let fingerprints = plan.checkpoint_fingerprints(registry, cwd, modules.fingerprints())?;
     let state = store.load()?;
     let mut completed = BTreeMap::new();

@@ -3,7 +3,7 @@
 use crate::platform::windows::{available, Job};
 use std::os::windows::io::{AsHandle, AsRawHandle};
 use windows_sys::Win32::{
-    Foundation::WAIT_TIMEOUT,
+    Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::Threading::WaitForSingleObject,
 };
 
@@ -47,6 +47,100 @@ impl Children {
         self.check_bridge_error()
     }
 }
+/// Non-reaping liveness probe for a Windows child: a signalled process handle
+/// (zero-timeout wait) means the process has exited. Takes only `&Child` so
+/// the abort path can poll for early exit while `Children`'s drop still owns
+/// the final reaping wait.
+fn child_exited(child: &Child) -> bool {
+    // SAFETY: WaitForSingleObject only observes the process handle, and a
+    // zero timeout never blocks. Any failure (WAIT_FAILED) reads as still
+    // running, so teardown stays bounded by the grace wait rather than
+    // skipping a wait the drop would still perform.
+    let status = unsafe {
+        WaitForSingleObject(
+            child.as_handle().as_raw_handle(),
+            0,
+        )
+    };
+    status == WAIT_OBJECT_0
+}
+
+#[cfg(all(test, windows))]
+mod child_exited_tests {
+    use super::*;
+
+    #[test]
+    fn exited_and_running_processes_read_correctly() {
+        // A reaped, exited child handle reads as exited.
+        let mut exited = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .expect("spawning an exiting probe");
+        exited.wait().expect("reaping the exiting probe");
+        assert!(child_exited(&exited));
+        // A live sleeper reads as running, then as exited after the kill.
+        let mut sleeper = std::process::Command::new("cmd")
+            .args(["/C", "ping", "-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawning a sleeping probe");
+        assert!(!child_exited(&sleeper));
+        sleeper.kill().expect("stopping the sleeping probe");
+        sleeper.wait().expect("reaping the sleeping probe");
+        assert!(child_exited(&sleeper));
+    }
+}
+
+/// Bounded graceful shutdown for Windows groups (issue #525): best-effort
+/// `CTRL_BREAK_EVENT` to every live process group up front, one grace wait
+/// shared by all groups with early exit, then the job object ends stragglers.
+/// Never blocks longer than `grace` plus a poll slice no matter how many
+/// groups are still running, so cancellation and timeout paths stay bounded
+/// with no leaks.
+///
+/// Takes the run's own `Signals` for the grace, keeping the Unix/Windows call
+/// shape symmetric. The break itself is signal-agnostic on Windows, so the
+/// run's cancel slot is intentionally not read here: no process-global signal
+/// number can poison another run's abort.
+fn windows_escalate_unreaped_for_abort(children: &Children, signals: &Signals) {
+    let grace = signals.kill_grace;
+    // Signal the whole owned set first so one slow ignorer cannot delay the
+    // polite signal to the rest. The pid comes from a live `Child` whose
+    // handle is still open, which keeps Windows from recycling it; a group
+    // that already exited simply ignores the best-effort break.
+    let live: Vec<u32> = children
+        .0
+        .iter()
+        .filter(|child| !child.reaped && !child_exited(&child.child))
+        .map(|child| child.child.id())
+        .collect();
+    for pid in &live {
+        crate::platform::windows::Job::send_ctrl_break(*pid);
+    }
+    if live.is_empty() || grace.is_zero() {
+        return;
+    }
+    // `check_native_abort` holds `&Children`, so reaping here would fight the
+    // `Children` drop that owns the final wait. Poll in slices so a trapping
+    // child can flush output and exit early; the drop then reaps, and the job
+    // object ends any ignorer. Bounded by `grace` plus one slice.
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        if children
+            .0
+            .iter()
+            .filter(|child| !child.reaped)
+            .all(|child| child_exited(&child.child))
+        {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
 impl Drop for Children {
     fn drop(&mut self) {
         if let Some(target) = &self.1 {
@@ -59,9 +153,24 @@ impl Drop for Children {
         for child in &self.0 {
             child.job.terminate();
         }
+        // Never hang teardown: poll briefly, re-terminate once per round.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         for child in &mut self.0 {
-            if !child.reaped {
-                let _ = child.child.wait();
+            if child.reaped {
+                continue;
+            }
+            loop {
+                match child.child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {
+                        if std::time::Instant::now() >= deadline {
+                            break;
+                        }
+                        child.job.terminate();
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
             }
         }
         for bridge in self.2.drain(..) {
@@ -271,6 +380,7 @@ fn execute_group_with_sink(
         cancel_signal: Arc::clone(&signals.cancel_signal),
         drain_stop: None,
         registrations: Vec::new(),
+        owns_signal_handlers: false,
         capture_diagnostics: signals.capture_diagnostics,
         graph_service_cancellation: signals.graph_service_cancellation,
         background_jobs_allowed: signals.background_jobs_allowed,
@@ -292,6 +402,7 @@ fn execute_group_with_sink(
         job_stage_results: signals.job_stage_results.clone(),
         job_run_context: Arc::clone(&signals.job_run_context),
         output_writers: Arc::clone(&signals.output_writers),
+        kill_grace: options.kill_grace,
         #[cfg(test)]
         job_panic_before_ack: signals.job_panic_before_ack.clone(),
         deadline: {

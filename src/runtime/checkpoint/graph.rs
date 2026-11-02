@@ -108,6 +108,19 @@ pub(crate) fn open_graph_journal(
     let resolved = real_directory(&directory, "checkpoint", false)?;
     #[cfg(windows)]
     let _ = (original, resolved);
+    if resume {
+        #[cfg(unix)]
+        let root_metadata = directory_handle.metadata()?;
+        #[cfg(windows)]
+        let root_metadata =
+            fs::symlink_metadata(&directory).context("inspecting checkpoint root permissions")?;
+        crate::security::verify_private_checkpoint_directory(
+            &directory,
+            &root_metadata,
+            #[cfg(unix)]
+            &directory_handle,
+        )?;
+    }
     // Same rule as program checkpoints: a created or empty fresh directory is made
     // private; a resumed one keeps its permissions; a non-empty one was refused.
     if !resume || !existed {
@@ -542,6 +555,24 @@ fn append_line(
 #[cfg(test)]
 mod lane_v3_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_resume_rejects_a_permissive_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let authorize: PersistenceAuthorizer = Arc::new(|_| Ok(()));
+        drop(open_graph_journal(directory.path(), false, "identity", authorize.clone()).unwrap());
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = open_graph_journal(directory.path(), true, "identity", authorize)
+            .err()
+            .expect("graph resume must reject a root accessible to other users");
+        assert!(format!("{error:#}").contains("must be owned by the current user and private"));
+        assert_eq!(
+            fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
 
     #[test]
     fn graph_envelope_streams_without_a_second_buffer() {

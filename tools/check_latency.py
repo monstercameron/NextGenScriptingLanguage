@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Time the startup floor, a one-line program, a ten-step program, and a hot loop.
 
-Each program runs through `execute run` with the binary's default manifests,
-except `--version`, which measures the process floor alone. Passing
-`--manifest-dir` adds a second set of rows for that explicit directory. The script
-prints median and 95th-percentile wall time and, on Linux with GNU time, each
-child's peak resident set size. Python 3.9+, standard library only.
+Each program runs through `execute run` against a staged installed-layout copy
+of the given binary (identical bytes under `<tmp>/bin/execute` next to a copy
+of the repo `manifests/` tree), so the default rows time exactly what an
+installed binary runs: `default_manifest_dir` discovery plus the bundled-index
+registry, with no manifest flags passed. `--version` measures the process floor
+alone through the same staged copy. Passing `--manifest-dir` adds a second set
+of rows that run the given binary with that explicit directory (the
+file-loaded registry path). The script prints median and 95th-percentile wall
+time and, on Linux with GNU time, each child's peak resident set size.
+Python 3.9+, standard library only.
 """
 import argparse
+from contextlib import contextmanager
 import functools
 import hashlib
 import json
@@ -98,6 +104,54 @@ def run_once(command, rss_command=None):
     return elapsed, rss, returncode, message
 
 
+def repo_manifests():
+    """Return the checkout's manifests tree next to this tool."""
+    root = Path(__file__).resolve().parent.parent / "manifests"
+    if not root.is_dir():
+        raise RuntimeError(f"manifests tree {root} is missing; cannot stage the installed layout")
+    return root
+
+
+def stage_installed_binary(binary):
+    """Stage an installed layout for default-manifest timing.
+
+    Returns a context manager yielding a copy of `binary` placed as
+    `<tmp>/bin/execute` next to a copy of the repo `manifests/` tree, which
+    is the non-system layout `tools/package.py` installs. The copy is
+    byte-identical to the given binary, so wall time and GNU-time RSS match
+    the original; only `default_manifest_dir` discovery sees an installed
+    tree, exactly as a packaged install would. Without this staging the
+    default rows fail in a fresh build tree, because the release binary
+    resolves its defaults from `<install_root>/manifests` (the source tree
+    is a candidate in debug builds only) and an absent directory loads as
+    an empty registry.
+    """
+
+    @contextmanager
+    def staged():
+        source = Path(binary)
+        with tempfile.TemporaryDirectory(prefix="execute-installed-") as directory:
+            root = Path(directory)
+            (root / "bin").mkdir()
+            dest = root / "bin" / source.name
+            shutil.copyfile(source, dest)
+            dest.chmod(0o755)
+            shutil.copytree(repo_manifests(), root / "manifests")
+            smoke = subprocess.run(
+                [str(dest), "--version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if smoke.returncode != 0:
+                raise RuntimeError(
+                    f"staged installed copy {dest} --version failed; refusing to time it"
+                )
+            yield dest
+
+    return staged()
+
+
 def time_program(binary, arguments, runs, warmup, label):
     command = [str(binary), *arguments]
     for _ in range(warmup):
@@ -146,7 +200,9 @@ def main(argv=None):
     budget = json.loads(args.budget.read_text(encoding="utf-8"))
 
     results = {}
-    with tempfile.TemporaryDirectory(prefix="execute-latency-") as directory:
+    with tempfile.TemporaryDirectory(prefix="execute-latency-") as directory, stage_installed_binary(
+        args.binary
+    ) as installed:
         programs = {
             "one_line": (Path(directory) / "one_line.program", ONE_LINE),
             "ten_step": (Path(directory) / "ten_step.program", TEN_STEPS),
@@ -154,16 +210,17 @@ def main(argv=None):
         }
         for path, source in programs.values():
             path.write_text(source, encoding="utf-8")
-        plans = {"version": ["--version"]}
+        default_plans = {"version": (installed, ["--version"])}
         for key, (path, _) in programs.items():
-            plans[key] = ["run", str(path)]
+            default_plans[key] = (installed, ["run", str(path)])
             if args.manifest_dir:
-                plans[f"{key}_manifest_dir"] = [
-                    "run", str(path), "--manifest-dir", str(args.manifest_dir)
-                ]
-        for key, arguments in plans.items():
+                default_plans[f"{key}_manifest_dir"] = (
+                    args.binary,
+                    ["run", str(path), "--manifest-dir", str(args.manifest_dir)],
+                )
+        for key, (runner, arguments) in default_plans.items():
             runs = max(3, args.runs // 4) if key.startswith("hot_loop") else args.runs
-            samples, peak = time_program(args.binary, arguments, runs, args.warmup, key)
+            samples, peak = time_program(runner, arguments, runs, args.warmup, key)
             results[key] = {
                 "median_ms": statistics.median(samples),
                 "p95_ms": percentile(samples, 0.95),
@@ -192,6 +249,7 @@ def main(argv=None):
                         "python": platform.python_version(),
                         "binary_sha256": binary_digest,
                         "manifest_dir": str(args.manifest_dir) if args.manifest_dir else None,
+                        "staged_installed_layout": True,
                     },
                     "results": {
                         key: {

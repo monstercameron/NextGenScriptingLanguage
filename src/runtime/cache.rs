@@ -27,7 +27,7 @@ fn directory(path: &Path, create: bool) -> Result<Option<CacheDirectory>> {
     #[cfg(unix)]
     let (metadata, handle) = {
         let Some((handle, _created)) =
-            super::checkpoint::open_or_create_directory_tree(&path, create, 0o700)?
+            super::checkpoint::open_or_create_directory_tree(&path, "cache", create, 0o700)?
         else {
             return Ok(None);
         };

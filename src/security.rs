@@ -9,9 +9,7 @@
 use crate::contracts::Sensitivity;
 use crate::manifest::Registry;
 use crate::manifest::{AppletBackend, Manifest};
-use anyhow::{anyhow, Result};
-#[cfg(windows)]
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -482,7 +480,22 @@ impl SecretRedactor {
         Ok(())
     }
 
-    /// Replace exact registered byte sequences in an emitted byte string.
+    /// Replace registered byte sequences in an emitted byte string. Besides the
+    /// exact values, the standard base64 encoding and the lowercase/uppercase
+    /// hex encoding of each secret are matched too, so a transformed echo is
+    /// still recognized as the same secret by redaction and by the checkpoint
+    /// withholding checks that build on this comparison. Derived forms are
+    /// computed at match time and never count against the registration budget.
+    ///
+    /// Explicit scope: base64url, unpadded or chunked base64, URL/percent and
+    /// JSON-unicode escapes, case-shifted or truncated echoes, and compressed
+    /// or otherwise re-encoded values are NOT matched here. Reports therefore
+    /// redact those only as best effort. Checkpoint persistence does not rely
+    /// on this byte comparison alone: the per-element commit gates additionally
+    /// refuse when the element's own inputs carry a registered secret (a
+    /// literal duplicate), which is transform-agnostic, and provenance
+    /// (`sensitive_binding` folds, `sensitive_bindings` name intersection)
+    /// withholds secret-derived outputs even with no byte match at all.
     pub fn redact_bytes(&self, input: &[u8]) -> Vec<u8> {
         const REDACTED: &[u8] = b"[REDACTED]";
         let state = self
@@ -492,16 +505,33 @@ impl SecretRedactor {
         if state.values.is_empty() || input.is_empty() {
             return input.to_vec();
         }
+        // Derived encodings across all secrets, longest first so a longer
+        // encoding wins over its own prefix at the same cursor. Computed once
+        // per call so a large registry is still one pass.
+        let mut derived: Vec<Vec<u8>> = state
+            .values
+            .iter()
+            .flat_map(|secret| derived_secret_forms(&secret.0))
+            .collect();
+        derived.sort_by_key(|form| std::cmp::Reverse(form.len()));
         let mut output = Vec::with_capacity(input.len());
         let mut cursor = 0;
         while cursor < input.len() {
-            let matched = state
+            let rest = &input[cursor..];
+            let matched_len = state
                 .values
                 .iter()
-                .find(|secret| input[cursor..].starts_with(&secret.0));
-            if let Some(secret) = matched {
+                .find(|secret| rest.starts_with(&secret.0))
+                .map(|secret| secret.0.len())
+                .or_else(|| {
+                    derived
+                        .iter()
+                        .find(|form| rest.starts_with(form.as_slice()))
+                        .map(Vec::len)
+                });
+            if let Some(len) = matched_len {
                 output.extend_from_slice(REDACTED);
-                cursor += secret.0.len();
+                cursor += len;
             } else {
                 output.push(input[cursor]);
                 cursor += 1;
@@ -514,6 +544,34 @@ impl SecretRedactor {
     pub fn redact_text(&self, input: &str) -> String {
         String::from_utf8_lossy(&self.redact_bytes(input.as_bytes())).into_owned()
     }
+}
+
+/// Encoded echoes of one secret that still identify it: standard base64 and
+/// lowercase/uppercase hex. Forms identical to the raw value are omitted so
+/// short alphanumeric secrets do not match themselves twice.
+fn derived_secret_forms(secret: &[u8]) -> Vec<Vec<u8>> {
+    use base64::Engine as _;
+    let mut forms = Vec::with_capacity(3);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(secret);
+    if encoded.as_bytes() != secret {
+        forms.push(encoded.into_bytes());
+    }
+    let lower = secret
+        .iter()
+        .flat_map(|byte| format!("{byte:02x}").into_bytes())
+        .collect::<Vec<_>>();
+    if lower != secret {
+        forms.push(lower);
+    }
+    let upper = secret
+        .iter()
+        .flat_map(|byte| format!("{byte:02X}").into_bytes())
+        .collect::<Vec<_>>();
+    if upper != secret && forms.iter().all(|form| *form != upper) {
+        forms.push(upper);
+    }
+    forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+    forms
 }
 
 /// Obtain the registry-scoped shared redactor. Registry clones share this
@@ -529,7 +587,10 @@ pub fn register_sensitive_inputs(
     declarations: &[crate::ast::InputDeclaration],
     inputs: &BTreeMap<String, crate::ast::Value>,
 ) -> Result<()> {
-    let resolved = crate::inputs::resolve(declarations, inputs, false)?;
+    // Static graph commands may have only a subset of required inputs. The
+    // caller supplies resolved environment values for `run`; known_values
+    // adds defaults without making inspection require every input.
+    let resolved = crate::inputs::known_values(declarations, inputs)?;
     for declaration in declarations
         .iter()
         .filter(|input| crate::ast::is_sensitive(input))
@@ -803,6 +864,19 @@ pub fn applet_has_declared_secret_environment(registry: &Registry, applet_name: 
             .secret_environment
             .get(applet_name)
             .is_some_and(|names| !names.is_empty())
+}
+
+/// Applets the operator declared secret-bearing environment for. Task groups
+/// pre-register every one of these manifest secrets before any element runs,
+/// even when the secret-owning applet never runs in the group: a literal or
+/// transformed echo would otherwise leak a known secret with no byte match
+/// against anything registered yet. Bounded by the policy's declared set.
+pub fn declared_secret_applets(registry: &Registry) -> Vec<String> {
+    let policy = registry.host_state::<DataFlowPolicy>();
+    if !policy.active {
+        return Vec::new();
+    }
+    policy.secret_environment.keys().cloned().collect()
 }
 
 #[cfg(unix)]
@@ -1413,7 +1487,7 @@ pub(crate) enum TrustedInputKind {
 /// NFSv4, RichACL and macOS ACLs are not probed here. Other Unix systems do
 /// not expose ACLs here and remain documented as best-effort (see
 /// SECURITY.md). Windows inputs must not be reparse points, must be owned by
-/// the current user, SYSTEM or Administrators, and must grant no write access
+/// the current user, SYSTEM, Administrators or TrustedInstaller, and must grant no write access
 /// to any other principal; an unreadable ACL fails closed. A private-DACL
 /// demand is deliberately not made: installed trees stay readable by every
 /// local runner, so read grants to others are allowed and only write grants
@@ -1606,9 +1680,206 @@ pub(crate) fn verify_trusted_fd(
     {
         // Handle-side owner/ACE re-check: an owner or DACL swap between the
         // path check and the open must fail closed here.
-        check_trusted_windows_handle(file, path, label)?;
+        check_trusted_windows_handle(file, path, label, false)?;
     }
     Ok(())
+}
+
+/// Check that an existing checkpoint root is private before its entries are
+/// trusted. Checkpoints contain resumable execution state, so unlike ordinary
+/// trusted inputs they must not be readable by other local principals either.
+/// The caller supplies the already-opened directory descriptor on Unix so the
+/// ownership, mode, and Linux ACL checks apply to the inode pinned for resume.
+/// Windows validates the opened directory handle's protected DACL; failures to
+/// read its owner or ACL fail closed.
+pub(crate) fn verify_private_checkpoint_directory(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    #[cfg(unix)] file: &File,
+) -> Result<()> {
+    if metadata.file_type().is_symlink() {
+        bail!("checkpoint directory {} is a symbolic link", path.display());
+    }
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(metadata) {
+        bail!("checkpoint directory {} is a reparse point", path.display());
+    }
+    if !metadata.is_dir() {
+        bail!("checkpoint root {} is not a directory", path.display());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != crate::platform::unix_ffi::effective_uid()
+            || metadata.mode() & 0o077 != 0
+        {
+            bail!(
+                "checkpoint root {} must be owned by the current user and private; set its Unix mode to 0700 before resuming",
+                path.display()
+            );
+        }
+        // ACL grants can exceed mode bits, so reject them on the pinned
+        // descriptor. If this platform or filesystem cannot attest whether an
+        // ACL exists, fail closed rather than treating that as a private root.
+        if checkpoint_directory_has_acl(file)? {
+            bail!(
+                "checkpoint root {} has an extended ACL; remove the ACL before resuming",
+                path.display()
+            );
+        }
+    }
+    #[cfg(windows)]
+    {
+        validate_private_windows_acl_for_directory(path)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+    let name = c"system.posix_acl_access";
+    // SAFETY: the descriptor is live; a null buffer with size zero only queries
+    // the extended attribute size and does not change the checkpoint root.
+    let size = unsafe {
+        libc::fgetxattr(
+            file.as_raw_fd(),
+            name.as_ptr().cast(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if size >= 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        // ENODATA only establishes that this POSIX ACL xattr is absent; it
+        // does not attest the absence of a separate NFSv4/RichACL dialect.
+        Some(libc::ENODATA) => {}
+        Some(libc::ENOTSUP) => Err(anyhow!(
+            "the filesystem does not support POSIX ACL xattrs, so checkpoint ACL access cannot be verified; resume from a filesystem with ACL-query support"
+        ))?,
+        _ => return Err(error).context("checking checkpoint root POSIX ACL"),
+    }
+    let names = linux_xattr_names(file)?;
+    checkpoint_xattr_list_has_unsupported_acl(&names)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_xattr_names(file: &File) -> Result<Vec<u8>> {
+    use std::os::unix::io::AsRawFd;
+
+    // Linux caps an xattr name list at 64 KiB. Keep the bound explicit so a
+    // malformed or unusual filesystem cannot trigger an unbounded allocation.
+    const MAX_XATTR_LIST_BYTES: usize = 64 * 1024;
+    // SAFETY: the descriptor is live; a null list with size zero only queries
+    // the length of the extended-attribute name list.
+    let size = unsafe { libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0) };
+    if size < 0 {
+        return Err(std::io::Error::last_os_error()).context("listing checkpoint root xattrs");
+    }
+    let size = usize::try_from(size).context("checkpoint root xattr list length overflowed")?;
+    if size > MAX_XATTR_LIST_BYTES {
+        bail!("checkpoint root xattr list exceeds the verification limit");
+    }
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut names = vec![0; size];
+    // SAFETY: names is a writable buffer of `size` bytes and file is a live fd.
+    // If the list grew since the size query, Linux returns ERANGE and we fail closed.
+    let actual =
+        unsafe { libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len()) };
+    if actual < 0 {
+        return Err(std::io::Error::last_os_error()).context("reading checkpoint root xattr list");
+    }
+    let actual = usize::try_from(actual).context("checkpoint root xattr list length overflowed")?;
+    if actual > names.len() {
+        bail!("checkpoint root xattr list changed while it was being read");
+    }
+    names.truncate(actual);
+    Ok(names)
+}
+
+fn checkpoint_xattr_list_has_unsupported_acl(names: &[u8]) -> Result<bool> {
+    let mut rest = names;
+    while !rest.is_empty() {
+        let Some(end) = rest.iter().position(|byte| *byte == 0) else {
+            bail!("checkpoint root xattr list is malformed");
+        };
+        let name = &rest[..end];
+        if name.is_empty() {
+            bail!("checkpoint root xattr list contains an empty name");
+        }
+        if name == b"system.nfs4_acl"
+            || name == b"system.nfs4_dacl"
+            || name == b"system.nfs4_sacl"
+            || name == b"system.richacl"
+            || name == b"system.posix_acl_default"
+            || name.starts_with(b"security.nfs4acl_")
+        {
+            return Ok(true);
+        }
+        rest = &rest[end + 1..];
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    // Darwin's ACL API reports ENOENT when no extended ACL is attached. Any
+    // other failure to inspect it is a refusal to resume.
+    #[link(name = "System")]
+    extern "C" {
+        fn acl_get_fd_np(fd: libc::c_int, acl_type: libc::c_int) -> *mut std::ffi::c_void;
+        fn acl_free(acl: *mut std::ffi::c_void) -> libc::c_int;
+    }
+
+    const ACL_TYPE_EXTENDED: libc::c_int = 0x0000_0100;
+    // SAFETY: file is live; ACL_TYPE_EXTENDED requests an ACL read from this
+    // descriptor and the returned allocation is released with acl_free below.
+    let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(false)
+        } else {
+            Err(error).context("checking checkpoint root macOS ACL")
+        };
+    }
+    // SAFETY: acl_get_fd_np returned a live ACL allocation owned by this call.
+    if unsafe { acl_free(acl) } == -1 {
+        return Err(std::io::Error::last_os_error()).context("releasing checkpoint root macOS ACL");
+    }
+    Ok(true)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn checkpoint_directory_has_acl(_file: &File) -> Result<bool> {
+    bail!(
+        "cannot verify checkpoint root ACLs on {}; resume is refused",
+        std::env::consts::OS
+    )
+}
+
+#[cfg(windows)]
+fn validate_private_windows_acl_for_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+        .with_context(|| format!("reading checkpoint root Windows ACL {}", path.display()))?;
+    validate_private_windows_acl(&handle, path)
 }
 
 /// Check every ancestor directory of the canonical form of `path` for the
@@ -1758,12 +2029,101 @@ fn has_posix_extended_acl_fd(file: &File) -> bool {
     }
 }
 
-/// Windows writability gate for trusted inputs. The path must be owned by the
-/// current user, SYSTEM or Administrators, and no other principal may hold an
-/// allow ACE granting write-level access. Read grants to others are allowed
-/// so shared installs keep working; only writes fail closed. A missing DACL
-/// (full access to everyone) or an unreadable ACL fails closed and names the
-/// path. Deny and audit ACEs grant nothing and are ignored.
+/// Allow-ACE rights that fail the trusted-input gate at the LEAF: data and
+/// extended-attribute writes, child add/delete, attribute writes, delete,
+/// DACL/owner takeover, and the generic umbrellas covering them. Read-level
+/// rights stay out, including `FILE_READ_EA` (`0x8`): standard read grants
+/// carry it, so keeping it here would refuse every path that lets another
+/// principal read, such as `C:\Users` on a shared host. `GENERIC_READ` and
+/// `GENERIC_EXECUTE` are likewise absent because they map to read-only
+/// rights.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_WRITE_MASK: u32 =
+    0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+
+/// Whether an allow-ACE access mask grants write-level rights under
+/// [`TRUSTED_WINDOWS_WRITE_MASK`]. Pure mask logic with no platform calls, so
+/// the gate's read/write boundary is pinned by unit tests on every host.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_allow_ace_grants_write(mask: u32) -> bool {
+    mask & TRUSTED_WINDOWS_WRITE_MASK != 0
+}
+
+/// Allow-ACE rights that disqualify an ANCESTOR directory: the subset of
+/// [`TRUSTED_WINDOWS_WRITE_MASK`] that lets another principal rename, delete
+/// or replace an already-verified entry inside the ancestor. Decided per bit
+/// from the ancestor threat model ("a writable ancestor lets an attacker
+/// rename or replace the verified leaf"):
+/// - `FILE_ADD_FILE` (`0x2`), `FILE_ADD_SUBDIRECTORY`/`FILE_APPEND_DATA`
+///   (`0x4`), `FILE_WRITE_EA` (`0x10`) and `FILE_WRITE_ATTRIBUTES` (`0x100`)
+///   pass: they let a principal create new entries or alter attributes, but
+///   cannot rename, delete or replace an EXISTING verified entry, so they do
+///   not break the ancestor threat model. Factory `C:\` grants
+///   `BUILTIN\Users` a create/append right (`0x4`) at the root; refusing it
+///   would refuse every manifest load on factory Windows installs.
+/// - `FILE_DELETE_CHILD` (`0x40`) refuses: it lets a principal delete any
+///   child entry, which enables removing the verified leaf to plant a
+///   replacement.
+/// - `DELETE` (`0x10000`) refuses: it lets a principal delete the ancestor
+///   itself, removing the verified path.
+/// - `WRITE_DAC` (`0x40000`) and `WRITE_OWNER` (`0x80000`) refuse: they let a
+///   principal rewrite the DACL or retake ownership, escalating to full
+///   control over the verified path.
+/// - `GENERIC_WRITE` (`0x40000000`) and `GENERIC_ALL` (`0x10000000`) refuse:
+///   umbrella rights that include the refused rights above.
+///
+/// `FILE_READ_EA` (`0x8`) is a read right and refuses nowhere (already
+/// excluded from the leaf mask).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK: u32 =
+    0x40 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+
+/// Whether an allow-ACE access mask on an ANCESTOR directory disqualifies it
+/// under [`TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK`]. Pure mask logic with no
+/// platform calls, so the ancestor create/replace boundary is pinned by unit
+/// tests on every host. Mirrors the discipline of
+/// [`windows_owner_sid_is_trusted`]: one pure predicate per gate boundary.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_ancestor_mask_is_disqualifying(mask: u32) -> bool {
+    mask & TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK != 0
+}
+
+/// String form of the well-known `NT AUTHORITY\SYSTEM` principal.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_SYSTEM_SID: &str = "S-1-5-18";
+/// String form of the well-known `BUILTIN\Administrators` group.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+/// String form of the well-known `NT SERVICE\TrustedInstaller` principal: the
+/// OS-installer identity that owns system locations such as the drive root
+/// (`C:\`) on factory Windows installs. It holds the same standing as
+/// SYSTEM/Administrators in the trusted-input gate.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID: &str =
+    "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+/// Whether an owner SID (string form) is trusted for the Windows trusted-input
+/// gate: the current user, SYSTEM, Administrators, or TrustedInstaller. Pure
+/// string logic with no platform calls, so the owner boundary is pinned by
+/// unit tests on every host. Comparison is ASCII case-insensitive because SID
+/// string form is canonically upper-case but never guaranteed by a producer.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_owner_sid_is_trusted(owner_sid: &str, current_user_sid: &str) -> bool {
+    (!current_user_sid.is_empty() && owner_sid.eq_ignore_ascii_case(current_user_sid))
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_SYSTEM_SID)
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_ADMINISTRATORS_SID)
+        || owner_sid.eq_ignore_ascii_case(TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID)
+}
+
+/// Windows writability gate for trusted input leaves. The path must be owned by
+/// the current user, SYSTEM, Administrators or TrustedInstaller, and no other
+/// principal may hold an allow ACE granting write-level access under the
+/// strict leaf mask ([`TRUSTED_WINDOWS_WRITE_MASK`]). Read grants to others
+/// are allowed so shared installs keep working; only writes fail closed. A
+/// missing DACL (full access to everyone) or an unreadable ACL fails closed
+/// and names the path. Deny and audit ACEs grant nothing and are ignored.
+/// Every refusal names the trustee SID and the granted mask so a CI log alone
+/// diagnoses which principal and right tripped the gate.
 #[cfg(windows)]
 pub(crate) fn verify_trusted_windows_acl(path: &Path, label: &str) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
@@ -1777,13 +2137,18 @@ pub(crate) fn verify_trusted_windows_acl(path: &Path, label: &str) -> Result<()>
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(path)
         .with_context(|| format!("reading {label} Windows ACL {}", path.display()))?;
-    check_trusted_windows_handle(&handle, path, label)
+    check_trusted_windows_handle(&handle, path, label, false)
 }
 
 /// Ancestor half of the Windows gate: every ancestor directory of the
-/// canonical path must pass the same owner/no-foreign-write check as the
-/// leaf, since a writable ancestor lets an attacker rename or replace the
-/// verified leaf. Reparse-point ancestors are refused.
+/// canonical path must pass the same owner check as the leaf, but the
+/// no-foreign-write check uses the narrowed ancestor mask
+/// ([`TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK`]): create-only rights
+/// (`FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`/`FILE_APPEND_DATA`,
+/// `FILE_WRITE_EA`, `FILE_WRITE_ATTRIBUTES`) cannot rename or replace an
+/// existing verified entry, so they pass here while the leaf still refuses
+/// them. Only replacement/removal/takeover rights disqualify an ancestor.
+/// Reparse-point ancestors are refused.
 #[cfg(windows)]
 pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
@@ -1815,7 +2180,7 @@ pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Resu
             .with_context(|| {
                 format!("reading {label} ancestor Windows ACL {}", current.display())
             })?;
-        check_trusted_windows_handle(&handle, current, label)?;
+        check_trusted_windows_handle(&handle, current, label, true)?;
         if current.parent().is_none() {
             break;
         }
@@ -1823,11 +2188,24 @@ pub(crate) fn verify_trusted_windows_ancestors(path: &Path, label: &str) -> Resu
     Ok(())
 }
 
-/// Shared DACL inspection behind [`verify_trusted_windows_acl`]: owner must
-/// be the current user, SYSTEM or Administrators, and no allow ACE may grant
-/// write-level rights to anyone else.
+/// Shared DACL inspection behind [`verify_trusted_windows_acl`] (leaf,
+/// `ancestor = false`) and [`verify_trusted_windows_ancestors`] (`ancestor =
+/// true`): owner must be the current user, SYSTEM, Administrators or
+/// TrustedInstaller, and no allow ACE may grant disqualifying rights to
+/// anyone else. The leaf uses the strict [`TRUSTED_WINDOWS_WRITE_MASK`];
+/// ancestors use the narrowed [`TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK`], so
+/// create-only rights pass on ancestors while replacement/removal/takeover
+/// rights refuse on both. TrustedInstaller holds the same standing as
+/// SYSTEM/Administrators as an ACE trustee, so a write grant it holds on a
+/// system ancestor does not fail the gate. Refusals name the trustee SID and
+/// the granted mask.
 #[cfg(windows)]
-fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Result<()> {
+fn check_trusted_windows_handle(
+    handle: &File,
+    path: &Path,
+    label: &str,
+    ancestor: bool,
+) -> Result<()> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -1843,22 +2221,6 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
     const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
     const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
     const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
-    // Write-level rights that would let another principal replace content,
-    // delete the path itself, or rename entries: data writes, extended-attribute
-    // writes, child add/delete, delete, DACL/owner takeover, and the generic
-    // umbrellas covering them. `0x10` is FILE_WRITE_EA and `0x10000` is
-    // DELETE; both let a foreign principal replace or remove a trusted input.
-    const WRITE_MASK: u32 = 0x2
-        | 0x4
-        | 0x8
-        | 0x10
-        | 0x40
-        | 0x100
-        | 0x10000
-        | 0x40000
-        | 0x80000
-        | 0x40000000
-        | 0x10000000;
 
     let mut owner = std::ptr::null_mut();
     let mut dacl = std::ptr::null_mut();
@@ -1954,16 +2316,31 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
         };
         let system_sid = well_known(windows_sys::Win32::Security::WinLocalSystemSid)?;
         let admins_sid = well_known(windows_sys::Win32::Security::WinBuiltinAdministratorsSid)?;
+        // Stringify the owner and current-user SIDs so the acceptance decision
+        // runs through the pure [`windows_owner_sid_is_trusted`] predicate
+        // and the refusal names the actual owner. Conversion failures fail
+        // closed: the input is refused rather than trusted.
+        let owner_string =
+            trusted_windows_sid_to_string(owner).context("reading trusted Windows owner SID")?;
+        // SAFETY: user.User.Sid is non-null (checked above) and lives in the token buffer.
+        let user_string = trusted_windows_sid_to_string(user.User.Sid)
+            .context("reading trusted Windows user SID")?;
+        // Keep the pointer comparison as a second opinion alongside the string
+        // predicate: either route trusting the owner accepts the input.
         // SAFETY: owner is non-null in the live descriptor; the other SIDs are
         // live in the token and local buffers.
-        let owner_trusted = unsafe {
-            EqualSid(owner, user.User.Sid) != 0
-                || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
-                || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
+        let owner_trusted = windows_owner_sid_is_trusted(&owner_string, &user_string) || {
+            // SAFETY: owner is non-null in the live descriptor; the other
+            // SIDs are live in the token and local buffers.
+            unsafe {
+                EqualSid(owner, user.User.Sid) != 0
+                    || EqualSid(owner, system_sid.as_ptr().cast_mut().cast()) != 0
+                    || EqualSid(owner, admins_sid.as_ptr().cast_mut().cast()) != 0
+            }
         };
         if !owner_trusted {
             bail!(
-                "{label} {} must be owned by the current user, SYSTEM or Administrators",
+                "{label} {} must be owned by the current user, SYSTEM, Administrators or TrustedInstaller (owner {owner_string})",
                 path.display()
             );
         }
@@ -2041,7 +2418,15 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
             } else {
                 continue;
             };
-            if mask & WRITE_MASK == 0 {
+            // Leaves refuse every write-level right; ancestors refuse only the
+            // replacement/removal/takeover subset: create-only rights cannot
+            // rename or replace the verified entry below them.
+            let disqualifying = if ancestor {
+                windows_ancestor_mask_is_disqualifying(mask)
+            } else {
+                windows_allow_ace_grants_write(mask)
+            };
+            if !disqualifying {
                 continue;
             }
             // SAFETY: the ACE SID lies inside the validated ACL; the compared
@@ -2052,9 +2437,22 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
                     || EqualSid(ace_sid, system_sid.as_ptr().cast_mut().cast()) != 0
                     || EqualSid(ace_sid, admins_sid.as_ptr().cast_mut().cast()) != 0
             };
+            // TrustedInstaller holds the same standing as SYSTEM/Administrators
+            // as an ACE trustee: a write grant it holds on a system ancestor
+            // (such as the drive root) does not fail the gate. The string
+            // conversion is a fallback checked only when the pointer
+            // comparison above refused; an unreadable SID stays refused. The
+            // string form is also what the refusal below names, so a CI log
+            // alone diagnoses which principal and mask tripped the gate.
+            let ace_string = trusted_windows_sid_to_string(ace_sid).ok();
+            let sid_trusted = sid_trusted
+                || ace_string.as_deref().is_some_and(|ace| {
+                    ace.eq_ignore_ascii_case(TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID)
+                });
             if !sid_trusted {
+                let trustee = ace_string.as_deref().unwrap_or("<unreadable SID>");
                 bail!(
-                    "{label} {} grants Windows write access to another principal; refusing",
+                    "{label} {} grants Windows write access to {trustee} (mask {mask:#x}); refusing",
                     path.display()
                 );
             }
@@ -2066,6 +2464,41 @@ fn check_trusted_windows_handle(handle: &File, path: &Path, label: &str) -> Resu
         unsafe { LocalFree(descriptor) };
     }
     result
+}
+
+/// Stringify a live SID pointer via `ConvertSidToStringSidW` so the gate can
+/// run its pure string predicate and name the SID in diagnostics. The caller
+/// keeps the SID alive; the returned string is owned. Any conversion failure
+/// is an error so callers fail closed.
+#[cfg(windows)]
+fn trusted_windows_sid_to_string(sid: *mut std::ffi::c_void) -> Result<String> {
+    use std::os::windows::ffi::OsStringExt;
+    if sid.is_null() {
+        bail!("Windows SID is null; refusing");
+    }
+    let mut text: *mut u16 = std::ptr::null_mut();
+    // SAFETY: sid is a live SID owned by the caller; text is a writable
+    // out-slot, and the API allocates the returned string for LocalFree.
+    let status = unsafe {
+        windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW(sid, &mut text)
+    };
+    if status == 0 || text.is_null() {
+        return Err(std::io::Error::last_os_error()).context("converting Windows SID to string");
+    }
+    let mut length = 0usize;
+    // SAFETY: ConvertSidToStringSidW returned a NUL-terminated LocalAlloc string.
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    // SAFETY: the counted UTF-16 units precede the validated terminator, and
+    // `text` stays live until LocalFree below.
+    let units = unsafe { std::slice::from_raw_parts(text, length) };
+    let value = std::ffi::OsString::from_wide(units)
+        .to_string_lossy()
+        .into_owned();
+    // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
+    unsafe { windows_sys::Win32::Foundation::LocalFree(text.cast()) };
+    Ok(value)
 }
 
 pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {
@@ -2340,6 +2773,121 @@ pub(crate) fn validate_private_windows_acl(file: &File, path: &Path) -> Result<(
     result
 }
 
+/// Streaming SHA-256 of a bundled helper binary, as lowercase hex. The file
+/// is read in bounded chunks so a large helper is never loaded whole.
+pub(crate) fn bundled_helper_sha256(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .map_err(|error| anyhow!("reading bundled helper {}: {error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| anyhow!("reading bundled helper {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// The helper hash recorded beside the helper at build/packaging time, in
+/// `<helper>.sha256` (for `execute-applet.exe` that is `execute-applet.sha256`).
+/// The sidecar holds one whitespace-separated lowercase hex digest, as
+/// `sha256sum` writes it. No sidecar means no recorded hash; a present but
+/// malformed sidecar fails closed instead of silently dropping the check.
+pub(crate) fn recorded_bundled_helper_sha256(path: &Path) -> Result<Option<String>> {
+    let sidecar = path.with_extension("sha256");
+    let text = match std::fs::read_to_string(&sidecar) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow!(
+                "reading bundled helper hash {}: {error}",
+                sidecar.display()
+            ))
+        }
+    };
+    let digest = text.split_whitespace().next().unwrap_or_default();
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "bundled helper hash {} is malformed; refusing to trust {}",
+            sidecar.display(),
+            path.display()
+        ));
+    }
+    Ok(Some(digest.to_ascii_lowercase()))
+}
+
+/// Trust gate for a bundled helper binary (`execute-applet`/`execute-model`)
+/// resolved beside the running interpreter. Location alone is not trust: on
+/// Unix the helper file and its parent directory must not be group- or
+/// world-writable (a writable directory lets another local user replace the
+/// verified binary), a symlinked helper is refused, and when a hash was
+/// recorded at build time the helper's content must match it exactly. The
+/// caller applies the stronger trusted-input gate first (ownership, full
+/// ancestor chain, hardlink/setuid, ACLs) and runs the version/identity
+/// handshake afterwards, so a replaced helper that does not mimic the
+/// version line is refused even in a plain `cargo build` tree with no
+/// sidecar. The sidecar ships in the same directory it protects, so a
+/// same-directory attacker who can replace the helper can also rewrite the
+/// sidecar: the recorded hash binds the packaged artifact against stale or
+/// mismatched helpers, not against that attacker. Hash and handshake bytes
+/// also cannot be pinned through `exec`; see SECURITY.md.
+pub(crate) fn verify_bundled_helper(path: &Path, expected_sha256: Option<&str>) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| anyhow!("reading bundled helper {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(anyhow!(
+            "bundled helper {} is a symbolic link; refusing to trust it",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(anyhow!(
+            "bundled helper {} is not a regular file",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(anyhow!(
+                "bundled helper {} is group/world-writable; refusing to trust it",
+                path.display()
+            ));
+        }
+        if let Some(parent) = path.parent() {
+            let parent_metadata = std::fs::metadata(parent).map_err(|error| {
+                anyhow!(
+                    "reading bundled helper directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+            if parent_metadata.permissions().mode() & 0o022 != 0 {
+                return Err(anyhow!(
+                    "bundled helper directory {} is group/world-writable; refusing to trust {}",
+                    parent.display(),
+                    path.display()
+                ));
+            }
+        }
+    }
+    if let Some(expected) = expected_sha256 {
+        let actual = bundled_helper_sha256(path)?;
+        if !actual.eq_ignore_ascii_case(expected.trim()) {
+            return Err(anyhow!(
+                "bundled helper {} hash mismatch: expected {}, got {actual}; refusing to run an untrusted helper",
+                path.display(),
+                expected.trim().to_ascii_lowercase()
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2347,6 +2895,67 @@ mod tests {
 
     fn policy(text: &str) -> DataFlowPolicy {
         DataFlowPolicy::from_json(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn checkpoint_root_xattr_scan_detects_known_alternate_acl_names() {
+        for name in [
+            b"system.nfs4_acl\0".as_slice(),
+            b"system.nfs4_dacl\0".as_slice(),
+            b"system.nfs4_sacl\0".as_slice(),
+            b"system.richacl\0".as_slice(),
+            b"system.posix_acl_default\0".as_slice(),
+            b"security.nfs4acl_dacl\0".as_slice(),
+            b"security.nfs4acl_sacl\0".as_slice(),
+        ] {
+            assert!(
+                checkpoint_xattr_list_has_unsupported_acl(name).unwrap(),
+                "must recognize {}",
+                String::from_utf8_lossy(name)
+            );
+        }
+        assert!(!checkpoint_xattr_list_has_unsupported_acl(
+            b"security.selinux\0user.description\0system.posix_acl_access\0"
+        )
+        .unwrap());
+        assert!(checkpoint_xattr_list_has_unsupported_acl(b"system.nfs4_acl").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn checkpoint_linux_xattr_scan_uses_the_pinned_directory_descriptor() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = std::ffi::CString::new(directory.path().as_os_str().as_bytes()).unwrap();
+        let value = b"value";
+        // SAFETY: path and attribute name are NUL-terminated; value is a live
+        // readable byte slice for the supplied length.
+        let result = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                c"user.checkpoint-root-scan-test".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "setting a test xattr: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let directory_handle = std::fs::File::open(directory.path()).unwrap();
+        let names = linux_xattr_names(&directory_handle).unwrap();
+        assert!(names
+            .split(|byte| *byte == 0)
+            .any(|name| name == b"user.checkpoint-root-scan-test"));
+        assert!(
+            !checkpoint_xattr_list_has_unsupported_acl(b"user.checkpoint-root-scan-test\0")
+                .unwrap()
+        );
     }
 
     #[cfg(all(windows, feature = "live"))]
@@ -2392,11 +3001,14 @@ mod tests {
                 GetSecurityDescriptorDacl, DACL_SECURITY_INFORMATION,
                 PROTECTED_DACL_SECURITY_INFORMATION,
             },
-            Storage::FileSystem::{FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC},
+            Storage::FileSystem::{
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
+            },
         };
 
         let file = std::fs::OpenOptions::new()
             .access_mode(WRITE_DAC | READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)
             .unwrap();
         let wide = std::ffi::OsStr::new(sddl)
@@ -2504,6 +3116,38 @@ mod tests {
             open_private_file(&administrators).is_ok(),
             "Administrators and SYSTEM ACEs are trusted exceptions"
         );
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn checkpoint_root_rejects_an_explicit_outsider_acl() {
+        let directory = tempfile::tempdir().unwrap();
+        let user_sid = current_user_sid_string();
+        replace_test_dacl(
+            directory.path(),
+            &format!("D:P(A;;FA;;;WD)(A;;FA;;;{user_sid})"),
+        );
+        let metadata = std::fs::symlink_metadata(directory.path()).unwrap();
+        let error = verify_private_checkpoint_directory(directory.path(), &metadata)
+            .expect_err("checkpoint roots must reject an outsider write ACE");
+        assert!(
+            format!("{error:#}").contains("another Windows principal"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(all(windows, feature = "live"))]
+    #[test]
+    fn checkpoint_root_accepts_a_private_user_system_administrators_dacl() {
+        let directory = tempfile::tempdir().unwrap();
+        let user_sid = current_user_sid_string();
+        replace_test_dacl(
+            directory.path(),
+            &format!("D:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;{user_sid})"),
+        );
+        let metadata = std::fs::symlink_metadata(directory.path()).unwrap();
+        verify_private_checkpoint_directory(directory.path(), &metadata)
+            .expect("the owner and trusted platform principals may access the checkpoint");
     }
 
     #[test]
@@ -2879,6 +3523,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn replaced_helper_with_a_different_hash_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("execute-applet");
+        std::fs::write(&helper, b"genuine helper bytes").unwrap();
+        let expected = bundled_helper_sha256(&helper).unwrap();
+        assert!(verify_bundled_helper(&helper, Some(&expected)).is_ok());
+        // Replacing the helper changes its hash and must fail closed.
+        std::fs::write(&helper, b"attacker-controlled replacement").unwrap();
+        let error = verify_bundled_helper(&helper, Some(&expected)).unwrap_err();
+        assert!(error.to_string().contains("hash mismatch"), "{error}");
+    }
+
+    #[test]
+    fn recorded_helper_hash_sidecar_is_read_and_malformed_sidecar_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("execute-applet");
+        std::fs::write(&helper, b"genuine helper bytes").unwrap();
+        assert_eq!(recorded_bundled_helper_sha256(&helper).unwrap(), None);
+        let expected = bundled_helper_sha256(&helper).unwrap();
+        std::fs::write(
+            temp.path().join("execute-applet.sha256"),
+            format!("{expected}  execute-applet\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            recorded_bundled_helper_sha256(&helper).unwrap(),
+            Some(expected)
+        );
+        std::fs::write(temp.path().join("execute-applet.sha256"), "not-a-hash\n").unwrap();
+        assert!(recorded_bundled_helper_sha256(&helper).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_helper_directory_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("execute-applet");
+        std::fs::write(&helper, b"genuine helper bytes").unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(verify_bundled_helper(&helper, None).is_ok());
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let error = verify_bundled_helper(&helper, None).unwrap_err();
+        assert!(
+            error.to_string().contains("group/world-writable"),
+            "{error}"
+        );
+        // A group/world-writable helper file is refused for the same reason.
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(verify_bundled_helper(&helper, None).is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn policy_loader_rejects_group_readable_files() {
@@ -2974,5 +3672,202 @@ mod tests {
             "the bounded window must keep the newest decisions"
         );
         assert_consistent(&snapshot, total);
+    }
+
+    /// The Windows allow-ACE gate must refuse write-level grants while letting
+    /// read-level grants through, on every host: this is pure mask logic with
+    /// no platform calls. Regression cover for the `0x8` (`FILE_READ_EA`)
+    /// misclassification that refused `C:\Users` — standard read-and-execute
+    /// grants carry read-EA, so the ancestor walk failed every manifest load
+    /// under a Windows user profile and `check --json` degraded to
+    /// `check_failed`.
+    #[test]
+    fn windows_write_mask_keeps_read_grants_trusted() {
+        const FILE_READ_DATA: u32 = 0x1;
+        const FILE_READ_EA: u32 = 0x8;
+        const FILE_EXECUTE: u32 = 0x20;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const READ_CONTROL: u32 = 0x20000;
+        const SYNCHRONIZE: u32 = 0x100000;
+        const GENERIC_READ: u32 = 0x80000000;
+        const GENERIC_EXECUTE: u32 = 0x20000000;
+        // A standard read-and-execute grant, as `C:\Users` carries for
+        // `BUILTIN\Users`: read data/EA/attributes, execute, and the generic
+        // read-control/synchronize rights. None of it lets another principal
+        // replace or remove a trusted input.
+        const STANDARD_READ_EXECUTE: u32 = FILE_READ_DATA
+            | FILE_READ_EA
+            | FILE_EXECUTE
+            | FILE_READ_ATTRIBUTES
+            | READ_CONTROL
+            | SYNCHRONIZE;
+        assert!(!windows_allow_ace_grants_write(0));
+        assert!(!windows_allow_ace_grants_write(STANDARD_READ_EXECUTE));
+        for read in [
+            FILE_READ_DATA,
+            FILE_READ_EA,
+            FILE_EXECUTE,
+            FILE_READ_ATTRIBUTES,
+            READ_CONTROL,
+            SYNCHRONIZE,
+            GENERIC_READ,
+            GENERIC_EXECUTE,
+        ] {
+            assert!(
+                !windows_allow_ace_grants_write(read),
+                "read-level right {read:#x} must stay trusted"
+            );
+        }
+        // Every write-level right the gate documents still fails closed, both
+        // alone and combined with a read grant.
+        for write in [
+            0x2,        // FILE_WRITE_DATA
+            0x4,        // FILE_APPEND_DATA
+            0x10,       // FILE_WRITE_EA
+            0x40,       // FILE_DELETE_CHILD
+            0x100,      // FILE_WRITE_ATTRIBUTES
+            0x10000,    // DELETE
+            0x40000,    // WRITE_DAC
+            0x80000,    // WRITE_OWNER
+            0x40000000, // GENERIC_WRITE
+            0x10000000, // GENERIC_ALL
+        ] {
+            assert!(
+                windows_allow_ace_grants_write(write),
+                "write-level right {write:#x} must fail closed"
+            );
+            assert!(
+                windows_allow_ace_grants_write(STANDARD_READ_EXECUTE | write),
+                "write-level right {write:#x} must fail closed beside reads"
+            );
+        }
+    }
+
+    /// The ancestor half of the Windows gate must pass create-only grants
+    /// while refusing replacement/removal/takeover grants, on every host:
+    /// this is pure mask logic with no platform calls. Regression cover for
+    /// the factory-install drive root (`C:\`), which grants
+    /// `BUILTIN\Users` a create/append right (`0x4`): the full leaf mask
+    /// refused the root and `check --json` degraded to `check_failed` for
+    /// every manifest load. The leaf keeps the strict mask; only ancestors
+    /// narrow it.
+    #[test]
+    fn windows_ancestor_mask_passes_create_only_grants() {
+        const FILE_READ_DATA: u32 = 0x1;
+        const FILE_READ_EA: u32 = 0x8;
+        const FILE_EXECUTE: u32 = 0x20;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const READ_CONTROL: u32 = 0x20000;
+        const SYNCHRONIZE: u32 = 0x100000;
+        const STANDARD_READ_EXECUTE: u32 = FILE_READ_DATA
+            | FILE_READ_EA
+            | FILE_EXECUTE
+            | FILE_READ_ATTRIBUTES
+            | READ_CONTROL
+            | SYNCHRONIZE;
+        // The ancestor mask must stay a strict subset of the leaf mask: the
+        // leaf refuses everything the ancestor refuses, plus create-only
+        // rights.
+        assert_eq!(
+            TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK & !TRUSTED_WINDOWS_WRITE_MASK,
+            0,
+            "every ancestor-disqualifying right must also fail the leaf"
+        );
+        assert_eq!(
+            TRUSTED_WINDOWS_WRITE_MASK & !TRUSTED_WINDOWS_ANCESTOR_WRITE_MASK,
+            0x2 | 0x4 | 0x10 | 0x100,
+            "only the create-only rights may pass on ancestors"
+        );
+        // Create-only rights pass on ancestors, alone and beside reads: they
+        // let a principal create new entries or alter attributes but cannot
+        // rename, delete or replace an existing verified entry.
+        for create_only in [
+            0x2,   // FILE_ADD_FILE
+            0x4,   // FILE_APPEND_DATA / FILE_ADD_SUBDIRECTORY
+            0x10,  // FILE_WRITE_EA
+            0x100, // FILE_WRITE_ATTRIBUTES
+        ] {
+            assert!(
+                !windows_ancestor_mask_is_disqualifying(create_only),
+                "create-only right {create_only:#x} must pass on ancestors"
+            );
+            assert!(
+                !windows_ancestor_mask_is_disqualifying(STANDARD_READ_EXECUTE | create_only),
+                "create-only right {create_only:#x} must pass on ancestors beside reads"
+            );
+            // The leaf keeps refusing them: narrowing applies to ancestors only.
+            assert!(
+                windows_allow_ace_grants_write(create_only),
+                "create-only right {create_only:#x} must still fail the leaf"
+            );
+        }
+        // The factory-`C:\` shape passes: a create/append grant beside reads.
+        assert!(!windows_ancestor_mask_is_disqualifying(
+            STANDARD_READ_EXECUTE | 0x4
+        ));
+        // Replacement/removal/takeover rights refuse on ancestors, both alone
+        // and combined with a read grant.
+        for disqualifying in [
+            0x40,       // FILE_DELETE_CHILD
+            0x10000,    // DELETE
+            0x40000,    // WRITE_DAC
+            0x80000,    // WRITE_OWNER
+            0x40000000, // GENERIC_WRITE
+            0x10000000, // GENERIC_ALL
+        ] {
+            assert!(
+                windows_ancestor_mask_is_disqualifying(disqualifying),
+                "replacement/removal right {disqualifying:#x} must fail ancestors"
+            );
+            assert!(
+                windows_ancestor_mask_is_disqualifying(STANDARD_READ_EXECUTE | disqualifying),
+                "replacement/removal right {disqualifying:#x} must fail ancestors beside reads"
+            );
+        }
+        assert!(!windows_ancestor_mask_is_disqualifying(0));
+        assert!(!windows_ancestor_mask_is_disqualifying(
+            STANDARD_READ_EXECUTE
+        ));
+    }
+
+    /// The Windows owner gate must accept the current user, SYSTEM,
+    /// Administrators and TrustedInstaller while refusing anyone else, on
+    /// every host: this is pure string logic with no platform calls.
+    /// Regression cover for the factory-install drive root (`C:\`), which is
+    /// owned by `NT SERVICE\TrustedInstaller` rather than the runner: the
+    /// ancestor walk refused the root and `check --json` degraded to
+    /// `check_failed` for every manifest load.
+    #[test]
+    fn windows_trusted_owner_sid_accepts_platform_principals() {
+        const CURRENT_USER: &str = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+        const OTHER_USER: &str = "S-1-5-21-9999999999-8888888888-7777777777-1002";
+        const BUILTIN_USERS: &str = "S-1-5-32-545";
+        assert!(windows_owner_sid_is_trusted(CURRENT_USER, CURRENT_USER));
+        for trusted in [
+            TRUSTED_WINDOWS_SYSTEM_SID,
+            TRUSTED_WINDOWS_ADMINISTRATORS_SID,
+            TRUSTED_WINDOWS_TRUSTED_INSTALLER_SID,
+        ] {
+            assert!(
+                windows_owner_sid_is_trusted(trusted, CURRENT_USER),
+                "{trusted} must stay trusted"
+            );
+        }
+        assert!(
+            !windows_owner_sid_is_trusted(OTHER_USER, CURRENT_USER),
+            "a random user SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted(BUILTIN_USERS, CURRENT_USER),
+            "the Users-group SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted("", CURRENT_USER),
+            "an empty owner SID must fail closed"
+        );
+        assert!(
+            !windows_owner_sid_is_trusted(CURRENT_USER, ""),
+            "an empty current-user SID must not self-trust"
+        );
     }
 }

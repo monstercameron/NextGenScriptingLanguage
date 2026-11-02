@@ -209,6 +209,11 @@ pub enum AgentPermission {
 struct AgentGrant {
     token_sha256: String,
     permissions: BTreeSet<AgentPermission>,
+    /// Unix epoch seconds (UTC) after which this grant no longer authorizes.
+    /// Absent means the grant never expires, so policy files written before
+    /// expiry existed keep working unchanged.
+    #[serde(default)]
+    expires_at: Option<u64>,
 }
 
 impl fmt::Debug for AgentGrant {
@@ -217,6 +222,7 @@ impl fmt::Debug for AgentGrant {
             .debug_struct("AgentGrant")
             .field("token_sha256", &"<redacted>")
             .field("permissions", &self.permissions)
+            .field("expires_at", &self.expires_at)
             .finish()
     }
 }
@@ -285,13 +291,32 @@ impl AgentAuthPolicy {
     }
 
     /// Authorize the exact operation before live-state dispatch. Unknown
-    /// operations and unsupported control actions fail closed.
+    /// operations and unsupported control actions fail closed. The token hash
+    /// comparison always runs for a known agent — including expired grants —
+    /// so expiry reveals nothing through timing, and every denial reports the
+    /// same [`AuthError::Unauthorized`].
     pub fn authorize(
         &self,
         auth: Option<&RequestAuth>,
         operation: &str,
         action: Option<&str>,
     ) -> Result<(), AuthError> {
+        let permission = required_permission(operation, action)?;
+        self.authorize_permissions(auth, &[permission])
+    }
+
+    /// Authorize a request that needs every listed permission. Live edits may
+    /// combine ordinary state changes with listener or UI input injection;
+    /// those requests must hold both `edit` and `input` before any mutation is
+    /// attempted.
+    pub fn authorize_permissions(
+        &self,
+        auth: Option<&RequestAuth>,
+        permissions: &[AgentPermission],
+    ) -> Result<(), AuthError> {
+        if permissions.is_empty() {
+            return Err(AuthError::InvalidRequest);
+        }
         let auth = auth.ok_or(AuthError::Unauthorized)?;
         if !valid_agent_id(&auth.agent) || !valid_token(auth.token.as_bytes()) {
             return Err(AuthError::Unauthorized);
@@ -301,16 +326,121 @@ impl AgentAuthPolicy {
             .get(&auth.agent)
             .ok_or(AuthError::Unauthorized)?;
         let supplied = sha256_hex(auth.token.as_bytes());
-        if !constant_time_eq(supplied.as_bytes(), grant.token_sha256.as_bytes()) {
-            return Err(AuthError::Unauthorized);
-        }
-        let required = required_permission(operation, action)?;
-        if grant.permissions.contains(&required) {
+        let matched = constant_time_eq(supplied.as_bytes(), grant.token_sha256.as_bytes());
+        let live = grant
+            .expires_at
+            .is_none_or(|expires_at| now_unix_secs() < expires_at);
+        if matched
+            && live
+            && permissions
+                .iter()
+                .all(|permission| grant.permissions.contains(permission))
+        {
             Ok(())
         } else {
             Err(AuthError::Unauthorized)
         }
     }
+}
+
+/// Return true when an edit operation can change listener or UI input state.
+/// Paths are JSON Pointer tokens, decoded according to RFC 6901. Ancestor
+/// replacements count because they can replace the protected subtree.
+pub fn edit_injects_input(operation: &str, request: &serde_json::Value) -> bool {
+    let edits: Vec<(String, String)> = match operation {
+        "create" | "update" | "delete" => request
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(|path| vec![(operation.to_owned(), path.to_owned())])
+            .unwrap_or_default(),
+        "patch" => request
+            .get("operations")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                Some((
+                    entry.get("op")?.as_str()?.to_owned(),
+                    entry.get("path")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect(),
+        _ => return false,
+    };
+    edits.into_iter().any(|(op, path)| {
+        if matches!(op.as_str(), "test") {
+            return false;
+        }
+        let Some(parts) = decode_pointer(&path) else {
+            return false;
+        };
+        pointer_intersects(&parts, &["inbox"])
+            || pointer_intersects(&parts, &["ui", "events"])
+            || ui_component_input_intersects(&parts)
+    })
+}
+
+fn decode_pointer(path: &str) -> Option<Vec<String>> {
+    if path.is_empty() {
+        return Some(Vec::new());
+    }
+    if !path.starts_with('/') {
+        return None;
+    }
+    path[1..]
+        .split('/')
+        .map(|part| {
+            let mut decoded = String::new();
+            let mut chars = part.chars();
+            while let Some(c) = chars.next() {
+                if c != '~' {
+                    decoded.push(c);
+                } else {
+                    decoded.push(match chars.next()? {
+                        '0' => '~',
+                        '1' => '/',
+                        _ => return None,
+                    });
+                }
+            }
+            Some(decoded)
+        })
+        .collect()
+}
+
+fn pointer_intersects(path: &[String], protected: &[&str]) -> bool {
+    !path.is_empty()
+        && (path.len() <= protected.len()
+            && path
+                .iter()
+                .map(String::as_str)
+                .zip(protected)
+                .all(|(a, b)| a == *b)
+            || protected.len() <= path.len()
+                && protected
+                    .iter()
+                    .map(|part| *part)
+                    .zip(path.iter().map(String::as_str))
+                    .all(|(a, b)| a == b))
+}
+
+fn ui_component_input_intersects(path: &[String]) -> bool {
+    const PREFIX: &[&str] = &["ui", "programs"];
+    if !path
+        .iter()
+        .map(String::as_str)
+        .zip(PREFIX)
+        .all(|(a, b)| a == *b)
+    {
+        return false;
+    }
+    // Replacing /ui, /ui/programs, or a component can replace its inputs.
+    if path.len() <= 3 {
+        return true;
+    }
+    // Under a component, only its inputs map and descendants represent
+    // handler input. Widget display state remains an ordinary edit.
+    path.len() >= 4 && path[3] == "inputs"
 }
 
 /// Determine which grant protects one validated live request. Exposed so the
@@ -327,7 +457,7 @@ pub fn required_permission(
             Some("stop") => Ok(AgentPermission::Stop),
             Some(
                 "pause" | "resume" | "step" | "continue" | "breakpoint" | "cancel" | "retry"
-                | "reset" | "restart" | "restart-source",
+                | "reset" | "restart" | "restart-source" | "reload-agents",
             ) => Ok(AgentPermission::Control),
             _ => Err(AuthError::InvalidRequest),
         },
@@ -455,6 +585,16 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Wall-clock seconds since the Unix epoch, matching the `expires_at` grant
+/// field. A clock failure yields 0 so every grant carrying an expiry denies
+/// (fail closed); grants without expiry are unaffected.
+pub(crate) fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(64);
@@ -538,6 +678,129 @@ mod tests {
     }
 
     #[test]
+    fn edits_that_intersect_listener_or_ui_inputs_require_input_scope() {
+        for request in [
+            serde_json::json!({"path":"/inbox/-"}),
+            serde_json::json!({"path":"/inbox"}),
+            serde_json::json!({"path":"/ui"}),
+            serde_json::json!({"path":"/ui/events/-"}),
+            serde_json::json!({"path":"/ui/programs"}),
+            serde_json::json!({"path":"/ui/programs/console"}),
+            serde_json::json!({"path":"/ui/programs/console/inputs/name"}),
+            serde_json::json!({"operations":[{"op":"replace","path":"/inbox","value":[]}]}),
+            serde_json::json!({"operations":[{"op":"add","path":"/ui/events/-","value":{}}]}),
+            serde_json::json!({"operations":[{"op":"replace","path":"/ui/programs/console/inputs","value":{}}]}),
+        ] {
+            let operation = if request.get("operations").is_some() {
+                "patch"
+            } else {
+                "update"
+            };
+            assert!(edit_injects_input(operation, &request), "{request}");
+        }
+        for (operation, request) in [
+            ("update", serde_json::json!({"path":"/user/note"})),
+            (
+                "update",
+                serde_json::json!({"path":"/ui/programs/console/widgets/button/text"}),
+            ),
+            (
+                "patch",
+                serde_json::json!({"operations":[{"op":"test","path":"/inbox","value":[]}]}),
+            ),
+            (
+                "patch",
+                serde_json::json!({"operations":[{"op":"replace","path":"/bindings/name","value":"x"}]}),
+            ),
+        ] {
+            assert!(!edit_injects_input(operation, &request), "{request}");
+        }
+    }
+
+    #[test]
+    fn input_edits_require_both_edit_and_input_grants() {
+        let edit_only = policy(&["edit"]);
+        assert!(edit_only.authorize(Some(&auth()), "update", None).is_ok());
+        assert!(edit_only
+            .authorize_permissions(
+                Some(&auth()),
+                &[AgentPermission::Edit, AgentPermission::Input]
+            )
+            .is_err());
+        let edit_and_input = policy(&["edit", "input"]);
+        assert!(edit_and_input
+            .authorize_permissions(
+                Some(&auth()),
+                &[AgentPermission::Edit, AgentPermission::Input]
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn expiry_is_backward_compatible_and_fail_closed() {
+        // Grants written before expiry existed (no `expires_at`) keep working.
+        let policy = policy(&["read"]);
+        assert!(policy.authorize(Some(&auth()), "read", None).is_ok());
+
+        let token_hash = sha256_hex(b"0123456789abcdef0123456789abcdef");
+        let granting = |expires_at: Option<u64>| {
+            let grant = match expires_at {
+                Some(at) => format!(
+                    "{{\"token_sha256\":\"{token_hash}\",\"permissions\":[\"read\"],\"expires_at\":{at}}}"
+                ),
+                None => format!("{{\"token_sha256\":\"{token_hash}\",\"permissions\":[\"read\"]}}"),
+            };
+            AgentAuthPolicy::from_json(
+                format!("{{\"version\":1,\"agents\":{{\"writer\":{grant}}}}}").as_bytes(),
+            )
+            .unwrap()
+        };
+        // A grant expiring in the future authorizes; an expired grant denies
+        // even with the correct token and permission.
+        assert!(granting(Some(now_unix_secs() + 3600))
+            .authorize(Some(&auth()), "read", None)
+            .is_ok());
+        for expires_at in [0, 1, now_unix_secs().saturating_sub(1)] {
+            let expired = granting(Some(expires_at));
+            assert_eq!(
+                expired.authorize(Some(&auth()), "read", None),
+                Err(AuthError::Unauthorized)
+            );
+            // A wrong token on an expired grant denies identically: expiry
+            // reveals nothing beyond what a plain mismatch already reports.
+            let mut wrong = auth();
+            wrong.token = "abcdefghijklmnopqrstuvwxyz012345".into();
+            assert_eq!(
+                expired.authorize(Some(&wrong), "read", None),
+                Err(AuthError::Unauthorized)
+            );
+        }
+        // Malformed `expires_at` shapes fail closed at parse time.
+        for expires_at in [
+            json!("tomorrow"),
+            json!(-1),
+            json!(1.5),
+            json!(true),
+            json!([]),
+        ] {
+            let document = json!({
+                "version": 1,
+                "agents": {
+                    "writer": {
+                        "token_sha256": token_hash,
+                        "permissions": ["read"],
+                        "expires_at": expires_at,
+                    }
+                }
+            });
+            assert!(
+                AgentAuthPolicy::from_json(document.to_string().as_bytes()).is_err(),
+                "malformed expires_at must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn policy_parse_fails_closed_for_ambiguous_or_unknown_fields() {
         let hash = sha256_hex(b"0123456789abcdef0123456789abcdef");
         let valid_grant = format!("{{\"token_sha256\":\"{hash}\",\"permissions\":[\"read\"]}}");
@@ -572,6 +835,10 @@ mod tests {
         );
         assert_eq!(
             required_permission("control", Some("resume")),
+            Ok(AgentPermission::Control)
+        );
+        assert_eq!(
+            required_permission("control", Some("reload-agents")),
             Ok(AgentPermission::Control)
         );
         assert!(required_permission("control", Some("unknown")).is_err());

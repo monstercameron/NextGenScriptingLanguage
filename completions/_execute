@@ -34,5 +34,5 @@ _arguments -s \
   '--max-runs[maximum trigger runs]:count:' '--missed-ticks[trigger backlog policy]:policy:(skip coalesce catch-up)' \
   '--max-catch-up[catch-up run bound]:count:' '--calendar-dedup[calendar fold policy]:mode:(instant local)' \
   '--command-timeout-ms[native pipeline lifetime]:milliseconds:' '--total-timeout-ms[workflow lifetime]:milliseconds:' \
-  '--drain-timeout-ms[interrupt drain budget]:milliseconds:' '--max-record-bytes[listener record limit]:bytes:' \
+  '--drain-timeout-ms[interrupt drain budget]:milliseconds:' '--kill-grace-ms[polite kill grace]:milliseconds:' '--max-record-bytes[listener record limit]:bytes:' \
   '--help[show help]' '-h[show help]' '*:file:_files'

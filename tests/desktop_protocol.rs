@@ -446,6 +446,7 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
         network: false,
         network_origins: Default::default(),
         sandbox_required: false,
+        resource_limits: None,
     };
     registry.set_host_state(Some(CapabilityPolicy {
         host: None,

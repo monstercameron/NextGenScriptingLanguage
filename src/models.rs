@@ -4,6 +4,7 @@
 //! workflow runtime owns this applet as a normal child process, so cancellation
 //! kills an in-flight request with the rest of its process group.
 
+use crate::capabilities::MODEL_GRANTED_ORIGIN_ENV;
 use crate::model_schema::{parse_unique_json, validate_schema_definition, DuplicateJsonKey};
 use crate::ssrf;
 use anyhow::{anyhow, bail, Context, Result};
@@ -225,7 +226,8 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
     // Hermetic fixture runs never open a socket, so loopback endpoints stay
     // usable there without the live-loopback grant below.
     let allow_loopback = options.fixture.is_some() || model_loopback_allowed();
-    check_endpoint_ssrf(&parsed, allow_loopback)
+    let granted = model_granted_set(&model_origin(&parsed));
+    check_endpoint_ssrf(&parsed, allow_loopback, &granted)
         .map_err(|_| failure(FailureClass::Configuration))?;
     let transport = if options.fixture.is_some() {
         "fixture"
@@ -1170,6 +1172,31 @@ fn is_loopback(host: Host<&str>) -> bool {
     }
 }
 
+/// Whether the helper environment explicitly grants this canonical origin.
+/// The comparison is exact: a grant for any other origin leaves the default
+/// refusal in place.
+fn model_ssrf_grant(origin: &str) -> bool {
+    granted_origin_matches(
+        std::env::var_os(MODEL_GRANTED_ORIGIN_ENV).as_deref(),
+        origin,
+    )
+}
+
+fn granted_origin_matches(granted: Option<&std::ffi::OsStr>, origin: &str) -> bool {
+    granted.is_some_and(|granted| granted == std::ffi::OsStr::new(origin))
+}
+
+/// The explicit grant set for one endpoint origin: the origin itself when the
+/// parent conveyed it, empty otherwise. Only a listed origin preserves a
+/// non-public destination; a broad empty grant does not.
+fn model_granted_set(origin: &str) -> BTreeSet<String> {
+    if model_ssrf_grant(origin) {
+        BTreeSet::from([origin.to_owned()])
+    } else {
+        BTreeSet::new()
+    }
+}
+
 /// Explicit opt-in for live loopback model endpoints.
 ///
 /// A script-controlled `--endpoint` can otherwise reach any unauthenticated
@@ -1179,10 +1206,10 @@ fn is_loopback(host: Host<&str>) -> bool {
 /// environments must list the variable explicitly. Hermetic `--fixture` runs
 /// never open a socket and do not need it.
 ///
-/// Model endpoints have no `network_origins` grant yet: dependency #375 keeps
-/// them outside `network_origins`, which `Command`-backend applets cannot
-/// declare, so this variable is the interim explicit grant until that policy
-/// work lands.
+/// Policy grants for non-public model destinations travel as
+/// `EXECUTE_MODEL_GRANTED_ORIGIN`, conveyed by the runtime parent after it
+/// authorizes the endpoint; this variable stays the explicit grant for live
+/// loopback endpoints with no origin listing.
 fn model_loopback_allowed() -> bool {
     std::env::var_os("EXECUTE_MODEL_ALLOW_LOOPBACK").is_some()
 }
@@ -1195,8 +1222,14 @@ fn model_loopback_allowed() -> bool {
 /// (or hermetic fixture mode, which never reaches the network): the HTTP form
 /// is already restricted to loopback by [`validate_endpoint`], and HTTPS
 /// loopback covers local TLS servers. Fixture mode with a non-public,
-/// non-loopback endpoint is still refused.
-fn check_endpoint_ssrf(parsed: &Url, allow_loopback: bool) -> Result<()> {
+/// non-loopback endpoint is still refused. `granted` carries the explicitly
+/// granted origin, if any; only that exact origin preserves a non-public
+/// destination.
+fn check_endpoint_ssrf(
+    parsed: &Url,
+    allow_loopback: bool,
+    granted: &BTreeSet<String>,
+) -> Result<()> {
     let host = match parsed.host() {
         Some(Host::Ipv4(address)) => address.to_string(),
         Some(Host::Ipv6(address)) => address.to_string(),
@@ -1204,7 +1237,7 @@ fn check_endpoint_ssrf(parsed: &Url, allow_loopback: bool) -> Result<()> {
         None => bail!("endpoint must name a host"),
     };
     let origin = model_origin(parsed);
-    ssrf::check_endpoint_host(&host, &origin, allow_loopback, &Default::default())
+    ssrf::check_endpoint_host(&host, &origin, allow_loopback, granted)
         .map_err(|denied| anyhow!("{denied}"))
 }
 
@@ -1222,23 +1255,35 @@ fn model_origin(parsed: &Url) -> String {
 
 /// Resolver that pins the endpoint against DNS rebinding: every resolved
 /// address must be publicly routable (loopback excepted only under the
-/// explicit [`model_loopback_allowed`] grant), otherwise the whole set is
-/// refused before the transport connects. The default is fail-closed.
-#[derive(Debug, Default)]
-struct SsrfSystemResolver {
+/// explicit [`model_loopback_allowed`] grant or an explicit origin grant),
+/// otherwise the whole set is refused before the transport connects. The
+/// default is fail-closed: an empty set or an unclassifiable address never
+/// reaches the transport.
+struct SsrfSystemResolver<R = ureq::unversioned::resolver::DefaultResolver> {
     allow_loopback: bool,
+    granted_origin: bool,
+    inner: R,
 }
 
-impl Resolver for SsrfSystemResolver {
+impl<R> std::fmt::Debug for SsrfSystemResolver<R> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SsrfSystemResolver")
+            .field("allow_loopback", &self.allow_loopback)
+            .field("granted_origin", &self.granted_origin)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: Resolver> Resolver for SsrfSystemResolver<R> {
     fn resolve(
         &self,
         uri: &ureq::http::Uri,
         config: &ureq::config::Config,
         timeout: ureq::unversioned::transport::NextTimeout,
     ) -> Result<ResolvedSocketAddrs, ureq::Error> {
-        let addrs = ureq::unversioned::resolver::DefaultResolver::default()
-            .resolve(uri, config, timeout)?;
-        ssrf::check_resolved_addrs(&addrs, self.allow_loopback, false)
+        let addrs = self.inner.resolve(uri, config, timeout)?;
+        ssrf::check_resolved_addrs(&addrs, self.allow_loopback, self.granted_origin)
             .map_err(|_| ureq::Error::HostNotFound)?;
         Ok(addrs)
     }
@@ -1462,7 +1507,9 @@ fn post_json(
     // Defense in depth: `run` checks the same gate, but `post_json` rechecks
     // so a live request can never bypass the explicit loopback grant.
     let allow_loopback = model_loopback_allowed();
-    check_endpoint_ssrf(&parsed, allow_loopback)
+    let origin = model_origin(&parsed);
+    let granted = model_granted_set(&origin);
+    check_endpoint_ssrf(&parsed, allow_loopback, &granted)
         .map_err(|_| failure(FailureClass::Configuration))?;
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(timeout_ms)))
@@ -1477,11 +1524,17 @@ fn post_json(
     );
     let config = config.build();
     // Pin the resolved addresses at connect time: the default resolver would
-    // use a rebinding hostname's private address as-is.
+    // use a rebinding hostname's private address as-is. The checked set is
+    // what the transport connects from, so a rebinding answer is refused as a
+    // whole before any connection.
     let agent = ureq::Agent::with_parts(
         config,
         ureq::unversioned::transport::DefaultConnector::new(),
-        SsrfSystemResolver { allow_loopback },
+        SsrfSystemResolver {
+            allow_loopback,
+            granted_origin: model_ssrf_grant(&origin),
+            inner: ureq::unversioned::resolver::DefaultResolver::default(),
+        },
     );
     let request = agent
         .post(endpoint)
@@ -2309,6 +2362,119 @@ mod unit_tests {
         ] {
             assert!(validate_endpoint(endpoint).is_ok(), "{endpoint}");
         }
+    }
+
+    #[test]
+    fn granted_origin_match_is_exact_and_never_blanket() {
+        use std::ffi::OsStr;
+        assert!(granted_origin_matches(
+            Some(OsStr::new("https://169.254.169.254")),
+            "https://169.254.169.254"
+        ));
+        assert!(!granted_origin_matches(
+            Some(OsStr::new("https://169.254.169.254")),
+            "https://10.0.0.1"
+        ));
+        assert!(!granted_origin_matches(None, "https://169.254.169.254"));
+        assert!(!granted_origin_matches(
+            Some(OsStr::new("https://example.test")),
+            "https://example.test/"
+        ));
+        assert!(!granted_origin_matches(
+            Some(OsStr::new("")),
+            "https://10.0.0.1"
+        ));
+    }
+
+    #[test]
+    fn granted_origin_preserves_only_its_own_non_public_literal() {
+        let origin = "https://169.254.169.254";
+        let parsed = Url::parse(origin).unwrap();
+        assert!(check_endpoint_ssrf(&parsed, false, &BTreeSet::new()).is_err());
+        assert!(check_endpoint_ssrf(&parsed, true, &BTreeSet::new()).is_err());
+        let granted = BTreeSet::from([origin.to_owned()]);
+        assert!(check_endpoint_ssrf(&parsed, false, &granted).is_ok());
+        // A grant for a different origin does not open this destination.
+        let other = BTreeSet::from(["https://10.0.0.1".to_owned()]);
+        assert!(check_endpoint_ssrf(&parsed, false, &other).is_err());
+        let loopback = Url::parse("http://127.0.0.1:11434/v1").unwrap();
+        assert!(check_endpoint_ssrf(&loopback, false, &BTreeSet::new()).is_err());
+        let loopback_grant = BTreeSet::from(["http://127.0.0.1:11434".to_owned()]);
+        assert!(check_endpoint_ssrf(&loopback, false, &loopback_grant).is_ok());
+    }
+
+    /// The connect-time pin, driven by a fake resolver: a hostname that looks
+    /// benign at validation time (public literal passes the by-name check)
+    /// is refused when the resolved set mixes in a private address — the DNS
+    /// rebinding shape — and the whole set is refused when empty. Only an
+    /// explicit origin grant preserves a private set.
+    #[test]
+    fn resolver_pins_rebinding_answers_fail_closed() {
+        use std::net::SocketAddr;
+        use ureq::config::Config;
+        use ureq::unversioned::transport::NextTimeout;
+
+        #[derive(Debug)]
+        struct FakeResolver {
+            addrs: Vec<SocketAddr>,
+        }
+
+        impl Resolver for FakeResolver {
+            fn resolve(
+                &self,
+                _uri: &ureq::http::Uri,
+                _config: &ureq::config::Config,
+                _timeout: NextTimeout,
+            ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+                let mut addrs =
+                    ResolvedSocketAddrs::from_fn(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+                for addr in &self.addrs {
+                    addrs.push(*addr);
+                }
+                Ok(addrs)
+            }
+        }
+
+        fn pin(addrs: &[&str], allow_loopback: bool, granted_origin: bool) -> bool {
+            let resolver = SsrfSystemResolver {
+                allow_loopback,
+                granted_origin,
+                inner: FakeResolver {
+                    addrs: addrs.iter().map(|addr| addr.parse().unwrap()).collect(),
+                },
+            };
+            let uri: ureq::http::Uri = "https://rebind.example.test/".parse().unwrap();
+            resolver
+                .resolve(
+                    &uri,
+                    &Config::default(),
+                    NextTimeout {
+                        after: ureq::unversioned::transport::time::Duration::Exact(
+                            Duration::from_secs(5),
+                        ),
+                        reason: ureq::Timeout::Resolve,
+                    },
+                )
+                .is_ok()
+        }
+
+        // Benign validation, tainted resolution: refused as a whole, in either
+        // order, before any connection.
+        assert!(!pin(&["93.184.216.34:443", "10.0.0.1:443"], false, false));
+        assert!(!pin(&["10.0.0.1:443", "93.184.216.34:443"], false, false));
+        assert!(!pin(&["169.254.169.254:80"], false, false));
+        assert!(!pin(&[], false, false));
+        assert!(!pin(&["127.0.0.1:80"], false, false));
+        // Public-only sets still connect.
+        assert!(pin(&["93.184.216.34:443"], false, false));
+        assert!(pin(&["127.0.0.1:80"], true, false));
+        // An explicit origin grant preserves a private set.
+        assert!(pin(&["10.0.0.1:443"], false, true));
+        assert!(pin(
+            &["93.184.216.34:443", "169.254.169.254:80"],
+            false,
+            true
+        ));
     }
 
     #[test]

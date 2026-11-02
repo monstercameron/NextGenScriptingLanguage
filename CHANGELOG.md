@@ -25,6 +25,10 @@ original version labels.
   without flush support fail closed with an explicit error asking for a local
   NTFS directory, and no hard power-loss survival is claimed until the
   50-trial hard-reset lab passes.
+- Graph inspection with supplied sensitive prompt or environment inputs now keeps
+  those values withheld in resolved applet parameters while resolving non-sensitive
+  inputs normally. Graph validation diagnostics redact supplied sensitive values
+  before they reach `check`, `inspect`, `explain`, or `run` error output.
 
 - `execute run GRAPH --events jsonl` streams one `execute.graph-event/1` JSON
   line per terminal event as it arrives, flushing after every event and holding

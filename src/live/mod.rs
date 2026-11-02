@@ -1370,12 +1370,24 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                 // so bytes that arrive after the accept drain are still picked
                 // up promptly.
                 if ready != 0 {
+                    // Bound one accept pass (#722): take at most PENDING_MAX
+                    // connections and stop once `pending` is at the cap, so
+                    // the queue can never grow past PENDING_MAX between
+                    // sweeps and a continuous burst cannot starve the sweep
+                    // or stop handling. Connections past the cap stay in
+                    // the listen backlog for a later tick, once the sweep
+                    // has admitted or expired what is already pending.
+                    let mut accepted = 0usize;
                     loop {
+                        if accepted >= PENDING_MAX || pending.len() >= PENDING_MAX {
+                            break;
+                        }
                         let (stream, _) = match listener.accept() {
                             Ok(stream) => stream,
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                             Err(e) => return Err(e.into()),
                         };
+                        accepted += 1;
                         // Owner check and non-blocking mode before any buffering: a
                         // foreign peer is dropped without costing a slot or a
                         // flood token, and the sweep below relies on WouldBlock

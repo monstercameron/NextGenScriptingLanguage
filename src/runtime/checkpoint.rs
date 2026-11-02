@@ -2077,29 +2077,45 @@ pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
 }
 
 /// The checkpoint's exclusive lock, held while a resolution is validated and
-/// appended. End-to-end: the running program holds this same `lock` file from
-/// `Journal::open` (via `lock_directory`) until the journal drops, covering
-/// the whole resume; resolve holds it here across journal validation,
-/// element-log reads, and the resolutions append; status probes it without
-/// creating it. Dropping the guard releases the lock (closing the descriptor
-/// releases flock on Unix and LockFileEx on Windows), so concurrent resolves
-/// serialize on it: exactly one read-check-append runs at a time, and a
-/// resume holding the journal lock makes resolve fail with `locked` instead
-/// of racing it. The concurrency test covers `append_resolution`; the
-/// `checkpoint resolve` CLI path holds this same guard across its wider
-/// validation in `agent::checkpoint::resolve_uncertain`.
-#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+/// appended, and while a repair reads state, plans and commits. End-to-end:
+/// the running program holds this same `lock` file from `Journal::open` (via
+/// `lock_directory`) until the journal drops, covering the whole resume;
+/// resolve holds it here across journal validation, element-log reads, and
+/// the resolutions append; repair holds it here via
+/// `repair::acquire_repair_lock` across its read, check and commit; status
+/// probes it without creating it. Dropping the guard releases the lock
+/// (closing the descriptor releases flock on Unix and LockFileEx on
+/// Windows), so concurrent resolves and repairs serialize on it: exactly one
+/// read-check-write runs at a time, and a resume holding the journal lock
+/// makes resolve and repair fail with `locked` instead of racing it. The
+/// concurrency test covers `append_resolution`; the `checkpoint resolve` CLI
+/// path holds this same guard across its wider validation in
+/// `agent::checkpoint::resolve_uncertain`.
+#[cfg(any(
+    test,
+    all(
+        any(feature = "agent-advisory", feature = "records"),
+        not(target_arch = "wasm32")
+    )
+))]
 pub(crate) struct ResolveLock {
     _file: File,
 }
 
-/// Acquire the checkpoint's exclusive lock for one resolution. Fails closed
-/// with `locked` when a run or resume holds the journal lock for the whole
-/// resume, and for any other lock error. The lock file is created when absent
-/// so two resolves serialize even on a checkpoint no process currently holds;
-/// status never creates it (it probes only), so `lock_file_present` plus
-/// `lock_held` tells a live resume apart from an idle checkpoint.
-#[cfg(any(test, all(feature = "agent-advisory", not(target_arch = "wasm32"))))]
+/// Acquire the checkpoint's exclusive lock for one resolution or repair.
+/// Fails closed with `locked` when a run or resume holds the journal lock
+/// for the whole resume, and for any other lock error. The lock file is
+/// created when absent so two resolves or repairs serialize even on a
+/// checkpoint no process currently holds; status never creates it (it
+/// probes only), so `lock_file_present` plus `lock_held` tells a live
+/// resume apart from an idle checkpoint.
+#[cfg(any(
+    test,
+    all(
+        any(feature = "agent-advisory", feature = "records"),
+        not(target_arch = "wasm32")
+    )
+))]
 pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
     let path = directory.join("lock");
     let mut options = fs::OpenOptions::new();
@@ -2122,7 +2138,7 @@ pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
     }
     let file = options
         .open(&path)
-        .context("opening checkpoint lock for resolve")?;
+        .context("opening checkpoint lock for resolve or repair")?;
     if !file.metadata()?.is_file() {
         bail!("checkpoint lock must be a regular file");
     }
@@ -2143,9 +2159,11 @@ pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
                     .and_then(io::Error::raw_os_error)
                     == Some(windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION as i32) =>
             {
-                bail!("checkpoint is locked by a running process; stop it before resolving");
+                bail!(
+                    "checkpoint is locked by a running process; stop it before resolving or repairing"
+                );
             }
-            Err(error) => return Err(error).context("locking checkpoint for resolve"),
+            Err(error) => return Err(error).context("locking checkpoint for resolve or repair"),
         }
     }
     #[cfg(unix)]
@@ -2156,9 +2174,11 @@ pub(crate) fn acquire_resolve_lock(directory: &Path) -> Result<ResolveLock> {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == -1 {
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
-                bail!("checkpoint is locked by a running process; stop it before resolving");
+                bail!(
+                    "checkpoint is locked by a running process; stop it before resolving or repairing"
+                );
             }
-            return Err(error).context("locking checkpoint for resolve");
+            return Err(error).context("locking checkpoint for resolve or repair");
         }
     }
     Ok(ResolveLock { _file: file })

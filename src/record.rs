@@ -1548,6 +1548,12 @@ impl StoredRecord {
         let mut steps = Vec::new();
         let mut torn_trace = false;
         for (number, line) in trace.lines().enumerate() {
+            if line.len() > MAX_TRACE_BYTES {
+                bail!(
+                    "trace.jsonl line {} exceeds the {MAX_TRACE_BYTES}-byte record trace limit",
+                    number + 1
+                );
+            }
             let value: Json = match serde_json::from_str(line) {
                 Ok(value) => value,
                 Err(_) if number + 1 == trace_line_count && has_torn_final_line => {
@@ -1564,6 +1570,12 @@ impl StoredRecord {
             if value["event"] != "step" {
                 continue;
             }
+            // Validate the descriptor shapes before cloning them into the
+            // retained step: a size-compliant trace can otherwise put a
+            // densely packed JSON tree where the writer only ever emits a
+            // small scalar descriptor, amplifying allocation on open.
+            let stdout = bounded_blob_descriptor(&value["stdout"], "stdout", number + 1)?;
+            let stderr = bounded_blob_descriptor(&value["stderr"], "stderr", number + 1)?;
             steps.push(StoredStep {
                 index: value["index"].as_u64().unwrap_or(0) as usize,
                 line: value["line"].as_u64().unwrap_or(0) as usize,
@@ -1576,8 +1588,8 @@ impl StoredRecord {
                 status: value["status"].as_i64().map(|code| code as i32),
                 outcome: (!value["outcome"].is_null()).then(|| value["outcome"].clone()),
                 wall_us: value["wall_us"].as_u64().unwrap_or(0),
-                stdout: value["stdout"].clone(),
-                stderr: value["stderr"].clone(),
+                stdout,
+                stderr,
                 failed: value["failed"].as_bool().unwrap_or(false),
             });
         }
@@ -1659,6 +1671,53 @@ impl StoredRecord {
         }
         Ok(bytes)
     }
+}
+
+/// Validate a trace `stdout`/`stderr` value against the blob-descriptor
+/// shape the recorder writes, and only then clone it for retention. A
+/// missing descriptor (older or hand-written traces) stays `Null`. Every
+/// present field must be the scalar the writer emits, and a declared
+/// `bytes` size past [`MAX_BLOB_BYTES`] is refused, so the retained value
+/// is always a small bounded object rather than an arbitrary JSON tree.
+fn bounded_blob_descriptor(value: &Json, field: &str, line_number: usize) -> Result<Json> {
+    if value.is_null() {
+        return Ok(Json::Null);
+    }
+    let Some(fields) = value.as_object() else {
+        bail!("trace.jsonl line {line_number}: {field} is not a blob descriptor");
+    };
+    for (key, item) in fields {
+        let valid = match key.as_str() {
+            "bytes" => match item.as_u64() {
+                Some(bytes) if bytes > MAX_BLOB_BYTES as u64 => {
+                    bail!(
+                        "trace.jsonl line {line_number}: {field} declares {bytes} bytes, which exceeds the {MAX_BLOB_BYTES}-byte record blob limit"
+                    );
+                }
+                Some(_) => true,
+                None => item.is_null(),
+            },
+            "sha256" => {
+                item.is_null()
+                    || item.as_str().is_some_and(|digest| {
+                        digest.len() == 64
+                            && digest
+                                .bytes()
+                                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                    })
+            }
+            "blob" => item.is_null() || item.as_str().is_some_and(valid_blob_name),
+            "truncated" => item.is_null() || item.is_boolean(),
+            "withheld" | "tail" => item.is_null() || item.is_string(),
+            _ => false,
+        };
+        if !valid {
+            bail!(
+                "trace.jsonl line {line_number}: {field} is not a blob descriptor (invalid {key:?} field)"
+            );
+        }
+    }
+    Ok(value.clone())
 }
 
 /// Whether a stored blob name is exactly the writer's `blobs/<64 lowercase hex>` form.
@@ -2654,7 +2713,10 @@ mod no_follow_tests {
 
 #[cfg(test)]
 mod bounded_record_tests {
-    use super::{read_regular_no_follow, RecordStart, Recorder, StoredRecord, MAX_TRACE_BYTES};
+    use super::{
+        read_regular_no_follow, RecordStart, Recorder, StoredRecord, MAX_BLOB_BYTES,
+        MAX_TRACE_BYTES,
+    };
     use serde_json::json;
 
     #[test]
@@ -2664,6 +2726,47 @@ mod bounded_record_tests {
         std::fs::write(&path, vec![b'x'; MAX_TRACE_BYTES + 1]).unwrap();
         let error = read_regular_no_follow(&path).unwrap_err();
         assert!(error.to_string().contains("record file limit"));
+    }
+
+    #[test]
+    fn record_open_refuses_adversarial_blob_descriptors_before_cloning_them() {
+        // Size-compliant with the trace file limit, but `stdout` holds a
+        // densely packed array instead of the small descriptor the writer
+        // emits: retaining or cloning it would amplify allocation far past
+        // the file size.
+        for (stdout, expected) in [
+            (
+                format!("[{}0]", "0,".repeat(10_000)),
+                "not a blob descriptor",
+            ),
+            (
+                format!(
+                    "{{\"bytes\":{},\"sha256\":\"{}\",\"blob\":null,\"truncated\":true}}",
+                    MAX_BLOB_BYTES + 1,
+                    "a".repeat(64)
+                ),
+                "exceeds",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::write(
+                directory.path().join(super::RUN_FILE),
+                br#"{"protocol":"execute.record/1","finished":true,"steps":1}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                directory.path().join(super::TRACE_FILE),
+                format!(
+                    "{{\"event\":\"step\",\"index\":0,\"line\":1,\"applets\":[],\"binaries\":[],\"argv\":[],\"status\":0,\"wall_us\":1,\"failed\":false,\"stdout\":{stdout},\"stderr\":{{\"bytes\":0,\"blob\":null,\"truncated\":false}}}}\n"
+                ),
+            )
+            .unwrap();
+            let error = StoredRecord::open(directory.path())
+                .err()
+                .expect("adversarial descriptor must be refused");
+            assert!(format!("{error:#}").contains("stdout"), "{error:#}");
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
     }
 
     #[test]

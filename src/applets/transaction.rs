@@ -1117,7 +1117,7 @@ fn reclaim_abandoned_stages(parent: &Path, name: &std::ffi::OsStr) {
 }
 
 #[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
+pub(super) fn process_alive(pid: u32) -> bool {
     if pid == 0 {
         return true;
     }
@@ -1133,7 +1133,7 @@ fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
+pub(super) fn process_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED};
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     // SAFETY: OpenProcess with a numeric pid has no pointer arguments; a returned
@@ -1153,7 +1153,7 @@ fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn process_alive(_pid: u32) -> bool {
+pub(super) fn process_alive(_pid: u32) -> bool {
     true
 }
 

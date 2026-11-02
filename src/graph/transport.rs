@@ -2213,11 +2213,17 @@ impl RuntimeGraphExecutor {
         else {
             return Ok(());
         };
+        // A configured Bearer [REDACTED] is secret data sent to this
+        // origin alongside the invocation input.
+        let mut sensitivities = sensitivities.clone();
+        if remote.auth.is_some() {
+            sensitivities.insert(Sensitivity::Secret);
+        }
         crate::security::authorize_data_flow_set(
             &self.registry,
             &manifest.name,
             &remote.endpoint,
-            sensitivities,
+            &sensitivities,
         )
         .map_err(|error| {
             anyhow!(
@@ -3340,6 +3346,11 @@ fn prepare_session(
                 scope_registry,
                 &manifest.name,
             ) {
+                sensitivities.insert(Sensitivity::Secret);
+            }
+            if remote.auth.is_some() {
+                // A configured Bearer [REDACTED] is secret data sent to
+                // this origin alongside the invocation input.
                 sensitivities.insert(Sensitivity::Secret);
             }
             crate::security::authorize_data_flow_set(

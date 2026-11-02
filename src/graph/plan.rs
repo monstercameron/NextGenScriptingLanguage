@@ -1009,6 +1009,11 @@ impl GraphPlan {
                             // even when its graph ports are public.
                             insert_sensitivity(&mut incoming, Sensitivity::Secret);
                         }
+                        if remote.auth.is_some() {
+                            // A configured Bearer [REDACTED] is secret data
+                            // sent to the remote origin on every invocation.
+                            insert_sensitivity(&mut incoming, Sensitivity::Secret);
+                        }
                         let sensitivities = incoming.unwrap_or_default();
                         crate::security::authorize_data_flow_set(
                             registry,

@@ -749,3 +749,96 @@ fn authenticated_remote_event_listener_requires_secret_egress_grant() {
     );
     plan.validate_with_registry(&registry).unwrap();
 }
+
+#[test]
+fn authenticated_remote_applet_requires_secret_egress_grant() {
+    use flow::ast::StepKind;
+    use flow::security::DataFlowPolicy;
+
+    // A host-managed Bearer [REDACTED] is secret data sent to the remote
+    // origin on ordinary invocations too, whatever its configured source.
+    for auth in [
+        r#"{"kind":"bearer_env","name":"SINK_TOKEN"}"#,
+        r#"{"kind":"bearer_file","path":"sink-token"}"#,
+    ] {
+        let remote = format!(
+            r#"{{
+              "name":"remote.sink",
+              "binary":"@remote-applet",
+              "parameters":{{"payload":{{"type":"string","required":true}}}},
+              "arguments":[{{"parameter":"payload"}}],
+              "contract":{{
+                "version":1,
+                "backend":"remote",
+                "remote":{{"endpoint":"https://api.example.test/v1","auth":{auth}}},
+                "ports":{{"inputs":{{"payload":{{"schema":{{"type":"text"}},"delivery":"single","sensitivity":"public"}}}}}}
+              }}
+            }}"#
+        );
+        let registry = Registry::from_sources(&[&remote]).unwrap();
+        let parsed = flow::parser::parse("run remote.sink\n").unwrap();
+        let StepKind::Invoke { call, .. } = parsed.steps[0].kind.clone() else {
+            panic!("invocation expected")
+        };
+
+        let mut source_port = PortSchema::single(leaf(OutputType::Text));
+        source_port.sensitivity = Sensitivity::Public;
+        let mut plan = GraphPlan::new("authenticated_remote");
+        plan.add_node(GraphNode {
+            id: "source".into(),
+            kind: GraphNodeKind::Renderer {
+                backend: "mock".into(),
+            },
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::from([("out".into(), source_port)]),
+            events: BTreeMap::new(),
+            line: None,
+        })
+        .unwrap();
+        plan.add_node(GraphNode::applet(
+            "remote",
+            call,
+            BTreeMap::from([(
+                "payload".into(),
+                PortSchema {
+                    schema: leaf(OutputType::Text),
+                    delivery: PortDelivery::Single,
+                    sensitivity: Sensitivity::Public,
+                    required: true,
+                    pointer: None,
+                    encoding: None,
+                },
+            )]),
+            BTreeMap::new(),
+        ))
+        .unwrap();
+        plan.add_edge(EdgeSpec::lossless(
+            PortRef::new("source", "out"),
+            PortRef::new("remote", "payload"),
+            1,
+        ));
+
+        // The public input alone fits this policy; only the Bearer
+        // credential's Secret label can deny the call.
+        registry.set_host_state(
+            DataFlowPolicy::from_json(
+                br#"{"version":1,"remote_sinks":{"https://api.example.test":{"allow":["public","unknown"]}}}"#,
+            )
+            .unwrap(),
+        );
+        let error = plan.validate_with_registry(&registry).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("data flow into remote node"),
+            "{error:#}"
+        );
+
+        // An explicit Secret grant for this origin permits the call.
+        registry.set_host_state(
+            DataFlowPolicy::from_json(
+                br#"{"version":1,"remote_sinks":{"https://api.example.test":{"allow":["public","secret"]}}}"#,
+            )
+            .unwrap(),
+        );
+        plan.validate_with_registry(&registry).unwrap();
+    }
+}

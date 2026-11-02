@@ -479,7 +479,13 @@ fn committed_element_index(directory: &Path, wanted: usize) -> Result<bool> {
 
 /// Build the summary object for one checkpoint directory.
 pub fn summarize(directory: &Path) -> Result<Value> {
-    let lock_held = crate::runtime::checkpoint::directory_lock_held(directory)?;
+    // Hold the probe across every read below (journal, blobs, resolutions,
+    // element log, and the graph path): when the lock was free the probe
+    // keeps it, so no writer can change the checkpoint mid-snapshot. When
+    // the lock is already held, `lock_held` reports it and the summary is
+    // marked locked.
+    let probe = crate::runtime::checkpoint::probe_directory_lock(directory)?;
+    let lock_held = probe.held;
     let journal_path = directory.join("journal.json");
     let journal = read_journal_value(&journal_path)?;
     let data = journal

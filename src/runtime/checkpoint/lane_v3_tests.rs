@@ -356,3 +356,29 @@ fn lock_probe_never_creates_files_and_refuses_nonregular_locks() {
     fs::create_dir(directory.path().join("lock")).unwrap();
     assert!(directory_lock_held(directory.path()).is_err());
 }
+
+/// Issue #718: a successful probe must keep holding the lock until dropped,
+/// so status reads under it cannot race a writer that starts after the
+/// probe. Separate handles conflict on both flock and LockFileEx, so this
+/// is deterministic in-process.
+#[cfg(feature = "agent-advisory")]
+#[test]
+fn status_probe_holds_lock_until_dropped() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    // Create the lock file the way a run would, then release it.
+    drop(acquire_resolve_lock(path).unwrap());
+    let probe = probe_directory_lock(path).unwrap();
+    assert!(!probe.held, "a free checkpoint must probe as unlocked");
+    assert!(
+        acquire_resolve_lock(path).is_err(),
+        "a writer must not acquire the lock while the status probe is held"
+    );
+    drop(probe);
+    let held = acquire_resolve_lock(path).unwrap();
+    let probe = probe_directory_lock(path).unwrap();
+    assert!(probe.held, "a held checkpoint must probe as locked");
+    drop(probe);
+    drop(held);
+    let _reacquired = acquire_resolve_lock(path).unwrap();
+}

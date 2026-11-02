@@ -5,18 +5,25 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const HELPER: &str = env!("CARGO_BIN_EXE_execute-model");
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
+/// The cargo-built model helper, staged as a private single-link copy: the
+/// trusted-executable gate refuses the hardlinked `target/` original.
+fn helper() -> &'static std::path::Path {
+    staged_helpers::execute_model()
+}
 
 fn write_manifests(directory: &Path) -> PathBuf {
     let manifests = directory.join("manifests");
     std::fs::create_dir_all(&manifests).unwrap();
     let plain = serde_json::json!({
-        "name": "plain.helper", "binary": HELPER, "accepts_stdin": false,
+        "name": "plain.helper", "binary": helper(), "accepts_stdin": false,
         "parameters": {}, "arguments": [{ "literal": "--version" }]
     });
     std::fs::write(manifests.join("plain.helper.json"), plain.to_string()).unwrap();
     let declared = serde_json::json!({
-        "name": "net.helper", "binary": HELPER, "accepts_stdin": false,
+        "name": "net.helper", "binary": helper(), "accepts_stdin": false,
         "parameters": {}, "arguments": [{ "literal": "--version" }],
         "contract": {
             "version": 1, "backend": "command", "lifecycle": { "kind": "oneshot" },
@@ -32,7 +39,7 @@ fn write_manifests(directory: &Path) -> PathBuf {
         ("mystery.helper", "mystery.effect"),
     ] {
         let manifest = serde_json::json!({
-            "name": name, "binary": HELPER, "accepts_stdin": false,
+            "name": name, "binary": helper(), "accepts_stdin": false,
             "parameters": {}, "arguments": [{ "literal": "--version" }],
             "contract": {
                 "version": 1, "backend": "command", "lifecycle": { "kind": "oneshot" },

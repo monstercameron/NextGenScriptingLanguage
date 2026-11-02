@@ -5,7 +5,14 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const HELPER: &str = env!("CARGO_BIN_EXE_execute-model");
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
+/// The cargo-built model helper, staged as a private single-link copy: the
+/// trusted-executable gate refuses the hardlinked `target/` original.
+fn helper() -> &'static std::path::Path {
+    staged_helpers::execute_model()
+}
 
 fn manifests_with(directory: &Path) -> PathBuf {
     let manifests = directory.join("manifests");
@@ -13,7 +20,7 @@ fn manifests_with(directory: &Path) -> PathBuf {
     for (name, argument) in [("ok.helper", "--version"), ("fail.helper", "--nope")] {
         let manifest = serde_json::json!({
             "name": name,
-            "binary": HELPER,
+            "binary": helper(),
             "accepts_stdin": false,
             "parameters": {},
             "arguments": [{ "literal": argument }]

@@ -660,8 +660,11 @@ struct RepairRecord<'a> {
     diff: &'a str,
 }
 
-/// Write an applied plan: keep a copy of the program as it was, replace the program
-/// file atomically, and append the record to `repairs.jsonl`. Returns the record's
+/// Write an applied plan: keep a copy of the program as it was, append the record
+/// to `repairs.jsonl` and sync it, and only then replace the program file
+/// atomically. The audit record is durable before the program changes, so a
+/// crash or a failed replace can leave a record for a repair that was not
+/// applied, but never an applied repair with no record. Returns the record's
 /// sequence number.
 pub fn commit(
     checkpoint: &Path,
@@ -676,8 +679,6 @@ pub fn commit(
     if !copy.exists() {
         write_private(&copy, plan.before.as_bytes())?;
     }
-    let temporary = program_path.with_extension("repair-tmp");
-    replace_with_temporary(program_path, &temporary, plan.after.as_bytes())?;
 
     let log = checkpoint.join(REPAIRS_FILE);
     let sequence = match fs::read_to_string(&log) {
@@ -711,6 +712,16 @@ pub fn commit(
         .with_context(|| format!("opening {}", log.display()))?;
     writeln!(file, "{}", serde_json::to_string(&record)?)?;
     file.sync_all()?;
+    drop(file);
+
+    let temporary = program_path.with_extension("repair-tmp");
+    replace_with_temporary(program_path, &temporary, plan.after.as_bytes()).with_context(|| {
+        format!(
+            "repair record {sequence} is already durable in {}; replacing {} failed",
+            log.display(),
+            program_path.display()
+        )
+    })?;
     Ok(sequence)
 }
 
@@ -1828,6 +1839,25 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&program).unwrap(), plan.after);
         assert!(std::fs::symlink_metadata(program.with_extension("repair-tmp")).is_err());
         assert!(checkpoint.join(REPAIRS_FILE).is_file());
+    }
+
+    #[test]
+    fn commit_records_the_repair_before_replacing_the_program() {
+        let (_directory, checkpoint, program, plan) = commit_fixture();
+        // Force the replace step to fail: its temporary already exists.
+        let temporary = program.with_extension("repair-tmp");
+        std::fs::write(&temporary, "planted").unwrap();
+        let before = std::fs::read_to_string(&program).unwrap();
+
+        assert!(commit(&checkpoint, &program, &plan, "set-parameter 1 count 2").is_err());
+
+        // The program is untouched, but its audit record is already durable:
+        // the record is written and synced before the replace is attempted.
+        assert_eq!(std::fs::read_to_string(&program).unwrap(), before);
+        let log = std::fs::read_to_string(checkpoint.join(REPAIRS_FILE)).unwrap();
+        assert_eq!(log.lines().count(), 1, "{log}");
+        assert!(log.contains("\"sequence\":1"), "{log}");
+        assert!(log.contains(&sha256_hex(plan.after.as_bytes())), "{log}");
     }
 
     #[test]

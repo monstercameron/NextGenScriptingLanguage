@@ -1394,9 +1394,7 @@ pub fn check_from_record_usable(
             record.run["steps"]
         );
     }
-    if record.run["finished"].as_bool() != Some(true)
-        && record.run["steps"].as_u64().unwrap_or(0) != 0
-    {
+    if record.run["finished"].as_bool() != Some(true) {
         bail!(
             "the record {} claims an unfinished run but counts {} steps; the recorder only writes a step count when a run finishes, so this record was edited after the run and its completed prefix cannot be trusted; re-run the repaired program without --from-record",
             record.directory.display(),
@@ -2646,6 +2644,38 @@ mod bounded_record_tests {
         assert_eq!(record.run["finished"], false);
         assert_eq!(record.run["steps"], 0);
         assert!(!record.torn_trace);
+    }
+
+    #[test]
+    fn zero_step_unfinished_record_is_refused_for_from_record_use() {
+        // A clean, zero-step trace does not prove the first step never
+        // started: the recorder writes a step only after it finishes, so an
+        // in-flight effect may be unrecorded. Resume must refuse the
+        // unfinished record instead of running that step again.
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            working_directory: directory.path(),
+            audit_key: None,
+        })
+        .unwrap();
+        drop(recorder);
+        let record = StoredRecord::open(directory.path()).unwrap();
+        assert_eq!(record.run["finished"], false);
+        assert_eq!(record.run["steps"], 0);
+        assert!(record.steps.is_empty());
+        assert!(!record.torn_trace);
+        let error =
+            super::check_from_record_usable(&record, &registry, directory.path()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("claims an unfinished run"),
+            "{error:#}"
+        );
     }
 }
 

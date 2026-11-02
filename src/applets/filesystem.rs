@@ -1078,6 +1078,7 @@ fn to_hex(bytes: &[u8]) -> String {
 
 fn create_temp(parent: &Path, file_name: &std::ffi::OsStr) -> Result<(PathBuf, File), AppletError> {
     let prefix = sibling_prefix(file_name);
+    reclaim_abandoned_temps(parent, &prefix);
     for _ in 0..100 {
         let sequence = TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let mut temp_name = prefix.clone();
@@ -1122,10 +1123,60 @@ fn sync_directory(path: &Path) -> Result<(), AppletError> {
     Ok(())
 }
 
+/// Remove sibling temporary files for this output whose creating process no
+/// longer exists. `TempCleanup` cannot run after a hard interruption
+/// (SIGKILL or power loss), so the next write for the same output reclaims
+/// those orphans here, mirroring `transaction::reclaim_abandoned_stages`.
+/// Anything that cannot be proven abandoned is kept: names that do not parse
+/// as `<prefix>.<pid>.<seq>.tmp`, temporaries owned by this or another live
+/// process (via the shared `transaction::process_alive` helper), links,
+/// non-files, and (on Unix) files owned by someone else. Removal is
+/// best-effort through the same `TempCleanup` the ordinary failure path uses.
+fn reclaim_abandoned_temps(parent: &Path, prefix: &std::ffi::OsStr) {
+    let prefix = format!("{}.", prefix.to_string_lossy());
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(suffix) = file_name
+            .strip_prefix(prefix.as_str())
+            .and_then(|suffix| suffix.strip_suffix(".tmp"))
+        else {
+            continue;
+        };
+        let Some((pid, sequence)) = suffix.split_once('.') else {
+            continue;
+        };
+        let (Ok(pid), Ok(_)) = (pid.parse::<u32>(), sequence.parse::<u64>()) else {
+            continue;
+        };
+        if pid == std::process::id() || super::transaction::process_alive(pid) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.uid() != crate::platform::unix_ffi::effective_uid() {
+                continue;
+            }
+        }
+        drop(TempCleanup(Some(path)));
+    }
+}
+
 // Normal error returns and unwinding clean up the temporary file. Forced
-// process termination can leave a hidden `.execute-applet.*.tmp` file; trying
-// to reap unknown old names would risk deleting another live invocation's
-// temporary file.
+// process termination can leave a hidden `.execute-applet.*.tmp` file behind;
+// the next write for the same output reclaims it once its creating process
+// is gone (see `reclaim_abandoned_temps`).
 struct TempCleanup(Option<PathBuf>);
 
 impl Drop for TempCleanup {
@@ -1162,6 +1213,58 @@ mod tests {
         assert_eq!(result["path"], expected.to_str().unwrap());
         let returned = Path::new(result["path"].as_str().unwrap());
         assert_eq!(fs::read(returned).unwrap(), b"written");
+    }
+
+    #[test]
+    fn orphaned_atomic_write_temporary_is_reclaimed_by_the_next_write() {
+        fn dead_pid() -> u32 {
+            #[cfg(windows)]
+            let mut child = std::process::Command::new("cmd")
+                .args(["/C", "exit", "0"])
+                .spawn()
+                .unwrap();
+            #[cfg(not(windows))]
+            let mut child = std::process::Command::new("true").spawn().unwrap();
+            let pid = child.id();
+            child.wait().unwrap();
+            pid
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let prefix = sibling_prefix(std::ffi::OsStr::new("out.txt"));
+        let prefix = prefix.to_string_lossy();
+        let dead = dead_pid();
+
+        // Simulate a hard interruption before the rename: a temporary for
+        // this output left behind by a process that no longer exists.
+        let orphaned = directory.path().join(format!("{prefix}.{dead}.0.tmp"));
+        fs::write(&orphaned, b"orphaned").unwrap();
+
+        // A temporary belonging to this live process, one for a different
+        // output, and an unparsable name must all survive the reclaim.
+        let active = directory
+            .path()
+            .join(format!("{prefix}.{}.999.tmp", std::process::id()));
+        fs::write(&active, b"active").unwrap();
+        let other_prefix = sibling_prefix(std::ffi::OsStr::new("other.txt"));
+        let other = directory
+            .path()
+            .join(format!("{}.{dead}.0.tmp", other_prefix.to_string_lossy()));
+        fs::write(&other, b"other").unwrap();
+        let unparsable = directory.path().join(format!("{prefix}.nope.tmp"));
+        fs::write(&unparsable, b"unparsable").unwrap();
+
+        let context = ExecutionContext::unrestricted();
+        let result = write_atomic(&write_args(), b"", directory.path(), &context).unwrap();
+        assert_eq!(result["changed"], true);
+        assert!(!orphaned.exists(), "orphaned temporary must be reclaimed");
+        assert!(active.exists(), "live process temporary must be kept");
+        assert!(other.exists(), "another output's temporary must be kept");
+        assert!(unparsable.exists(), "unparsable name must be kept");
+        assert_eq!(
+            fs::read(directory.path().join("out.txt")).unwrap(),
+            b"written"
+        );
     }
 
     /// A relative path in a non-UTF-8 working directory resolves to a path

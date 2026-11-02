@@ -72,6 +72,40 @@ class FlakyToolRegressions(unittest.TestCase):
         self.assertNotIn("test-only", components)
         self.assertEqual(components["runtime"]["licenses"], [{"expression": "MIT OR Apache-2.0"}])
 
+    def test_sbom_marks_path_patched_component_as_vendored(self):
+        vendored_manifest = str(ROOT / "vendor" / "iana-time-zone" / "Cargo.toml")
+        metadata = {
+            "resolve": {
+                "root": "root",
+                "nodes": [
+                    {"id": "root", "deps": [
+                        {"pkg": "vendored", "dep_kinds": [{"kind": "normal"}]},
+                        {"pkg": "registry", "dep_kinds": [{"kind": "normal"}]},
+                    ]},
+                    {"id": "vendored", "deps": []},
+                    {"id": "registry", "deps": []},
+                ],
+            },
+            "workspace_members": ["root"],
+            "packages": [
+                {"id": "root", "name": "execute", "version": "1.0.0", "license": "MIT",
+                 "source": None, "manifest_path": str(ROOT / "Cargo.toml")},
+                {"id": "vendored", "name": "iana-time-zone", "version": "0.1.65",
+                 "license": "MIT OR Apache-2.0", "source": None,
+                 "manifest_path": vendored_manifest},
+                {"id": "registry", "name": "registry", "version": "1.0.0", "license": "MIT",
+                 "source": "registry+https://github.com/rust-lang/crates.io-index",
+                 "manifest_path": "/registry/registry-1.0.0/Cargo.toml"},
+            ],
+        }
+        result = sbom.build_sbom(metadata, "", "1.0.0", 1)
+        components = {component["name"]: component for component in result["components"]}
+        props = {p["name"]: p["value"] for p in components["iana-time-zone"]["properties"]}
+        self.assertEqual(props.get("vendored"), "true")
+        self.assertEqual(props.get("patched"), "true")
+        self.assertEqual(props.get("patch-source"), "vendor/iana-time-zone")
+        self.assertNotIn("properties", components["registry"])
+
     def test_ci_budgets_are_enforceable_numbers(self):
         for name in (
             "linux-binary-budget.json",

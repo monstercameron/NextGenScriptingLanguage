@@ -26,6 +26,47 @@ def purl(name, value):
     return "pkg:cargo/" + name + "@" + value
 
 
+def _posix_relative(directory):
+    """`directory` as a repo-relative POSIX path when it lies under ROOT or a vendor/ tree."""
+    text = str(directory).replace("\\", "/").rstrip("/")
+    root = str(ROOT).replace("\\", "/").rstrip("/")
+    if text.lower() == root.lower():
+        return "."
+    if text.lower().startswith(root.lower() + "/"):
+        return text[len(root) + 1:]
+    parts = text.split("/")
+    if "vendor" in parts:
+        return "/".join(parts[parts.index("vendor"):])
+    return text.lstrip("/")
+
+
+def patch_source(package, workspace_members=()):
+    """Repo-relative patch path for a path-sourced (vendored/patched) package, else None.
+
+    Cargo records a `[patch.crates-io]` path replacement with `source: null` and a
+    `path+file://...` id; registry and git packages carry a non-empty `source`.
+    Workspace members are first-party, not vendored. Returns "" when the package is
+    path-sourced but no path can be derived from its metadata."""
+    if package.get("id") in set(workspace_members or ()):
+        return None
+    source = package.get("source")
+    if isinstance(source, str) and source and not source.startswith("path+"):
+        return None
+    manifest = package.get("manifest_path")
+    if manifest and not (isinstance(source, str) and source):
+        return _posix_relative(str(Path(str(manifest)).parent))
+    match = re.search(r"path\+file://([^)#]+)", str(package.get("id", "")))
+    if match:
+        from urllib.parse import unquote
+
+        return _posix_relative(unquote(match[1]).rstrip("/"))
+    if isinstance(source, str) and source.startswith("path+"):
+        return ""
+    if "source" in package and package["source"] is None:
+        return ""
+    return None
+
+
 def node_edges(node):
     """Return Cargo resolve edges across current and older metadata schemas."""
     if "deps" in node:
@@ -91,6 +132,15 @@ def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
         digest = checksums.get((package["name"], package["version"]))
         if digest:
             component["hashes"] = [{"alg": "SHA-256", "content": digest}]
+        patched_from = patch_source(package, metadata.get("workspace_members") or ())
+        if patched_from is not None:
+            properties = [
+                {"name": "vendored", "value": "true"},
+                {"name": "patched", "value": "true"},
+            ]
+            if patched_from:
+                properties.append({"name": "patch-source", "value": patched_from})
+            component["properties"] = properties
         components.append(component)
     components.sort(key=lambda component: component["bom-ref"])
 
@@ -154,6 +204,7 @@ def release_metadata():
     """Union the full-feature resolve graph across every shipped target."""
     packages = {}
     nodes = {}
+    workspace_members = set()
     root_id = None
     for target in RELEASE_TARGETS:
         document = json.loads(
@@ -167,6 +218,7 @@ def release_metadata():
             )
         )
         root_id = root_id or document["resolve"]["root"]
+        workspace_members.update(document.get("workspace_members") or ())
         packages.update({package["id"]: package for package in document["packages"]})
         for node in document["resolve"]["nodes"]:
             if node["id"] not in nodes:
@@ -178,7 +230,11 @@ def release_metadata():
                     for dependency in node_edges(existing) + node_edges(node)
                 }
                 existing["deps"] = [dependencies[key] for key in sorted(dependencies)]
-    return {"packages": list(packages.values()), "resolve": {"root": root_id, "nodes": list(nodes.values())}}
+    return {
+        "packages": list(packages.values()),
+        "workspace_members": sorted(workspace_members),
+        "resolve": {"root": root_id, "nodes": list(nodes.values())},
+    }
 
 
 def main():

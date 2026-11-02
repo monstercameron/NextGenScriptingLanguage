@@ -153,9 +153,20 @@ pub(crate) fn read_resolutions(
     max_output_bytes: usize,
 ) -> Result<Vec<ResolutionRecord>> {
     let path = directory.join(RESOLUTIONS_LOG);
-    let file = match fs::File::open(&path) {
+    // Open without following a final symlink/reparse point, like the other
+    // checkpoint state files: a plain open would read through a planted
+    // link to a regular file outside the checkpoint (#714).
+    let file = match super::open_regular_readonly(&path, "checkpoint resolutions") {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error)
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+            }) =>
+        {
+            return Ok(Vec::new())
+        }
         Err(error) => return Err(error).context("reading checkpoint resolutions"),
     };
     if !file.metadata()?.is_file() {
@@ -305,7 +316,9 @@ pub(crate) fn append_resolution_locked(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     #[cfg(windows)]
     {
@@ -325,6 +338,17 @@ pub(crate) fn append_resolution_locked(
     let mut file = options
         .open(&path)
         .with_context(|| format!("appending {}", path.display()))?;
+    // The no-follow open above (O_NOFOLLOW on Unix, FILE_FLAG_OPEN_REPARSE_POINT
+    // on Windows) opens a planted link itself rather than its target; refuse
+    // it here, before restricting or writing, so the external target is never
+    // touched even if the link was swapped in after the read above (#714).
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(&file.metadata()?) {
+        bail!("checkpoint resolutions cannot be a reparse point");
+    }
+    if !file.metadata()?.is_file() {
+        bail!("checkpoint resolutions must be a regular file");
+    }
     crate::runtime::checkpoint::restrict_file(&file)?;
     #[cfg(windows)]
     {
@@ -666,6 +690,23 @@ mod tests {
             message.contains("incomplete") || message.contains("malformed"),
             "unexpected error: {message}"
         );
+    }
+
+    /// A `resolutions.jsonl` planted as a symlink to a file outside the
+    /// checkpoint must be refused on both read and append, and the external
+    /// target must stay untouched (#714).
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_resolutions_log_is_refused_without_touching_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("outside.jsonl");
+        fs::write(&target, b"original\n").unwrap();
+        std::os::unix::fs::symlink(&target, directory.path().join(RESOLUTIONS_LOG)).unwrap();
+        assert!(read_resolutions(directory.path(), 1024 * 1024).is_err());
+        let first = record("step:abc#1", Some(0), ResolutionDecision::Retry);
+        assert!(append_resolution(directory.path(), &first).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"original\n");
     }
 
     #[test]

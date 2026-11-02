@@ -16,6 +16,50 @@ pub fn escape_terminal_field(text: &str) -> String {
     escape(text, false)
 }
 
+/// Make serialized JSON safe to view in a terminal: terminal-unsafe characters
+/// inside JSON strings (C1 controls, bidi overrides/isolates, and the other
+/// characters [`escape_controls`] escapes) become JSON `\uXXXX` escapes.
+/// The JSON-decoded value is unchanged, so machine readers see the original
+/// text while a person viewing the emitted bytes sees no raw controls.
+/// Characters outside strings (structural punctuation and pretty-print
+/// whitespace) pass through untouched.
+pub fn escape_json_for_terminal(serialized: &str) -> String {
+    let mut out = String::with_capacity(serialized.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for character in serialized.chars() {
+        if in_string && !escaped && is_unsafe_terminal_character(character) {
+            write_json_unicode_escape(&mut out, character);
+            continue;
+        }
+        out.push(character);
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+        } else if character == '"' {
+            in_string = true;
+        }
+    }
+    out
+}
+
+fn write_json_unicode_escape(out: &mut String, character: char) {
+    let code = u32::from(character);
+    if code <= 0xffff {
+        let _ = write!(out, "\\u{code:04x}");
+    } else {
+        let shifted = code - 0x1_0000;
+        let high = 0xd800 + (shifted >> 10);
+        let low = 0xdc00 + (shifted & 0x3ff);
+        let _ = write!(out, "\\u{high:04x}\\u{low:04x}");
+    }
+}
+
 /// Whether pipeline output is bound for a terminal: the actual stdout sink,
 /// not the content source. Model text becomes an ordinary pipeline value, so
 /// the sink cannot tell model bytes apart later; every stdout sink below
@@ -162,6 +206,28 @@ mod tests {
             b"a\xffb".to_vec(),
             "pipes keep even invalid bytes exact"
         );
+    }
+
+    #[test]
+    fn json_escaping_removes_raw_bidi_and_c1_but_preserves_decoded_values() {
+        let message = "a\u{202e}b\u{2066}c\u{009b}d\u{0080}e\u{009f}f\"g\\h\ni";
+        let document = serde_json::json!({
+            "message": message,
+            "nested": [{ "stderr_tail": message, "key\u{202e}": "v" }],
+        });
+        for serialized in [
+            document.to_string(),
+            serde_json::to_string_pretty(&document).unwrap(),
+        ] {
+            let rendered = super::escape_json_for_terminal(&serialized);
+            for raw in ['\u{202e}', '\u{2066}', '\u{009b}', '\u{0080}', '\u{009f}'] {
+                assert!(!rendered.contains(raw), "raw {raw:?} in JSON: {rendered:?}");
+            }
+            assert!(rendered.contains(r"\u202e"), "{rendered:?}");
+            assert!(rendered.contains(r"\u009b"), "{rendered:?}");
+            let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(parsed, document, "decoded JSON changed: {rendered:?}");
+        }
     }
 
     #[test]

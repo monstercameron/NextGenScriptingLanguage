@@ -2011,17 +2011,32 @@ fn has_element_progress(directory: &Path) -> Result<bool> {
     }
 }
 
+/// A status probe of the checkpoint lock. When the lock was free, the probe
+/// keeps holding it until dropped, so a status snapshot read under the probe
+/// cannot race a writer that starts after the probe. When another process
+/// already holds the lock, `held` is true and the probe holds nothing.
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+pub(crate) struct StatusLockProbe {
+    _file: Option<File>,
+    pub(crate) held: bool,
+}
+
 /// Probe the existing lock without creating files or changing permissions. All
 /// errors other than lock contention are reported rather than treated as unlocked.
 #[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
-pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
+pub(crate) fn probe_directory_lock(directory: &Path) -> Result<StatusLockProbe> {
     let path = directory.join("lock");
     match fs::symlink_metadata(&path) {
         Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
             bail!("checkpoint lock must be a regular file");
         }
         Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(StatusLockProbe {
+                _file: None,
+                held: false,
+            });
+        }
         Err(error) => return Err(error).context("inspecting checkpoint lock"),
     }
     let mut options = fs::OpenOptions::new();
@@ -2048,14 +2063,20 @@ pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
             bail!("checkpoint lock cannot be a reparse point");
         }
         match crate::platform::windows::lock(&file) {
-            Ok(()) => Ok(false),
+            Ok(()) => Ok(StatusLockProbe {
+                _file: Some(file),
+                held: false,
+            }),
             Err(error)
                 if error
                     .downcast_ref::<io::Error>()
                     .and_then(io::Error::raw_os_error)
                     == Some(windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION as i32) =>
             {
-                Ok(true)
+                Ok(StatusLockProbe {
+                    _file: None,
+                    held: true,
+                })
             }
             Err(error) => Err(error).context("probing checkpoint lock"),
         }
@@ -2063,17 +2084,32 @@ pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
     #[cfg(unix)]
     {
         // SAFETY: file is a live descriptor. flock takes only descriptor and flags,
-        // and closing file releases a successful nonblocking probe's lock.
+        // and closing file releases a successful nonblocking probe's lock; on
+        // success the file moves into the returned probe so the lock stays held.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(false);
+            return Ok(StatusLockProbe {
+                _file: Some(file),
+                held: false,
+            });
         }
         let error = io::Error::last_os_error();
         if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
-            Ok(true)
+            Ok(StatusLockProbe {
+                _file: None,
+                held: true,
+            })
         } else {
             Err(error).context("probing checkpoint lock")
         }
     }
+}
+
+/// Whether another process holds the checkpoint lock, releasing the probe
+/// immediately. Callers that read checkpoint state afterwards must use
+/// [`probe_directory_lock`] and keep the probe alive across those reads.
+#[cfg(all(test, feature = "agent-advisory", not(target_arch = "wasm32")))]
+pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
+    Ok(probe_directory_lock(directory)?.held)
 }
 
 /// The checkpoint's exclusive lock, held while a resolution is validated and

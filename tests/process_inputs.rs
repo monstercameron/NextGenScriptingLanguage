@@ -11,6 +11,9 @@ fn command(source: &str, directory: &Path) -> Command {
     fs::write(&file, source).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
     command.arg(file).current_dir(directory);
+    // Hardening under `GITHUB_ACTIONS=true` rewrites line-leading `::` and
+    // emits mask lines; these assertions cover exact non-CI bytes.
+    command.env_remove("GITHUB_ACTIONS");
     command
 }
 fn success(output: Output) -> Output {

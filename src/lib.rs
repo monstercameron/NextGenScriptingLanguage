@@ -19,6 +19,7 @@ pub mod diagnostics;
 pub mod discovery;
 #[cfg(feature = "failpoints")]
 pub(crate) mod failpoint;
+pub mod github_actions;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "graph")]
 pub mod graph;

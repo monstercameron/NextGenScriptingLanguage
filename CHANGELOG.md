@@ -7,6 +7,14 @@ original version labels.
 
 ## Unreleased
 
+- `run` and `resume` now harden the job log when `GITHUB_ACTIONS` is `"true"`:
+  line-leading `::` sequences in terminal-bound output are neutralized with a
+  zero-width space (streamed, captured-stderr, final and diagnostic writes,
+  with cross-write line state; manifest `inherit` stdio is force-captured and
+  sanitized), and each registered secret emits an escaped `::add-mask::` line.
+  `hand over to` is refused before any step runs under hardening because the
+  handed-over program would write to the log unsanitized. Non-CI output is
+  byte-identical.
 - Graph inspection with supplied sensitive prompt or environment inputs now keeps
   those values withheld in resolved applet parameters while resolving non-sensitive
   inputs normally. Graph validation diagnostics redact supplied sensitive values

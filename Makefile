@@ -5,7 +5,7 @@ NPM ?= npm
 PORT ?= 8080
 
 .DEFAULT_GOAL := help
-.PHONY: help setup format format-check docs-check applet-boundaries-harness-check stress-evidence-harness-check check rust-check build omarchy-rewrite-check proof-smoke unix-smoke playground-build playground-check playground-browser-check site-serve
+.PHONY: help setup format format-check docs-check applet-boundaries-harness-check stress-evidence-harness-check check check-no-clippy check-scripts rust-check rust-check-no-clippy clippy-check build omarchy-rewrite-check proof-smoke unix-smoke playground-build playground-check playground-browser-check site-serve
 
 help:
 	@printf '%s\n' \
@@ -68,6 +68,18 @@ native-tool-contracts:
 # bundle (which fails cargo test by design until the coordinator regenerates
 # it) cannot mask a taxonomy regression.
 check: native-tool-contracts rust-check docs-check applet-boundaries-harness-check stress-evidence-harness-check
+	$(MAKE) check-scripts
+
+# Same as check, without Clippy. CI runs this on ubuntu-24.04 and runs
+# clippy-check in its own job with its own timeout budget (#758); every
+# other check below still runs here.
+check-no-clippy: native-tool-contracts rust-check-no-clippy docs-check applet-boundaries-harness-check stress-evidence-harness-check
+	$(MAKE) check-scripts
+
+# Python and editor checks that follow the Rust checks in check and
+# check-no-clippy. Several need target/release/execute, built by rust-check
+# (or rust-check-no-clippy) before this runs.
+check-scripts:
 	$(PYTHON) tests/test_regenerate_latency_budget.py
 	$(PYTHON) tests/staged_rust.py
 	$(PYTHON) tests/releases.py
@@ -93,6 +105,18 @@ rust-check:
 	$(CARGO) fmt --check
 	$(RUSTFMT) --edition 2021 --check src/runtime/shared.rs
 	$(CARGO) clippy --locked --features full,test-fixtures --all-targets -- -D warnings
+	$(CARGO) test --locked --features full,test-fixtures --release --no-fail-fast -- --test-threads=1
+	$(CARGO) build --locked --features full --release
+
+# The Clippy line from rust-check, on its own, so CI can give it a separate
+# job and timeout budget on ubuntu-24.04 (#758).
+clippy-check:
+	$(CARGO) clippy --locked --features full,test-fixtures --all-targets -- -D warnings
+
+# rust-check without Clippy; pair with clippy-check (see check-no-clippy).
+rust-check-no-clippy:
+	$(CARGO) fmt --check
+	$(RUSTFMT) --edition 2021 --check src/runtime/shared.rs
 	$(CARGO) test --locked --features full,test-fixtures --release --no-fail-fast -- --test-threads=1
 	$(CARGO) build --locked --features full --release
 

@@ -11,8 +11,8 @@ mod transport;
 
 pub use crate::contracts::{OutputType, PortDelivery, ValueSchema};
 pub use checkpoint::{
-    checkpoint_identity, open_checkpoint_directory, CompletedNode, GraphCheckpointState,
-    GraphCheckpointStore, InterruptedNode, MemoryGraphStore, RecordedOutput,
+    checkpoint_identity, checkpoint_identity_for, open_checkpoint_directory, CompletedNode,
+    GraphCheckpointState, GraphCheckpointStore, InterruptedNode, MemoryGraphStore, RecordedOutput,
 };
 pub use plan::{
     BufferPolicy, EdgeSpec, GraphDiagnostic, GraphNode, GraphNodeKind, GraphPlan, PortDirection,

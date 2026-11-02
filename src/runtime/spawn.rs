@@ -5,6 +5,8 @@
 use super::execute_group_with_sink;
 #[cfg(windows)]
 use super::observe;
+#[cfg(windows)]
+use super::windows_escalate_unreaped_for_abort;
 // The Unix supervision path (pidfd and epoll, process groups, stdin prefill) uses many
 // runtime-private helpers; it reads them from the parent module rather than listing each.
 #[cfg(unix)]
@@ -341,6 +343,10 @@ pub(super) fn check_native_abort(
     signals: &Signals,
 ) -> Result<()> {
     if signals.is_cancelled() {
+        #[cfg(unix)]
+        escalate_unreaped_for_abort(children, signals);
+        #[cfg(windows)]
+        windows_escalate_unreaped_for_abort(children, signals);
         let message = if signals
             .job_cancelled
             .as_ref()
@@ -364,6 +370,10 @@ pub(super) fn check_native_abort(
         .deadline
         .is_some_and(|deadline| Instant::now() >= deadline)
     {
+        #[cfg(unix)]
+        escalate_unreaped_for_abort(children, signals);
+        #[cfg(windows)]
+        windows_escalate_unreaped_for_abort(children, signals);
         return Err(native_execution_failure(
             execution_result::ExecutionKind::Timeout,
             "command pipeline timed out; external effects may be incomplete",
@@ -519,6 +529,7 @@ pub(super) fn execute_group_with_sink(
         cancel_signal: Arc::clone(&signals.cancel_signal),
         drain_stop: None,
         registrations: Vec::new(),
+        owns_signal_handlers: false,
         capture_diagnostics: signals.capture_diagnostics,
         graph_service_cancellation: signals.graph_service_cancellation,
         background_jobs_allowed: signals.background_jobs_allowed,
@@ -541,6 +552,7 @@ pub(super) fn execute_group_with_sink(
         job_run_context: Arc::clone(&signals.job_run_context),
         output_writers: Arc::clone(&signals.output_writers),
         fs_timeout: signals.fs_timeout,
+        kill_grace: options.kill_grace,
         #[cfg(test)]
         job_panic_before_ack: signals.job_panic_before_ack.clone(),
         deadline: {
@@ -665,6 +677,21 @@ pub(super) fn execute_group_with_sink(
                 )?,
             }
         };
+        // A custom model endpoint is authorized like a remote origin before the
+        // child spawns. An explicitly listed origin is conveyed to the helper
+        // so it can preserve the destination; anything else stays fail-closed
+        // in the helper's own guard.
+        if manifest.binary == "@execute-model" {
+            if let Some(granted) = crate::capabilities::authorize_model_endpoint_params(
+                registry,
+                manifest,
+                &call.parameters,
+                bindings,
+                &sensitivities,
+            )? {
+                command.env(crate::capabilities::MODEL_GRANTED_ORIGIN_ENV, granted);
+            }
+        }
         let resolved_io = resolved_call_stdio(call, manifest, signals);
         let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
         command

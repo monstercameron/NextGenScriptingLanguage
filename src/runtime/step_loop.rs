@@ -569,8 +569,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     let mut journal_start = 0;
     let mut journal_uncertain = false;
     // Set once a failure or cancellation leaves its node for cleanup outside it. The
-    // failed node stays in flight and nothing after it is recorded: the run ends
-    // failed, and a resume retries that node and runs the cleanup again.
+    // failed node stays in flight and nothing after it is recorded as completed:
+    // the run ends failed, and a resume retries that node and runs the cleanup
+    // again. An effect in that cleanup revokes the node's retry safety first.
     let mut journal_suspended = false;
     // Set once a repeat interrupt during cleanup is recorded, so the diagnostic
     // names the interruption exactly once however many statements fail fast after it.
@@ -764,6 +765,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 step_id,
                 element_kind,
             })?;
+        }
+        // Suspended cleanup is not journaled, so an effect it is about to
+        // perform must count against the in-flight node's retry safety before
+        // it runs: a resume retries that node and repeats the cleanup (#707).
+        if journal_suspended {
+            if let Some(journal) = journal.as_deref_mut() {
+                if !journal.persistence_failed()
+                    && !resume::retry_safe(program, index, index + 1, registry)?
+                {
+                    journal.mark_in_flight_not_retry_safe()?;
+                }
+            }
         }
         let mut jump_to = None;
         let mut control_rethrow = None;
@@ -3646,4 +3659,109 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     result.dropped_executions = execution_history.dropped_executions;
     result.dropped_stages = execution_history.dropped_stages;
     Ok(result)
+}
+
+#[cfg(test)]
+mod cleanup_retry_gate_tests {
+    use super::*;
+
+    /// Run `source` checkpointed in a fresh directory. The body statement is
+    /// retry-safe and fails, so only its `on exit` cleanup distinguishes the
+    /// two cases (#707).
+    fn run_failed_with_cleanup(source: &str) -> (tempfile::TempDir, checkpoint::Journal) {
+        let directory = tempfile::tempdir().unwrap();
+        let work = directory.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let program_path = directory.path().join("cleanup.program");
+        std::fs::write(&program_path, source).unwrap();
+        let registry =
+            Registry::from_sources(&[include_str!("../../manifests/cd.json")]).unwrap();
+        let program = crate::parser::parse(source).unwrap();
+        let checkpoint = checkpoint::CheckpointOptions {
+            directory: directory.path().join("ck"),
+            program_path,
+            resume: false,
+            retry_uncertain: false,
+        };
+        let mut journal =
+            checkpoint::Journal::open_with_inputs(&checkpoint, &work, "finite", 4096, None)
+                .unwrap();
+        let options = RunOptions::new(work);
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let result = run_finite_inner(
+            FiniteRun {
+                program: &program,
+                registry: &registry,
+                options: &options,
+                signals: &signals,
+            },
+            Input::Empty,
+            None,
+            Some(&mut journal),
+        );
+        assert!(result.is_err(), "the body statement must fail");
+        (directory, journal)
+    }
+
+    #[test]
+    fn effectful_failure_cleanup_revokes_retry_safety() {
+        let source = "on exit\n  use value \"cleanup\"\n  then append to \"ledger.txt\"\nrun cd with path \"missing-directory\"\n";
+        let (directory, journal) = run_failed_with_cleanup(source);
+        let ledger = std::fs::read_to_string(directory.path().join("work/ledger.txt")).unwrap();
+        assert!(
+            ledger.contains("cleanup"),
+            "the cleanup effect must have run: {ledger}"
+        );
+        assert!(
+            journal.ensure_retry_allowed().is_err(),
+            "a cleanup effect must gate resume without --retry-uncertain (#707)"
+        );
+        drop(journal);
+        // The revocation is durable: a reopened journal stays gated until the
+        // uncertainty is explicitly acknowledged.
+        let mut options = checkpoint::CheckpointOptions {
+            directory: directory.path().join("ck"),
+            program_path: directory.path().join("cleanup.program"),
+            resume: true,
+            retry_uncertain: false,
+        };
+        let work = directory.path().join("work");
+        let journal = checkpoint::Journal::open_with_inputs(&options, &work, "finite", 4096, None)
+            .unwrap();
+        assert!(journal.ensure_retry_allowed().is_err());
+        drop(journal);
+        options.retry_uncertain = true;
+        let journal = checkpoint::Journal::open_with_inputs(&options, &work, "finite", 4096, None)
+            .unwrap();
+        assert!(journal.ensure_retry_allowed().is_ok());
+        drop(journal);
+    }
+
+    #[test]
+    fn interrupted_cleanup_after_its_effect_stays_gated() {
+        let source = "on exit\n  use value \"cleanup\"\n  then append to \"ledger.txt\"\n  run cd with path \"also-missing\"\nrun cd with path \"missing-directory\"\n";
+        let (directory, journal) = run_failed_with_cleanup(source);
+        assert!(
+            directory.path().join("work/ledger.txt").exists(),
+            "the cleanup effect must have run before the interruption"
+        );
+        assert!(
+            journal.ensure_retry_allowed().is_err(),
+            "cleanup interrupted after its effect must stay gated (#707)"
+        );
+        drop(journal);
+    }
+
+    #[test]
+    fn effect_free_failure_cleanup_stays_retry_safe() {
+        let source = "on exit\n  use value \"cleanup\"\nrun cd with path \"missing-directory\"\n";
+        let (_directory, journal) = run_failed_with_cleanup(source);
+        assert!(
+            journal.ensure_retry_allowed().is_ok(),
+            "genuinely effect-free cleanup must stay retry-safe"
+        );
+        drop(journal);
+    }
 }

@@ -11,6 +11,7 @@ use crate::ast::Program;
 use crate::manifest::Registry;
 use crate::record::{StoredRecord, StoredStep};
 use crate::runtime::observe::{Observer, StepRequest, StepResult};
+use crate::runtime::ProgramExit;
 use crate::security::{self, SecretRedactor};
 use crate::terminal_text::escape_controls;
 use anyhow::{anyhow, bail, Context, Result};
@@ -40,6 +41,17 @@ pub enum Stop {
     Diverged(Divergence),
     /// The program finished with recorded steps still unused.
     UnusedRecordedSteps { next: usize, line: usize },
+}
+
+/// The explicit exit a replay reports, mirroring normal execution. Only a
+/// completed replay — every recorded step replayed, no divergence — reports
+/// the replayed program's `exit with status` / `fail with message` outcome.
+/// An early stop or a divergence keeps its own outcome instead.
+pub fn completed_exit(stop: &Stop, exit: Option<ProgramExit>) -> Option<ProgramExit> {
+    match stop {
+        Stop::Completed => exit,
+        Stop::UntilLine { .. } | Stop::Diverged(_) | Stop::UnusedRecordedSteps { .. } => None,
+    }
 }
 
 /// Replays one record. Install it with `runtime::observe::install` before a run.
@@ -529,6 +541,52 @@ mod tests {
         assert!(unsupported_reason(&program).is_some());
         let plain = crate::parser::parse("run \"true\"\n").unwrap();
         assert!(unsupported_reason(&plain).is_none());
+    }
+
+    #[test]
+    fn completed_replay_reports_the_explicit_exit_status_and_message() {
+        for (status, message) in [
+            (7, Some("bad input".to_owned())),
+            (7, None),
+            (0, Some("done".to_owned())),
+            (0, None),
+        ] {
+            let exit = ProgramExit {
+                status,
+                message: message.clone(),
+            };
+            assert_eq!(
+                completed_exit(&Stop::Completed, Some(exit)),
+                Some(ProgramExit { status, message })
+            );
+        }
+        // A normal completion has no explicit exit to report.
+        assert_eq!(completed_exit(&Stop::Completed, None), None);
+    }
+
+    #[test]
+    fn early_stop_and_divergence_do_not_report_the_explicit_exit() {
+        let exit = || {
+            Some(ProgramExit {
+                status: 7,
+                message: Some("bad input".into()),
+            })
+        };
+        for stop in [
+            Stop::UntilLine {
+                line: 2,
+                steps_replayed: 1,
+            },
+            Stop::Diverged(Divergence {
+                step: 0,
+                line: 1,
+                expected: "recorded".into(),
+                actual: "replayed".into(),
+            }),
+            Stop::UnusedRecordedSteps { next: 1, line: 2 },
+        ] {
+            assert_eq!(completed_exit(&stop, exit()), None, "{stop:?}");
+        }
     }
 
     #[test]

@@ -368,7 +368,15 @@ jobs:
       - name: Verify inherited stdio remains blocking
         if: matrix.os == 'ubuntu-24.04'
         run: cargo test --locked --features test-fixtures --test inherited_stdio_nonblocking
-      - run: make check
+      # On ubuntu-24.04, Clippy runs in the unix-clippy job below with its
+      # own timeout budget (#758); every other make check step still runs
+      # here. The macos-15 leg is unchanged and runs the full make check.
+      - name: Run make check without Clippy (Clippy job covers it)
+        if: matrix.os == 'ubuntu-24.04'
+        run: make check-no-clippy
+      - name: Run make check
+        if: matrix.os != 'ubuntu-24.04'
+        run: make check
       - run: make unix-smoke
       - run: make proof-smoke
       - run: npm run package
@@ -384,6 +392,27 @@ jobs:
             target/proof-smoke.json
           if-no-files-found: warn
           retention-days: 14
+  unix-clippy:
+    # The full-feature Clippy pass from make check / rust-check, split out
+    # of the Unix ubuntu-24.04 leg so it no longer shares that leg's
+    # 30-minute budget with the full test suite (#758). Clippy alone was
+    # still running when that budget expired, so this job gets the same
+    # 60 minutes as the feature-matrix Clippy job. The macos-15 leg of the
+    # unix job still runs Clippy as part of its full make check.
+    name: Unix Clippy (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Run Clippy (full feature set)
+        run: make clippy-check
   windows:
     name: Native Windows (${{ matrix.os }})
     strategy:

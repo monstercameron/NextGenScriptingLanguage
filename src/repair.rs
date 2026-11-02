@@ -428,37 +428,213 @@ fn repair_statement(source: &str, line: usize) -> Result<RepairStatement> {
     })
 }
 
+/// Largest longest-common-subsequence table `line_diff` will allocate, in
+/// `u32` cells (about 4 MiB). Larger middles use a linear-memory algorithm.
+const MAX_DIFF_TABLE_CELLS: u64 = 1_048_576;
+
+/// Largest middle, in `(old + 1) * (new + 1)` cells, for which `line_diff`
+/// still searches for a longest common subsequence. Beyond this the middle
+/// is reported as removed and re-added wholesale, bounding work as well as
+/// memory for pathological inputs. Repair operations edit one localized
+/// line, so their middles stay far below either bound.
+const MAX_DIFF_SEARCH_CELLS: u64 = 100_000_000;
+
 /// A line diff: removed lines with `-`, added lines with `+`, each with its line
 /// number in the side it belongs to. Computed from the longest common subsequence.
+///
+/// Memory stays linear in the program size: common prefix and suffix lines
+/// are trimmed first (a repair changes one localized line, so the remaining
+/// middle is normally tiny), the exact quadratic table is used only for a
+/// bounded middle, and larger middles use Hirschberg's linear-memory
+/// longest-common-subsequence search.
 pub fn line_diff(before: &str, after: &str) -> String {
     let old: Vec<&str> = before.lines().collect();
     let new: Vec<&str> = after.lines().collect();
+    let (old_mid, new_mid, old_offset, new_offset) = trim_common(&old, &new);
+    let mut out = String::new();
+    diff_middle(old_mid, new_mid, old_offset, new_offset, &mut out);
+    out
+}
+
+/// Strip the common prefix and suffix, returning the differing middles and
+/// each middle's starting index in its own side.
+fn trim_common<'a>(
+    old: &'a [&'a str],
+    new: &'a [&'a str],
+) -> (&'a [&'a str], &'a [&'a str], usize, usize) {
+    let mut prefix = 0;
+    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < old.len() - prefix
+        && suffix < new.len() - prefix
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    (
+        &old[prefix..old.len() - suffix],
+        &new[prefix..new.len() - suffix],
+        prefix,
+        prefix,
+    )
+}
+
+fn diff_middle(old: &[&str], new: &[&str], old_offset: usize, new_offset: usize, out: &mut String) {
+    if old.is_empty() {
+        push_added(new, new_offset, out);
+        return;
+    }
+    if new.is_empty() {
+        push_removed(old, old_offset, out);
+        return;
+    }
+    let cells = (old.len() as u64 + 1) * (new.len() as u64 + 1);
+    if cells <= MAX_DIFF_TABLE_CELLS {
+        diff_table(old, new, old_offset, new_offset, out);
+    } else if cells > MAX_DIFF_SEARCH_CELLS || !share_a_line(old, new) {
+        // Reporting the middle as added then removed matches the table
+        // walk's order when the sides share no line.
+        push_added(new, new_offset, out);
+        push_removed(old, old_offset, out);
+    } else {
+        diff_hirschberg(old, new, old_offset, new_offset, out);
+    }
+}
+
+fn push_added(new: &[&str], new_offset: usize, out: &mut String) {
+    for (index, line) in new.iter().enumerate() {
+        out.push_str(&format!("+{:>5} | {}\n", new_offset + index + 1, line));
+    }
+}
+
+fn push_removed(old: &[&str], old_offset: usize, out: &mut String) {
+    for (index, line) in old.iter().enumerate() {
+        out.push_str(&format!("-{:>5} | {}\n", old_offset + index + 1, line));
+    }
+}
+
+fn share_a_line(old: &[&str], new: &[&str]) -> bool {
+    let new_lines: std::collections::HashSet<&str> = new.iter().copied().collect();
+    old.iter().any(|line| new_lines.contains(line))
+}
+
+/// The exact suffix table and walk, for middles within `MAX_DIFF_TABLE_CELLS`.
+fn diff_table(old: &[&str], new: &[&str], old_offset: usize, new_offset: usize, out: &mut String) {
     let (rows, cols) = (old.len() + 1, new.len() + 1);
-    let mut table = vec![vec![0u32; cols]; rows];
+    let mut table = vec![0u32; rows * cols];
+    let cell = |i: usize, j: usize| i * cols + j;
     for i in (0..old.len()).rev() {
         for j in (0..new.len()).rev() {
-            table[i][j] = if old[i] == new[j] {
-                table[i + 1][j + 1] + 1
+            table[cell(i, j)] = if old[i] == new[j] {
+                table[cell(i + 1, j + 1)] + 1
             } else {
-                table[i + 1][j].max(table[i][j + 1])
+                table[cell(i + 1, j)].max(table[cell(i, j + 1)])
             };
         }
     }
     let (mut i, mut j) = (0, 0);
-    let mut out = String::new();
     while i < old.len() || j < new.len() {
         if i < old.len() && j < new.len() && old[i] == new[j] {
             i += 1;
             j += 1;
-        } else if j < new.len() && (i == old.len() || table[i][j + 1] >= table[i + 1][j]) {
-            out.push_str(&format!("+{:>5} | {}\n", j + 1, new[j]));
+        } else if j < new.len() && (i == old.len() || table[cell(i, j + 1)] >= table[cell(i + 1, j)])
+        {
+            out.push_str(&format!("+{:>5} | {}\n", new_offset + j + 1, new[j]));
             j += 1;
         } else {
-            out.push_str(&format!("-{:>5} | {}\n", i + 1, old[i]));
+            out.push_str(&format!("-{:>5} | {}\n", old_offset + i + 1, old[i]));
             i += 1;
         }
     }
-    out
+}
+
+/// Hirschberg's algorithm: a longest common subsequence diff using memory
+/// linear in `new.len()` per level instead of the quadratic table. The
+/// emitted diff is minimal, like the table walk's, though equally minimal
+/// choices among repeated lines may differ from it.
+fn diff_hirschberg(
+    old: &[&str],
+    new: &[&str],
+    old_offset: usize,
+    new_offset: usize,
+    out: &mut String,
+) {
+    let (old, new, trimmed_old, trimmed_new) = trim_common(old, new);
+    let (old_offset, new_offset) = (old_offset + trimmed_old, new_offset + trimmed_new);
+    if old.is_empty() {
+        push_added(new, new_offset, out);
+        return;
+    }
+    if new.is_empty() {
+        push_removed(old, old_offset, out);
+        return;
+    }
+    if (old.len() as u64 + 1) * (new.len() as u64 + 1) <= MAX_DIFF_TABLE_CELLS {
+        diff_table(old, new, old_offset, new_offset, out);
+        return;
+    }
+    if old.len() == 1 {
+        match new.iter().position(|line| *line == old[0]) {
+            Some(position) => {
+                push_added(&new[..position], new_offset, out);
+                push_added(&new[position + 1..], new_offset + position + 1, out);
+            }
+            None => {
+                push_added(new, new_offset, out);
+                push_removed(old, old_offset, out);
+            }
+        }
+        return;
+    }
+    let mid = old.len() / 2;
+    let forward = lcs_row(&old[..mid], new);
+    let backward = lcs_suffix_row(&old[mid..], new);
+    // The split of `new` that keeps the two halves' common subsequences
+    // longest overall. Later splits win ties, mirroring the table walk's
+    // preference for emitting an addition before a removal.
+    let mut split = 0;
+    for candidate in 0..=new.len() {
+        if forward[candidate] + backward[candidate] >= forward[split] + backward[split] {
+            split = candidate;
+        }
+    }
+    diff_hirschberg(&old[..mid], &new[..split], old_offset, new_offset, out);
+    diff_hirschberg(
+        &old[mid..],
+        &new[split..],
+        old_offset + mid,
+        new_offset + split,
+        out,
+    );
+}
+
+/// `row[j]` is the longest-common-subsequence length of `old` and `new[..j]`.
+fn lcs_row(old: &[&str], new: &[&str]) -> Vec<u32> {
+    let mut row = vec![0u32; new.len() + 1];
+    for old_line in old {
+        let mut diagonal = 0u32;
+        for (j, new_line) in new.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = if old_line == new_line {
+                diagonal + 1
+            } else {
+                above.max(row[j])
+            };
+            diagonal = above;
+        }
+    }
+    row
+}
+
+/// `row[j]` is the longest-common-subsequence length of `old` and `new[j..]`.
+fn lcs_suffix_row(old: &[&str], new: &[&str]) -> Vec<u32> {
+    let old_reversed: Vec<&str> = old.iter().rev().copied().collect();
+    let new_reversed: Vec<&str> = new.iter().rev().copied().collect();
+    let mut row = lcs_row(&old_reversed, &new_reversed);
+    row.reverse();
+    row
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1510,6 +1686,122 @@ mod tests {
         assert!(diff.contains("-    2 | b"), "{diff}");
         assert!(diff.contains("+    2 | x"), "{diff}");
         assert!(!diff.contains("| a"), "{diff}");
+    }
+
+    #[test]
+    fn the_diff_output_for_small_programs_is_unchanged() {
+        assert_eq!(line_diff("a\nb\nc\n", "a\nx\nc\n"), "+    2 | x\n-    2 | b\n");
+        assert_eq!(line_diff("a\nc\n", "a\nb\nc\n"), "+    2 | b\n");
+        assert_eq!(line_diff("a\nb\nc\n", "a\nc\n"), "-    2 | b\n");
+        assert_eq!(line_diff("a\nb\n", "a\nb\n"), "");
+        assert_eq!(line_diff("", ""), "");
+        assert_eq!(line_diff("", "héllo\n"), "+    1 | héllo\n");
+        assert_eq!(line_diff("héllo\n", ""), "-    1 | héllo\n");
+    }
+
+    #[test]
+    fn the_diff_for_a_large_program_with_a_one_line_edit_stays_bounded() {
+        // Regression for #755: the suffix table for this pair would hold
+        // about 100M cells. Trimming the common lines leaves a one-line
+        // middle, so the diff is exactly the edited line.
+        let lines: Vec<String> = (0..10_000).map(|index| format!("step {index:05}")).collect();
+        let before = format!("{}\n", lines.join("\n"));
+        let mut edited = lines.clone();
+        edited[5_000] = "step replaced".to_owned();
+        let after = format!("{}\n", edited.join("\n"));
+
+        let diff = line_diff(&before, &after);
+
+        assert_eq!(diff, "+ 5001 | step replaced\n- 5001 | step 05000\n");
+    }
+
+    #[test]
+    fn the_diff_for_a_large_program_with_scattered_edits_stays_minimal() {
+        // The middle after trimming exceeds the bounded table, so this
+        // exercises the linear-memory search. Unchanged lines, including
+        // the Unicode one, must not appear in the diff.
+        let lines: Vec<String> = (0..1_500).map(|index| format!("step {index:04}")).collect();
+        let before = format!("{}\n", lines.join("\n"));
+        let mut edited = lines.clone();
+        edited[750] = "step héllo".to_owned();
+        for index in (100..1_500).step_by(100) {
+            edited[index] = format!("step edited {index:04}");
+        }
+        let after = format!("{}\n", edited.join("\n"));
+
+        let diff = line_diff(&before, &after);
+
+        assert!(diff.contains("-  101 | step 0100\n"), "{diff}");
+        assert!(diff.contains("+  101 | step edited 0100\n"), "{diff}");
+        assert!(diff.contains("-  751 | step 0750\n"), "{diff}");
+        assert!(diff.contains("+  751 | step héllo\n"), "{diff}");
+        assert!(!diff.contains("| step 0000\n"), "{diff}");
+        assert!(!diff.contains("| step 0751\n"), "{diff}");
+        assert!(!diff.contains("| step 1499\n"), "{diff}");
+        assert_eq!(diff.lines().count(), 30, "{diff}");
+    }
+
+    #[test]
+    fn the_large_diff_with_repeated_lines_matches_the_table_diff_size() {
+        // Repeated lines make the common subsequence ambiguous. The
+        // linear-memory search must still emit a minimal diff that
+        // transforms the old program into the new one.
+        let mut state = 0x2545F4914F6CDD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = ["alpha", "beta", "gamma", "delta", "", "end", "run x", "alpha"];
+        let old_lines: Vec<&str> = (0..1200)
+            .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+            .collect();
+        let mut new_lines: Vec<&str> = old_lines.clone();
+        for _ in 0..60 {
+            let at = (next() % new_lines.len() as u64) as usize;
+            match next() % 3 {
+                0 => new_lines[at] = alphabet[(next() % alphabet.len() as u64) as usize],
+                1 => {
+                    new_lines.remove(at);
+                }
+                _ => new_lines.insert(at, alphabet[(next() % alphabet.len() as u64) as usize]),
+            }
+        }
+        let before = format!("{}\n", old_lines.join("\n"));
+        let after = format!("{}\n", new_lines.join("\n"));
+
+        let diff = line_diff(&before, &after);
+        let mut table_diff = String::new();
+        diff_table(&old_lines, &new_lines, 0, 0, &mut table_diff);
+        assert_eq!(diff.lines().count(), table_diff.lines().count(), "{diff}");
+
+        let mut removed: Vec<usize> = Vec::new();
+        let mut added: Vec<usize> = Vec::new();
+        for entry in diff.lines() {
+            let number: usize = entry[1..6].trim().parse().unwrap();
+            let content = &entry[9..];
+            if entry.starts_with('-') {
+                assert_eq!(old_lines[number - 1], content, "{diff}");
+                removed.push(number - 1);
+            } else {
+                assert_eq!(new_lines[number - 1], content, "{diff}");
+                added.push(number - 1);
+            }
+        }
+        let kept_old: Vec<&str> = old_lines
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !removed.contains(index))
+            .map(|(_, line)| *line)
+            .collect();
+        let kept_new: Vec<&str> = new_lines
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !added.contains(index))
+            .map(|(_, line)| *line)
+            .collect();
+        assert_eq!(kept_old, kept_new, "{diff}");
     }
 
     fn commit_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, Plan) {

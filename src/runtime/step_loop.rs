@@ -674,6 +674,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         let mut jump_to = None;
         let mut control_rethrow = None;
         let execution = (|| -> Result<()> {
+            // The shared workflow deadline is a hard bound between statements.
+            // Route it through control flow as non-catchable so a native timeout
+            // caught as an ordinary command failure cannot resume normal effects.
+            check_deadline(signals.deadline)?;
             if control_state.cleanup_active() {
                 control_state.charge_cleanup_step()?;
                 check_deadline(signals.deadline)?;
@@ -1937,6 +1941,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         crate::security::PersistenceKind::Save,
                         &signals.sensitivity_floor(),
                     )?;
+                    // Input materialization and authorization can consume the
+                    // remaining budget. Do not start a save if it has expired.
+                    check_deadline(signals.deadline)?;
                     atomic_write(&destination, &bytes)?;
                     if journal.is_some() {
                         sync_destination_parent(&destination, &cwd)?;
@@ -2608,6 +2615,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                 }
             }
+            // Detect a deadline reached while an in-process statement was
+            // executing, including when it was the final statement.
+            check_deadline(signals.deadline)?;
             Ok(())
         })();
         if execution.is_ok() {
@@ -2725,7 +2735,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             } else if cleanup_cancelled {
                 (error, true)
             } else {
-                let cancellation = !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
+                let cancellation = !was_cleanup
+                    && (parent_signals.cancelled.load(Ordering::Relaxed)
+                        || parent_signals
+                            .deadline
+                            .is_some_and(|deadline| Instant::now() >= deadline));
                 (error, cancellation)
             };
             let action = if let Some(call_depth) = status_capture_depth {

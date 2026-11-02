@@ -372,6 +372,55 @@ pub(crate) fn append_resolution(directory: &Path, record: &ResolutionRecord) -> 
     append_resolution_locked(directory, record, &lock)
 }
 
+/// Consume the `retry` resolution for one node or element when the attempt
+/// it authorized starts (#709). The record is removed from the log with an
+/// atomic rewrite, durably, before the attempt runs: if that attempt fails
+/// or is interrupted, a later resume finds no stale authorization and the
+/// operator must record a fresh decision (removal also keeps that possible,
+/// since duplicate records for one item are refused). `committed` records
+/// are never consumed. Returns true when a record was removed. The caller
+/// holds the checkpoint lock (a running journal), so no `resolve` can race
+/// the read-rewrite.
+pub(crate) fn consume_retry_resolution(
+    directory: &Path,
+    node: &str,
+    element: Option<usize>,
+    max_output_bytes: usize,
+) -> Result<bool> {
+    let records = read_resolutions(directory, max_output_bytes)?;
+    let original_len = records.len();
+    let kept: Vec<ResolutionRecord> = records
+        .into_iter()
+        .filter(|record| {
+            !(record.decision == ResolutionDecision::Retry
+                && record.node == node
+                && record.element == element)
+        })
+        .collect();
+    // `read_resolutions` refuses duplicate keys, so at most one matched.
+    if kept.len() == original_len {
+        return Ok(false);
+    }
+    let path = directory.join(RESOLUTIONS_LOG);
+    let metadata = fs::symlink_metadata(&path).context("inspecting checkpoint resolutions")?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("checkpoint resolutions must be a regular file");
+    }
+    let mut bytes = Vec::new();
+    for record in &kept {
+        serde_json::to_writer(&mut bytes, record).context("encoding checkpoint resolution")?;
+        bytes.push(b'\n');
+    }
+    super::atomic_write(
+        directory,
+        RESOLUTIONS_LOG,
+        "jsonl",
+        &bytes,
+        "checkpoint.resolutions.consume",
+    )?;
+    Ok(true)
+}
+
 /// Find the resolution for one node-level uncertain item.
 pub(crate) fn node_resolution<'a>(
     resolutions: &'a [ResolutionRecord],

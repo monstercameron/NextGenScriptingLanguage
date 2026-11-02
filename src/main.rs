@@ -1237,6 +1237,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             &registry,
             parsed_graph.input_declarations(),
             &inputs,
+            &std::sync::atomic::AtomicBool::new(false),
+            None,
         )?;
         let graph = parsed_graph.with_input_values(&inputs, false)?;
         graph

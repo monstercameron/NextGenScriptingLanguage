@@ -287,6 +287,41 @@ pub fn checkpoint_identity_for(plan: &GraphPlan, cwd: &Path, resume: bool) -> Re
     checkpoint_identity_at(plan, cwd, &key_path, resume)
 }
 
+/// The cwd bytes mixed into the checkpoint identity. A UTF-8 cwd keeps its
+/// plain bytes, so identities written before #795 are unchanged. A non-UTF-8
+/// cwd is encoded losslessly from its exact platform form (Unix `OsStr`
+/// bytes, Windows wide characters) behind a 0xff marker, which never occurs
+/// in valid UTF-8, so it cannot collide with any UTF-8 cwd or with a
+/// different non-UTF-8 cwd.
+fn cwd_identity_bytes(cwd: &Path) -> Result<Vec<u8>> {
+    if let Some(text) = cwd.to_str() {
+        return Ok(text.as_bytes().to_vec());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut bytes = vec![0xff];
+        bytes.extend_from_slice(cwd.as_os_str().as_bytes());
+        Ok(bytes)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let mut bytes = vec![0xff];
+        for unit in cwd.as_os_str().encode_wide() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        Ok(bytes)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        bail!(
+            "graph checkpoint identity cannot represent a non-UTF-8 working directory on this platform: {}",
+            cwd.display()
+        )
+    }
+}
+
 fn checkpoint_identity_at(
     plan: &GraphPlan,
     cwd: &Path,
@@ -304,7 +339,7 @@ fn checkpoint_identity_at(
     let mut message = b"execute-graph-checkpoint-identity/v6\n".to_vec();
     message.extend_from_slice(&serde_json::to_vec(&canonical)?);
     message.push(b'\n');
-    message.extend_from_slice(cwd.to_string_lossy().as_bytes());
+    message.extend_from_slice(&cwd_identity_bytes(cwd)?);
     Ok(crate::agent::what_if_key::hmac_sha256(&key, &message)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -340,6 +375,75 @@ mod tests {
         assert!(key_path.exists(), "a fresh run must create the key");
         let resumed = checkpoint_identity_at(&plan, directory.path(), &key_path, true).unwrap();
         assert_eq!(fresh, resumed);
+    }
+
+    #[test]
+    fn utf8_cwd_identity_is_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let key_path = directory.path().join("execute").join("what-if.key");
+        let plan = GraphPlan::new("utf8-cwd");
+
+        let identity = checkpoint_identity_at(&plan, directory.path(), &key_path, false).unwrap();
+
+        // The identity must still equal the pre-#795 computation, which mixed
+        // in the cwd's lossy (here exact) UTF-8 bytes.
+        let key = crate::agent::what_if_key::load_existing_at(&key_path).unwrap();
+        let mut canonical = serde_json::to_value(&plan).unwrap();
+        remove_source_lines(&mut canonical);
+        let mut message = b"execute-graph-checkpoint-identity/v6\n".to_vec();
+        message.extend_from_slice(&serde_json::to_vec(&canonical).unwrap());
+        message.push(b'\n');
+        message.extend_from_slice(directory.path().to_string_lossy().as_bytes());
+        let expected: String = crate::agent::what_if_key::hmac_sha256(&key, &message)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(identity, expected);
+        assert_eq!(
+            cwd_identity_bytes(directory.path()).unwrap(),
+            directory.path().to_str().unwrap().as_bytes()
+        );
+    }
+
+    // Windows paths are always UTF-16 and this host cannot create a
+    // non-UTF-8 path, so the non-UTF-8 regression is Unix-only.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_cwds_with_same_lossy_rendering_have_different_identities() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
+
+        let directory = tempfile::tempdir().unwrap();
+        let key_path = directory.path().join("execute").join("what-if.key");
+        let plan = GraphPlan::new("non-utf8-cwd");
+
+        let first = PathBuf::from(OsString::from_vec(b"/tmp/graph-cwd-\xff".to_vec()));
+        let second = PathBuf::from(OsString::from_vec(b"/tmp/graph-cwd-\xfe".to_vec()));
+        assert_ne!(first, second);
+        assert!(first.to_str().is_none() && second.to_str().is_none());
+        assert_eq!(
+            first.to_string_lossy(),
+            second.to_string_lossy(),
+            "precondition: both names render identically when lossy"
+        );
+
+        let first_identity = checkpoint_identity_at(&plan, &first, &key_path, false).unwrap();
+        let second_identity = checkpoint_identity_at(&plan, &second, &key_path, true).unwrap();
+        assert_ne!(first_identity, second_identity);
+
+        // Neither may collide with the UTF-8 path that literally contains
+        // the replacement character their lossy rendering produces.
+        let lossy_utf8 = PathBuf::from(first.to_string_lossy().into_owned());
+        let lossy_identity = checkpoint_identity_at(&plan, &lossy_utf8, &key_path, true).unwrap();
+        assert_ne!(first_identity, lossy_identity);
+        assert_ne!(second_identity, lossy_identity);
+
+        // The same non-UTF-8 directory still resumes with the same identity.
+        assert_eq!(
+            first_identity,
+            checkpoint_identity_at(&plan, &first, &key_path, true).unwrap()
+        );
     }
 }
 

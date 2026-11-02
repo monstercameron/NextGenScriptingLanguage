@@ -266,8 +266,14 @@ pub(crate) fn preflight_executables(
                  missing: &mut Vec<String>|
      -> Result<()> {
         let manifest = registry.resolve_call(call)?;
+        // Static preflight covers every backend the launcher resolves to a
+        // native executable, including persistent workers.
         if manifest.builtin.is_some()
-            || manifest.execution_backend() != crate::contracts::AppletBackend::Command
+            || !matches!(
+                manifest.execution_backend(),
+                crate::contracts::AppletBackend::Command
+                    | crate::contracts::AppletBackend::JsonLinesWorker
+            )
         {
             return Ok(());
         }
@@ -279,7 +285,7 @@ pub(crate) fn preflight_executables(
             || (cfg!(windows) && binary.contains('\\'))
             || Path::new(binary).is_absolute()
         {
-            binary_path(binary, current_cwd)
+            binary_path_for_applet(manifest, call, current_cwd)
         } else {
             binary_path_from_path(binary, current_cwd, path)
         };

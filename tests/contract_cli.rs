@@ -1062,6 +1062,12 @@ fn help_lists_the_opt_in_policy_and_contract_inspection_details() {
     // printed when a capability policy is used without it.
     assert!(help.contains("--data-flow-policy FILE"));
     assert!(help.contains("--total-timeout-ms N"));
+    // `--allow` approves an effect category only in `explain --json` review;
+    // it never grants a capability to a run.
+    assert!(help.contains("--allow CATEGORY"));
+    assert!(help.contains("explain --json review only"));
+    assert!(help.contains("not a runtime capability grant"));
+    assert!(!help.contains("Grant a capability"));
 
     let applets = cli(root.path(), &["applets", "--help"]);
     let help = String::from_utf8_lossy(&applets.stdout);

@@ -439,6 +439,7 @@ impl Observer for PrefixReplayer {
 pub fn recorded_inputs(
     record: &StoredRecord,
 ) -> Result<std::collections::BTreeMap<String, crate::ast::Value>> {
+    crate::record::check_replayable_after_redaction(record)?;
     if let Some(name) = record.run["inputs"]
         .as_object()
         .and_then(|fields| {

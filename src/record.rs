@@ -218,6 +218,10 @@ pub struct Recorder {
     plan_sha256: String,
     plan_text: String,
     inputs: Json,
+    /// Structural text redaction changed (program source or an input
+    /// name), if any. Such a record must refuse replay rather than run a
+    /// different program under redacted names.
+    structural_redaction: Option<String>,
     declared_secret_names: Vec<String>,
     provenance_manifests: String,
     provenance_cwd: String,
@@ -922,6 +926,15 @@ impl Recorder {
             .map_err(|error| anyhow!("registering declared secrets: {error}"))?;
         let redactor = security::secret_redactor(start.registry);
         let program_source = redactor.redact_bytes(start.program_source);
+        let inputs = redact_json(&redactor, &start.inputs);
+        let mut structural = Vec::new();
+        if program_source.as_slice() != start.program_source {
+            structural.push("the recorded program source");
+        }
+        if input_name_redacted(&redactor, &start.inputs) {
+            structural.push("an input name");
+        }
+        let structural_redaction = (!structural.is_empty()).then(|| structural.join(" and "));
         #[cfg(unix)]
         write_private_at(&directory_handle, PROGRAM_FILE, &program_source)?;
         #[cfg(not(unix))]
@@ -956,7 +969,8 @@ impl Recorder {
             started_unix_ms: unix_ms(),
             plan_sha256,
             plan_text,
-            inputs: redact_json(&redactor, &start.inputs),
+            inputs,
+            structural_redaction,
             declared_secret_names: security::declared_secret_environment_names(start.registry),
             provenance_manifests,
             provenance_cwd,
@@ -1101,6 +1115,7 @@ impl Recorder {
             },
             "redaction": {
                 "declared_secret_names": self.declared_secret_names,
+                "structural_redaction": self.structural_redaction,
             },
             "provenance": {
                 "manifests_sha256": self.provenance_manifests,
@@ -1352,11 +1367,33 @@ pub struct StoredRecord {
 /// trailing trace lines while zeroing the step count of an unfinished record
 /// — is not detected. Only resume records written on this machine by a run you
 /// trust, from a directory only you can write.
+/// Refuse replay of a record whose structural text was redacted. The
+/// stored bytes stay redacted (a matching secret is never written back),
+/// so replaying would parse altered source or bind inputs under altered
+/// names. Records written before the flag are also refused when an
+/// input name carries the redaction marker, which no input identifier
+/// can contain.
+pub fn check_replayable_after_redaction(record: &StoredRecord) -> Result<()> {
+    let flagged = &record.run["redaction"]["structural_redaction"];
+    let marker_name = record.run["inputs"]
+        .as_object()
+        .is_some_and(|fields| fields.keys().any(|key| key.contains("[REDACTED]")));
+    if flagged.is_null() && !marker_name {
+        return Ok(());
+    }
+    let what = flagged.as_str().unwrap_or("an input name");
+    bail!(
+        "the record {} cannot be replayed: redaction changed {what}, so replay would run a different program than the recorded one; re-record with a secret that does not match an input name or program text",
+        record.directory.display()
+    )
+}
+
 pub fn check_from_record_usable(
     record: &StoredRecord,
     registry: &Registry,
     working_directory: &Path,
 ) -> Result<()> {
+    check_replayable_after_redaction(record)?;
     // The program copy is content-addressed by run.json: a record whose
     // copy no longer matches its hash was edited after the run, so its
     // line numbers no longer bound any program. Records written before
@@ -2120,6 +2157,17 @@ fn step_summary(step: &StoredStep) -> Json {
     })
 }
 
+/// Whether redaction would change a top-level input name. Only these
+/// keys are structural: replay reads them as the program's input names.
+/// Keys nested inside an input value are data and stay redacted as data.
+fn input_name_redacted(redactor: &SecretRedactor, inputs: &Json) -> bool {
+    inputs.as_object().is_some_and(|fields| {
+        fields
+            .keys()
+            .any(|key| redactor.redact_text(key).as_str() != key)
+    })
+}
+
 fn redact_json(redactor: &SecretRedactor, value: &Json) -> Json {
     match value {
         Json::String(text) => Json::String(redactor.redact_text(text)),
@@ -2413,6 +2461,56 @@ mod tests {
         let redacted = redact_json(&redactor, &value);
         let text = redacted.to_string();
         assert!(!text.contains("hunter2"), "{text}");
+    }
+
+    #[test]
+    fn secret_matching_an_input_name_keeps_other_names_and_refuses_replay() {
+        // A declared secret whose value equals a public input identifier
+        // must not be written back in cleartext to keep replay working.
+        // The record stays redacted and replay refuses it with the reason.
+        let directory = tempfile::tempdir().unwrap();
+        let registry = Registry::default();
+        security::secret_redactor(&registry)
+            .register(
+                b"DEPLOY_ENV",
+                &std::sync::atomic::AtomicBool::new(false),
+                None,
+            )
+            .unwrap();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"input DEPLOY_ENV\nrun text.concat with parts []",
+            plan: "plan",
+            inputs: json!({"DEPLOY_ENV": "prod", "REGION": "eu"}),
+            registry: &registry,
+            working_directory: directory.path(),
+            audit_key: None,
+        })
+        .unwrap();
+        drop(recorder);
+        let record = StoredRecord::open(directory.path()).unwrap();
+        // Non-colliding structural input names survive unchanged.
+        assert_eq!(record.run["inputs"]["REGION"], "eu");
+        // The colliding secret bytes appear nowhere replay reads.
+        assert!(
+            !record.run["inputs"].to_string().contains("DEPLOY_ENV"),
+            "{}",
+            record.run["inputs"]
+        );
+        assert!(!String::from_utf8_lossy(&record.program_source().unwrap()).contains("DEPLOY_ENV"));
+        let structural = record.run["redaction"]["structural_redaction"]
+            .as_str()
+            .expect("structural redaction is recorded");
+        assert!(structural.contains("input name"), "{structural}");
+        assert!(structural.contains("program source"), "{structural}");
+        let error = crate::replay::recorded_inputs(&record).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("cannot be replayed"), "{message}");
+        assert!(message.contains("redaction changed"), "{message}");
+        assert!(
+            message.contains(&record.directory.display().to_string()),
+            "{message}"
+        );
     }
 
     #[test]

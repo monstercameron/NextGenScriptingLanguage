@@ -234,6 +234,7 @@ pub fn replay(arguments: &[String]) -> Result<()> {
     }
     let directory = directory.context("usage: execute replay RECORD [--until LINE]")?;
     let record = StoredRecord::open(&directory)?;
+    record::check_replayable_after_redaction(&record)?;
     let source_path = if let Some(path) = program_path.as_ref() {
         fs::canonicalize(path).with_context(|| format!("resolving program {}", path.display()))?
     } else {

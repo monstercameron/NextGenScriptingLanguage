@@ -23,7 +23,7 @@ pub(super) fn execute(
     match call.operation.as_str() {
         "json.stringify" => Ok(Value::String(String::from_utf8(
             crate::structured::encode(required("value")?, LIMIT)?,
-        )?)),
+        )?.into())),
         "json.parse" => {
             let text = match args.get("text") {
                 Some(Value::String(text)) => text.as_bytes(),
@@ -94,7 +94,7 @@ pub(super) fn execute(
             let Value::Record(values) = required("values")? else {
                 bail!("values must be a record");
             };
-            if !matches!(required("escape")?, Value::String(mode) if mode == "plain") {
+            if !matches!(required("escape")?, Value::String(mode.into()) if mode == "plain") {
                 bail!("browser text.format supports only escape plain");
             }
             let mut output = String::new();

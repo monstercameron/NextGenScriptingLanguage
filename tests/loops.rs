@@ -73,7 +73,7 @@ fn foreach_uses_literal_filenames_and_keeps_only_last_result() {
         flow::ast::Value::List(vec![
             flow::ast::Value::String("first one.txt".into()),
             flow::ast::Value::String("last ; $HOME.txt".into()),
-        ]),
+        ].into()),
     );
     let result =
         runtime::run(&parser::parse(source).unwrap(), &Registry::default(), &opts).unwrap();
@@ -98,6 +98,94 @@ fn foreach_iterates_json_array_literals_and_keeps_the_last_value() {
         "for each item in [1, null, {\"nested\": [2]}]\n  then encode item as json\n",
     );
     assert_eq!(result.output, br#"{"nested":[2]}"#);
+}
+
+#[test]
+fn foreach_over_deep_nested_values_matches_reference_encoding() {
+    // Deep list/string payloads travel through header resolution and one
+    // clone per iteration. The observable output, errors, and values must
+    // match the reference encoding exactly.
+    let dir = tempfile::tempdir().unwrap();
+    let items: Vec<flow::ast::Value> = (0..64)
+        .map(|index: i64| {
+            flow::ast::Value::Record(
+                BTreeMap::from([
+                    (
+                        "name".into(),
+                        flow::ast::Value::String(
+                            format!("item-{index}-{}", "n".repeat(256)).into(),
+                        ),
+                    ),
+                    (
+                        "tags".into(),
+                        flow::ast::Value::List(
+                            vec![
+                                flow::ast::Value::String(
+                                    format!("tag-{index}-a-{}", "t".repeat(128)).into(),
+                                ),
+                                flow::ast::Value::String(
+                                    format!("tag-{index}-b-{}", "u".repeat(128)).into(),
+                                ),
+                            ]
+                            .into(),
+                        ),
+                    ),
+                    (
+                        "nested".into(),
+                        flow::ast::Value::Record(
+                            BTreeMap::from([
+                                (
+                                    "inner".into(),
+                                    flow::ast::Value::List(
+                                        (0..8)
+                                            .map(|n| flow::ast::Value::Integer(i64::from(n)))
+                                            .collect::<Vec<flow::ast::Value>>()
+                                            .into(),
+                                    ),
+                                ),
+                                (
+                                    "deep".into(),
+                                    flow::ast::Value::String(
+                                        format!("deep-{index}-{}", "d".repeat(512)).into(),
+                                    ),
+                                ),
+                            ])
+                            .into(),
+                        ),
+                    ),
+                ])
+                .into(),
+            )
+        })
+        .collect();
+    let expected = serde_json::json!({
+        "name": format!("item-63-{}", "n".repeat(256)),
+        "tags": [
+            format!("tag-63-a-{}", "t".repeat(128)),
+            format!("tag-63-b-{}", "u".repeat(128)),
+        ],
+        "nested": {
+            "inner": [0, 1, 2, 3, 4, 5, 6, 7],
+            "deep": format!("deep-63-{}", "d".repeat(512)),
+        },
+    });
+    let mut opts = options(dir.path());
+    opts.inputs.insert(
+        "items".into(),
+        flow::ast::Value::List(items.into()),
+    );
+    let result = runtime::run(
+        &parser::parse("accept items as json\nfor each item in items\n  then encode item as json\n")
+            .unwrap(),
+        &Registry::default(),
+        &opts,
+    )
+    .unwrap();
+    assert_eq!(result.output, serde_json::to_vec(&expected).unwrap());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result.output).unwrap(),
+        expected
+    );
 }
 
 #[test]
@@ -171,7 +259,7 @@ fn known_loop_inputs_are_preflighted_before_earlier_effects_in_all_contexts() {
     let program = parser::parse("run \"printf\" with arguments [\"effect\"]\nthen save to \"forbidden\"\nwhile flag is true\n  run \"true\"\n").unwrap();
     for value in [
         flow::ast::Value::String("wrong scalar type".into()),
-        flow::ast::Value::List(Vec::new()),
+        flow::ast::Value::List(Vec::new().into()),
     ] {
         let supplied = BTreeMap::from([("flag".into(), value)]);
         let error = runtime::run_with_context(

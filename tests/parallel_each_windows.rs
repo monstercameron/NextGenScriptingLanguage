@@ -83,10 +83,10 @@ fn native_parallel_each_shared_limit_preserves_versioned_partial_results() -> Re
         failure.message
     );
     assert_eq!(failure.partial_results_schema_version, Some(3));
-    let flow::ast::Value::List(records) = &failure.partial_results else {
+    let flow::ast::Value::List(records.into()) = &failure.partial_results else {
         panic!("partial results should remain a list")
     };
-    let flow::ast::Value::Record(first) = &records[0] else {
+    let flow::ast::Value::Record(first.into()) = &records[0] else {
         panic!("first partial result should be a record")
     };
     assert_eq!(
@@ -99,7 +99,7 @@ fn native_parallel_each_shared_limit_preserves_versioned_partial_results() -> Re
     );
     assert_eq!(
         first.get("output"),
-        Some(&flow::ast::Value::String("x".repeat(800)))
+        Some(&flow::ast::Value::String("x".repeat(800).into()))
     );
     Ok(())
 }

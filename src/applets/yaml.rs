@@ -386,7 +386,7 @@ impl Parser<'_, '_> {
                 Chomp::Keep => trailing_blank.max(pending_blank),
                 _ => 0,
             };
-            return Ok(Value::String("\n".repeat(newlines)));
+            return Ok(Value::String("\n".repeat(newlines).into()));
         }
         let body = if literal {
             lines_out.join("\n")
@@ -678,7 +678,7 @@ fn resolve_plain(text: &str, number: usize) -> Result<Value, AppletError> {
             .map(Value::Number)
             .ok_or_else(|| syntax(FORMAT, number, "number is not finite"));
     }
-    Ok(Value::String(text.to_owned()))
+    Ok(Value::String(text.to_owned().into()))
 }
 
 fn is_integer(text: &str) -> bool {

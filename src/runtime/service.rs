@@ -308,7 +308,7 @@ fn fire(
                 String::from_utf8(bytes.clone()).context("listener records must be UTF-8 text")?;
             (
                 Input::Bytes(bytes),
-                Some((name.to_owned(), Value::String(text))),
+                Some((name.to_owned(), Value::String(text.into()))),
             )
         }
         None => (Input::Empty, None),

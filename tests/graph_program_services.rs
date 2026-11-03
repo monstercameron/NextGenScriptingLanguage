@@ -437,7 +437,7 @@ fn scheduled_program_service_emits_successive_typed_events() {
     assert_eq!(first.port.port, "updated");
     assert!(matches!(
         &first.payload,
-        PortValue::Value(Value::Record(record)) if record.get("count") == Some(&Value::Integer(7))
+        PortValue::Value(Value::Record(record.into())) if record.get("count") == Some(&Value::Integer(7))
     ));
     assert!(second.sequence > first.sequence);
     assert_eq!(second.payload, first.payload);
@@ -457,7 +457,7 @@ fn native_listener_program_service_emits_a_typed_event_and_counts_its_source() {
     assert_eq!(event.port.port, "updated");
     assert!(matches!(
         event.payload,
-        PortValue::Value(Value::Record(ref record))
+        PortValue::Value(Value::Record(ref record.into()))
             if record.get("count") == Some(&Value::Integer(7))
     ));
     assert!(session.recv_output().unwrap().is_none());
@@ -482,7 +482,7 @@ fn native_listener_honors_a_declared_nonzero_success_status() {
     let event = session.recv_output().unwrap().unwrap();
     assert!(matches!(
         event.payload,
-        PortValue::Value(Value::Record(ref record))
+        PortValue::Value(Value::Record(ref record.into()))
             if record.get("count") == Some(&Value::Integer(11))
     ));
     assert!(session.recv_output().unwrap().is_none());
@@ -551,7 +551,7 @@ fn scheduled_service_resolves_declared_graph_inputs_before_startup() {
         .with_input_values(&BTreeMap::new(), true)
         .is_err());
 
-    let snapshot = Value::Record(BTreeMap::from([("count".into(), Value::Integer(23))]));
+    let snapshot = Value::Record(BTreeMap::from([("count".into(), Value::Integer(23))]).into());
     let plan = unresolved
         .with_input_values(
             &BTreeMap::from([("requested".into(), snapshot.clone())]),
@@ -589,7 +589,7 @@ fn scheduled_service_reads_required_single_input_from_graph_edge() {
     assert!(
         matches!(
             &event.payload,
-            PortValue::Value(Value::Record(record)) if record.get("count") == Some(&Value::Integer(11))
+            PortValue::Value(Value::Record(record.into())) if record.get("count") == Some(&Value::Integer(11))
         ),
         "unexpected service event payload: {:?}",
         event.payload
@@ -724,7 +724,7 @@ fn package_service_accepts_a_path_typed_single_input_from_a_graph_edge() {
             ("service", "updated") => {
                 assert_eq!(
                     event.payload,
-                    PortValue::Value(Value::String(location.to_string_lossy().into_owned()))
+                    PortValue::Value(Value::String(location.to_string_lossy().into_owned().into()))
                 );
                 saw_service_event = true;
             }
@@ -826,7 +826,7 @@ fn graph_service_cancellation_reaps_only_its_retained_json_lines_worker() {
     let event = session.recv_output().unwrap().unwrap();
     assert!(matches!(
         event.payload,
-        PortValue::Value(Value::Record(ref record))
+        PortValue::Value(Value::Record(ref record.into()))
             if record.get("count") == Some(&Value::Integer(1))
     ));
     let pids = fs::read_to_string(&marker)
@@ -878,7 +878,7 @@ fn cancelling_native_listener_service_reaps_source_and_keeps_immediate_spawn_cou
     let event = session.recv_output().unwrap().unwrap();
     assert!(matches!(
         event.payload,
-        PortValue::Value(Value::Record(ref record))
+        PortValue::Value(Value::Record(ref record.into()))
             if record.get("count") == Some(&Value::Integer(7))
     ));
     assert_eq!(session.context().metrics.launched_processes(), 1);
@@ -1069,7 +1069,7 @@ fn scheduled_package_handler_can_invoke_a_pinned_v1_dependency_alias() {
     let event = session.recv_output().unwrap().unwrap();
     assert!(matches!(
         &event.payload,
-        PortValue::Value(Value::Record(record)) if record.get("count") == Some(&Value::Integer(9))
+        PortValue::Value(Value::Record(record.into())) if record.get("count") == Some(&Value::Integer(9))
     ));
     session.cancel_and_join().unwrap();
 }
@@ -1112,7 +1112,7 @@ fn package_listener_preflights_its_native_source_and_invokes_a_pinned_v1_alias()
     assert_eq!(result.outputs[0].port, PortRef::new("service", "updated"));
     assert!(matches!(
         &result.outputs[0].payload,
-        PortValue::Value(Value::Record(record))
+        PortValue::Value(Value::Record(record.into()))
             if record.get("count") == Some(&Value::Integer(9))
     ));
     assert_eq!(result.launched_processes, 1);
@@ -1220,7 +1220,7 @@ fn cancelling_a_service_blocked_by_a_full_lossless_edge_queue_joins_it() {
         .expect("the sink should consume and report the first service event");
     assert!(matches!(
         &first.payload,
-        PortValue::Value(Value::Record(record)) if record.get("count") == Some(&Value::Integer(3))
+        PortValue::Value(Value::Record(record.into())) if record.get("count") == Some(&Value::Integer(3))
     ));
 
     // The sink now holds its input. Handler one was consumed, handler two fills

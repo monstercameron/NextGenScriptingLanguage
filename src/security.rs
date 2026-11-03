@@ -753,7 +753,7 @@ pub(crate) fn register_sensitive_value(
         deadline: Option<Instant>,
     ) -> Result<()> {
         let text = match value {
-            crate::ast::Value::String(value) => value.clone(),
+            crate::ast::Value::String(value) => value.to_string(),
             crate::ast::Value::Integer(value) => value.to_string(),
             crate::ast::Value::Number(value) => value.to_string(),
             crate::ast::Value::List(values) => {
@@ -762,7 +762,7 @@ pub(crate) fn register_sensitive_value(
                     .try_for_each(|value| register(redactor, value, cancelled, deadline));
             }
             crate::ast::Value::Record(values) => {
-                for (key, value) in values {
+                for (key, value) in values.iter() {
                     redactor
                         .register(key.as_bytes(), cancelled, deadline)
                         .map_err(|error| anyhow!("registering sensitive value key: {error}"))?;
@@ -941,7 +941,7 @@ fn register_sensitive_ast_value(
     deadline: Option<Instant>,
 ) -> Result<()> {
     let text = match value {
-        crate::ast::Value::String(value) => value.clone(),
+        crate::ast::Value::String(value) => value.to_string(),
         crate::ast::Value::Integer(value) => value.to_string(),
         crate::ast::Value::Number(value) => value.to_string(),
         crate::ast::Value::List(values) => {
@@ -950,7 +950,7 @@ fn register_sensitive_ast_value(
             });
         }
         crate::ast::Value::Record(values) => {
-            for (key, value) in values {
+            for (key, value) in values.iter() {
                 redactor
                     .register(key.as_bytes(), cancelled, deadline)
                     .map_err(|error| anyhow!("registering sensitive source key: {error}"))?;

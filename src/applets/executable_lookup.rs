@@ -41,7 +41,7 @@ pub(super) fn which(
     for name in names {
         context.checkpoint()?;
         for found in find_all(name, &search_path, cwd) {
-            all.push(Value::String(found.to_string_lossy().into_owned()));
+            all.push(Value::String(found.to_string_lossy().into_owned().into()));
         }
     }
     let path = all.first().cloned().unwrap_or(Value::Null);

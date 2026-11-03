@@ -203,7 +203,7 @@ mod tests {
     fn write_manifest(directory: &Path, name: &str) {
         let cat = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests/cat.json");
         let mut value: serde_json::Value = serde_json::from_slice(&fs::read(cat).unwrap()).unwrap();
-        value["name"] = serde_json::Value::String(name.to_owned());
+        value["name"] = serde_json::Value::String(name.to_owned().into());
         value["phrases"] = serde_json::json!([format!("{name} copy")]);
         fs::write(
             directory.join(format!("{name}.json")),

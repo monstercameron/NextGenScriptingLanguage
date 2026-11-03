@@ -47,7 +47,12 @@ fn core_operations() {
     params.insert("path".into(), Value::String(".".into()));
     params.insert(
         "flags".into(),
-        Value::List((0..256).map(|_| Value::String("-a".into())).collect()),
+        Value::List(
+            (0..256)
+                .map(|_| Value::String("-a".into()))
+                .collect::<Vec<Value>>()
+                .into(),
+        ),
     );
     let invocation = Invocation {
         operation: "ls".into(),

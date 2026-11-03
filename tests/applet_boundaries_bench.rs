@@ -302,7 +302,7 @@ fn applet_boundaries() {
     let absence_program = parser::parse(ABSENCE_PROGRAM).expect("absence program parses");
     let absence_inputs = BTreeMap::from([(
         "path".into(),
-        Value::String(missing.to_string_lossy().into_owned()),
+        Value::String(missing.to_string_lossy().into_owned().into()),
     )]);
     let absence_options = options(cwd.path(), absence_inputs);
     let expected_absence = serde_json::to_vec(&json!({

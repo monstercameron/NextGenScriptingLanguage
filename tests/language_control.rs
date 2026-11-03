@@ -68,8 +68,8 @@ fn json_iteration_dynamic_pointer_and_structured_conditions_execute() -> Result<
                 Value::Record(BTreeMap::from([(
                     "name".into(),
                     Value::String("Ada".into()),
-                )])),
-            ]),
+                )]).into()),
+            ].into()),
         )]),
     )?;
     assert_eq!(
@@ -90,7 +90,7 @@ fn json_iteration_dynamic_pointer_and_structured_conditions_execute() -> Result<
             Value::Record(BTreeMap::from([(
                 "name".into(),
                 Value::String("Ada".into()),
-            )])),
+            )]).into()),
         )]),
     )?;
     assert_eq!(

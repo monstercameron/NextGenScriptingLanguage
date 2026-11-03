@@ -252,7 +252,7 @@ fn live_state_handoff() -> Result<()> {
             bindings: if binding_bytes == 0 {
                 BTreeMap::new()
             } else {
-                BTreeMap::from([("padding".into(), Value::String("x".repeat(binding_bytes)))])
+                BTreeMap::from([("padding".into(), Value::String("x".repeat(binding_bytes).into()))])
             },
             data: vec![b'x'; data_bytes],
         };

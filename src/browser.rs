@@ -528,7 +528,7 @@ impl BrowserSession {
                                 if core::supports(call) {
                                     let value = core::execute(call, &bindings, &data)?;
                                     let mut bytes = bound_value_bytes(&value, LIMIT)?;
-                                    if !matches!(value, Value::String(_)) {
+                                    if !matches!(value, Value::String(_.into())) {
                                         bytes.push(b'\n');
                                     }
                                     typed_value = Some(value);
@@ -660,7 +660,7 @@ fn bind_text(
             name.into(),
             Value::String(
                 String::from_utf8(bytes.to_vec()).context("named results must be UTF-8 text")?,
-            ),
+            .into()),
         );
     }
     Ok(())
@@ -713,7 +713,7 @@ fn bind_applet_output(
     let value = match manifest.decode_output(bytes, status)? {
         AppletOutput::Value(value) => value,
         AppletOutput::Bytes(bytes) => {
-            Value::String(String::from_utf8(bytes).context("named results must be UTF-8 text")?)
+            Value::String(String::from_utf8(bytes).context("named results must be UTF-8 text")?.into())
         }
     };
     bindings.insert(name.to_owned(), value);

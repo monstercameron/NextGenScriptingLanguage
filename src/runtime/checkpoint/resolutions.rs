@@ -598,7 +598,7 @@ pub(crate) fn parse_binding(argument: &str) -> Result<(String, Value)> {
     }
     let value = serde_json::from_str::<serde_json::Value>(value)
         .map(|json| json_to_value(&json))
-        .unwrap_or_else(|_| Value::String(value.to_owned()));
+        .unwrap_or_else(|_| Value::String(value.to_owned().into()));
     Ok((name.to_owned(), value))
 }
 
@@ -614,13 +614,16 @@ fn json_to_value(json: &serde_json::Value) -> Value {
                 Value::Number(value.clone())
             }
         }
-        serde_json::Value::String(value) => Value::String(value.clone()),
-        serde_json::Value::Array(items) => Value::List(items.iter().map(json_to_value).collect()),
+        serde_json::Value::String(value) => Value::String(value.clone().into()),
+        serde_json::Value::Array(items) => {
+            Value::List(items.iter().map(json_to_value).collect::<Vec<Value>>().into())
+        }
         serde_json::Value::Object(fields) => Value::Record(
             fields
                 .iter()
                 .map(|(key, item)| (key.clone(), json_to_value(item)))
-                .collect(),
+                .collect::<BTreeMap<String, Value>>()
+                .into(),
         ),
     }
 }
@@ -758,7 +761,7 @@ mod tests {
     fn binding_text_falls_back_to_plain_string() {
         let (name, value) = parse_binding("greeting=hello").unwrap();
         assert_eq!(name, "greeting");
-        assert_eq!(value, Value::String("hello".to_owned()));
+        assert_eq!(value, Value::String("hello".to_owned().into()));
         let (_, value) = parse_binding("count=3").unwrap();
         assert_eq!(value, Value::Integer(3));
     }

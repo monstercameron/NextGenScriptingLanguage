@@ -319,7 +319,7 @@ fn failed_multicommand_submission_keeps_ordered_redacted_partial_stdout() {
         let (binary, arguments) = shell_command(unix_script, windows_script);
         let environment = serde_json::Map::from_iter([(
             env_name.to_owned(),
-            serde_json::Value::String(secret.to_owned()),
+            serde_json::Value::String(secret.to_owned().into()),
         )]);
         let manifest = serde_json::json!({
             "name":name, "binary":binary,

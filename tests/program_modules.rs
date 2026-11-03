@@ -489,7 +489,7 @@ fn changed_transitive_module_source_rejects_resume_before_replaying_completed_ef
             flow::ast::Value::Record(BTreeMap::from([
                 ("count".into(), flow::ast::Value::Integer(5)),
                 ("name".into(), flow::ast::Value::String("stable".into())),
-            ])),
+            ]).into()),
         )]),
         max_output_bytes: 1024 * 1024,
         ..flow::runtime::RunOptions::new(cwd.clone())
@@ -982,7 +982,7 @@ fn package_alias_invokes_pinned_transitive_export_without_catalog_duplicate() {
             flow::ast::Value::Record(BTreeMap::from([
                 ("count".into(), flow::ast::Value::Integer(5)),
                 ("name".into(), flow::ast::Value::String("pinned".into())),
-            ])),
+            ]).into()),
         )]),
         max_output_bytes: 1024 * 1024,
         ..flow::runtime::RunOptions::new(temp.path().to_path_buf())

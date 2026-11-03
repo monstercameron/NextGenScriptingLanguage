@@ -847,7 +847,7 @@ fn set_location_defaults(inputs: &mut [InputDeclaration], file: &Path) -> Result
             Some(InputSource::ProgramPath) => display_path(file),
             _ => continue,
         };
-        let value = Value::String(location);
+        let value = Value::String(location.into());
         input.validate_value(&value)?;
         input.default = Some(value);
     }

@@ -555,7 +555,7 @@ mod tests {
                 state: LoopIterationState::Repeat { remaining: 1 },
             })],
             cwd: EncodedPath::from_path(&std::env::temp_dir().join("execute-checkpoint-cursor")),
-            bindings: BTreeMap::from([("theme".to_owned(), Value::String("dark".to_owned()))]),
+            bindings: BTreeMap::from([("theme".to_owned(), Value::String("dark".to_owned().into()))]),
             pipeline_bytes: b"input to next leaf".to_vec(),
         }
     }

@@ -112,7 +112,7 @@ fn packed_catalog_matches_every_manifest_spec_and_representative_argv() {
 
     let values = BTreeMap::from([(
         "message".to_owned(),
-        Value::String("catalog equivalence".to_owned()),
+        Value::String("catalog equivalence".to_owned().into()),
     )]);
     let directory_argv = directory
         .resolve("printf")
@@ -379,7 +379,7 @@ fn example_invocation<'a>(
 
 fn ast_value_to_json(value: &Value) -> serde_json::Value {
     match value {
-        Value::String(value) => serde_json::Value::String(value.clone()),
+        Value::String(value) => serde_json::Value::String(value.to_string()),
         Value::Integer(value) => serde_json::Value::Number((*value).into()),
         Value::Number(value) => serde_json::Value::Number(value.clone()),
         Value::Bool(value) => serde_json::Value::Bool(*value),

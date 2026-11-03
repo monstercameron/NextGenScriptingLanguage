@@ -222,7 +222,7 @@ impl Emitter<'_> {
                     }
                     let value = self.literal(source, line)?;
                     let bytes = match &value {
-                        Value::String(text) => text.clone(),
+                        Value::String(text) => text.to_string(),
                         _ => crate::structured::to_json(&value)?.to_string(),
                     };
                     self.push(depth, &format!("__execute_value={}", quote(&bytes)?));
@@ -558,7 +558,7 @@ impl Emitter<'_> {
                 let Value::List(items) = &value else {
                     bail!("line {line}: direct command arguments must be a list to compile to sh");
                 };
-                for item in items {
+                for item in items.iter() {
                     words.push(self.text(item, line)?);
                 }
             }
@@ -619,13 +619,13 @@ impl Emitter<'_> {
                 items
                     .iter()
                     .map(|item| self.literal(item, line))
-                    .collect::<Result<_>>()?,
+                    .collect::<Result<Vec<_>>>()?.into(),
             ),
             Value::Record(fields) => Value::Record(
                 fields
                     .iter()
                     .map(|(name, value)| Ok((name.clone(), self.literal(value, line)?)))
-                    .collect::<Result<_>>()?,
+                    .collect::<Result<BTreeMap<_, _>>>()?.into(),
             ),
             value => value.clone(),
         })
@@ -686,7 +686,7 @@ impl Emitter<'_> {
                     bail!("line {line}: for each lists must be literal to compile to sh");
                 };
                 let mut words = Vec::new();
-                for item in items {
+                for item in items.iter() {
                     let Value::String(text) = item else {
                         bail!(
                             "line {line}: for each lists must hold literal text to compile to sh"

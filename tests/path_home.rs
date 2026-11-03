@@ -37,8 +37,8 @@ fn reader_registry() -> Registry {
 
 fn values(file: &str, label: &str) -> BTreeMap<String, Value> {
     BTreeMap::from([
-        ("file".to_owned(), Value::String(file.to_owned())),
-        ("label".to_owned(), Value::String(label.to_owned())),
+        ("file".to_owned(), Value::String(file.to_owned().into())),
+        ("label".to_owned(), Value::String(label.to_owned().into())),
     ])
 }
 
@@ -93,14 +93,14 @@ fn in_process_path_parameters_expand_in_the_json_handed_to_the_applet() {
     let parameters = manifest
         .parameters_json(&BTreeMap::from([(
             "path".to_owned(),
-            Value::String("~/work/build".to_owned()),
+            Value::String("~/work/build".to_owned().into()),
         )]))
         .unwrap();
     assert_eq!(parameters["path"], expanded("~/work/build"));
     let mode = manifest
         .parameters_json(&BTreeMap::from([
-            ("path".to_owned(), Value::String("x".to_owned())),
-            ("mode".to_owned(), Value::String("0755".to_owned())),
+            ("path".to_owned(), Value::String("x".to_owned().into())),
+            ("mode".to_owned(), Value::String("0755".to_owned().into())),
         ]))
         .unwrap();
     assert_eq!(
@@ -111,9 +111,9 @@ fn in_process_path_parameters_expand_in_the_json_handed_to_the_applet() {
     let manifest = registry.resolve("fs.ensure_file").unwrap();
     let file = manifest
         .parameters_json(&BTreeMap::from([
-            ("path".to_owned(), Value::String("~/work/build".to_owned())),
-            ("content".to_owned(), Value::String("~/label".to_owned())),
-            ("mode".to_owned(), Value::String("0644".to_owned())),
+            ("path".to_owned(), Value::String("~/work/build".to_owned().into())),
+            ("content".to_owned(), Value::String("~/label".to_owned().into())),
+            ("mode".to_owned(), Value::String("0644".to_owned().into())),
         ]))
         .unwrap();
     assert_eq!(file["path"], expanded("~/work/build"));

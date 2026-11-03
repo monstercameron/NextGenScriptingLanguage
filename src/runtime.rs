@@ -424,7 +424,7 @@ mod program_exit_tests {
         let mut bindings = BTreeMap::new();
         bindings.insert(
             "msg".to_owned(),
-            Value::String("before\u{1b}[2J\u{9b}31m\nafter".to_owned()),
+            Value::String("before\u{1b}[2J\u{9b}31m\nafter".to_owned().into()),
         );
         let exit = program_exit(
             &StepKind::Fail {
@@ -2240,7 +2240,7 @@ fn binary_path_for_launch(
 fn event(enabled: bool, mut value: serde_json::Value, signals: &Signals) -> Result<()> {
     if enabled {
         if let (Some(object), Some(id)) = (value.as_object_mut(), current_step_id()) {
-            object.insert("id".to_owned(), serde_json::Value::String(id.to_string()));
+            object.insert("id".to_owned(), serde_json::Value::String(id.to_string().into()));
         }
         stdio::write_with_deadline(
             2,
@@ -3398,7 +3398,7 @@ fn decode_call_output(output: CallOutput<'_>) -> Result<Value> {
             .map_err(|error| {
                 decode_failure(error, status.map(|status| manifest.outcome_for(status)))
             })?;
-        Value::String(text)
+        Value::String(text.into())
     } else {
         let status = status.ok_or_else(|| {
             let error = anyhow!("versioned applet finished without an exit code");
@@ -3421,7 +3421,7 @@ fn decode_call_output(output: CallOutput<'_>) -> Result<Value> {
             AppletOutput::Bytes(bytes) => Value::String(
                 String::from_utf8(bytes)
                     .context("named results must be UTF-8 text")
-                    .map_err(decode_failure_for_status)?,
+                    .map_err(decode_failure_for_status)?.into(),
             ),
         }
     };
@@ -3604,7 +3604,7 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
                     if keep_typed_value {
                         (
                             text.as_bytes().to_vec(),
-                            Some(serde_json::Value::String(text)),
+                            Some(serde_json::Value::String(text.into())),
                         )
                     } else {
                         (text.into_bytes(), None)
@@ -3632,7 +3632,7 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
                     value.clone().map(crate::structured::from_json).or_else(|| {
                         String::from_utf8(bytes.clone())
                             .ok()
-                            .map(crate::ast::Value::String)
+                            .map(|text| crate::ast::Value::String(text.into()))
                     }),
                     vec![stage],
                 );
@@ -3648,7 +3648,7 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
                     value.clone().map(crate::structured::from_json).or_else(|| {
                         String::from_utf8(bytes.clone())
                             .ok()
-                            .map(crate::ast::Value::String)
+                            .map(|text| crate::ast::Value::String(text.into()))
                     }),
                     vec![stage],
                 );
@@ -4404,7 +4404,7 @@ fn execute_remote_applet(
             for (name, value) in &response.outputs {
                 let value = match value {
                     RemoteValue::Json(value) => value.clone(),
-                    RemoteValue::Base64(encoded) => serde_json::Value::String(encoded.clone()),
+                    RemoteValue::Base64(encoded) => serde_json::Value::String(encoded.clone().into()),
                 };
                 values.insert(name.clone(), value);
             }
@@ -5650,12 +5650,12 @@ mod opt_manifest_path_cache_tests {
     fn opt_manifest_path_value_borrows_literal_and_one_level_string_reference() {
         let cwd = Path::new("/workspace/π");
         let bindings = BTreeMap::from([
-            ("text".to_owned(), Value::String("nested/雪".to_owned())),
+            ("text".to_owned(), Value::String("nested/雪".to_owned().into())),
             ("number".to_owned(), Value::Integer(7)),
             ("reference".to_owned(), Value::Reference("text".to_owned())),
         ]);
         assert_eq!(
-            path_value(&Value::String("literal/é".to_owned()), &bindings, cwd).unwrap(),
+            path_value(&Value::String("literal/é".to_owned().into()), &bindings, cwd).unwrap(),
             cwd.join("literal/é")
         );
         assert_eq!(
@@ -6679,9 +6679,9 @@ mod resolved_json_argument_tests {
                             Value::Integer(4),
                             Value::Null,
                             Value::Number(serde_json::Number::from_f64(2.5).unwrap()),
-                        ]),
+                        ].into()),
                     ),
-                ])),
+                ]).into()),
             ),
             (
                 "second".into(),
@@ -6690,8 +6690,8 @@ mod resolved_json_argument_tests {
                     Value::Record(BTreeMap::from([(
                         "nested".into(),
                         Value::String("value".into()),
-                    )])),
-                ]),
+                    )]).into()),
+                ].into()),
             ),
         ]));
 
@@ -6719,10 +6719,10 @@ mod resolved_json_argument_tests {
                             Value::Record(BTreeMap::from([(
                                 "label".into(),
                                 Value::Reference("label".into()),
-                            )])),
-                        ]),
+                            )]).into()),
+                        ].into()),
                     ),
-                ])),
+                ]).into()),
             ),
         ]));
         let bindings = BTreeMap::from([
@@ -6753,7 +6753,7 @@ mod resolved_json_argument_tests {
             ("first".into(), Value::Integer(1)),
             (
                 "second".into(),
-                Value::List(vec![Value::Reference("missing".into())]),
+                Value::List(vec![Value::Reference("missing".into())].into()),
             ),
         ]));
         let error = resolved_json_arguments(&referenced, &manifest, &BTreeMap::new()).unwrap_err();

@@ -233,7 +233,7 @@ fn hostile_format_corpus_roundtrips_or_is_refused() {
         strings
             .iter()
             .enumerate()
-            .map(|(index, text)| (format!("k{index}"), Value::String((*text).to_owned())))
+            .map(|(index, text)| (format!("k{index}"), Value::String((*text).to_owned().into())))
             .collect(),
     );
     let toml = run("toml.stringify", json!({"value":toml_value}), b"");

@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 pub(super) fn dirname(args: &Map<String, Value>) -> Result<Value, AppletError> {
     let value = required_string(args, "path")?;
-    Ok(Value::String(posix_dirname(value).to_owned()))
+    Ok(Value::String(posix_dirname(value).to_owned().into()))
 }
 
 fn posix_dirname(value: &str) -> &str {
@@ -28,7 +28,7 @@ pub(super) fn basename(args: &Map<String, Value>) -> Result<Value, AppletError> 
         Some(Value::String(suffix)) => Some(suffix.as_str()),
         Some(_) => return Err(invalid("args.suffix must be a string")),
     };
-    Ok(Value::String(posix_basename(value, suffix).to_owned()))
+    Ok(Value::String(posix_basename(value, suffix).to_owned().into()))
 }
 
 fn posix_basename<'a>(value: &'a str, suffix: Option<&str>) -> &'a str {
@@ -87,7 +87,7 @@ pub(super) fn join(args: &Map<String, Value>) -> Result<Value, AppletError> {
     let text = path
         .to_str()
         .ok_or_else(|| failed("invalid_request", "path.join produced a non-UTF-8 path"))?;
-    Ok(Value::String(text.to_owned()))
+    Ok(Value::String(text.to_owned().into()))
 }
 
 pub(super) fn remove_suffix(args: &Map<String, Value>) -> Result<Value, AppletError> {
@@ -97,6 +97,6 @@ pub(super) fn remove_suffix(args: &Map<String, Value>) -> Result<Value, AppletEr
         return Err(failed("invalid_request", "args.suffix cannot be empty"));
     }
     Ok(Value::String(
-        value.strip_suffix(suffix).unwrap_or(value).to_owned(),
+        value.strip_suffix(suffix).unwrap_or(value).to_owned().into(),
     ))
 }

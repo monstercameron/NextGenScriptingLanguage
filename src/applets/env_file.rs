@@ -103,7 +103,7 @@ fn parse(text: &str) -> Result<Map<String, Value>, String> {
             return Err(format!("line {line_number}: name is set more than once"));
         }
         let value = parse_value(rest, line_number)?;
-        values.insert(name.to_owned(), Value::String(value));
+        values.insert(name.to_owned(), Value::String(value.into()));
     }
     Ok(values)
 }

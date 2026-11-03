@@ -154,7 +154,7 @@ pub(super) fn stringify(
         work = work.saturating_add(1);
         write_record(row, &mut output, &mut cells_written, &mut work, context)?;
     }
-    let value = Value::String(output);
+    let value = Value::String(output.into());
     check_json_size(&value, context, "serialized CSV text")?;
     Ok(value)
 }

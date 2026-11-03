@@ -278,7 +278,7 @@ fn undeclared_host_values_require_matching_scalar_types_at_runtime() {
         &matching,
         &Registry::default(),
         &options(dir.path()),
-        BTreeMap::from([(String::from("setting"), Value::String(String::from("1")))]),
+        BTreeMap::from([(String::from("setting"), Value::String(String::from("1").into()))]),
         Vec::new(),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
@@ -297,7 +297,7 @@ fn undeclared_host_values_require_matching_scalar_types_at_runtime() {
         &options(dir.path()),
         BTreeMap::from([(
             String::from("setting"),
-            Value::Record(BTreeMap::from([(String::from("key"), Value::Bool(true))])),
+            Value::Record(BTreeMap::from([(String::from("key"), Value::Bool(true))]).into()),
         )]),
         Vec::new(),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),

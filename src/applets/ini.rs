@@ -71,7 +71,7 @@ pub(super) fn parse(
         if key.is_empty() {
             return Err(syntax(FORMAT, line_no, "key is empty"));
         }
-        let value = Value::String(trimmed[separator + 1..].trim().to_owned());
+        let value = Value::String(trimmed[separator + 1..].trim().to_owned().into());
         count_value(&mut count)?;
         match &current {
             None => insert_unique(&mut root, key.to_owned(), value, FORMAT, line_no)?,

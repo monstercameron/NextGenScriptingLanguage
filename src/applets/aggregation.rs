@@ -33,7 +33,7 @@ fn items(
     }
     Ok(text
         .lines()
-        .map(|line| Value::String(line.to_owned()))
+        .map(|line| Value::String(line.to_owned().into()))
         .collect())
 }
 

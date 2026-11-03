@@ -117,11 +117,11 @@ mod lane_v3_tests {
     fn fingerprint_parity_and_allocation_reduction() {
         for item in [
             Value::Integer(i64::MIN),
-            Value::String("雪\n\"\\".repeat(4096)),
+            Value::String("雪\n\"\\".repeat(4096).into()),
             Value::List(vec![
                 Value::Bool(true),
-                Value::List(vec![Value::Integer(0)]),
-            ]),
+                Value::List(vec![Value::Integer(0)].into()),
+            ].into()),
         ] {
             for index in [0, 9, 10, usize::MAX] {
                 let (old, old_calls, _) = measured(|| legacy_fingerprint("node", index, &item));
@@ -181,7 +181,7 @@ mod lane_v3_tests {
         open_elements(&mut journal);
         for index in 0..3 {
             let bindings =
-                BTreeMap::from([("acc".to_owned(), Value::String(format!("state-{index}")))]);
+                BTreeMap::from([("acc".to_owned(), Value::String(format!("state-{index}").into()))]);
             journal
                 .commit_state(index, format!("element-{index}"), &cwd, b"", &bindings)
                 .unwrap();
@@ -189,7 +189,7 @@ mod lane_v3_tests {
         journal.sync_elements().unwrap();
         journal.collect_unreferenced_blobs();
         for index in 0..3 {
-            let bytes = serde_json::to_vec(&Value::String(format!("state-{index}"))).unwrap();
+            let bytes = serde_json::to_vec(&Value::String(format!("state-{index}").into())).unwrap();
             assert!(
                 journal.blobs_directory.join(hex_digest(&bytes)).exists(),
                 "lost state blob for element {index}"
@@ -251,7 +251,7 @@ mod lane_v3_tests {
     #[ignore = "explicit checkpoint allocation and elapsed-time microbenchmark"]
     fn checkpoint_memory_microbenchmark() {
         for size in [16, 4096] {
-            let item = Value::String("x".repeat(size));
+            let item = Value::String("x".repeat(size).into());
             for optimized in [false, true] {
                 let started = std::time::Instant::now();
                 let (_, calls, bytes) = measured(|| {
@@ -549,7 +549,7 @@ fn element_uncertain(
 
 fn list_items(values: &Value, bindings: &BTreeMap<String, Value>) -> Result<Vec<Value>> {
     match crate::runtime::resolve(values, bindings)? {
-        Value::List(items) => Ok(items),
+        Value::List(items) => Ok(std::sync::Arc::unwrap_or_clone(items)),
         _ => bail!("for each requires a JSON array or list of text"),
     }
 }

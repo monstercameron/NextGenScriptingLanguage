@@ -64,11 +64,11 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor {
     }
 
     fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E> {
-        Ok(UniqueJson(Value::String(value.to_owned())))
+        Ok(UniqueJson(Value::String(value.to_owned().into())))
     }
 
     fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E> {
-        Ok(UniqueJson(Value::String(value)))
+        Ok(UniqueJson(Value::String(value.into())))
     }
 
     fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {

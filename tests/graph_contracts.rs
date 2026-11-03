@@ -304,7 +304,7 @@ fn renderer_record_literal_seeds_the_typed_properties_port() {
         flow::ast::Value::Record(BTreeMap::from([(
             "text".into(),
             flow::ast::Value::String("Hello".into()),
-        )]))
+        )]).into())
     );
 }
 

@@ -1,6 +1,7 @@
 //! Graphs use the same typed process-input contract as finite workflows.
 #![cfg(feature = "graph")]
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -59,15 +60,18 @@ fn ast_value_from_json(value: &Value) -> flow::ast::Value {
             .as_i64()
             .map(flow::ast::Value::Integer)
             .unwrap_or_else(|| flow::ast::Value::Number(value.clone())),
-        Value::String(value) => flow::ast::Value::String(value.clone()),
+        Value::String(value) => flow::ast::Value::String(value.clone().into()),
         Value::Array(values) => {
-            flow::ast::Value::List(values.iter().map(ast_value_from_json).collect())
+            flow::ast::Value::List(
+                values.iter().map(ast_value_from_json).collect::<Vec<flow::ast::Value>>().into(),
+            )
         }
         Value::Object(values) => flow::ast::Value::Record(
             values
                 .iter()
                 .map(|(key, value)| (key.clone(), ast_value_from_json(value)))
-                .collect(),
+                .collect::<BTreeMap<String, flow::ast::Value>>()
+                .into(),
         ),
     }
 }

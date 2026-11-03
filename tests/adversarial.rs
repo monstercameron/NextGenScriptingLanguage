@@ -145,7 +145,7 @@ fn plain_tail_uses_unix_defaults_and_exits() {
         .unwrap()
         .build_arguments(&std::collections::BTreeMap::from([(
             "path".to_owned(),
-            flow::ast::Value::String("lines.txt".to_owned()),
+            flow::ast::Value::String("lines.txt".to_owned().into()),
         )]))
         .unwrap();
     assert_eq!(args, ["--", "lines.txt"]);

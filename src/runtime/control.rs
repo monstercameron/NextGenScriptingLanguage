@@ -411,9 +411,11 @@ pub(super) fn evaluate(condition: &Condition, bindings: &BTreeMap<String, Value>
             left == right
         }
         crate::ast::ConditionOperator::Contains => match (&left, &right) {
-            (Value::String(haystack), Value::String(needle)) => haystack.contains(needle),
+            (Value::String(haystack), Value::String(needle)) => {
+                haystack.contains(needle.as_ref())
+            }
             (Value::List(items), needle) => items.iter().any(|item| item == needle),
-            (Value::Record(fields), Value::String(key)) => fields.contains_key(key),
+            (Value::Record(fields), Value::String(key)) => fields.contains_key(key.as_ref()),
             _ => bail!(
                 "contains requires text in text, a value in a list, or a text key in a record"
             ),
@@ -648,10 +650,11 @@ mod loop_shape_tests {
         let value = Value::Record(
             [(
                 "payload".to_owned(),
-                Value::List(vec![Value::String("x".repeat(64 * 1024))]),
+                Value::List(vec![Value::String("x".repeat(64 * 1024).into())].into()),
             )]
             .into_iter()
-            .collect(),
+            .collect::<BTreeMap<String, Value>>()
+            .into(),
         );
         flow.bind_known_value("document", value);
         let snapshot = flow.clone();
@@ -671,7 +674,7 @@ mod structured_condition_tests {
         let record = Value::Record(BTreeMap::from([
             ("name".into(), Value::String("Ada".into())),
             ("active".into(), Value::Bool(true)),
-        ]));
+        ]).into());
         let equal_record = Condition {
             left: Value::Reference("left".into()),
             right: record.clone(),
@@ -692,7 +695,7 @@ mod structured_condition_tests {
 
     #[test]
     fn json_typed_operand_of_another_kind_is_an_error_not_false() {
-        let record = Value::Record(BTreeMap::from([("ok".into(), Value::Bool(true))]));
+        let record = Value::Record(BTreeMap::from([("ok".into(), Value::Bool(true))]).into());
         let bindings = BTreeMap::from([("verdict".into(), record)]);
         let against_bool = Condition {
             left: Value::Reference("verdict".into()),
@@ -729,11 +732,11 @@ mod structured_condition_tests {
         let bindings = BTreeMap::from([
             (
                 "items".into(),
-                Value::List(vec![Value::Integer(2), Value::Integer(3)]),
+                Value::List(vec![Value::Integer(2), Value::Integer(3)].into()),
             ),
             (
                 "record".into(),
-                Value::Record(BTreeMap::from([("ready".into(), Value::Bool(false))])),
+                Value::Record(BTreeMap::from([("ready".into(), Value::Bool(false))]).into()),
             ),
         ]);
 

@@ -480,13 +480,13 @@ mod replay_source_tests {
         let program = parse_replay_program(&source_path, &source).unwrap();
         assert_eq!(
             program.inputs[0].default,
-            Some(Value::String(source_path.to_string_lossy().into_owned()))
+            Some(Value::String(source_path.to_string_lossy().into_owned().into()))
         );
         assert_eq!(
             program.inputs[1].default,
             Some(Value::String(
                 source_path.parent().unwrap().to_string_lossy().into_owned()
-            ))
+            .into()))
         );
         let error = parse_replay_program(&source_path, b"run program file \"callee.program\"\n")
             .unwrap_err();

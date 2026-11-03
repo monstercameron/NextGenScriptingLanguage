@@ -2971,13 +2971,13 @@ fn encoded_byte_field_size(record: &BTreeMap<String, Value>, key: &str) -> Optio
         _ => return None,
     };
     match (record.get(encoding), record.get(key)) {
-        (Some(Value::String(encoding)), Some(Value::List(items))) if encoding == "u8_array" => {
+        (Some(Value::String(encoding)), Some(Value::List(items))) if encoding.as_ref() == "u8_array" => {
             Some(byte_array_size(items))
         }
-        (Some(Value::String(encoding)), Some(Value::String(value))) if encoding == "utf8" => {
+        (Some(Value::String(encoding)), Some(Value::String(value))) if encoding.as_ref() == "utf8" => {
             Some(value.len())
         }
-        (Some(Value::String(encoding)), Some(Value::String(value))) if encoding == "base64" => {
+        (Some(Value::String(encoding)), Some(Value::String(value))) if encoding.as_ref() == "base64" => {
             base64_decoded_size(value)
         }
         _ => None,
@@ -3028,7 +3028,8 @@ fn byte_array_size(items: &[Value]) -> usize {
 
 fn value_size(value: &Value) -> usize {
     match value {
-        Value::String(value) | Value::Reference(value) => value.len(),
+        Value::String(value) => value.len(),
+        Value::Reference(value) => value.len(),
         Value::Integer(_) => std::mem::size_of::<i64>(),
         Value::Bool(_) => 1,
         Value::Null => 0,
@@ -4399,7 +4400,7 @@ mod tests {
         ExecutionState {
             cwd: fs::canonicalize(cwd).unwrap(),
             output: output.to_vec(),
-            bindings: BTreeMap::from([("result".to_owned(), Value::String(binding.to_owned()))]),
+            bindings: BTreeMap::from([("result".to_owned(), Value::String(binding.to_owned().into()))]),
         }
     }
 
@@ -4451,7 +4452,7 @@ mod tests {
             Journal::open(&options, &cwd, &format!("service:{trigger_hash}"), 1024).unwrap();
         let event = b"event one\n";
         let event_digest = hex_digest(event);
-        let binding = Value::String(String::from_utf8(event.to_vec()).unwrap());
+        let binding = Value::String(String::from_utf8(event.to_vec()).unwrap().into());
         journal
             .begin_listener_event_parts(&cwd, event, [("event", &binding)])
             .unwrap();
@@ -5197,13 +5198,13 @@ mod record_size_and_log_bound_tests {
         let record = Value::Record(BTreeMap::from([
             (
                 "output".to_owned(),
-                Value::List(vec![Value::Integer(0); 2_200_000]),
+                Value::List(vec![Value::Integer(0); 2_200_000].into()),
             ),
             (
                 "output_encoding".to_owned(),
-                Value::String("u8_array".to_owned()),
+                Value::String("u8_array".to_owned().into()),
             ),
-        ]));
+        ]).into());
         assert!(value_size(&record) <= 16 * 1024 * 1024);
     }
 
@@ -5212,17 +5213,17 @@ mod record_size_and_log_bound_tests {
         let record = Value::Record(BTreeMap::from([
             (
                 "output".to_owned(),
-                Value::List(vec![Value::String("x".repeat(1024)), Value::Integer(7)]),
+                Value::List(vec![Value::String("x".repeat(1024).into()), Value::Integer(7)].into()),
             ),
             (
                 "output_encoding".to_owned(),
-                Value::String("u8_array".to_owned()),
+                Value::String("u8_array".to_owned().into()),
             ),
             (
                 "stderr".to_owned(),
-                Value::List(vec![Value::Integer(1), Value::Integer(2)]),
+                Value::List(vec![Value::Integer(1), Value::Integer(2)].into()),
             ),
-        ]));
+        ]).into());
         let expected = std::mem::size_of::<BTreeMap<String, Value>>()
             + 3 * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
             + "output".len()
@@ -5240,17 +5241,17 @@ mod record_size_and_log_bound_tests {
     #[test]
     fn schema_v3_capture_strings_are_sized_as_raw_bytes() {
         let record = Value::Record(BTreeMap::from([
-            ("output".to_owned(), Value::String("hello".to_owned())),
+            ("output".to_owned(), Value::String("hello".to_owned().into())),
             (
                 "output_encoding".to_owned(),
-                Value::String("utf8".to_owned()),
+                Value::String("utf8".to_owned().into()),
             ),
-            ("stderr".to_owned(), Value::String("YWJj".to_owned())),
+            ("stderr".to_owned(), Value::String("YWJj".to_owned().into())),
             (
                 "stderr_encoding".to_owned(),
-                Value::String("base64".to_owned()),
+                Value::String("base64".to_owned().into()),
             ),
-        ]));
+        ]).into());
         assert_eq!(
             value_size(&record),
             std::mem::size_of::<BTreeMap<String, Value>>()
@@ -5269,12 +5270,12 @@ mod record_size_and_log_bound_tests {
     #[test]
     fn invalid_claimed_base64_is_sized_as_a_regular_string() {
         let record = Value::Record(BTreeMap::from([
-            ("output".to_owned(), Value::String("not base64".to_owned())),
+            ("output".to_owned(), Value::String("not base64".to_owned().into())),
             (
                 "output_encoding".to_owned(),
-                Value::String("base64".to_owned()),
+                Value::String("base64".to_owned().into()),
             ),
-        ]));
+        ]).into());
         assert_eq!(
             value_size(&record),
             std::mem::size_of::<BTreeMap<String, Value>>()
@@ -5289,16 +5290,21 @@ mod record_size_and_log_bound_tests {
     #[test]
     fn container_heavy_binding_exceeds_the_size_limit() {
         let limit = 1024usize;
-        let nulls = Value::List(vec![Value::Null; 1024]);
+        let nulls = Value::List(vec![Value::Null; 1024].into());
         assert!(value_size(&nulls) > limit);
 
-        let nested = Value::List((0..512).map(|_| Value::Record(BTreeMap::new())).collect());
+        let nested = Value::List(
+            (0..512)
+                .map(|_| Value::Record(BTreeMap::new().into()))
+                .collect::<Vec<Value>>()
+                .into(),
+        );
         assert!(value_size(&nested) > limit);
     }
 
     #[test]
     fn scalar_only_binding_size_is_unchanged() {
-        assert_eq!(value_size(&Value::String("hello".to_owned())), 5);
+        assert_eq!(value_size(&Value::String("hello".to_owned().into())), 5);
         assert_eq!(value_size(&Value::Integer(7)), std::mem::size_of::<i64>());
         assert_eq!(value_size(&Value::Bool(true)), 1);
         assert_eq!(value_size(&Value::Null), 0);

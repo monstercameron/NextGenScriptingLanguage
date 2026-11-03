@@ -107,11 +107,11 @@ fn indexed_interfaces_keep_literal_values_types_defaults_and_local_binding_polic
                 Value::List(vec![
                     Value::String("one space".into()),
                     Value::String("*".into()),
-                ]),
+                ].into()),
             ),
             _ => (
                 InputType::Json,
-                Value::Record(BTreeMap::from([("answer".into(), Value::Integer(42))])),
+                Value::Record(BTreeMap::from([("answer".into(), Value::Integer(42))]).into()),
             ),
         };
         let literal = match n % 5 {
@@ -127,7 +127,7 @@ fn indexed_interfaces_keep_literal_values_types_defaults_and_local_binding_polic
         text.insert(
             decl.name.clone(),
             if let Value::String(v) = &value {
-                v.clone()
+                v.to_string()
             } else {
                 literal.to_string()
             },

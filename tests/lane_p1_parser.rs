@@ -175,12 +175,12 @@ fn sh_probe_workflow_keeps_status_path_out_of_the_shell_script() {
         panic!("sh invocation must carry an arguments list");
     };
     assert_eq!(
-        arguments,
-        &vec![
-            flow::ast::Value::String("-c".to_owned()),
-            flow::ast::Value::String(script),
-            flow::ast::Value::String(fixture.to_owned()),
-            flow::ast::Value::String(status.to_owned()),
+        arguments.as_slice(),
+        &[
+            flow::ast::Value::String("-c".to_owned().into()),
+            flow::ast::Value::String(script.into()),
+            flow::ast::Value::String(fixture.to_owned().into()),
+            flow::ast::Value::String(status.to_owned().into()),
         ]
     );
 }

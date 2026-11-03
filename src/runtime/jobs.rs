@@ -414,7 +414,7 @@ impl Supervisor {
             .iter()
             .map(|scope| self.inspect(*scope, name))
             .collect::<Result<Vec<_>>>()
-            .map(Value::List)
+            .map(|items| Value::List(items.into()))
     }
 
     pub(super) fn await_batch_until(
@@ -854,8 +854,10 @@ impl Supervisor {
             .snapshot
             .lock()
             .map_err(|_| anyhow!("background job snapshot lock is poisoned"))?;
+        // `to_source_value` builds a fresh record, so unwrapping its shared
+        // fields reuses the backing map instead of cloning it.
         let mut record = match result.to_source_value(line, format!("job {name}")) {
-            Value::Record(record) => record,
+            Value::Record(record) => std::sync::Arc::unwrap_or_clone(record),
             _ => unreachable!("execution source record is a JSON object"),
         };
         record.insert(
@@ -865,7 +867,9 @@ impl Supervisor {
         let truncated = snapshot.diagnostic_truncated.clone();
         record.insert(
             "stderr_truncated".into(),
-            Value::List(truncated.iter().copied().map(Value::Bool).collect()),
+            Value::List(
+                truncated.iter().copied().map(Value::Bool).collect::<Vec<Value>>().into(),
+            ),
         );
         record.insert(
             "stderr_by_stage".into(),
@@ -882,18 +886,24 @@ impl Supervisor {
                                     bytes
                                         .iter()
                                         .map(|byte| Value::Integer(i64::from(*byte)))
-                                        .collect(),
+                                        .collect::<Vec<Value>>()
+                                        .into(),
                                 )
                             })
-                            .unwrap_or_else(|| Value::List(Vec::new()))
+                            .unwrap_or_else(|| Value::List(Vec::<Value>::new().into()))
                     })
-                    .collect(),
+                    .collect::<Vec<Value>>().into(),
             ),
         );
         if let Some(Value::List(stages)) = record.get_mut("stages") {
-            for (stage, truncated) in stages.iter_mut().zip(truncated) {
+            // Freshly inserted above, so this is uniquely owned and
+            // `make_mut` does not clone.
+            for (stage, truncated) in std::sync::Arc::make_mut(stages).iter_mut().zip(truncated) {
                 if let Value::Record(fields) = stage {
-                    fields.insert("stderr_truncated".into(), Value::Bool(truncated));
+                    // Stage records are only mutated here; `make_mut` clones
+                    // the backing map solely when it is actually shared.
+                    std::sync::Arc::make_mut(fields)
+                        .insert("stderr_truncated".into(), Value::Bool(truncated));
                 }
             }
         }
@@ -901,7 +911,7 @@ impl Supervisor {
             "stderr_limit_per_stage".into(),
             Value::Integer(MAX_DIAGNOSTIC_BYTES_PER_STAGE as i64),
         );
-        Ok(Value::Record(record))
+        Ok(Value::Record(record.into()))
     }
 
     pub(super) fn await_job_until(
@@ -1117,7 +1127,7 @@ fn state_for_result(result: &execution_result::ExecutionResult) -> JobState {
 
 fn snapshot_value(name: &str, snapshot: &JobSnapshot) -> Value {
     let mut fields = BTreeMap::new();
-    fields.insert("name".into(), Value::String(name.to_owned()));
+    fields.insert("name".into(), Value::String(name.to_owned().into()));
     fields.insert(
         "state".into(),
         Value::String(snapshot.state.as_str().into()),
@@ -1149,7 +1159,7 @@ fn snapshot_value(name: &str, snapshot: &JobSnapshot) -> Value {
                     stage_result
                         .map(|stage| stage.applet.clone())
                         .or_else(|| launched.map(|stage| stage.applet.clone()))
-                        .unwrap_or_default(),
+                        .unwrap_or_default().into(),
                 ),
             );
             stage.insert(
@@ -1167,10 +1177,9 @@ fn snapshot_value(name: &str, snapshot: &JobSnapshot) -> Value {
                         } else {
                             "not_started"
                         }
-                        .into()
                     },
-                    |stage| stage_state(stage.state).into(),
-                )),
+                    |stage| stage_state(stage.state),
+                ).into()),
             );
             stage.insert(
                 "status".into(),
@@ -1217,10 +1226,10 @@ fn snapshot_value(name: &str, snapshot: &JobSnapshot) -> Value {
                         .unwrap_or(false),
                 ),
             );
-            Value::Record(stage)
+            Value::Record(stage.into())
         })
-        .collect();
-    fields.insert("stages".into(), Value::List(stages));
+        .collect::<Vec<Value>>();
+    fields.insert("stages".into(), Value::List(stages.into()));
     fields.insert(
         "status".into(),
         result
@@ -1268,7 +1277,7 @@ fn snapshot_value(name: &str, snapshot: &JobSnapshot) -> Value {
         "stderr_limit_per_stage".into(),
         Value::Integer(MAX_DIAGNOSTIC_BYTES_PER_STAGE as i64),
     );
-    Value::Record(fields)
+    Value::Record(fields.into())
 }
 
 fn stage_state(state: execution_result::StageState) -> &'static str {

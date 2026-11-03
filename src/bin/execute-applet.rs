@@ -379,7 +379,7 @@ fn worker_response_v2_error(id: u64, json_output: bool, message: &str) -> Value 
     if json_output {
         response["value"] = Value::Null;
     } else {
-        response["output_base64"] = Value::String(String::new());
+        response["output_base64"] = Value::String(String::new().into());
     }
     response
 }

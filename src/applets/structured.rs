@@ -179,7 +179,7 @@ fn check_typed_size_and_depth(
                         "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
                     )));
                 }
-                for item in items {
+                for item in items.iter() {
                     checkpoint_work(context, work)?;
                     work += 1;
                     pending.push((item, depth + 1));
@@ -198,7 +198,7 @@ fn check_typed_size_and_depth(
                         "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
                     )));
                 }
-                for (key, item) in fields {
+                for (key, item) in fields.iter() {
                     checkpoint_work(context, work)?;
                     work += 1;
                     length = length.saturating_add(escaped_length_checked(key, context)? + 1);
@@ -384,7 +384,7 @@ pub(super) fn keys(
     let mut keys = Vec::with_capacity(object.len());
     for (index, key) in object.keys().enumerate() {
         checkpoint_work(context, index)?;
-        keys.push(Value::String(key.clone()));
+        keys.push(Value::String(key.clone().into()));
     }
     Ok(Value::Array(keys))
 }
@@ -1228,7 +1228,7 @@ mod tests {
         let json: Value = serde_json::from_slice(source).expect("JSON parses");
         let args = Map::from_iter([(
             "pointer".to_owned(),
-            Value::String("/meta/count".to_owned()),
+            Value::String("/meta/count".to_owned().into()),
         )]);
         let context = ExecutionContext::new(&|| Ok(()));
 
@@ -1239,7 +1239,7 @@ mod tests {
                     ("document".to_owned(), json),
                     (
                         "pointer".to_owned(),
-                        Value::String("/meta/count".to_owned()),
+                        Value::String("/meta/count".to_owned().into()),
                     ),
                 ]),
                 &[],
@@ -1252,9 +1252,9 @@ mod tests {
     #[test]
     fn typed_get_preserves_size_and_depth_failures() {
         let context = ExecutionContext::new(&|| Ok(()));
-        let args = Map::from_iter([("pointer".to_owned(), Value::String(String::new()))]);
+        let args = Map::from_iter([("pointer".to_owned(), Value::String(String::new().into()))]);
         let too_deep =
-            (0..=MAX_DEPTH).fold(TypedValue::Null, |value, _| TypedValue::List(vec![value]));
+            (0..=MAX_DEPTH).fold(TypedValue::Null, |value, _| TypedValue::List(vec![value].into()));
         assert_eq!(
             get_typed(&args, &too_deep, &context)
                 .expect_err("deep JSON is rejected")
@@ -1265,7 +1265,7 @@ mod tests {
             .to_string()
         );
 
-        let oversized = TypedValue::String("x".repeat(MAX_JSON_BYTES));
+        let oversized = TypedValue::String("x".repeat(MAX_JSON_BYTES).into());
         assert_eq!(
             get_typed(&args, &oversized, &context)
                 .expect_err("oversized JSON is rejected")
@@ -1514,7 +1514,7 @@ mod tests {
             }
         }
 
-        let oversized = Value::String("x".repeat(MAX_JSON_BYTES));
+        let oversized = Value::String("x".repeat(MAX_JSON_BYTES).into());
         let mut args = Map::from_iter([
             ("pointer".into(), Value::String("/missing".into())),
             ("default".into(), oversized),

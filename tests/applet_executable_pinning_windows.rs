@@ -233,7 +233,7 @@ fn command_manifest(
         }
     });
     if let Some(digest) = pin {
-        manifest["binary_sha256"] = serde_json::Value::String(digest.to_owned());
+        manifest["binary_sha256"] = serde_json::Value::String(digest.to_owned().into());
     }
     manifest
 }

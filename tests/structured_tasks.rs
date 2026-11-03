@@ -512,7 +512,7 @@ fn parallel_for_each_with_run_inputs_present_runs_every_element() -> Result<()> 
     let options = flow::runtime::RunOptions {
         inputs: std::collections::BTreeMap::from([(
             "greeting".to_owned(),
-            flow::ast::Value::String("x".repeat(65_536)),
+            flow::ast::Value::String("x".repeat(65_536).into()),
         )]),
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(8)),
@@ -551,7 +551,7 @@ fn parallel_for_each_short_total_timeout_bounds_sleeping_elements() -> Result<()
     let options = flow::runtime::RunOptions {
         inputs: std::collections::BTreeMap::from([(
             "greeting".to_owned(),
-            flow::ast::Value::String("x".repeat(65_536)),
+            flow::ast::Value::String("x".repeat(65_536).into()),
         )]),
         max_output_bytes: 4 * 1024 * 1024,
         command_timeout: Some(Duration::from_secs(8)),
@@ -599,7 +599,7 @@ fn parallel_for_each_re_resolves_symlinked_workdir_per_element() -> Result<()> {
     let options = flow::runtime::RunOptions {
         inputs: std::collections::BTreeMap::from([(
             "greeting".to_owned(),
-            flow::ast::Value::String("x".repeat(65_536)),
+            flow::ast::Value::String("x".repeat(65_536).into()),
         )]),
         max_output_bytes: 4 * 1024 * 1024,
         command_timeout: Some(Duration::from_secs(8)),
@@ -2031,7 +2031,7 @@ fn join_partial_results_redact_completed_secret_when_sibling_fails() -> Result<(
             flow::ast::Value::Integer(69),
             flow::ast::Value::Integer(68),
             flow::ast::Value::Integer(93),
-        ]))
+        ].into()))
     );
     Ok(())
 }

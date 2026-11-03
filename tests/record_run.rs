@@ -1033,7 +1033,7 @@ fn a_tampered_real_record_is_shown_as_untrusted_not_hidden() {
     } else {
         "approved"
     };
-    document["decisions"][0]["outcome"] = Value::String(flipped.to_owned());
+    document["decisions"][0]["outcome"] = Value::String(flipped.to_owned().into());
     fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
 
     // Warn-open: both renderings still succeed and label the audit untrusted,

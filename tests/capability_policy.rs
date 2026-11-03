@@ -1370,7 +1370,7 @@ fn model_file_params_require_the_applets_own_read_grant() {
     let manifest = registry.resolve("llm.ask").unwrap();
     let empty: BTreeMap<String, Value> = BTreeMap::new();
     let param = |name: &str, value: &str| {
-        BTreeMap::from([(name.to_owned(), Value::String(value.to_owned()))])
+        BTreeMap::from([(name.to_owned(), Value::String(value.to_owned().into()))])
     };
     let granted = |name: &str| allowed.join(name).to_string_lossy().into_owned();
 
@@ -1419,7 +1419,7 @@ fn model_file_params_require_the_applets_own_read_grant() {
                 .path()
                 .join("other.env")
                 .to_string_lossy()
-                .into_owned(),
+                .into_owned().into(),
         ),
     );
     authorize_model_file_params(&registry, manifest, &both, &empty, directory.path(), false)
@@ -1440,7 +1440,7 @@ fn model_file_params_require_the_applets_own_read_grant() {
     // References resolve through bindings; unbound names are skipped for the
     // later argument resolution to reject, and non-text values fail closed.
     let reference = BTreeMap::from([("env_file".to_owned(), Value::Reference("keys".into()))]);
-    let bound = BTreeMap::from([("keys".to_owned(), Value::String(granted("bound.env")))]);
+    let bound = BTreeMap::from([("keys".to_owned(), Value::String(granted("bound.env").into()))]);
     authorize_model_file_params(
         &registry,
         manifest,
@@ -1610,7 +1610,7 @@ fn model_path_params_are_generic_not_name_locked() {
     authorize_model_file_params(
         &registry,
         manifest,
-        &BTreeMap::from([("fixture".to_owned(), Value::String(granted.clone()))]),
+        &BTreeMap::from([("fixture".to_owned(), Value::String(granted.clone().into()))]),
         &empty,
         directory.path(),
         false,
@@ -1619,7 +1619,7 @@ fn model_path_params_are_generic_not_name_locked() {
     assert!(authorize_model_file_params(
         &registry,
         manifest,
-        &BTreeMap::from([("fixture".to_owned(), Value::String(outside.clone()))]),
+        &BTreeMap::from([("fixture".to_owned(), Value::String(outside.clone().into()))]),
         &empty,
         directory.path(),
         false,
@@ -1631,7 +1631,7 @@ fn model_path_params_are_generic_not_name_locked() {
     authorize_model_file_params(
         &registry,
         renamed_manifest,
-        &BTreeMap::from([("data_file".to_owned(), Value::String(granted.clone()))]),
+        &BTreeMap::from([("data_file".to_owned(), Value::String(granted.clone().into()))]),
         &empty,
         directory.path(),
         false,
@@ -1640,7 +1640,7 @@ fn model_path_params_are_generic_not_name_locked() {
     assert!(authorize_model_file_params(
         &registry,
         renamed_manifest,
-        &BTreeMap::from([("data_file".to_owned(), Value::String(outside.clone()))]),
+        &BTreeMap::from([("data_file".to_owned(), Value::String(outside.clone().into()))]),
         &empty,
         directory.path(),
         false,
@@ -1653,7 +1653,7 @@ fn model_path_params_are_generic_not_name_locked() {
     assert!(authorize_model_file_params(
         &registry,
         legacy_manifest,
-        &BTreeMap::from([("fixture".to_owned(), Value::String(outside.clone()))]),
+        &BTreeMap::from([("fixture".to_owned(), Value::String(outside.clone().into()))]),
         &empty,
         directory.path(),
         false,
@@ -1666,7 +1666,7 @@ fn model_path_params_are_generic_not_name_locked() {
     authorize_model_file_params(
         &registry,
         plain,
-        &BTreeMap::from([("data".to_owned(), Value::String(outside))]),
+        &BTreeMap::from([("data".to_owned(), Value::String(outside.into()))]),
         &empty,
         directory.path(),
         false,
@@ -1749,7 +1749,7 @@ fn model_preflight_refuses_fixture_outside_grant_and_final_link_fails_closed() {
                 .path()
                 .join("late.json")
                 .to_string_lossy()
-                .into_owned(),
+                .into_owned().into(),
         ),
     )]);
     assert!(authorize_model_file_params(
@@ -1786,7 +1786,7 @@ fn model_preflight_refuses_fixture_outside_grant_and_final_link_fails_closed() {
             manifest,
             &BTreeMap::from([(
                 "fixture".to_owned(),
-                Value::String(link.to_string_lossy().into_owned()),
+                Value::String(link.to_string_lossy().into_owned().into()),
             )]),
             &empty,
             directory.path(),

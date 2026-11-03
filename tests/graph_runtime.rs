@@ -102,7 +102,7 @@ impl GraphExecutor for MergeExecutor {
                     };
                     values.push(value);
                 }
-                io.emit("joined", PortValue::Value(Value::List(values)))?;
+                io.emit("joined", PortValue::Value(Value::List(values.into())))?;
             }
             _ => return Err(anyhow!("unknown test node")),
         }
@@ -171,7 +171,7 @@ fn fanout_merges_record_ports_in_order_with_lossless_bounded_queues() {
     assert_eq!(
         joined.payload,
         PortValue::Value(Value::List(
-            vec![1, 2, 3, 4].into_iter().map(Value::Integer).collect()
+            vec![1, 2, 3, 4].into_iter().map(Value::Integer).collect::<Vec<Value>>().into()
         ))
     );
     assert_eq!(result.dropped_messages, 0);
@@ -915,6 +915,6 @@ fn typed_native_jsonl_stream_emits_decoded_records() {
                 == PortValue::Value(Value::Record(BTreeMap::from([(
                     "text".into(),
                     Value::String("tick".into()),
-                )])))
+                )]).into()))
     }));
 }

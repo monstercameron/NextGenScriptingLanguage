@@ -660,13 +660,13 @@ fn emitted_lines_validate_against_the_full_schema() {
     let nested = Value::Record(BTreeMap::from([
         (
             "items".into(),
-            Value::List(vec![Value::Integer(1), Value::Null]),
+            Value::List(vec![Value::Integer(1), Value::Null].into()),
         ),
         (
             "note".into(),
             Value::String("line\nfeed \"quoted\" \\ backslash".into()),
         ),
-    ]));
+    ]).into());
     let cases = [
         sample_envelope(),
         bytes_envelope(vec![0, 255]),
@@ -744,7 +744,7 @@ fn large_string_and_nested_value_payloads_fit_the_derived_bound() {
         heavy.len() < 64 * 1024,
         "the raw string stays small while its escaping does not"
     );
-    let string_event = value_envelope(Value::String(heavy));
+    let string_event = value_envelope(Value::String(heavy.into()));
     let max_message_bytes = 128 * 1024;
     let limit = stream_event_byte_limit(max_message_bytes);
     let text = graph_event_line_json("ticks", 1, 1, &string_event, limit)
@@ -755,13 +755,18 @@ fn large_string_and_nested_value_payloads_fit_the_derived_bound() {
     let nested = Value::Record(BTreeMap::from([
         (
             "runs".into(),
-            Value::List((0..500).map(Value::Integer).collect()),
+            Value::List(
+                (0..500)
+                    .map(|n| Value::Integer(i64::from(n)))
+                    .collect::<Vec<Value>>()
+                    .into(),
+            ),
         ),
         (
             "note".into(),
-            Value::String("tab\there \"quoted\" \\ end".repeat(50)),
+            Value::String("tab\there \"quoted\" \\ end".repeat(50).into()),
         ),
-    ]));
+    ]).into());
     let nested_event = value_envelope(nested);
     let text = graph_event_line_json("ticks", 1, 1, &nested_event, limit)
         .expect("an admitted nested payload fits its derived bound");

@@ -998,7 +998,7 @@ pub(super) fn run_each(
     }
     let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
     if prepared.is_empty() {
-        let value = each_value(&mut records, items, &secret_redactor);
+        let value = each_value(&mut records, items.iter().cloned(), &secret_redactor);
         return Ok(TaskGroupResult {
             presentation: value.clone(),
             value,
@@ -1420,7 +1420,7 @@ pub(super) fn run_each(
     drop(sender);
     drop(skip);
     let item_count = items.len();
-    let value = each_value(&mut records, items, &secret_redactor);
+    let value = each_value(&mut records, items.iter().cloned(), &secret_redactor);
     // `max_output_bytes` accounts for captured stdout and stderr. The result
     // record has a different JSON representation: redaction can expand each
     // captured stderr byte to the 10-byte `[REDACTED]` marker. JSON string
@@ -1469,21 +1469,23 @@ fn each_value(
             // materialized.
             let mut value = each_task_value(record, secret_redactor);
             if let Value::Record(fields) = &mut value {
-                fields.insert("index".into(), Value::Integer(index as i64));
-                fields.insert("item".into(), redact_value(secret_redactor, &item));
+                // `each_task_value` builds a fresh record, so this is
+                // uniquely owned and `make_mut` does not clone.
+                Arc::make_mut(fields).insert("index".into(), Value::Integer(index as i64));
+                Arc::make_mut(fields).insert("item".into(), redact_value(secret_redactor, &item));
             }
             value
         })
-        .collect();
+        .collect::<Vec<Value>>();
     Value::Record(BTreeMap::from([
         ("mode".into(), Value::String("for_each".into())),
         ("schema_version".into(), Value::Integer(3)),
-        ("items".into(), Value::List(elements)),
+        ("items".into(), Value::List(elements.into())),
         ("succeeded".into(), succeeded),
         ("failed".into(), failed),
         ("cancelled".into(), cancelled),
         ("not_started".into(), not_started),
-    ]))
+    ]).into())
 }
 
 fn launched_processes(records: &[TaskRecord]) -> usize {
@@ -1600,12 +1602,12 @@ fn register_secret_value(
                 .map_err(|error| anyhow!("registering sensitive value: {error}"))?;
         }
         Value::List(values) => {
-            for value in values {
+            for value in values.iter() {
                 register_secret_value(redactor, value, cancelled, deadline)?;
             }
         }
         Value::Record(values) => {
-            for (key, value) in values {
+            for (key, value) in values.iter() {
                 redactor
                     .register(key.as_bytes(), cancelled, deadline)
                     .map_err(|error| anyhow!("registering sensitive value key: {error}"))?;
@@ -1685,9 +1687,9 @@ fn group_value(
         (
             "mode".into(),
             Value::String(match mode {
-                TaskGroupMode::Join => "join".into(),
-                TaskGroupMode::Race => "race".into(),
-            }),
+                TaskGroupMode::Join => "join",
+                TaskGroupMode::Race => "race",
+            }.into()),
         ),
         (
             "tasks".into(),
@@ -1695,14 +1697,14 @@ fn group_value(
                 records
                     .iter()
                     .map(|record| task_value(record, secret_redactor, false))
-                    .collect(),
+                    .collect::<Vec<Value>>().into(),
             ),
         ),
     ]);
     if let Some(index) = winner {
-        group.insert("winner".into(), Value::String(records[index].id.clone()));
+        group.insert("winner".into(), Value::String(records[index].id.clone().into()));
     }
-    Value::Record(group)
+    Value::Record(group.into())
 }
 
 fn group_presentation_value(
@@ -1715,9 +1717,9 @@ fn group_presentation_value(
         (
             "mode".into(),
             Value::String(match mode {
-                TaskGroupMode::Join => "join".into(),
-                TaskGroupMode::Race => "race".into(),
-            }),
+                TaskGroupMode::Join => "join",
+                TaskGroupMode::Race => "race",
+            }.into()),
         ),
         (
             "tasks".into(),
@@ -1725,14 +1727,14 @@ fn group_presentation_value(
                 records
                     .iter()
                     .map(|record| task_value(record, secret_redactor, false))
-                    .collect(),
+                    .collect::<Vec<Value>>().into(),
             ),
         ),
     ]);
     if let Some(index) = winner {
-        group.insert("winner".into(), Value::String(records[index].id.clone()));
+        group.insert("winner".into(), Value::String(records[index].id.clone().into()));
     }
-    Value::Record(group)
+    Value::Record(group.into())
 }
 
 fn task_value(
@@ -1741,7 +1743,7 @@ fn task_value(
     compact: bool,
 ) -> Value {
     let mut fields = std::collections::BTreeMap::from([
-        ("id".into(), Value::String(record.id.clone())),
+        ("id".into(), Value::String(record.id.clone().into())),
         ("state".into(), Value::String(record.state.as_str().into())),
         ("uncertain".into(), Value::Bool(record.uncertain)),
         (
@@ -1752,12 +1754,12 @@ fn task_value(
     if let Some(error) = &record.error {
         fields.insert(
             "error".into(),
-            Value::String(secret_redactor.redact_text(error)),
+            Value::String(secret_redactor.redact_text(error).into()),
         );
     }
     if let Some(result) = &record.invocation {
         fields.insert("status".into(), Value::Integer(i64::from(result.status)));
-        fields.insert("outcome".into(), Value::String(result.outcome.name.clone()));
+        fields.insert("outcome".into(), Value::String(result.outcome.name.clone().into()));
         fields.insert(
             "outcome_kind".into(),
             Value::String(result.outcome.kind.as_str().into()),
@@ -1765,8 +1767,8 @@ fn task_value(
         let encode = |bytes: &[u8]| {
             if compact {
                 match std::str::from_utf8(bytes) {
-                    Ok(text) => ("utf8", Value::String(text.to_owned())),
-                    Err(_) => ("base64", Value::String(BASE64.encode(bytes))),
+                    Ok(text) => ("utf8", Value::String(text.to_owned().into())),
+                    Err(_) => ("base64", Value::String(BASE64.encode(bytes).into())),
                 }
             } else {
                 ("u8_array", byte_array(bytes))
@@ -1792,7 +1794,7 @@ fn task_value(
             fields.insert("value".into(), redact_value(secret_redactor, value));
         }
     }
-    Value::Record(fields)
+    Value::Record(fields.into())
 }
 
 fn each_task_value(
@@ -1810,21 +1812,21 @@ fn each_task_value(
     if let Some(error) = &record.error {
         fields.insert(
             "error".into(),
-            Value::String(secret_redactor.redact_text(error)),
+            Value::String(secret_redactor.redact_text(error).into()),
         );
     }
     if let Some(result) = record.invocation.take() {
         let mut result = *result;
         fields.insert("status".into(), Value::Integer(i64::from(result.status)));
-        fields.insert("outcome".into(), Value::String(result.outcome.name));
+        fields.insert("outcome".into(), Value::String(result.outcome.name.into()));
         fields.insert(
             "outcome_kind".into(),
             Value::String(result.outcome.kind.as_str().into()),
         );
         let redacted_output = secret_redactor.redact_bytes(&result.output);
         let (output_encoding, output) = match String::from_utf8(redacted_output) {
-            Ok(text) => ("utf8", Value::String(text)),
-            Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()))),
+            Ok(text) => ("utf8", Value::String(text.into())),
+            Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()).into())),
         };
         fields.insert(
             "output_encoding".into(),
@@ -1833,8 +1835,8 @@ fn each_task_value(
         fields.insert("output".into(), output);
         let stderr = secret_redactor.redact_bytes(&result.stderr);
         let (stderr_encoding, stderr) = match String::from_utf8(stderr) {
-            Ok(text) => ("utf8", Value::String(text)),
-            Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()))),
+            Ok(text) => ("utf8", Value::String(text.into())),
+            Err(error) => ("base64", Value::String(BASE64.encode(error.as_bytes()).into())),
         };
         fields.insert(
             "stderr_encoding".into(),
@@ -1845,7 +1847,7 @@ fn each_task_value(
             fields.insert("value".into(), redact_value(secret_redactor, &value));
         }
     }
-    Value::Record(fields)
+    Value::Record(fields.into())
 }
 
 /// Whether presenting `value` would redact it. The checkpoint refuses exactly
@@ -1893,7 +1895,7 @@ pub(in crate::runtime) fn redact_value(
     value: &Value,
 ) -> Value {
     match value {
-        Value::String(value) => Value::String(redactor.redact_text(value)),
+        Value::String(value) => Value::String(redactor.redact_text(value).into()),
         Value::Integer(value) => {
             let text = value.to_string();
             if redactor.redact_text(&text) == text {
@@ -1914,13 +1916,14 @@ pub(in crate::runtime) fn redact_value(
             values
                 .iter()
                 .map(|value| redact_value(redactor, value))
-                .collect(),
+                .collect::<Vec<Value>>().into(),
         ),
         Value::Record(values) => Value::Record(
             values
                 .iter()
                 .map(|(key, value)| (redactor.redact_text(key), redact_value(redactor, value)))
-                .collect(),
+                .collect::<BTreeMap<String, Value>>()
+                .into(),
         ),
         Value::Bool(_) | Value::Null | Value::Reference(_) => value.clone(),
     }
@@ -1930,7 +1933,7 @@ fn withheld_value() -> Value {
     Value::Record(BTreeMap::from([(
         "withheld".into(),
         Value::String("secret".into()),
-    )]))
+    )]).into())
 }
 
 fn byte_array(bytes: &[u8]) -> Value {
@@ -1938,7 +1941,7 @@ fn byte_array(bytes: &[u8]) -> Value {
         bytes
             .iter()
             .map(|byte| Value::Integer(i64::from(*byte)))
-            .collect(),
+            .collect::<Vec<Value>>().into(),
     )
 }
 
@@ -2016,7 +2019,7 @@ fn task_group_failure(request: TaskGroupFailureRequest<'_>) -> TaskGroupFailure 
             records
                 .iter()
                 .map(|record| task_value(record, secret_redactor, compact))
-                .collect(),
+                .collect::<Vec<Value>>().into(),
         ),
         partial_results_schema_version: compact.then_some(3),
         launched_processes: launched_processes(records),

@@ -2634,7 +2634,7 @@ mod tests {
         let value = crate::ast::Value::Record(BTreeMap::from([(
             key.to_owned(),
             crate::ast::Value::String("public value".into()),
-        )]));
+        )]).into());
         security::register_sensitive_value(
             &registry,
             &value,

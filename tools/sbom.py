@@ -89,6 +89,20 @@ def lock_checksums(lock_text):
     return checksums
 
 
+def directory_sha256(directory):
+    """Hash a directory's complete file tree, including relative paths."""
+    digest = hashlib.sha256()
+    root = Path(directory)
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        content = path.read_bytes()
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
     """The SBOM as a dict. `metadata` is `cargo metadata` output for the locked graph."""
     checksums = lock_checksums(lock_text)
@@ -130,6 +144,8 @@ def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
         if package.get("license"):
             component["licenses"] = [{"expression": normalize_license(package["license"])}]
         digest = checksums.get((package["name"], package["version"]))
+        if package["name"] == "iana-time-zone" and package["version"] == "0.1.65":
+            digest = directory_sha256(ROOT / "vendor/iana-time-zone")
         if digest:
             component["hashes"] = [{"alg": "SHA-256", "content": digest}]
         patched_from = patch_source(package, metadata.get("workspace_members") or ())

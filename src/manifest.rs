@@ -5368,6 +5368,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         }
     }
 
@@ -5824,6 +5825,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         let bytes = BTreeMap::from([("raw".into(), InputType::Bytes)]);
         let error = manifest
@@ -5925,6 +5927,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         assert!(manifest.validate(&invocation).is_ok());
         for value in ["", " \t\n", "\u{0085}"] {
@@ -6047,6 +6050,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         let bytes = BTreeMap::from([("raw".into(), InputType::Bytes)]);
         assert!(manifest
@@ -6493,6 +6497,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         assert!(manifest.validate(&invocation).is_ok());
         let values = BTreeMap::from([
@@ -6552,6 +6557,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         assert!(manifest.validate(&missing).is_err());
         let wrong = Invocation {
@@ -6565,6 +6571,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         assert!(manifest.validate(&wrong).is_err());
     }
@@ -6596,6 +6603,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         assert!(manifest.validate(&invocation).is_ok());
         assert!(manifest
@@ -6636,6 +6644,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
 
         assert!(manifest
@@ -6872,6 +6881,7 @@ mod tests {
                 status_binding: None,
                 result_binding: None,
                 retry: None,
+                timeout_ms: None,
             };
             assert!(manifest.validate(&invocation).is_err());
             assert!(manifest
@@ -7295,6 +7305,7 @@ mod first_token_rule_tests {
                 status_binding: None,
                 result_binding: None,
                 retry: None,
+                timeout_ms: None,
             })
         };
         for valid in ["0", "0644", "7777"] {
@@ -7345,6 +7356,7 @@ mod first_token_rule_tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         assert!(mode.validate(&dynamic_mode).is_ok());
         let dynamic_hex = Invocation {
@@ -7361,6 +7373,7 @@ mod first_token_rule_tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         assert!(hex.validate(&dynamic_hex).is_ok());
     }

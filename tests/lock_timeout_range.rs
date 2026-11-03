@@ -197,6 +197,7 @@ fn default_bundled_registry_enforces_filesystem_and_transaction_timeout_bounds()
                 status_binding: None,
                 result_binding: None,
                 retry: None,
+                timeout_ms: None,
             };
             manifest.validate(&invocation).unwrap_or_else(|error| {
                 panic!("bundled registry rejected {operation} timeout {timeout}: {error}")
@@ -216,6 +217,7 @@ fn default_bundled_registry_enforces_filesystem_and_transaction_timeout_bounds()
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         let error = manifest.validate(&invalid).unwrap_err();
         assert!(

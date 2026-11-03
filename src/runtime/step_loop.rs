@@ -3367,6 +3367,22 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     &failure.stages,
                                 );
                             }
+                        } else if let Some(timeout) =
+                            error.downcast_ref::<execution_result::ExecutionFailure>()
+                        {
+                            if timeout.result.kind == execution_result::ExecutionKind::Timeout
+                                && matches!(&program.steps[index].kind, StepKind::Invoke { .. })
+                            {
+                                let StepKind::Invoke { call, .. } = &program.steps[index].kind
+                                else {
+                                    unreachable!("retry applies to an invocation step")
+                                };
+                                execution_history.push(
+                                    step.line,
+                                    call.operation.as_str(),
+                                    &timeout.result,
+                                );
+                            }
                         }
                         Err(error.context(format!(
                             "line {}: retry exhausted after {attempts} attempts",
@@ -3387,6 +3403,22 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     None,
                                     failure.stderr.as_deref(),
                                     &failure.stages,
+                                );
+                            }
+                        } else if let Some(timeout) =
+                            error.downcast_ref::<execution_result::ExecutionFailure>()
+                        {
+                            if timeout.result.kind == execution_result::ExecutionKind::Timeout
+                                && matches!(&program.steps[index].kind, StepKind::Invoke { .. })
+                            {
+                                let StepKind::Invoke { call, .. } = &program.steps[index].kind
+                                else {
+                                    unreachable!("retry applies to an invocation step")
+                                };
+                                execution_history.push(
+                                    step.line,
+                                    call.operation.as_str(),
+                                    &timeout.result,
                                 );
                             }
                         }

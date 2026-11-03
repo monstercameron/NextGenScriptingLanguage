@@ -295,6 +295,7 @@ fn listener_source_cannot_silently_drop_the_stderr_modifier() {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         }),
         binding: "event".into(),
         line: 1,

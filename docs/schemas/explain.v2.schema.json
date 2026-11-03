@@ -159,6 +159,7 @@
           "undeclared",
           "privileged",
           "retry",
+          "timeout_ms",
           "binding",
           "program_stdout",
           "status_binding"
@@ -415,6 +416,13 @@
                 "type": "boolean"
               }
             }
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
           }
         }
       }

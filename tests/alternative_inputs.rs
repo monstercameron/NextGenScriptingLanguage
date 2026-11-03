@@ -579,6 +579,7 @@ fn custom_manifest_alternatives_are_checked_again_after_resolution() {
         status_binding: None,
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     assert!(manifest.validate(&invocation).is_ok());
     assert!(manifest
@@ -635,6 +636,7 @@ fn conditional_string_requirements_defer_references_and_project_to_schema() {
         status_binding: None,
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     assert!(manifest
         .validate(&invocation(Value::String("ordinary".into()), None))

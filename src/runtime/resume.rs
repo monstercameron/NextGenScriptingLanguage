@@ -1491,6 +1491,7 @@ mod tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         let program = Program {
             definitions: Default::default(),

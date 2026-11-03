@@ -501,14 +501,14 @@ pub(crate) struct SuffixCompletionForm {
 /// `environment_suffix`, `parse_process_handoff` and the job `await` suffixes.
 ///
 /// The core families are listed in the canonical `suffixes` order from the
-/// grammar (`as`, `and discard stderr`, `and keep status as`,
-/// `and keep result as`, `and keep secret`, `and cache`, then
-/// `and retry ...`; see `suffix_kind_rank`): completion only suggests a
+/// grammar (`as`, `and discard stderr`, `and timeout ...`,
+/// `and keep status as`, `and keep result as`, `and keep secret`, `and cache`,
+/// then `and retry ...`; see `suffix_kind_rank`): completion only suggests a
 /// family in canonical position, and never suggests the combinations the
 /// parser rejects (`and retry` with `and cache`/`and keep status`/`and keep
-/// result`, `and keep secret` without `as`, `and discard stderr` for
-/// non-direct commands). Redirection and environment suffixes accept any
-/// relative order and follow the core families.
+/// result`, `and timeout` with `and cache`, `and keep secret` without `as`,
+/// `and discard stderr` for non-direct commands). Redirection and environment
+/// suffixes accept any relative order and follow the core families.
 #[cfg(feature = "lsp")]
 pub(crate) fn invocation_suffix_forms() -> &'static [SuffixCompletionForm] {
     const FORMS: &[SuffixCompletionForm] = &[
@@ -521,6 +521,11 @@ pub(crate) fn invocation_suffix_forms() -> &'static [SuffixCompletionForm] {
             label: "and discard stderr",
             detail: "Discard stderr of a direct command",
             snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and timeout",
+            detail: "Bound this native pipeline group",
+            snippet: Some("and timeout ${1:2} seconds"),
         },
         SuffixCompletionForm {
             label: "and keep status as",
@@ -932,6 +937,7 @@ fn parse_condition_head(tokens: &[Token<'_>], keyword: &str) -> Result<Condition
         bail!("expected a command after `{keyword} run`");
     };
     forbid_retry(&call, "a command condition")?;
+    forbid_timeout(&call, "a command condition")?;
     if connection != Connection::Start
         || call.binding.is_some()
         || call.status_binding.is_some()
@@ -1923,6 +1929,7 @@ fn parse_trigger_header<'source>(
             bail!("line {}: listener source must be an applet", header.number);
         };
         forbid_retry(&call, "a listener source")?;
+        forbid_timeout(&call, "a listener source")?;
         if call.binding.is_some()
             || call.status_binding.is_some()
             || call.result_binding.is_some()
@@ -2162,6 +2169,7 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
             call.operation = name.to_owned();
         }
         forbid_retry(&call, "a program call")?;
+        forbid_timeout(&call, "a program call")?;
         if call.cache || call.result_binding.is_some() {
             bail!("program calls cannot cache or capture execution results");
         }
@@ -2634,6 +2642,7 @@ fn parse_interactive_run(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
         bail!("`interactively` applies to a single native `run` command");
     };
     forbid_retry(&call, "`interactively`")?;
+    forbid_timeout(&call, "`interactively`")?;
     if connection != Connection::Start {
         bail!("`interactively` applies to a fresh command, not `then` or `pipe to`");
     }
@@ -2693,6 +2702,7 @@ fn parse_process_handoff(tokens: &[Token<'_>]) -> Result<Option<Vec<StepKind>>> 
         );
     }
     forbid_retry(call, "a hand-over or detached command")?;
+    forbid_timeout(call, "a hand-over or detached command")?;
     if call.binding.is_some()
         || call.status_binding.is_some()
         || call.result_binding.is_some()
@@ -2856,14 +2866,15 @@ fn is_sensitive_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
 /// Canonical invocation suffix order for `run`/`then`/`pipe to` commands.
 ///
 /// Each family may appear at most once: `as NAME`, `and discard stderr`,
-/// `and keep status as NAME`, `and keep result as NAME`, `and keep secret`,
-/// `and cache`, then `and retry ...`. Redirection and environment suffixes are
-/// stripped before invocation parsing, so they accept any relative order and
-/// are not part of this ranking.
+/// `and timeout ...`, `and keep status as NAME`, `and keep result as NAME`,
+/// `and keep secret`, `and cache`, then `and retry ...`. Redirection and
+/// environment suffixes are stripped before invocation parsing, so they accept
+/// any relative order and are not part of this ranking.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum InvocationSuffixKind {
     Binding,
     Discard,
+    Timeout,
     Status,
     Result,
     Sensitive,
@@ -2875,11 +2886,12 @@ fn suffix_kind_rank(kind: InvocationSuffixKind) -> u8 {
     match kind {
         InvocationSuffixKind::Binding => 0,
         InvocationSuffixKind::Discard => 1,
-        InvocationSuffixKind::Status => 2,
-        InvocationSuffixKind::Result => 3,
-        InvocationSuffixKind::Sensitive => 4,
-        InvocationSuffixKind::Cache => 5,
-        InvocationSuffixKind::Retry => 6,
+        InvocationSuffixKind::Timeout => 2,
+        InvocationSuffixKind::Status => 3,
+        InvocationSuffixKind::Result => 4,
+        InvocationSuffixKind::Sensitive => 5,
+        InvocationSuffixKind::Cache => 6,
+        InvocationSuffixKind::Retry => 7,
     }
 }
 
@@ -2966,6 +2978,12 @@ fn invocation_suffix_at(tokens: &[Token<'_>], cursor: usize) -> Option<Invocatio
         return Some(InvocationSuffix {
             kind: InvocationSuffixKind::Discard,
             len: 3,
+        });
+    }
+    if let Some(len) = timeout_suffix_len(tokens, cursor) {
+        return Some(InvocationSuffix {
+            kind: InvocationSuffixKind::Timeout,
+            len,
         });
     }
     if is_status_suffix(tokens, cursor) {
@@ -3234,6 +3252,7 @@ fn parse_invocation_with_layout(
                 && word_is(tokens.get(cursor), "and")
                 && ((word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
                     || (direct && is_discard_stderr_suffix(tokens, cursor))
+                    || is_timeout_suffix(tokens, cursor)
                     || is_status_suffix(tokens, cursor)
                     || is_result_suffix(tokens, cursor)
                     || is_sensitive_suffix(tokens, cursor)
@@ -3297,6 +3316,7 @@ fn parse_invocation_with_layout(
             }
             let blocked = (word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
                 || (direct && is_discard_stderr_suffix(tokens, cursor))
+                || is_timeout_suffix(tokens, cursor)
                 || is_status_suffix(tokens, cursor)
                 || is_result_suffix(tokens, cursor)
                 || is_sensitive_suffix(tokens, cursor)
@@ -3327,6 +3347,12 @@ fn parse_invocation_with_layout(
         true
     } else {
         false
+    };
+    let timeout_ms = if is_timeout_suffix(tokens, cursor) {
+        cursor += 2;
+        Some(parse_timeout_suffix(tokens, &mut cursor)?)
+    } else {
+        None
     };
     let status_binding = if is_status_suffix(tokens, cursor) {
         if !word_is(tokens.get(cursor + 2), "status") || !word_is(tokens.get(cursor + 3), "as") {
@@ -3371,6 +3397,9 @@ fn parse_invocation_with_layout(
     if discard_stderr && cache {
         bail!("`and discard stderr` cannot be combined with `and cache`");
     }
+    if timeout_ms.is_some() && cache {
+        bail!("`and timeout` cannot be combined with `and cache`");
+    }
     if let Some(layout) = layout {
         layout.retry_insert_token = cursor;
     }
@@ -3404,6 +3433,7 @@ fn parse_invocation_with_layout(
             status_binding,
             result_binding,
             retry,
+            timeout_ms,
         },
         connection,
     })
@@ -3602,6 +3632,64 @@ fn duration_unit_ms(unit: &str) -> Option<u64> {
 pub(crate) fn forbid_retry(call: &Invocation, context: &str) -> Result<()> {
     if call.retry.is_some() {
         bail!("{context} cannot use `and retry`");
+    }
+    Ok(())
+}
+
+fn is_timeout_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
+    word_is(tokens.get(cursor), "and") && word_is(tokens.get(cursor + 1), "timeout")
+}
+
+/// Length of a syntactically valid `and timeout AMOUNT UNIT` suffix starting
+/// at `cursor` (`and` included), or `None` when the words do not form a valid
+/// timeout suffix. Reuses the duration units of `with backoff`.
+fn timeout_suffix_len(tokens: &[Token<'_>], cursor: usize) -> Option<usize> {
+    if !is_timeout_suffix(tokens, cursor) {
+        return None;
+    }
+    let amount = match tokens.get(cursor + 2) {
+        Some(Token::Word(amount)) => amount.parse::<u64>().ok()?,
+        _ => return None,
+    };
+    let unit = match tokens.get(cursor + 3) {
+        Some(Token::Word(unit)) => *unit,
+        _ => return None,
+    };
+    let factor = duration_unit_ms(unit)?;
+    let delay = amount.checked_mul(factor)?;
+    if delay == 0 {
+        return None;
+    }
+    Some(4)
+}
+
+/// The words after `and timeout`: `AMOUNT UNIT` with the duration units of
+/// `with backoff` (milliseconds, seconds, minutes, or hours).
+fn parse_timeout_suffix(tokens: &[Token<'_>], cursor: &mut usize) -> Result<u64> {
+    let amount = match tokens.get(*cursor) {
+        Some(Token::Word(amount)) => amount.parse::<u64>().ok(),
+        _ => None,
+    }
+    .context("timeout must be a whole number of a time unit")?;
+    let unit = match tokens.get(*cursor + 1) {
+        Some(Token::Word(unit)) => *unit,
+        _ => bail!("expected a timeout unit: milliseconds, seconds, minutes, or hours"),
+    };
+    let factor =
+        duration_unit_ms(unit).with_context(|| format!("unsupported timeout unit `{unit}`"))?;
+    let delay = amount.checked_mul(factor).context("timeout is too large")?;
+    if delay == 0 {
+        bail!("timeout must be greater than zero");
+    }
+    *cursor += 2;
+    Ok(delay)
+}
+
+/// Refuse `and timeout` where the command's invocation runs without a native
+/// pipeline group to bound, so a declared bound is never silently ignored.
+pub(crate) fn forbid_timeout(call: &Invocation, context: &str) -> Result<()> {
+    if call.timeout_ms.is_some() {
+        bail!("{context} cannot use `and timeout`");
     }
     Ok(())
 }
@@ -3915,6 +4003,7 @@ mod tests {
         const REQUIRED_SUFFIXES: &[&str] = &[
             "as",
             "and discard stderr",
+            "and timeout",
             "and keep status as",
             "and keep result as",
             "and keep secret",
@@ -3954,6 +4043,7 @@ mod tests {
         let core = [
             "as",
             "and discard stderr",
+            "and timeout",
             "and keep status as",
             "and keep result as",
             "and keep secret",
@@ -4655,6 +4745,76 @@ mod tests {
                 program.steps.last().unwrap().kind,
                 StepKind::EndLoop { .. }
             ));
+        }
+    }
+
+    #[test]
+    fn per_command_timeout_suffix_parses_before_keep_status() {
+        // The issue #310 acceptance shape: timeout precedes keep status.
+        let program =
+            parse("run \"sleep\" with arguments [5] and timeout 1 seconds and keep status as st\n")
+                .unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!("expected an invocation");
+        };
+        assert_eq!(call.timeout_ms, Some(1_000));
+        assert_eq!(call.status_binding.as_deref(), Some("st"));
+    }
+
+    #[test]
+    fn per_command_timeout_reuses_backoff_duration_units() {
+        for (source, expected) in [
+            ("run \"x\" and timeout 2 seconds\n", 2_000),
+            ("run \"x\" and timeout 1 second\n", 1_000),
+            ("run \"x\" and timeout 500 milliseconds\n", 500),
+            ("run \"x\" and timeout 1 millisecond\n", 1),
+            ("run \"x\" and timeout 2 minutes\n", 120_000),
+            ("run \"x\" and timeout 1 hour\n", 3_600_000),
+            (
+                "run \"x\" and timeout 2 seconds and retry up to 1 times even if uncertain\n",
+                2_000,
+            ),
+        ] {
+            let program = parse(source).unwrap();
+            let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+                panic!("expected an invocation for {source}");
+            };
+            assert_eq!(call.timeout_ms, Some(expected), "{source}");
+        }
+    }
+
+    #[test]
+    fn per_command_timeout_rejects_bad_bounds_and_combinations() {
+        for (source, expected) in [
+            ("run \"x\" and timeout 0 seconds\n", "greater than zero"),
+            ("run \"x\" and timeout two seconds\n", "whole number"),
+            (
+                "run \"x\" and timeout 2 fortnights\n",
+                "unsupported timeout unit",
+            ),
+            ("run \"x\" and timeout 2\n", "expected a timeout unit"),
+            (
+                "run \"x\" and timeout 2 seconds and cache\n",
+                "cannot be combined",
+            ),
+            (
+                "run \"x\" and keep status as st and timeout 1 seconds\n",
+                "stray token",
+            ),
+        ] {
+            let error = parse(source).expect_err(source);
+            let message = format!("{error:#}");
+            assert!(message.contains(expected), "{source}: {message}");
+        }
+        for source in [
+            "if run \"x\" and timeout 1 seconds succeeds\n",
+            "run \"x\" and timeout 1 seconds interactively\n",
+        ] {
+            let error = parse(source).expect_err(source);
+            assert!(
+                format!("{error:#}").contains("cannot use `and timeout`"),
+                "{source}"
+            );
         }
     }
 }

@@ -48,6 +48,10 @@ pub struct Invocation {
     /// `and retry up to N times`: run again after a declared retryable failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryPolicy>,
+    /// `and timeout N seconds`: bound this native pipeline group to N seconds.
+    /// The smaller of this bound and `--command-timeout-ms` wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// A declared retry for one command. Retries happen only for outcomes the

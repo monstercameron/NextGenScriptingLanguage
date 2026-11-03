@@ -301,6 +301,61 @@ mod execution_tests {
         command_for(&tool, ["--version"], &plain, "tool", &cwd).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn confirmed_launch_pins_the_reviewed_inode_through_exec() {
+        // The swap lands after the spawn command is built (the hash has
+        // already passed), so only holding the verified descriptor through
+        // `exec` can keep the swapped bytes from running.
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let tool = directory.path().join("tool");
+        let reviewed = b"#!/bin/sh\necho reviewed\n";
+        let swapped = b"#!/bin/sh\necho swapped\n";
+        std::fs::write(&tool, reviewed).unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let digest = sha256_file(&tool).unwrap();
+        let canonical = std::fs::canonicalize(&tool).unwrap();
+        let settings = serde_json::json!({
+            "executables": {
+                "tool@line:1": {
+                    "path": canonical.to_string_lossy(),
+                    "sha256": digest,
+                },
+            },
+        });
+        let confirmed = confirmed_executables_from_settings(&settings).unwrap();
+        let registry = crate::manifest::Registry::from_sources(&[] as &[String]).unwrap();
+        registry.set_host_state(Some(confirmed));
+        let cwd = crate::working_dir::WorkingDirectory::plain(directory.path().to_path_buf());
+
+        // Replacing the pathname with a different inode after the command
+        // is built still runs the reviewed inode, never the replacement.
+        let mut command = command_for(&tool, ["ignored"], &registry, "tool", &cwd).unwrap();
+        command.stdout(std::process::Stdio::piped());
+        let replacement = directory.path().join("replacement");
+        std::fs::write(&replacement, swapped).unwrap();
+        std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::rename(&replacement, &tool).unwrap();
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"reviewed\n");
+
+        // Rewriting the reviewed inode in place after the command is built
+        // fails the spawn instead of running the rewritten bytes.
+        std::fs::write(&tool, reviewed).unwrap();
+        let mut command = command_for(&tool, ["ignored"], &registry, "tool", &cwd).unwrap();
+        command.stdout(std::process::Stdio::piped());
+        std::fs::write(&tool, swapped).unwrap();
+        let error = command.output().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed after the confirmed review"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn confirmed_binding_rejects_a_review_without_executable_identities() {
         let error = confirmed_executables_from_settings(&serde_json::json!({})).unwrap_err();
@@ -1443,11 +1498,18 @@ impl CapabilityPolicy {
 /// `binary_sha256` pin, but also covers direct quoted commands, which have no
 /// policy grant to pin them.
 ///
-/// This narrows, but cannot eliminate, the replacement race: the re-hash runs
-/// immediately before the child command is built, yet the child is still
-/// executed by path, so a replacement between the final hash and `exec`
-/// would run unverified bytes. See SECURITY.md. Any mismatch, unreadable
-/// file, or launch of an executable absent from the review fails closed.
+/// On Linux the binding is held through `exec`: each launch opens the
+/// resolved executable once, hashes that descriptor, and executes the child
+/// from the same descriptor (`/proc/self/fd/N`, with the original path kept
+/// as argv[0]), so replacing the pathname after the hash cannot redirect the
+/// launch to a different inode. A child-side identity check on the held
+/// descriptor also refuses an in-place rewrite of that inode between the
+/// hash and `exec`. On other platforms, and for Linux launches that go
+/// through an OS sandbox wrapper, the child is still executed by path after
+/// a re-hash immediately before its command is built, so a residual
+/// hash-to-`exec` window remains there. See SECURITY.md. Any mismatch,
+/// unreadable file, or launch of an executable absent from the review fails
+/// closed.
 #[derive(Debug, Clone, Default)]
 pub struct ConfirmedExecutables {
     entries: BTreeMap<String, String>,
@@ -1507,6 +1569,235 @@ impl ConfirmedExecutables {
         }
         Ok(())
     }
+
+    /// Verify the reviewed bytes and, on Linux, hold the verified file open
+    /// so the launch executes that exact inode. See [`PinnedExecutable`].
+    pub fn pin(&self, binary: &Path) -> Result<PinnedExecutable> {
+        #[cfg(target_os = "linux")]
+        {
+            self.pin_linux(binary)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.verify(binary)?;
+            Ok(PinnedExecutable {})
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pin_linux(&self, binary: &Path) -> Result<PinnedExecutable> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+
+        let canonical = std::fs::canonicalize(binary)
+            .with_context(|| format!("resolving confirmed executable {}", binary.display()))?;
+        let key = canonical.to_string_lossy().into_owned();
+        let Some(expected) = self.entries.get(&key) else {
+            bail!(
+                "refusing to launch {}: it was not part of the confirmed review",
+                canonical.display()
+            );
+        };
+        // Open once and hash the held descriptor: whatever inode this open
+        // resolved to is the inode the hash covers and the inode that runs,
+        // even if the pathname is replaced afterwards.
+        let mut file = File::open(&canonical)
+            .with_context(|| format!("opening confirmed executable {}", canonical.display()))?;
+        if file.as_raw_fd() < 3 {
+            // Keep the descriptor out of stdin/stdout/stderr, which spawn
+            // file actions replace before the descriptor path is resolved.
+            let owned = crate::platform::unix_ffi::duplicate_cloexec(file.as_raw_fd(), 3)
+                .with_context(|| format!("pinning confirmed executable {}", canonical.display()))?;
+            file = File::from(owned);
+        }
+        let identity = |metadata: &std::fs::Metadata| {
+            (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.len(),
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            )
+        };
+        let before = file
+            .metadata()
+            .with_context(|| format!("stat-ing confirmed executable {}", canonical.display()))?;
+        if !before.is_file() {
+            bail!(
+                "refusing to launch {}: it is not a regular file",
+                canonical.display()
+            );
+        }
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut script = false;
+        let mut first = true;
+        loop {
+            let count = file
+                .read(&mut buffer)
+                .with_context(|| format!("hashing confirmed executable {}", canonical.display()))?;
+            if count == 0 {
+                break;
+            }
+            if first {
+                script = buffer[..count].starts_with(b"#!");
+                first = false;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        let actual = format!("{:x}", hasher.finalize());
+        if !actual.eq_ignore_ascii_case(expected) {
+            bail!(
+                "refusing to launch {}: it changed after the confirmed review",
+                canonical.display()
+            );
+        }
+        let after = file
+            .metadata()
+            .with_context(|| format!("stat-ing confirmed executable {}", canonical.display()))?;
+        if identity(&before) != identity(&after) {
+            bail!(
+                "refusing to launch {}: it changed after the confirmed review",
+                canonical.display()
+            );
+        }
+        let fd = file.as_raw_fd();
+        if script {
+            // The kernel hands the script's pathname to its interpreter,
+            // which reopens it after `exec`; the descriptor must survive
+            // that `exec` for `/proc/self/fd/N` to name the reviewed inode
+            // in the interpreter too.
+            // SAFETY: F_GETFD/F_SETFD take an integer descriptor and flags
+            // word and read no memory; failures return -1, checked below.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1
+            {
+                return Err(std::io::Error::last_os_error()).with_context(|| {
+                    format!("pinning confirmed executable {}", canonical.display())
+                });
+            }
+        }
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+        if !descriptor_path.exists() {
+            bail!(
+                "refusing to launch {}: this system cannot pin it through exec",
+                canonical.display()
+            );
+        }
+        let (dev, ino, size, mtime, mtime_nsec, ctime, ctime_nsec) = identity(&after);
+        Ok(PinnedExecutable {
+            inner: Some(LinuxPinnedExecutable {
+                file,
+                descriptor_path,
+                dev,
+                ino,
+                size,
+                mtime,
+                mtime_nsec,
+                ctime,
+                ctime_nsec,
+            }),
+        })
+    }
+}
+
+/// A launch-time hold on the exact executable a `--confirm` review approved.
+///
+/// On Linux this keeps the hashed file open and launches the child from its
+/// descriptor, so the inode that runs is the inode that was hashed even if
+/// the pathname is replaced in between. Elsewhere it is only the record
+/// that the by-path re-hash already passed; the child still executes by
+/// path and the residual hash-to-`exec` window documented in SECURITY.md
+/// remains.
+pub struct PinnedExecutable {
+    #[cfg(target_os = "linux")]
+    inner: Option<LinuxPinnedExecutable>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPinnedExecutable {
+    file: File,
+    descriptor_path: PathBuf,
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime: i64,
+    mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
+}
+
+impl PinnedExecutable {
+    /// The program path to build the child command with: the descriptor
+    /// path on Linux, the resolved executable path elsewhere.
+    pub(crate) fn program<'a>(&'a self, original: &'a Path) -> &'a Path {
+        #[cfg(target_os = "linux")]
+        if let Some(pinned) = &self.inner {
+            return &pinned.descriptor_path;
+        }
+        original
+    }
+
+    /// Bind a built command to the held descriptor. The descriptor stays
+    /// open in a child-side hook until `exec`; the hook re-checks the
+    /// inode's identity on that descriptor, so an in-place rewrite after
+    /// the hash fails the spawn instead of running. argv[0] keeps the
+    /// original spelling launch used before pinning (multicall dispatch
+    /// and diagnostics depend on it).
+    pub(crate) fn attach(self, command: &mut Command, original: &Path) {
+        #[cfg(target_os = "linux")]
+        if let Some(pinned) = self.inner {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::process::CommandExt;
+            command.arg0(original.as_os_str());
+            let LinuxPinnedExecutable {
+                file,
+                dev,
+                ino,
+                size,
+                mtime,
+                mtime_nsec,
+                ctime,
+                ctime_nsec,
+                ..
+            } = pinned;
+            let fd = file.as_raw_fd();
+            // SAFETY: the hook owns the pinned file, so `fd` stays valid
+            // until `exec`; it only `fstat`s that descriptor and compares
+            // stack values, which is async-signal-safe.
+            unsafe {
+                command.pre_exec(move || {
+                    let _held = &file;
+                    // SAFETY: `stat` is a plain C out-parameter struct;
+                    // zeroing it and passing its address with a valid
+                    // descriptor is the documented `fstat` contract.
+                    let mut stat: libc::stat = std::mem::zeroed();
+                    if libc::fstat(fd, &mut stat) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if stat.st_dev as u64 != dev
+                        || stat.st_ino as u64 != ino
+                        || stat.st_size as u64 != size
+                        || stat.st_mtime as i64 != mtime
+                        || stat.st_mtime_nsec as i64 != mtime_nsec
+                        || stat.st_ctime as i64 != ctime
+                        || stat.st_ctime_nsec as i64 != ctime_nsec
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "confirmed executable changed after the confirmed review",
+                        ));
+                    }
+                    Ok(())
+                });
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (command, original);
+    }
 }
 
 /// Enforce the `--confirm` binding for one launch. Runs without a confirmed
@@ -1517,6 +1808,20 @@ pub fn verify_confirmed_executable(registry: &Registry, binary: &Path) -> Result
         return Ok(());
     };
     confirmed.verify(binary)
+}
+
+/// Enforce the `--confirm` binding for one launch and hold it through
+/// `exec` where the platform supports that. Runs without a confirmed
+/// review install no pinning and return `None`.
+pub fn pin_confirmed_executable(
+    registry: &Registry,
+    binary: &Path,
+) -> Result<Option<PinnedExecutable>> {
+    let confirmed = registry.host_state::<Option<ConfirmedExecutables>>();
+    let Some(confirmed) = confirmed.as_ref().as_ref() else {
+        return Ok(None);
+    };
+    Ok(Some(confirmed.pin(binary)?))
 }
 
 fn record_contract_authorization(
@@ -2379,12 +2684,14 @@ where
     S: AsRef<OsStr>,
 {
     require_execution_policy(registry)?;
-    // A confirmed review pins the exact bytes each spawn may run. Re-hash
-    // here — the one check every spawn path reaches before a Command exists,
+    // A confirmed review pins the exact bytes each spawn may run. Pin here —
+    // the one check every spawn path reaches before a Command exists,
     // including direct quoted commands and background-job launches — so a
-    // binary swapped after the review cannot launch. Runs without `--confirm`
+    // binary swapped after the review cannot launch. On Linux the pin holds
+    // the hashed descriptor through `exec`; elsewhere it re-hashes by path
+    // (SECURITY.md names the residual window). Runs without `--confirm`
     // install no pinning and skip this.
-    verify_confirmed_executable(registry, binary)?;
+    let pinned = pin_confirmed_executable(registry, binary)?;
     #[cfg(feature = "failpoints")]
     if std::env::var("EXECUTE_TEST_PANIC_APPLET").is_ok_and(|name| name == applet_name) {
         panic!("injected native launch panic");
@@ -2430,8 +2737,15 @@ where
             // Direct quoted commands use a synthetic manifest that is not in
             // the registry. Keep their legacy launch path when no strict
             // capability policy is active.
-            let mut command = Command::new(binary);
+            let mut command = Command::new(
+                pinned
+                    .as_ref()
+                    .map_or(binary, |pinned| pinned.program(binary)),
+            );
             crate::platform::add_arguments(&mut command, arguments);
+            if let Some(pinned) = pinned {
+                pinned.attach(&mut command, binary);
+            }
             apply_child_environment(registry, applet_name, &mut command, environment)?;
             cwd.apply(&mut command);
             return Ok(command);
@@ -2462,8 +2776,15 @@ where
         return Err(error);
     }
     let Some(policy) = configured.as_ref() else {
-        let mut command = Command::new(binary);
+        let mut command = Command::new(
+            pinned
+                .as_ref()
+                .map_or(binary, |pinned| pinned.program(binary)),
+        );
         crate::platform::add_arguments(&mut command, arguments);
+        if let Some(pinned) = pinned {
+            pinned.attach(&mut command, binary);
+        }
         apply_child_environment(registry, applet_name, &mut command, environment)?;
         cwd.apply(&mut command);
         return Ok(command);
@@ -2513,11 +2834,23 @@ where
             .with_context(|| format!("preflighting required sandbox for applet {applet_name:?}"))?;
     }
     let mut command = if native_sandbox {
+        // The sandbox wrapper executes the binary by path inside the
+        // sandbox, where a held descriptor of this process does not name
+        // the file; the pin above still re-hashed the reviewed bytes, and
+        // SECURITY.md names the residual hash-to-`exec` window here.
+        drop(pinned);
         crate::platform::sandbox::command(binary, arguments, grant, cwd)
             .map_err(|error| SandboxRefused(format!("{error:#}")))?
     } else {
-        let mut command = Command::new(binary);
+        let mut command = Command::new(
+            pinned
+                .as_ref()
+                .map_or(binary, |pinned| pinned.program(binary)),
+        );
         crate::platform::add_arguments(&mut command, arguments);
+        if let Some(pinned) = pinned {
+            pinned.attach(&mut command, binary);
+        }
         command
     };
     #[cfg(unix)]

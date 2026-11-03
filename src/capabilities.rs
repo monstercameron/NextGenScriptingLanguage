@@ -2806,11 +2806,17 @@ where
     }
     // The one check every spawn path reaches before a Command exists. It classifies the
     // manifest binary name, when the applet is registered, and the resolved path.
-    let manifest_binary = registry
-        .resolve(applet_name)
+    // The applet is resolved once and borrowed through launch validation: the
+    // privileged-launch check, the inherited-environment fast path, the
+    // environment setup and the launch below share this lookup instead of
+    // resolving (and cloning the manifest binary) again at each stage.
+    let resolved_manifest = registry.resolve(applet_name);
+    let names: Vec<&str> = resolved_manifest
+        .as_ref()
         .ok()
-        .map(|manifest| manifest.binary.clone());
-    let names: Vec<&str> = manifest_binary.as_deref().into_iter().collect();
+        .map(|manifest| manifest.binary.as_str())
+        .into_iter()
+        .collect();
     check_privileged_launch(registry, &names, binary)?;
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     // With no capability policy, command overlay, manifest environment section or declared
@@ -2829,17 +2835,22 @@ where
     let inherits_environment = configured.as_ref().is_none()
         && allowlist.is_none()
         && !command_overlay_active()
-        && registry
-            .resolve(applet_name)
+        && resolved_manifest
+            .as_ref()
+            .ok()
             .map_or(true, |manifest| manifest.environment().is_none())
         && !crate::security::declares_secret_environment(registry, applet_name);
     let environment = if inherits_environment {
         None
     } else {
-        let environment = effective_environment(registry, applet_name)?;
+        let environment = effective_environment_with_manifest(
+            registry,
+            applet_name,
+            resolved_manifest.as_ref().ok().copied(),
+        )?;
         Some(apply_command_overlay(registry, applet_name, environment)?)
     };
-    let manifest = match registry.resolve(applet_name) {
+    let manifest = match resolved_manifest {
         Ok(manifest) => manifest,
         Err(_) if configured.as_ref().is_none() => {
             // Direct quoted commands use a synthetic manifest that is not in
@@ -3112,6 +3123,42 @@ pub fn effective_environment(
                 .with_context(|| format!("resolving applet {applet_name:?} environment"));
         }
     };
+    effective_environment_for_manifest(registry, applet_name, &configured, manifest)
+}
+
+/// Environment setup for a manifest the caller already resolved: `command_for`
+/// passes the applet it borrowed for launch validation so one spawn resolves
+/// the registry once instead of again here. A missing manifest falls back to
+/// the same registry lookup, so direct commands and diagnostics are unchanged.
+fn effective_environment_with_manifest(
+    registry: &Registry,
+    applet_name: &str,
+    cached: Option<&crate::manifest::Manifest>,
+) -> Result<Vec<(OsString, OsString)>> {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let manifest = match cached {
+        Some(manifest) => Some(manifest),
+        None => match registry.resolve(applet_name) {
+            Ok(manifest) => Some(manifest),
+            Err(error) if configured.as_ref().is_none() => {
+                let _ = error;
+                None
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("resolving applet {applet_name:?} environment"));
+            }
+        },
+    };
+    effective_environment_for_manifest(registry, applet_name, &configured, manifest)
+}
+
+fn effective_environment_for_manifest(
+    registry: &Registry,
+    applet_name: &str,
+    configured: &Option<CapabilityPolicy>,
+    manifest: Option<&crate::manifest::Manifest>,
+) -> Result<Vec<(OsString, OsString)>> {
     if let Some(manifest) = manifest {
         if let Err(error) = validate_environment_backend(manifest) {
             record_preflight_denial(registry, &manifest.name, "environment.overlay");
@@ -3145,7 +3192,7 @@ pub fn effective_environment(
             if name.as_encoded_bytes().starts_with(b"=") {
                 return false;
             }
-            environment_name_allowed(configured.as_ref().as_ref(), applet_name, name)
+            environment_name_allowed(configured.as_ref(), applet_name, name)
                 && allowlist.as_ref().is_none_or(|list| {
                     list.iter()
                         .any(|allowed| same_environment_name(name, allowed))

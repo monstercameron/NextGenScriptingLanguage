@@ -435,13 +435,21 @@ resolved path, and refuses separator-bearing applet binaries when that path
 is missing rather than fingerprinting a review-cwd file the launch would
 never run. A `run --confirm` review additionally pins every reviewed
 executable: the hashes from the confirmed fingerprint are installed on the
-run, and each native launch re-hashes its resolved executable against that
-map immediately before its command is built, refusing on any mismatch or on
-an executable the review never saw. This closes the review-to-launch gap
-down to the residual hash-to-`exec` window on every platform; no platform
-closes that last window, because no spawn path executes from a held
-descriptor (`fexecve`/`execveat` is not implemented, and macOS offers
-neither). The
+run, and each native launch verifies its resolved executable against that
+map, refusing on any mismatch or on an executable the review never saw. On
+Linux, a launch that does not go through an OS sandbox wrapper opens the
+resolved executable once, hashes that held descriptor, and executes the
+child from the same descriptor (`/proc/self/fd/N`, keeping the original
+path as argv[0]); the inode the hash covers is therefore the inode that
+runs, even if the pathname is replaced between the hash and `exec`, and a
+child-side identity re-check on the descriptor refuses an in-place rewrite
+of that inode in the same interval. Windows cannot exec a held descriptor,
+macOS offers neither `fexecve` nor `execveat`, and sandbox-wrapper launches
+(bubblewrap, `sandbox-exec`) execute by path inside the sandbox; on those
+paths the launch only re-hashes the resolved executable immediately before
+its command is built, so a residual hash-to-`exec` window remains there and
+is not closed: a same-user replacement landing in that window would still
+run. The
 macOS profile uses Apple's undocumented, deprecated `sandbox-exec` interface.
 The sandbox applies to the launched applet and descendants that inherit it; a
 descendant that deliberately detaches may outlive its parent, so parent

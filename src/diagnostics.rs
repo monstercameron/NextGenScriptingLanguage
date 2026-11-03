@@ -1578,6 +1578,114 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         .flatten()
 }
 
+/// The argument index at which a value stops being data and becomes the
+/// command that runs, for positions [`shell_command_argument_index`] does
+/// not cover (#522, #373): the child command name an `env`/`busybox`
+/// wrapper execs, an `env -S` command line, and an interpreter's inline
+/// program (`-c`/`-e`). Ordinary argv items of a fixed command are data
+/// and never match. The returned index only matters when the argument
+/// there is a reference to model-generated text.
+fn model_command_argument_index(executable: &str, arguments: &[Value]) -> Option<usize> {
+    if let Some(index) = shell_command_argument_index(executable, arguments) {
+        return Some(index);
+    }
+    fn executable_name(value: &str) -> &str {
+        std::path::Path::new(value)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(value)
+    }
+    fn inline_program_index(arguments: &[Value], flags: &[&str]) -> Option<usize> {
+        let mut index = 0;
+        while let Some(Value::String(argument)) = arguments.get(index) {
+            if flags.contains(&argument.as_str()) {
+                return Some(index + 1);
+            }
+            if argument == "--" || argument == "-" || !argument.starts_with('-') {
+                // The first non-option argument is a script file; the
+                // interpreter's own option region has ended.
+                return None;
+            }
+            // A short flag cluster ending in the program flag (`perl -ne`,
+            // `node -pe`) still takes the next argument as the program.
+            let cluster = argument.strip_prefix('-').unwrap_or_default();
+            if cluster.len() > 1
+                && !cluster.starts_with('-')
+                && cluster.bytes().all(|byte| byte.is_ascii_alphabetic())
+                && flags
+                    .iter()
+                    .any(|flag| flag.len() == 2 && flag.ends_with(cluster.chars().last().unwrap()))
+            {
+                return Some(index + 1);
+            }
+            index += 1;
+        }
+        None
+    }
+    fn env_child_index(arguments: &[Value]) -> Option<usize> {
+        let mut index = 0;
+        loop {
+            let Value::String(argument) = arguments.get(index)? else {
+                // The first non-literal where the child command belongs
+                // names the command `env` will exec.
+                return Some(index);
+            };
+            if argument == "--" {
+                return arguments.get(index + 1).map(|_| index + 1);
+            }
+            if argument.starts_with('-') {
+                if matches!(argument.as_str(), "-S" | "--split-string") {
+                    // The split string itself is the command line.
+                    return Some(index + 1);
+                }
+                if matches!(argument.as_str(), "-u" | "--unset" | "-C" | "--chdir") {
+                    index += 2;
+                    continue;
+                }
+                if argument.starts_with("--unset=")
+                    || argument.starts_with("--chdir=")
+                    || argument.starts_with("--split-string=")
+                    || matches!(
+                        argument.as_str(),
+                        "-i" | "--ignore-environment" | "-0" | "--null" | "--debug"
+                    )
+                {
+                    index += 1;
+                    continue;
+                }
+                return None;
+            }
+            match argument.split_once('=') {
+                // A `NAME=value` assignment precedes the child command.
+                Some((name, _))
+                    if !name.is_empty()
+                        && name.chars().enumerate().all(|(position, ch)| {
+                            ch == '_'
+                                || ch.is_ascii_alphanumeric()
+                                    && (position > 0 || !ch.is_ascii_digit())
+                        }) =>
+                {
+                    index += 1;
+                }
+                _ => return Some(index),
+            }
+        }
+    }
+    match executable_name(executable) {
+        "env" => env_child_index(arguments),
+        "busybox" => {
+            let applet_index =
+                usize::from(matches!(arguments.first(), Some(Value::String(flag)) if flag == "--"));
+            arguments.get(applet_index).map(|_| applet_index)
+        }
+        "python" | "python3" => inline_program_index(arguments, &["-c"]),
+        "node" | "nodejs" => inline_program_index(arguments, &["-e", "--eval"]),
+        "perl" => inline_program_index(arguments, &["-e", "-E"]),
+        "ruby" => inline_program_index(arguments, &["-e"]),
+        _ => None,
+    }
+}
+
 fn mini_language_program_arguments(
     executable: &str,
     arguments: &[Value],
@@ -2851,15 +2959,15 @@ fn collect_model_lints(
         let Some(Value::List(arguments)) = call.parameters.get("arguments") else {
             continue;
         };
-        let shell_command = shell_command_argument_index(&call.operation, arguments)
+        let command_position = model_command_argument_index(&call.operation, arguments)
             .is_some_and(|index| {
                 matches!(arguments.get(index), Some(Value::Reference(name)) if generated_text.contains(name))
             });
-        if shell_command {
+        if command_position {
             diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Warning,
                 code: "model.text_to_command".into(),
-                message: "model-generated text is passed as a shell command; keep it as data and use fixed, reviewed commands".into(),
+                message: "model-generated text is used as a command name or inline program; keep it as data and use fixed, reviewed commands".into(),
                 span: parameter_value_span_at(source, line, "arguments", line_starts).unwrap_or_else(|| line_starts.span(source, line)),
                 fixes: Vec::new(),
                 related: Vec::new(),

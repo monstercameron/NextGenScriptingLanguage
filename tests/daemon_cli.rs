@@ -504,6 +504,105 @@ fn daemon_rejects_raw_run_requests() {
     assert!(reply["reason"].as_str().unwrap().contains("confinement"));
 }
 
+/// The SHA-256 of the `execute` binary under test, which is also the daemon binary.
+fn execute_binary_sha256() -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "{:x}",
+        Sha256::digest(fs::read(env!("CARGO_BIN_EXE_execute")).unwrap())
+    )
+}
+
+/// One raw `run` request carrying `identity` fields, read up to its reply newline.
+/// No descriptors are sent, so a request that passes the identity and confinement
+/// gates is answered with the descriptor error instead of a fallback.
+fn raw_run_request(socket: &Path, identity: Value) -> Value {
+    let mut request = serde_json::json!({
+        "protocol": "execute.daemon/1",
+        "op": "run",
+        "accept_daemon_context": true,
+        "argv": ["run", "workflow.program"],
+        "cwd": "/tmp",
+        "env": [],
+        "umask": 0o022,
+        "limits": {
+            "nofile": [1, 2], "nproc": [1, 2], "as": [1, 2],
+            "cpu": [1, 2], "fsize": [1, 2], "core": [1, 2],
+        },
+    });
+    request
+        .as_object_mut()
+        .unwrap()
+        .extend(identity.as_object().unwrap().clone());
+    let mut stream = UnixStream::connect(socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream.write_all(format!("{request}\n").as_bytes()).unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+#[test]
+fn daemon_status_and_ping_report_the_serving_build() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let status: Value =
+        serde_json::from_slice(&daemon_output(runtime.path(), &["status"]).stdout).unwrap();
+    let ping = raw_request(&default_socket_under(runtime.path()), "ping");
+    for reply in [&status, &ping] {
+        assert_eq!(reply["execute_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(reply["binary_sha256"], execute_binary_sha256());
+        let started = reply["started_unix_ms"].as_u64().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(started > 0 && started <= now, "started {started} now {now}");
+    }
+}
+
+#[test]
+fn daemon_declines_runs_from_a_different_build() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background_accepting(runtime.path());
+    let socket = default_socket_under(runtime.path());
+    // A client from another build, and an older client that sends no identity at
+    // all, both fall back to a local run with a restart note (#447).
+    for identity in [
+        serde_json::json!({"execute_version": "0.0.0-stale", "binary_sha256": "00"}),
+        serde_json::json!({
+            "execute_version": env!("CARGO_PKG_VERSION"),
+            "binary_sha256": "00",
+        }),
+        serde_json::json!({}),
+    ] {
+        let reply = raw_run_request(&socket, identity);
+        assert_eq!(reply["event"], "fallback", "{reply}");
+        assert!(
+            reply["reason"]
+                .as_str()
+                .unwrap()
+                .contains("restart the daemon"),
+            "{reply}"
+        );
+    }
+    // The same build passes the identity gate and reaches the descriptor check.
+    let reply = raw_run_request(
+        &socket,
+        serde_json::json!({
+            "execute_version": env!("CARGO_PKG_VERSION"),
+            "binary_sha256": execute_binary_sha256(),
+        }),
+    );
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(
+        reply["error"].as_str().unwrap().contains("descriptors"),
+        "{reply}"
+    );
+}
+
 #[test]
 fn environment_selected_daemon_runs_locally() {
     let runtime = tempfile::tempdir().unwrap();

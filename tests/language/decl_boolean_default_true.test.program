@@ -1,0 +1,2 @@
+accept flag as boolean with default true
+then encode flag as json

@@ -1,0 +1,2 @@
+read "no-such-file-for-conformance.txt" as contents
+use value contents

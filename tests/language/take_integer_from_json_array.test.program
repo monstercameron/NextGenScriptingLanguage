@@ -1,0 +1,3 @@
+use value {"items": [10, 20, 30]} as doc
+take integer at "/items/2" from doc as n
+then encode n as json

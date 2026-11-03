@@ -75,6 +75,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
       - name: Check the model-only build and helper environment
+        env:
+          # The test stages copies of the binaries under Cargo's output directory and
+          # runs them through the production owner gate. Windows runners place that
+          # directory on D:\, whose root is owned by NETWORK SERVICE and is refused,
+          # so this step builds on the system drive instead.
+          CARGO_TARGET_DIR: ${{ runner.os == 'Windows' && 'C:\ngs-target-model' || 'target' }}
         run: cargo test --locked --no-default-features --features model --test model_env_minimize
       - name: Test the core and default builds
         shell: bash

@@ -248,6 +248,10 @@ mod missing_key_tests {
 
 /// Create a new key at `path` with owner-only permissions. If another process creates
 /// the file first, its key is read instead, so the two never disagree.
+///
+/// The key is written to a private temporary name and published with a hard link,
+/// which fails when `path` already exists. A concurrent reader therefore sees either
+/// no key or the whole key, never an empty file that would be refused as corrupt.
 fn create(path: &Path) -> Result<[u8; KEY_BYTES]> {
     let parent = path
         .parent()
@@ -256,26 +260,18 @@ fn create(path: &Path) -> Result<[u8; KEY_BYTES]> {
     let mut key = [0u8; KEY_BYTES];
     getrandom::fill(&mut key)
         .map_err(|error| anyhow::anyhow!("generating the what-if key: {error}"))?;
-    #[cfg(not(windows))]
-    let mut options = OpenOptions::new();
-    #[cfg(not(windows))]
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    #[cfg(windows)]
-    let created = crate::platform::windows::create_private_file(path);
-    #[cfg(not(windows))]
-    let created = options.open(path);
-    match created {
-        Ok(mut file) => {
-            file.write_all(&key)
-                .and_then(|()| file.sync_all())
-                .with_context(|| format!("writing the what-if key {}", path.display()))?;
-            Ok(key)
-        }
+    let mut suffix = [0u8; 8];
+    getrandom::fill(&mut suffix)
+        .map_err(|error| anyhow::anyhow!("generating a temporary key name: {error}"))?;
+    let temporary = parent.join(format!(
+        ".what-if.key.{:016x}.tmp",
+        u64::from_le_bytes(suffix)
+    ));
+    let published = write_private(&temporary, &key)
+        .and_then(|()| fs::hard_link(&temporary, path).map_err(anyhow::Error::from));
+    let _ = fs::remove_file(&temporary);
+    match published {
+        Ok(()) => Ok(key),
         Err(error) if is_already_exists(&error) => read_existing(path)?
             .context("the what-if key was created by another process but could not be read"),
         Err(error) => {
@@ -284,18 +280,39 @@ fn create(path: &Path) -> Result<[u8; KEY_BYTES]> {
     }
 }
 
+/// Write `key` to a new owner-only file at `path` and flush it to disk.
+fn write_private(path: &Path, key: &[u8]) -> Result<()> {
+    let mut file = open_new_private(path)?;
+    file.write_all(key)
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("writing the what-if key {}", path.display()))
+}
+
 #[cfg(windows)]
+fn open_new_private(path: &Path) -> Result<fs::File> {
+    crate::platform::windows::create_private_file(path)
+}
+
+#[cfg(not(windows))]
+fn open_new_private(path: &Path) -> Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))
+}
+
 fn is_already_exists(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
             .is_some_and(|error| error.kind() == ErrorKind::AlreadyExists)
     })
-}
-
-#[cfg(not(windows))]
-fn is_already_exists(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::AlreadyExists
 }
 
 #[cfg(unix)]
@@ -333,6 +350,27 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "the key file must be owner-only");
         assert_eq!(fs::read(&path).unwrap().len(), KEY_BYTES);
+    }
+
+    #[test]
+    fn concurrent_first_use_sees_one_whole_key() {
+        let (_directory, path) = private_path();
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || load_or_create_at(&path))
+            })
+            .collect();
+        let keys: Vec<_> = handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap()
+                    .expect("every racer gets a whole key")
+            })
+            .collect();
+        assert!(keys.iter().all(|key| *key == keys[0]), "racers disagreed");
     }
 
     #[test]

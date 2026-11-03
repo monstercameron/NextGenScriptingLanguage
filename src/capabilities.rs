@@ -2836,6 +2836,34 @@ fn preflight_invocations_with_policy<'a>(
     Ok(())
 }
 
+/// The name the child is launched as (argv[0]). Resolution canonicalizes the file that
+/// runs, so a catalog-relative binary reached through a symlink would otherwise hand
+/// the child its target's name. Multicall dispatch keys on argv[0], so a relative
+/// binary keeps its manifest spelling, joined under the manifest directory. The
+/// canonical `binary` still runs.
+fn launch_argv0(registry: &Registry, applet_name: &str, binary: &Path) -> PathBuf {
+    let Ok(manifest) = registry.resolve(applet_name) else {
+        return binary.to_path_buf();
+    };
+    let spelled = manifest.binary.as_str();
+    if spelled.starts_with('@') || Path::new(spelled).is_absolute() || !spelled.contains('/') {
+        return binary.to_path_buf();
+    }
+    match manifest.origin().and_then(Path::parent) {
+        Some(parent) => parent.join(spelled),
+        None => binary.to_path_buf(),
+    }
+}
+
+#[cfg(unix)]
+fn set_argv0(command: &mut Command, argv0: &Path) {
+    use std::os::unix::process::CommandExt;
+    command.arg0(argv0);
+}
+
+#[cfg(not(unix))]
+fn set_argv0(_command: &mut Command, _argv0: &Path) {}
+
 /// Build the child command, applying policy environment filtering and OS
 /// sandboxing. Call this at every launch site, including persistent workers.
 pub fn command_for<I, S>(
@@ -2876,6 +2904,7 @@ where
         .into_iter()
         .collect();
     check_privileged_launch(registry, &names, binary)?;
+    let argv0 = launch_argv0(registry, applet_name, binary);
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     // With no capability policy, command overlay, manifest environment section or declared
     // secret variable, the child environment is exactly the inherited one. The command then
@@ -2920,8 +2949,9 @@ where
                     .map_or(binary, |pinned| pinned.program(binary)),
             );
             crate::platform::add_arguments(&mut command, arguments);
+            set_argv0(&mut command, &argv0);
             if let Some(pinned) = pinned {
-                pinned.attach(&mut command, binary);
+                pinned.attach(&mut command, &argv0);
             }
             apply_child_environment(registry, applet_name, &mut command, environment)?;
             cwd.apply(&mut command);
@@ -2959,8 +2989,9 @@ where
                 .map_or(binary, |pinned| pinned.program(binary)),
         );
         crate::platform::add_arguments(&mut command, arguments);
+        set_argv0(&mut command, &argv0);
         if let Some(pinned) = pinned {
-            pinned.attach(&mut command, binary);
+            pinned.attach(&mut command, &argv0);
         }
         apply_child_environment(registry, applet_name, &mut command, environment)?;
         cwd.apply(&mut command);
@@ -3028,8 +3059,9 @@ where
                 .map_or(binary, |pinned| pinned.program(binary)),
         );
         crate::platform::add_arguments(&mut command, arguments);
+        set_argv0(&mut command, &argv0);
         if let Some(pinned) = pinned {
-            pinned.attach(&mut command, binary);
+            pinned.attach(&mut command, &argv0);
         }
         command
     };

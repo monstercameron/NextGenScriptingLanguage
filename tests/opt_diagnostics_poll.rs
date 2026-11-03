@@ -202,6 +202,7 @@ fn assert_worker_reaped(directory: &Path) {
         .unwrap()
         .parse()
         .unwrap();
+    // SAFETY: signal 0 only probes whether `pid` exists; it sends no signal and touches no memory.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),

@@ -147,6 +147,7 @@ fn process_exists(pid: i32) -> bool {
     if handle.is_null() {
         return false;
     }
+    // SAFETY: `handle` is non-null and was returned by OpenProcess above, so it is valid to close once here.
     unsafe { CloseHandle(handle) };
     true
 }

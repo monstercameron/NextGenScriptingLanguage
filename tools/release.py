@@ -133,6 +133,29 @@ def publication_assets(value):
     return expected_assets(value) | {CHECKSUMS, SIGNATURE}
 
 
+def documented_artifacts(value):
+    validate(value)
+    return {CHECKSUMS, SIGNATURE, "execute-" + value + ".cdx.json"}
+
+
+def verify_publication_assets(folder, value):
+    actual = {p.name for p in folder.iterdir() if p.is_file()}
+    expected = publication_assets(value)
+    missing_documented = sorted(documented_artifacts(value) - actual)
+    if missing_documented:
+        raise ValueError(
+            "documented release artifacts missing before publish: "
+            + ", ".join(missing_documented)
+        )
+    if actual != expected:
+        raise ValueError(
+            "publication asset set mismatch; missing="
+            + repr(sorted(expected - actual))
+            + "; unexpected="
+            + repr(sorted(actual - expected))
+        )
+
+
 def verify_assets(folder, value):
     actual = {p.name for p in folder.iterdir() if p.is_file()}
     expected = expected_assets(value)
@@ -166,6 +189,8 @@ def main():
     bump.add_argument("part", choices=["major", "minor", "patch"])
     assets = sub.add_parser("verify-assets")
     assets.add_argument("directory", type=Path)
+    publication = sub.add_parser("verify-publication-assets")
+    publication.add_argument("directory", type=Path)
     args = parser.parse_args()
     value = version()
     if args.command == "version":
@@ -185,6 +210,8 @@ def main():
         print(new)
     elif args.command == "verify-assets":
         verify_assets(args.directory, value)
+    elif args.command == "verify-publication-assets":
+        verify_publication_assets(args.directory, value)
 
 
 if __name__ == "__main__":

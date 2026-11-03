@@ -7,7 +7,13 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
-from release import CHECKSUMS, SIGNATURE, publication_assets, version
+from release import (
+    CHECKSUMS,
+    SIGNATURE,
+    publication_assets,
+    verify_publication_assets,
+    version,
+)
 
 
 def gh(*args, **kwargs):
@@ -53,8 +59,7 @@ def main():
         raise ValueError("publication must run for the exact version tag")
     folder = Path("dist")
     expected = publication_assets(value)
-    if {p.name for p in folder.iterdir()} != expected:
-        raise ValueError("publication asset set is incomplete")
+    verify_publication_assets(folder, value)
     lines = (folder / CHECKSUMS).read_text().splitlines()
     # The checksums cover the payloads; SHA256SUMS and its signature are not payloads.
     actual = {

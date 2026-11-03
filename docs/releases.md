@@ -31,12 +31,23 @@ Arch Linux packaging (`packaging/aur/execute-bin` for the release tarball and
 `tools/aur.py` to render the version and checksums. It is not submitted to the AUR
 automatically, and the Arch build job in the packages workflow runs on tags.
 
-Download from [GitHub Releases](https://github.com/monstercameron/NextGenScriptingLanguage/releases),
-including `SHA256SUMS` and its Sigstore bundle `SHA256SUMS.sigstore.json`.
-Verify the signature on `SHA256SUMS`, then the checksum, before extracting or
-installing anything. The signature establishes that the checksum file came
-from this repository's release workflow; the checksum itself only detects
-corruption of a downloaded artifact. This step requires
+Download from [GitHub Releases](https://github.com/monstercameron/NextGenScriptingLanguage/releases).
+Which verification files to download depends on the release; check its asset
+list first. Releases published by the current workflow include `SHA256SUMS`
+and its Sigstore bundle `SHA256SUMS.sigstore.json`. The published
+`v0.9.0-rc.4` candidate predates that asset set: it has the twelve packages
+and `SHA256SUMS` only, with no `SHA256SUMS.sigstore.json` and no
+`execute-0.9.0-rc.4.cdx.json` SBOM attached, so the `cosign` commands below
+cannot be used for it. For `v0.9.0-rc.4`, follow the checksum and
+build-provenance steps in [Verifying a release](#verifying-a-release) instead.
+
+For a release that does publish the bundle, verify the signature on
+`SHA256SUMS`, then the checksum, before extracting or installing anything.
+These are different guarantees: the signature provides authenticity (that the
+checksum file came from this repository's release workflow); the checksum
+provides integrity only (that a downloaded artifact matches the listed digest
+and was not corrupted or truncated). A checksum alone does not prove who
+produced the file. This step requires
 [cosign](https://docs.sigstore.dev/cosign/system_config/installation/); replace
 `VERSION` with the release version. See [Verifying a release](#verifying-a-release)
 for the full procedure, including build provenance.
@@ -50,7 +61,9 @@ sha256sum --check SHA256SUMS --ignore-missing
 # Compare with that exact filename in SHA256SUMS.
 ```
 
-PowerShell (verify first, extract only after both checks pass):
+PowerShell, for a release that publishes the bundle (verify first, extract
+only after both checks pass; for `v0.9.0-rc.4`, skip the `cosign` line and use
+the provenance step in [Verifying a release](#verifying-a-release)):
 
 ```powershell
 cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity "https://github.com/monstercameron/NextGenScriptingLanguage/.github/workflows/release.yml@refs/tags/vVERSION" --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
@@ -82,15 +95,17 @@ DEB or RPM for arbitrary host commands, package managers and Omarchy/Hyprland
 integration. There is no hidden `flatpak-spawn --host` escape. Platform applets
 such as `gh`, `jq` and `ps` still need to exist where the runtime invokes them.
 
-GitHub build provenance is attached to release artifacts:
+GitHub build provenance is recorded for release artifacts (including
+`v0.9.0-rc.4`); it is stored by GitHub, not as a release asset file:
 
 ```sh
 gh attestation verify execute-VERSION-linux-x64.tar.gz \
   --repo monstercameron/NextGenScriptingLanguage
 ```
 
-Checksums detect corruption; attestation identifies the repository workflow that
-built an artifact. They do not replace OS code signing or a platform acceptance
+Checksums provide integrity (detecting corruption); attestation and the
+Sigstore bundle provide authenticity (identifying the repository workflow that
+built an artifact or signed the checksum file). They do not replace OS code signing or a platform acceptance
 study. Signing certificates, Apple notarization and Flatpak repository GPG keys
 are not configured.
 
@@ -124,8 +139,11 @@ published tags. A manually dispatched release must select an existing tag.
 The release workflow runs the reusable native checks, builds six native targets,
 executes extracted packages, installs DEBs, verifies RPM installation, runs both
 Flatpak sandboxes, and checks the exact twelve-package asset set. Only then does
-it generate `SHA256SUMS`, attest the artifacts and create a draft release. It
-checks uploaded server SHA-256 digests before publication. A retry may repair
+it generate `SHA256SUMS`, attest the artifacts and create a draft release.
+After signing, `tools/release.py verify-publication-assets dist` must find the
+documented artifacts (`SHA256SUMS`, `SHA256SUMS.sigstore.json` and
+`execute-<version>.cdx.json`) in the publication set, or publication stops.
+It checks uploaded server SHA-256 digests before publication. A retry may repair
 an owned draft; a published release is only accepted unchanged, byte for byte.
 
 Actions are pinned to commit SHAs. Build jobs have read-only tokens; only the
@@ -139,7 +157,9 @@ independent toolchains, and signatures can differ between builds.
 
 The first published multi-platform candidate is **[0.9.0-rc.4](https://github.com/monstercameron/NextGenScriptingLanguage/releases/tag/v0.9.0-rc.4)**. Its complete [validation receipt](release-validation-0.9.0-rc.4.json)
 records the source commit, every package digest, native test cohorts and verified
-GitHub signing identity. Earlier unpublished candidate tags retain the fixes and
+GitHub signing identity. That release attaches the twelve packages and
+`SHA256SUMS` only; it has no Sigstore bundle or CycloneDX SBOM asset (see
+[Verifying a release](#verifying-a-release)). Earlier unpublished candidate tags retain the fixes and
 failed-attempt evidence; their draft release was cleaned up.
 
 For interrupted publication, rerun failed jobs so they reuse the tested artifacts.
@@ -152,10 +172,40 @@ source commit, platform results, artifacts and any known limitations.
 
 ## Verifying a release
 
-Each release publishes `SHA256SUMS`, a Sigstore bundle that signs it
-(`SHA256SUMS.sigstore.json`), a CycloneDX SBOM of the locked dependency graph
-(`execute-<version>.cdx.json`), and GitHub build provenance and SBOM attestations.
-Verify the signature, then the checksums, before installing:
+Verification has two separate parts. Checksum integrity (`SHA256SUMS`) shows
+a downloaded file matches the listed digest; it does not show who produced
+it. Authenticity comes from the Sigstore bundle signing `SHA256SUMS`, or from
+GitHub build provenance identifying the workflow that built a package.
+
+What each published candidate actually has:
+
+| Release | Packages | `SHA256SUMS` | `SHA256SUMS.sigstore.json` | `execute-<version>.cdx.json` | Build provenance |
+| --- | --- | --- | --- | --- | --- |
+| `v0.9.0-rc.4` (only published candidate) | 12 attached | Attached | Not attached | Not attached | Recorded with GitHub |
+| Future releases from the current workflow | 12 attached | Attached | Attached | Attached | Recorded with GitHub |
+
+The release workflow now checks that set with
+`tools/release.py verify-publication-assets dist` after signing and before
+publishing, so a future release missing a documented artifact is not
+published. Published releases are not modified to add missing files.
+
+For `v0.9.0-rc.4`, use the supported path its assets allow: integrity from
+`SHA256SUMS`, authenticity from build provenance. Download the package and
+`SHA256SUMS` from the release page, then, before installing:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify ./execute-0.9.0-rc.4-linux-x64.tar.gz --repo monstercameron/NextGenScriptingLanguage
+```
+
+On Windows, compare `Get-FileHash <package> -Algorithm SHA256` with that exact
+filename in `SHA256SUMS`, then run the same `gh attestation verify` command
+for the downloaded package. There is no `cosign verify-blob` step for this
+release, and no SBOM asset to inspect; that is a limitation of this candidate,
+not a step to skip silently on releases that do publish those files.
+
+For a future release that publishes the bundle and SBOM, verify the signature,
+then the checksums, before installing:
 
 ```sh
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \

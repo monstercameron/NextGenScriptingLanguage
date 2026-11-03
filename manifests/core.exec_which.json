@@ -18,8 +18,8 @@
     "backend": "in_process",
     "lifecycle": { "kind": "oneshot" },
     "output": { "type": "json", "encoding": "json" },
-    "capabilities": [],
-    "effects": [],
+    "capabilities": ["filesystem.read"],
+    "effects": ["filesystem.read"],
     "ports": {
       "inputs": {
         "name": { "schema": { "type": "text" }, "delivery": "single" },

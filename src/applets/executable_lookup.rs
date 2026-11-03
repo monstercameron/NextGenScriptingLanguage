@@ -37,6 +37,11 @@ pub(super) fn which(
         Some(Value::String(path)) => path.into(),
         Some(_) => return Err(invalid("args.path must be a string")),
     };
+    if names.iter().any(|name| name.contains('/') || name.contains('\\') || Path::new(name).is_absolute()) {
+        return Err(invalid(
+            "command names must not contain path separators; names are searched on PATH",
+        ));
+    }
     let mut all = Vec::new();
     for name in names {
         context.checkpoint()?;

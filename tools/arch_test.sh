@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the rendered AUR packages in an Arch container, installs each with pacman, and
-# smoke-tests the installed tree. Run as root inside archlinux:latest with the repository
+# smoke-tests the installed tree. Run as root inside the pinned archlinux base image
+# (see the arch job in .github/workflows/packages.yml) with the repository
 # mounted at /work and tools/aur.py output in /work/pkgs.
 set -eu
 

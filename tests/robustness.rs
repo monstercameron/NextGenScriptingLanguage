@@ -1,5 +1,4 @@
 #![cfg(feature = "screens")]
-#![cfg(unix)]
 //! Seeded adversarial checks: malformed programs never execute native commands.
 use flow::{manifest::Registry, parser, schedule::CronSchedule, stream, ui};
 use std::path::Path;

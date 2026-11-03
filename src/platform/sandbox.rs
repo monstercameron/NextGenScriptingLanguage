@@ -1120,8 +1120,13 @@ fn ensure_parent_directories(
     created: &mut BTreeSet<PathBuf>,
     covered_roots: &[PathBuf],
 ) {
+    // Create only the parents. `ancestors()` yields `path` itself first, and a
+    // `--dir` at the bind target would turn a file bind such as
+    // /etc/ld.so.cache into a bind onto a directory. bwrap creates the mount
+    // point itself.
     let mut ancestors = path
         .ancestors()
+        .skip(1)
         .filter(|ancestor| *ancestor != Path::new("/"))
         .collect::<Vec<_>>();
     ancestors.reverse();

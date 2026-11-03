@@ -352,7 +352,7 @@ fn benchmark_run_with_context_cat_payloads() {
     assert!(sample_count > 0, "sample count must be positive");
 
     let directory = tempfile::tempdir().unwrap();
-    let registry = registry(directory.path(), "/bin/cat");
+    let registry = cat_registry(directory.path());
     let program = parser::parse("then worker\n").unwrap();
     let options = RunOptions {
         max_output_bytes: 4 * 1024 * 1024,

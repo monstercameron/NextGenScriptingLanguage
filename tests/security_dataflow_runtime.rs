@@ -1,4 +1,4 @@
-#![cfg(feature = "remote")]
+#![cfg(all(feature = "remote", feature = "graph"))]
 //! Cross-platform: remote applets run over TCP loopback and the worker fixture is
 //! a Python script launched through the interpreter. Unix-only notes mark the two
 //! spots that still depend on Unix execution: the secret producer is a shell script

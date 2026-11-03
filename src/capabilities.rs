@@ -357,12 +357,13 @@ mod execution_tests {
         let mut command = command_for(&tool, ["ignored"], &registry, "tool", &cwd).unwrap();
         command.stdout(std::process::Stdio::piped());
         std::fs::write(&tool, swapped).unwrap();
-        let error = command.output().unwrap_err();
+        // The pre-exec hook refuses the rewritten inode. std reports a hook
+        // error to the parent as a bare errno, so the refusal is asserted by
+        // outcome: the spawn fails and the swapped bytes never run.
+        let result = command.output();
         assert!(
-            error
-                .to_string()
-                .contains("changed after the confirmed review"),
-            "{error}"
+            result.is_err(),
+            "rewritten reviewed inode must refuse the spawn"
         );
     }
 

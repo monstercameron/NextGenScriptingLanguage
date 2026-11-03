@@ -24,6 +24,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Verify the vendored iana-time-zone source
+        run: python3 tools/verify_iana_time_zone.py
       - name: Install pinned scanners
         run: cargo install --locked --version 0.22.2 cargo-audit && cargo install --locked --version 0.20.2 cargo-deny
       - name: Audit the lockfile for vulnerabilities and warnings

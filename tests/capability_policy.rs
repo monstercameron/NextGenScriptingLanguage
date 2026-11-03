@@ -490,6 +490,119 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
 }
 
 #[test]
+fn command_for_borrows_one_applet_lookup_for_launch_and_environment() {
+    let canary = "EXECUTE_TEST_SINGLE_LOOKUP";
+    let source = serde_json::json!({
+        "name":"fixture.lookup",
+        "binary":"/usr/bin/env",
+        "arguments":[],
+        "contract":{
+            "version":1,
+            "capabilities":["process.exec"],
+            "environment":{
+                "set":{(canary):"lookup-value"},
+                "unset":["PATH"]
+            }
+        }
+    });
+    let registry = Registry::from_sources(&[source.to_string()]).unwrap();
+    let mut applet_grant = grant(&["process.exec"]);
+    applet_grant.environment.insert(canary.into());
+    registry.set_host_state(Some(CapabilityPolicy {
+        host: None,
+        version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
+        host_environment: Default::default(),
+        applets: BTreeMap::from([("fixture.lookup".into(), applet_grant)]),
+    }));
+    // Trusted mode keeps the launch on the plain Command path so this asserts
+    // the shared lookup and environment wiring, not sandbox preflight.
+    registry.set_host_state(Some(flow::capabilities::ExecutionMode::Trusted));
+
+    // The policy-filtered launch keeps argument order and carries exactly the
+    // resolved environment, including the manifest overlay.
+    let command = flow::capabilities::command_for(
+        Path::new("/usr/bin/env"),
+        ["first", "", "two words"],
+        &registry,
+        "fixture.lookup",
+        &flow::working_dir::WorkingDirectory::plain("."),
+    )
+    .unwrap();
+    assert_eq!(
+        command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        ["first", "", "two words"]
+    );
+    let expected = effective_environment(&registry, "fixture.lookup").unwrap();
+    assert_eq!(
+        expected
+            .iter()
+            .find(|(name, _)| name == canary)
+            .map(|(_, value)| value.as_os_str()),
+        Some(std::ffi::OsStr::new("lookup-value"))
+    );
+    assert!(!expected
+        .iter()
+        .any(|(name, _)| name == std::ffi::OsStr::new("PATH")));
+    let actual = command
+        .get_envs()
+        .map(|(name, value)| {
+            (
+                name.to_os_string(),
+                value.expect("filtered launch sets every variable").to_os_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        expected
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>()
+    );
+
+    // Without a policy the child inherits the environment untouched, so the
+    // command carries no environment deltas.
+    let plain = Registry::from_sources(&[serde_json::json!({
+        "name":"fixture.plain",
+        "binary":"/usr/bin/env",
+        "arguments":[],
+        "contract":{"version":1,"capabilities":["process.exec"]}
+    })
+    .to_string()])
+    .unwrap();
+    let inherited = flow::capabilities::command_for(
+        Path::new("/usr/bin/env"),
+        ["only"],
+        &plain,
+        "fixture.plain",
+        &flow::working_dir::WorkingDirectory::plain("."),
+    )
+    .unwrap();
+    assert_eq!(inherited.get_envs().count(), 0);
+
+    // A direct quoted command with no registered manifest keeps its legacy
+    // launch path when no policy is active.
+    let direct = flow::capabilities::command_for(
+        Path::new("/usr/bin/env"),
+        ["direct"],
+        &plain,
+        "unregistered.direct",
+        &flow::working_dir::WorkingDirectory::plain("."),
+    )
+    .unwrap();
+    assert_eq!(
+        direct.get_program(),
+        std::ffi::OsStr::new("/usr/bin/env")
+    );
+    assert_eq!(direct.get_envs().count(), 0);
+}
+
+#[test]
 fn decisions_record_approvals_and_denials_without_paths_or_environment_names() {
     use flow::security::{policy_decisions, PolicyDecisionOutcome};
 

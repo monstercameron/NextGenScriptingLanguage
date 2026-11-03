@@ -2694,8 +2694,10 @@ mod macos_acl_tests {
             0,
             "the test must exercise ACL access that mode bits do not reveal"
         );
-        let error = read_auth_token(&auth, directory.path())
-            .expect_err("a bearer file with a macOS extended ACL must be refused");
+        let error = match read_auth_token(&auth, directory.path()) {
+            Err(error) => error,
+            Ok(_) => panic!("a bearer file with a macOS extended ACL must be refused"),
+        };
         assert_eq!(error.kind, RemoteErrorKind::CredentialInvalid);
     }
 }

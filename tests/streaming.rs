@@ -439,6 +439,7 @@ fn assert_spawn_lines(stderr: &str, expected: &[&str]) {
         .filter_map(|e| e["pid"].as_u64())
     {
         assert_eq!(
+            // SAFETY: signal 0 only probes whether `pid` exists; it sends no signal and touches no memory.
             unsafe { libc::kill(pid as libc::pid_t, 0) },
             -1,
             "owned applet still alive after runner exit"
@@ -885,6 +886,7 @@ fn blocked_stdout_remains_deadline_bounded_and_cancellable() {
             // Ok(None), so the runner has not exited or been reaped.
             #[cfg(unix)]
             assert_eq!(
+                // SAFETY: the pid is the runner child this test spawned and has not reaped, so SIGINT targets our own child.
                 unsafe { libc::kill(runner.child.id() as libc::pid_t, libc::SIGINT) },
                 0
             );

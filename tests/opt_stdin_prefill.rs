@@ -274,6 +274,7 @@ fn assert_worker_reaped(directory: &Path) {
         .parse()
         .unwrap();
     assert_eq!(
+        // SAFETY: signal 0 only probes whether `pid` exists; it sends no signal and touches no memory.
         unsafe { libc::kill(pid, 0) },
         -1,
         "worker leaked after stdin handling"

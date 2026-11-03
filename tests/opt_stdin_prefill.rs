@@ -30,6 +30,7 @@ mod portable_shell;
 // Anonymous-pipe atomic-write boundary: the Unix PIPE_BUF where it exists,
 // the matching Windows pipe quantum otherwise.
 #[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // libc's PIPE_BUF is usize on some Unix targets and c_int on others.
 const PIPE_BUF: usize = libc::PIPE_BUF as usize;
 #[cfg(windows)]
 const PIPE_BUF: usize = 4096;

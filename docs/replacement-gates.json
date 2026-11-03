@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
-  "release": "0.8.0",
+  "release": "0.9.0-rc.5",
+  "commit": "b84d4cc883fbebeff7428bc657cc56cc2dc7782b",
   "overall_claim": "not_established",
   "full_replacement_claim_allowed": false,
   "aggregation": "All critical acceptance requirements must pass; scores are not averaged.",

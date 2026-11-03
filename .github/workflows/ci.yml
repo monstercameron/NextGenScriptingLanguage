@@ -37,6 +37,10 @@ jobs:
         run: python3 tools/test_ci_feature_matrix.py
       - name: Check sandbox-denial lane guards
         run: python3 tools/test_sandbox_denial_workflow.py
+      - name: Regenerate and check replacement gate summary
+        run: python3 tools/replacement_gates.py
+      - name: Test replacement gate summary generator
+        run: python3 -m unittest tools/test_replacement_gates.py
       - name: Clippy every feature combination
         shell: bash
         run: |

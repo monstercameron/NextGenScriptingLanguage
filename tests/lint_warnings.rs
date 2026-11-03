@@ -834,6 +834,39 @@ fn model_text_passed_to_shell_c_is_flagged_but_data_arguments_are_allowed() {
 }
 
 #[test]
+fn model_text_as_command_name_or_interpreter_program_is_flagged() {
+    for bad in [
+        // The child command `env`/`busybox` execs is named by model text.
+        "run llm.ask with prompt \"write something\" as generated\nrun \"env\" with arguments [generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"env\" with arguments [generated, \"arg\"]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"busybox\" with arguments [generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"env\" with arguments [\"MODE=fast\", generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"env\" with arguments [\"-S\", generated]\n",
+        // Interpreter inline programs are shell-like `-c`/`-e` positions.
+        "run llm.ask with prompt \"write something\" as generated\nrun \"python3\" with arguments [\"-c\", generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"node\" with arguments [\"-e\", generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"perl\" with arguments [\"-e\", generated]\n",
+        "run llm.ask with prompt \"write something\" as generated\nrun \"ruby\" with arguments [\"-e\", generated]\n",
+    ] {
+        let bad_diagnostics = analyze_source(bad, &Registry::default());
+        assert!(
+            bad_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "model.text_to_command"),
+            "{bad}: {bad_diagnostics:#?}"
+        );
+    }
+
+    // Model text as an ordinary argv item of a fixed command stays allowed,
+    // including after a script file, where `-c` belongs to the script.
+    let safe = "run llm.ask with prompt \"write something\" as generated\nrun \"python3\" with arguments [\"script.py\", \"-c\", generated]\n";
+    let safe_diagnostics = analyze_source(safe, &Registry::default());
+    assert!(!safe_diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "model.text_to_command"));
+}
+
+#[test]
 fn model_text_from_extract_and_env_shell_invocation_are_flagged() {
     let source = "run llm.extract with model model_name and instruction \"draft\" and schema schema as raw\nthen parse json as response\ntake text at \"/value\" from response as generated\nrun \"env\" with arguments [\"bash\", \"-c\", generated]\n";
     let diagnostics = analyze_source(source, &Registry::default());

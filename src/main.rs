@@ -1672,12 +1672,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 match stream.line_limit {
                     Some(limit) => writeln!(
                         io::stdout(),
-                        "persistent native pipeline; raw output to stdout; take the first {limit} final records; per-record limit {} bytes\n{pipeline}",
+                        "persistent native pipeline; output to stdout (raw into pipes, terminal-escaped on a TTY); take the first {limit} final records; per-record limit {} bytes\n{pipeline}",
                         args.max_record_bytes
                     )?,
                     None => writeln!(
                         io::stdout(),
-                        "persistent native pipeline; raw output to stdout until source EOF; per-record limit {} bytes\n{pipeline}",
+                        "persistent native pipeline; output to stdout until source EOF (raw into pipes, terminal-escaped on a TTY); per-record limit {} bytes\n{pipeline}",
                         args.max_record_bytes
                     )?,
                 }
@@ -1696,11 +1696,21 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     kill_grace: args.kill_grace.unwrap_or(runtime::DEFAULT_KILL_GRACE),
                     ..RunOptions::new(cwd.clone())
                 };
+                // Each record lands on this process's stdout, so the same
+                // sink rule as finite runs applies (#522): TTY sinks get
+                // terminal-escaped text, pipes and files keep exact bytes.
+                // Records split at `\n`, which never occurs inside a UTF-8
+                // sequence, so per-record encoding matches whole-output.
                 let mut emit =
                     |bytes: &[u8],
                      cancelled: &std::sync::atomic::AtomicBool,
                      deadline: Option<std::time::Instant>| {
-                        runtime::write_with_deadline(1, bytes, cancelled, deadline)
+                        runtime::write_with_deadline(
+                            1,
+                            &stdout_pipeline_bytes(bytes),
+                            cancelled,
+                            deadline,
+                        )
                     };
                 runtime::run_stream(
                     &stream,
@@ -2168,9 +2178,18 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     max_runs: args.max_runs,
                     max_record_bytes: args.max_record_bytes,
                 };
+                // Each activation's pipeline output lands on this process's
+                // stdout, so the same sink rule as finite runs applies
+                // (#522): TTY sinks get terminal-escaped text, pipes and
+                // files keep exact bytes.
                 let mut emit =
                     |bytes: &[u8], cancelled: &std::sync::atomic::AtomicBool, deadline| {
-                        runtime::write_with_deadline(1, bytes, cancelled, deadline)
+                        runtime::write_with_deadline(
+                            1,
+                            &stdout_pipeline_bytes(bytes),
+                            cancelled,
+                            deadline,
+                        )
                     };
                 if let Some(checkpoint) = checkpoint.as_ref() {
                     runtime::run_service_checkpointed_with_schedule_options(

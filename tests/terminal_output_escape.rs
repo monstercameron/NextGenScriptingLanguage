@@ -182,6 +182,21 @@ fn tty_final_write_is_escaped_while_files_stay_raw() {
     );
 }
 
+#[test]
+fn persistent_stream_records_are_escaped_on_a_tty_and_raw_on_a_pipe() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    // The persistent stream sink (`show each line`) writes each record to
+    // this process's stdout as it arrives; it is a stdout sink like the
+    // finite ones, so the same TTY rule applies (#522).
+    let script = format!("stream from printf with message \"{HOSTILE_LITERAL}\"\nshow each line\n");
+    let piped = run_piped(directory.path(), &manifests, &script);
+    assert_eq!(piped, HOSTILE_RAW, "stream pipes keep exact bytes");
+    let rendered = run_on_pty(directory.path(), &manifests, &script);
+    assert_terminal_neutral(&rendered, "persistent stream record");
+    assert_eq!(rendered, HOSTILE_ESCAPED.as_bytes());
+}
+
 /// The acceptance object itself: an `llm.ask` fixture response carrying
 /// OSC/CSI/bidi is neutralized on a TTY and byte-exact on a pipe.
 #[test]

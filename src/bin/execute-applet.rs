@@ -447,7 +447,7 @@ fn help() -> &'static str {
      hash.sha256, hash.sha512, encode.base64, encode.form, encode.hex, encode.url,\n\
      decode.base64, decode.hex, decode.url, time.add, time.diff, time.format, time.now,\n\
      time.parse, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
-     ini.parse, ini.stringify, env.load, fs.test, fs.glob, exec.which, fs.ensure_file, fs.ensure_line,\n\
+     ini.parse, ini.stringify, env.load, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
      fs.ensure_symlink, fs.ensure_dir,\n\
      fs.read, fs.snapshot,\n\
      fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\

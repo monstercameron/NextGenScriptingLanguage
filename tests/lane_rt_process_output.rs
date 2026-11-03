@@ -45,6 +45,51 @@ fn parallel_each_output_limit_fails_the_group() {
     );
 }
 
+// A signalled element whose stderr copies the output-limit message must
+// stay an ordinary element failure: the group still runs the remaining
+// elements instead of stopping as if the limit had been breached.
+#[cfg(unix)]
+#[test]
+fn parallel_each_stderr_limit_phrase_does_not_impersonate_output_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("case.program");
+    fs::write(
+        &program,
+        "parallel for each n in [\"a\", \"b\", \"c\"] at most 1 as results\n  run \"sh\" with arguments [\"-c\", \"echo $0 >> ledger; if [ $0 = a ]; then echo 'output exceeds the limit of 999 bytes' >&2; kill -TERM $$; fi; echo ok-$0\", n]\nthen encode results as json\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(directory.path())
+        .arg("run")
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("ledger")).unwrap(),
+        "a\nb\nc\n"
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["succeeded"], 2);
+    assert_eq!(value["failed"], 1);
+    assert_eq!(value["items"][0]["state"], "failed");
+    assert!(
+        value["items"][0]["error"]
+            .as_str()
+            .expect("failed element keeps its diagnostic")
+            .contains("output exceeds the limit of 999 bytes"),
+        "{value}"
+    );
+    assert_eq!(value["items"][1]["state"], "success");
+    assert_eq!(value["items"][2]["state"], "success");
+}
+
 #[test]
 fn missing_use_folder_error_includes_line_and_path() {
     let output = run_script("use folder \"rt_missing_folder_7c2e\"\n");

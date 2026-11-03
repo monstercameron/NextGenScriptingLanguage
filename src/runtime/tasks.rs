@@ -1261,6 +1261,14 @@ pub(super) fn run_each(
             records[index].error = Some(format!("could not reap element worker: {error:#}"));
         }
         active = active.saturating_sub(1);
+        // Decide a limit breach from the typed capture result before the
+        // error is formatted into the record: formatted text can contain a
+        // child's own stderr, which must never impersonate a limit failure.
+        let limit_scope = completion
+            .result
+            .as_ref()
+            .err()
+            .and_then(super::execution_result::output_limit_scope);
         update_record(
             completion,
             &mut records,
@@ -1270,26 +1278,22 @@ pub(super) fn run_each(
             &cancelled,
             outer_deadline,
         );
-        if records[index]
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("exceeds the shared group limit of"))
-        {
-            stopped = Some((
-                index,
-                format!("parallel for each output exceeded {max_output_bytes} bytes"),
-            ));
-        } else if records[index]
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("output exceeds the limit of"))
-        {
-            stopped = Some((
-                index,
-                format!(
-                    "parallel for each element exceeded its output limit of {max_output_bytes} bytes"
-                ),
-            ));
+        match limit_scope {
+            Some(super::execution_result::OutputLimitScope::Shared) => {
+                stopped = Some((
+                    index,
+                    format!("parallel for each output exceeded {max_output_bytes} bytes"),
+                ));
+            }
+            Some(super::execution_result::OutputLimitScope::Element) => {
+                stopped = Some((
+                    index,
+                    format!(
+                        "parallel for each element exceeded its output limit of {max_output_bytes} bytes"
+                    ),
+                ));
+            }
+            None => {}
         }
         if let Some(sink) = sink.as_deref_mut() {
             if matches!(records[index].state, TaskState::Succeeded) {

@@ -409,6 +409,7 @@ fn native_execution_failure(
 
 pub(super) fn native_output_limit_failure(
     message: impl Into<String>,
+    scope: execution_result::OutputLimitScope,
     output: Vec<u8>,
     calls: &[(&Invocation, &Manifest, usize)],
     children: &Children,
@@ -425,6 +426,7 @@ pub(super) fn native_output_limit_failure(
     )
     .result;
     result.stdout = Some(output);
+    result.output_limit_scope = Some(scope);
     execution_result::ExecutionFailure::new(result)
 }
 
@@ -1125,18 +1127,25 @@ pub(super) fn execute_group_with_sink(
                                 output.extend_from_slice(&chunk[..retained]);
                             }
                             if retained < count {
-                                let message = if job_exceeded {
-                                    output_limit_message(false, options.max_output_bytes)
+                                let (message, scope) = if job_exceeded {
+                                    (
+                                        output_limit_message(false, options.max_output_bytes),
+                                        execution_result::OutputLimitScope::Element,
+                                    )
                                 } else {
-                                    output_limit_message(
-                                        true,
-                                        signals
-                                            .job_output_limit
-                                            .unwrap_or(options.max_output_bytes),
+                                    (
+                                        output_limit_message(
+                                            true,
+                                            signals
+                                                .job_output_limit
+                                                .unwrap_or(options.max_output_bytes),
+                                        ),
+                                        execution_result::OutputLimitScope::Shared,
                                     )
                                 };
                                 return Err(native_output_limit_failure(
                                     message,
+                                    scope,
                                     output,
                                     calls,
                                     &children,

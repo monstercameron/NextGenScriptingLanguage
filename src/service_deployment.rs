@@ -38,6 +38,7 @@ pub struct WorkflowServiceRequest<'a> {
     pub executable: &'a Path,
     pub working_directory: &'a Path,
     pub manifest_directory: Option<&'a Path>,
+    pub execution_mode: Option<crate::capabilities::ExecutionMode>,
     pub capability_policy: Option<&'a Path>,
     pub data_flow_policy: Option<&'a Path>,
     /// Optional host child environment allowlist; an empty string clears it.
@@ -183,6 +184,17 @@ fn render_for_workflow_with_launchd_home_and_catalog(
             "--manifest-catalog".into(),
             utf8_path(&path, "manifest catalog")?,
         ]);
+    }
+    if let Some(mode) = request.execution_mode {
+        // Fail closed like the run path: an untrusted service without a policy
+        // would refuse at startup, so the generator refuses instead of
+        // emitting a unit that cannot start.
+        if mode == crate::capabilities::ExecutionMode::Untrusted
+            && request.capability_policy.is_none()
+        {
+            bail!("untrusted execution requires a capability policy");
+        }
+        argv.extend(["--execution-mode".into(), mode.as_str().into()]);
     }
     if let Some(path) = capability_policy {
         argv.extend([
@@ -761,6 +773,7 @@ mod tests {
             executable: &executable,
             working_directory: &working_directory,
             manifest_directory: None,
+            execution_mode: None,
             capability_policy: None,
             data_flow_policy: None,
             child_environment_allowlist: Some("PATH,LANG"),
@@ -802,6 +815,7 @@ mod tests {
             executable: &executable,
             working_directory: directory.path(),
             manifest_directory: None,
+            execution_mode: None,
             capability_policy: None,
             data_flow_policy: None,
             child_environment_allowlist: None,
@@ -839,6 +853,7 @@ mod tests {
                 executable: &executable,
                 working_directory: directory.path(),
                 manifest_directory: None,
+                execution_mode: None,
                 capability_policy: None,
                 data_flow_policy: None,
                 child_environment_allowlist: None,
@@ -883,6 +898,7 @@ mod tests {
             executable: &executable,
             working_directory,
             manifest_directory: None,
+            execution_mode: None,
             capability_policy: None,
             data_flow_policy: None,
             child_environment_allowlist: None,
@@ -1028,6 +1044,7 @@ mod tests {
             executable: &executable,
             working_directory: &working_directory,
             manifest_directory: None,
+            execution_mode: None,
             capability_policy: None,
             data_flow_policy: None,
             child_environment_allowlist: None,
@@ -1078,6 +1095,7 @@ mod tests {
             executable: &executable,
             working_directory: &working_directory,
             manifest_directory: None,
+            execution_mode: None,
             capability_policy: None,
             data_flow_policy: None,
             child_environment_allowlist: None,
@@ -1092,5 +1110,58 @@ mod tests {
             format!("{error:#}").contains("systemd-timer requires"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn generated_service_forwards_execution_mode_and_refuses_untrusted_without_policy() {
+        use crate::capabilities::ExecutionMode;
+
+        let directory = tempdir().unwrap();
+        let workflow = directory.path().join("scheduled.program");
+        fs::write(
+            &workflow,
+            "every 5 minutes\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let policy = directory.path().join("policy.json");
+        fs::write(&policy, "{\"version\":1,\"applets\":{}}\n").unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let inputs = BTreeMap::new();
+        let arguments: Vec<String> = Vec::new();
+        let mut request = WorkflowServiceRequest {
+            format: ServiceFormat::Systemd,
+            workflow_path: &workflow,
+            executable: &executable,
+            working_directory: directory.path(),
+            manifest_directory: None,
+            execution_mode: Some(ExecutionMode::Untrusted),
+            capability_policy: Some(&policy),
+            data_flow_policy: None,
+            child_environment_allowlist: None,
+            answers_file: None,
+            label: Some("com.example.untrusted-service"),
+            inputs: &inputs,
+            program_arguments: &arguments,
+            persistent: false,
+        };
+        let rendered = render_for_workflow(&request).unwrap();
+        assert!(rendered.contains("\"--execution-mode\" \"untrusted\""));
+        assert!(rendered.contains("\"--capability-policy\""));
+
+        // Fail closed: an untrusted unit without a policy could never start.
+        request.capability_policy = None;
+        let error = render_for_workflow(&request).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("untrusted execution requires a capability policy"),
+            "{error:#}"
+        );
+
+        request.execution_mode = Some(ExecutionMode::Trusted);
+        let rendered = render_for_workflow(&request).unwrap();
+        assert!(rendered.contains("\"--execution-mode\" \"trusted\""));
+
+        request.execution_mode = None;
+        let rendered = render_for_workflow(&request).unwrap();
+        assert!(!rendered.contains("--execution-mode"));
     }
 }

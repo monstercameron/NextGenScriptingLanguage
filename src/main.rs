@@ -3345,7 +3345,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
 
 #[cfg(feature = "tooling")]
 fn service_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--clear-env | --env-allow NAME[,NAME...]] [--input NAME=VALUE ... | --answers FILE] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. --answers requires a private JSON file and forwards only its path. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
+    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--execution-mode MODE] [--capability-policy FILE] [--data-flow-policy FILE] [--clear-env | --env-allow NAME[,NAME...]] [--input NAME=VALUE ... | --answers FILE] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. --answers requires a private JSON file and forwards only its path. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
@@ -3360,6 +3360,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     let mut working_directory = None;
     let mut capability_policy = None;
     let mut data_flow_policy = None;
+    let mut execution_mode: Option<flow::capabilities::ExecutionMode> = None;
     let mut answers_file = None;
     let mut persistent = false;
     let mut supplied_inputs = BTreeMap::new();
@@ -3450,6 +3451,22 @@ fn service_cli(arguments: &[String]) -> Result<()> {
                     "a policy file",
                 )?));
             }
+            "--execution-mode" => {
+                if execution_mode.is_some() {
+                    bail!("--execution-mode may be specified once");
+                }
+                let value = take_option_value(
+                    arguments,
+                    &mut index,
+                    "--execution-mode",
+                    "trusted or untrusted",
+                )?;
+                execution_mode = Some(match value.as_str() {
+                    "trusted" => flow::capabilities::ExecutionMode::Trusted,
+                    "untrusted" => flow::capabilities::ExecutionMode::Untrusted,
+                    _ => bail!("--execution-mode must be trusted or untrusted"),
+                });
+            }
             "--input" => {
                 let pair = take_option_value(arguments, &mut index, "--input", "NAME=VALUE")?;
                 let (name, value) = pair
@@ -3516,6 +3533,11 @@ fn service_cli(arguments: &[String]) -> Result<()> {
             b"warning: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants\n",
         );
     }
+    if execution_mode == Some(flow::capabilities::ExecutionMode::Untrusted)
+        && capability_policy.is_none()
+    {
+        bail!("untrusted execution requires a capability policy");
+    }
     let executable = fs::canonicalize(env::current_exe()?)?;
     let working_directory = fs::canonicalize(working_directory.unwrap_or(env::current_dir()?))?;
     let registry = load_workflow_registry(
@@ -3525,6 +3547,9 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         capability_policy.as_ref(),
         data_flow_policy.as_ref(),
     )?;
+    if execution_mode.is_some() {
+        registry.set_host_state(execution_mode);
+    }
     let source = fs::read_to_string(&positional[1])
         .with_context(|| format!("reading workflow {}", positional[1].display()))?;
     let program = flow::program_files::parse_source(
@@ -3546,6 +3571,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         executable: &executable,
         working_directory: &working_directory,
         manifest_directory: manifest_dir.as_deref(),
+        execution_mode,
         capability_policy: capability_policy_path.as_deref(),
         data_flow_policy: data_flow_policy_path.as_deref(),
         child_environment_allowlist: child_environment_allowlist.as_deref(),

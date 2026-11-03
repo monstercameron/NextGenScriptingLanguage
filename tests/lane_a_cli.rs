@@ -48,6 +48,47 @@ fn stdout(output: &Output) -> String {
 }
 
 #[test]
+fn exec_which_checks_and_branches_without_running_optional_commands() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = write_program(
+        &directory,
+        "optional-tools.program",
+        "run exec.which with name \"wl-copy\" and path \"\" as wl\nrun json.get with document wl and pointer \"/found\" as has_wl\nif has_wl is true\n  run \"printf\" with arguments [\"wl-copy\"]\notherwise\n  run exec.which with name \"xclip\" and path \"\" as xclip\n  run json.get with document xclip and pointer \"/found\" as has_xclip\n  if has_xclip is true\n    run \"printf\" with arguments [\"xclip\"]\n  otherwise\n    run \"printf\" with arguments [\"neither\"]\n",
+    );
+    let manifest_dir = directory.path().join("manifests");
+    fs::create_dir(&manifest_dir).unwrap();
+    for name in ["core.exec_which.json", "core.json_get.json", "printf.json"] {
+        fs::copy(manifests().join(name), manifest_dir.join(name)).unwrap();
+    }
+    let check = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(directory.path())
+        .arg("check")
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(directory.path())
+        .arg(&program)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(stdout(&output), "neither");
+}
+
+#[test]
 fn fs_test_booleans_drive_conditions_directly() {
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("folder");

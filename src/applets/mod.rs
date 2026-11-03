@@ -10,6 +10,7 @@ mod config;
 mod csv;
 mod ensure;
 mod env_file;
+mod executable_lookup;
 mod file_test;
 mod filesystem;
 mod glob;
@@ -318,6 +319,7 @@ pub fn execute_with_context(
         "text.lines" => text::lines(args, input, context),
         "text.split" => text::split(args, input, context),
         "fs.test" => file_test::test(args, cwd, context),
+        "exec.which" => executable_lookup::which(args, cwd, context),
         "fs.glob" => glob::glob(args, cwd, context),
         "number.add" | "number.subtract" | "number.multiply" | "number.divide"
         | "number.compare" | "number.int_divide" | "number.modulo" | "number.divmod"

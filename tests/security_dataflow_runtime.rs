@@ -1,5 +1,9 @@
 #![cfg(feature = "remote")]
-#![cfg(unix)]
+//! Cross-platform: remote applets run over TCP loopback and the worker fixture is
+//! a Python script launched through the interpreter. Unix-only notes mark the two
+//! spots that still depend on Unix execution: the secret producer is a shell script
+//! there (a `.cmd` shim forwards to Python on Windows) and the worker manifest
+//! names `python3` (plain `python` on Windows).
 
 use flow::contracts::{
     AppletBackend, AppletContract, AppletPort, AppletPorts, Lifecycle, OutputType, PortDelivery,
@@ -22,8 +26,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -113,6 +118,9 @@ fn remote_manifest(
     };
     let descriptor_bytes = serde_json::to_vec(&descriptor).unwrap();
     fs::write(cwd.join("descriptor.json"), &descriptor_bytes).unwrap();
+    // Unix-only: the descriptor carries a secret, so it is owner-read-only there.
+    // Windows ACLs on the test directory already restrict access to the owner.
+    #[cfg(unix)]
     fs::set_permissions(
         cwd.join("descriptor.json"),
         fs::Permissions::from_mode(0o600),
@@ -296,16 +304,38 @@ fn unknown_remote_data_is_allowed_by_exact_unknown_grant_but_secret_is_denied_pr
 
 fn executable(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
+    #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn secret_producer(path: &Path) -> String {
-    executable(path, "#!/bin/sh\nprintf 'TOP-SECRET-MARKER'\n");
+    // Unix-only: the secret producer is a shell script executed directly.
+    // Windows cannot execute extensionless scripts, so the same byte-identical
+    // output is produced by a Python script launched through the interpreter
+    // (manifest `arguments` carry the script; the call itself takes none).
+    #[cfg(unix)]
+    let (binary, script_argument) = {
+        executable(path, "#!/bin/sh\nprintf 'TOP-SECRET-MARKER'\n");
+        (path.to_path_buf(), None)
+    };
+    #[cfg(not(unix))]
+    let (binary, script_argument) = {
+        let script = path.with_extension("py");
+        fs::write(&script, "import sys;sys.stdout.write('TOP-SECRET-MARKER')\n").unwrap();
+        (
+            PathBuf::from("python"),
+            Some(script.to_string_lossy().into_owned()),
+        )
+    };
+    let mut arguments = Vec::new();
+    if let Some(script) = script_argument {
+        arguments.push(json!({"literal": script}));
+    }
     json!({
         "name": "fixture.secret",
-        "binary": path,
+        "binary": binary,
         "parameters": {},
-        "arguments": [],
+        "arguments": arguments,
         "contract": {
             "version": 1,
             "output": {"type": "text", "encoding": "raw"},
@@ -327,9 +357,12 @@ fn secret_producer(path: &Path) -> String {
 
 fn stateful_worker(directory: &Path) -> String {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/json_lines_worker.py");
+    // The worker fixture is a Python script run through the interpreter, so no
+    // executable bit is needed; only the interpreter name differs by platform.
+    let interpreter = if cfg!(windows) { "python" } else { "python3" };
     json!({
         "name": "fixture.worker",
-        "binary": "python3",
+        "binary": interpreter,
         "arguments": [],
         "accepts_stdin": true,
         "contract": {
@@ -519,16 +552,41 @@ fn task_public_consumer_cannot_lower_secret_producer_provenance() {
 #[test]
 fn secret_listener_event_label_survives_into_service_handler_authorization() {
     let directory = tempfile::tempdir().unwrap();
-    let listener_script = directory.path().join("secret-listener");
-    executable(
-        &listener_script,
-        "#!/bin/sh\nprintf 'TOP-SECRET-EVENT\\n'\n",
-    );
+    // Unix-only: the listener is a shell script executed directly. On other
+    // platforms the same event line is produced by a Python script launched
+    // through the interpreter; the denial under test depends on the secret
+    // event-port label, not on the exact event bytes.
+    #[cfg(unix)]
+    let (listener_binary, listener_script_argument) = {
+        let listener_script = directory.path().join("secret-listener");
+        executable(
+            &listener_script,
+            "#!/bin/sh\nprintf 'TOP-SECRET-EVENT\\n'\n",
+        );
+        (listener_script, None)
+    };
+    #[cfg(not(unix))]
+    let (listener_binary, listener_script_argument): (PathBuf, Option<String>) = {
+        let listener_script = directory.path().join("secret-listener.py");
+        fs::write(
+            &listener_script,
+            "import sys;sys.stdout.write('TOP-SECRET-EVENT')\n",
+        )
+        .unwrap();
+        (
+            PathBuf::from("python"),
+            Some(listener_script.to_string_lossy().into_owned()),
+        )
+    };
+    let mut listener_arguments = Vec::new();
+    if let Some(script) = listener_script_argument {
+        listener_arguments.push(json!({"literal": script}));
+    }
     let listener_manifest = json!({
         "name": "fixture.listener",
-        "binary": listener_script,
+        "binary": listener_binary,
         "parameters": {},
-        "arguments": [],
+        "arguments": listener_arguments,
         "contract": {
             "version": 1,
             "ports": {
@@ -762,19 +820,48 @@ fn checkpointed_graph_api_denies_ungranted_secret_input_before_persisting_or_sen
 fn checkpointed_graph_rejects_secret_before_custom_store_or_local_applet_runs() {
     let directory = tempfile::tempdir().unwrap();
     let marker = directory.path().join("local-applet-ran");
-    let binary = directory.path().join("local-applet");
-    executable(
-        &binary,
-        &format!(
-            "#!/bin/sh\nprintf ran > '{}'\nprintf result\n",
-            marker.display()
-        ),
-    );
+    // Unix-only: the local applet is a shell script executed directly. On other
+    // platforms the same marker write and result line come from a Python
+    // script launched through the interpreter; the test asserts the marker
+    // and the checkpoint outcome, never the script bytes.
+    #[cfg(unix)]
+    let (binary, applet_script_argument) = {
+        let binary = directory.path().join("local-applet");
+        executable(
+            &binary,
+            &format!(
+                "#!/bin/sh\nprintf ran > '{}'\nprintf result\n",
+                marker.display()
+            ),
+        );
+        (binary, None)
+    };
+    #[cfg(not(unix))]
+    let (binary, applet_script_argument): (PathBuf, Option<String>) = {
+        let script = directory.path().join("local-applet.py");
+        fs::write(
+            &script,
+            format!(
+                "import pathlib,sys;pathlib.Path(r'{}').write_text('ran');sys.stdout.write('result')\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        (
+            PathBuf::from("python"),
+            Some(script.to_string_lossy().into_owned()),
+        )
+    };
+    let mut applet_arguments = Vec::new();
+    if let Some(script) = applet_script_argument {
+        applet_arguments.push(json!({"literal": script}));
+    }
+    applet_arguments.push(json!({"parameter": "message"}));
     let manifest = json!({
         "name": "fixture.local",
         "binary": binary,
         "parameters": {"message": {"type": "string", "required": true}},
-        "arguments": [{"parameter": "message"}],
+        "arguments": applet_arguments,
         "contract": {"version": 1, "output": {"type": "text", "encoding": "raw"}}
     })
     .to_string();

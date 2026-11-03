@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#[cfg(unix)]
 use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
 use std::{
     fs,
@@ -103,11 +103,21 @@ fn variadic_arguments_preserve_empty_values_flags_and_literal_paths() {
 fn process_input_errors_prevent_earlier_effects_and_do_not_echo_environment_values() {
     let directory = tempfile::tempdir().unwrap();
     let source = "accept count as integer from environment \"EXECUTE_TEST_INTEGER\"\nrun \"printf\" with arguments [\"forbidden\"]\nthen save to \"forbidden\"\n";
-    for output in [
+    // Unix appends a third, non-UTF8 case below; Windows has no equivalent.
+    #[allow(unused_mut)]
+    let mut cases = vec![
         command(source, directory.path())
             .env("EXECUTE_TEST_INTEGER", "secret-invalid-integer")
             .output()
             .unwrap(),
+        command(source, directory.path())
+            .env_remove("EXECUTE_TEST_INTEGER")
+            .output()
+            .unwrap(),
+    ];
+    // Unix-only: non-UTF8 environment values have no Windows equivalent.
+    #[cfg(unix)]
+    cases.push(
         command(source, directory.path())
             .env(
                 "EXECUTE_TEST_INTEGER",
@@ -115,11 +125,8 @@ fn process_input_errors_prevent_earlier_effects_and_do_not_echo_environment_valu
             )
             .output()
             .unwrap(),
-        command(source, directory.path())
-            .env_remove("EXECUTE_TEST_INTEGER")
-            .output()
-            .unwrap(),
-    ] {
+    );
+    for output in cases {
         assert!(!output.status.success());
         assert!(!directory.path().join("forbidden").exists());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-invalid-integer"));
@@ -179,6 +186,9 @@ fn inspection_marks_an_explicit_public_environment_value_as_public() {
     assert_eq!(value["inputs"][0]["source"]["public"], true);
     assert!(value["inputs"][0].get("value_withheld").is_none());
 }
+// Unix-only: executes a `#!/usr/bin/env` script directly, which Windows
+// cannot do without an interpreter.
+#[cfg(unix)]
 #[test]
 fn executable_program_shebang_forwards_options_as_program_arguments() {
     let directory = tempfile::tempdir().unwrap();

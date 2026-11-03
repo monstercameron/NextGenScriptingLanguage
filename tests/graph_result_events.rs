@@ -1,5 +1,4 @@
 #![cfg(feature = "graph")]
-#![cfg(unix)]
 
 use anyhow::Result;
 use flow::ast::Value;
@@ -12,6 +11,9 @@ use serde_json::{json, Value as JsonValue};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 fn event_schema(schema: JsonValue) -> JsonValue {
     json!({
@@ -46,7 +48,7 @@ fn command_manifest(
     }
     json!({
         "name": name,
-        "binary": binary,
+        "binary": portable_shell::shell_binary(binary),
         "accepts_stdin": false,
         "parameters": {},
         "arguments": arguments,

@@ -1,15 +1,19 @@
-#![cfg(unix)]
 //! Terminal safety for pipeline output (#522 part 1): a hostile model/fixture
 //! response carrying OSC/CSI/C1 escapes and bidi overrides must not reach a
 //! TTY raw, while pipes and files keep the exact bytes (H17 pipe guarantee).
 
 use std::fs;
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::sync::mpsc;
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// OSC title-set, CSI erase, C1 CSI, BEL and a bidi override, as a program
@@ -21,6 +25,8 @@ const HOSTILE_RAW: &[u8] = b"a\x1b]0;pwned\x07now\x1b[2Jthen\xc2\x9b31mswap\xe2\
 
 /// The exact TTY rendering after `escape_controls` (plus the pty's own
 /// `\n` -> `\r\n` translation, which tests strip before comparing).
+// Unix-only: only the pty tests compare TTY rendering.
+#[cfg(unix)]
 const HOSTILE_ESCAPED: &str = "a\\u{1b}]0;pwned\\u{7}now\\u{1b}[2Jthen\\u{9b}31mswap\\u{202e}end\n";
 
 fn hostile_program() -> String {
@@ -53,6 +59,8 @@ fn run_piped(directory: &Path, manifests: &Path, script: &str) -> Vec<u8> {
 
 /// Run `execute` with stdout attached to a real pty slave (so
 /// `stdout.is_terminal()` is true) and return the bytes read from the master.
+/// Unix-only: needs `openpty`; Windows has no equivalent slave setup here.
+#[cfg(unix)]
 fn run_on_pty(directory: &Path, manifests: &Path, script: &str) -> Vec<u8> {
     let script_path = directory.join("workflow.program");
     fs::write(&script_path, script).unwrap();
@@ -127,6 +135,8 @@ fn run_on_pty(directory: &Path, manifests: &Path, script: &str) -> Vec<u8> {
     bytes.into_iter().filter(|byte| *byte != b'\r').collect()
 }
 
+// Unix-only: only the pty tests assert TTY neutralization.
+#[cfg(unix)]
 fn assert_terminal_neutral(rendered: &[u8], context: &str) {
     assert!(
         !rendered.contains(&0x1b),
@@ -151,6 +161,8 @@ fn pipe_keeps_hostile_pipeline_bytes_exact() {
     assert_eq!(stdout, HOSTILE_RAW, "H17 pipe guarantee broke");
 }
 
+// Unix-only: needs a real pty slave for `stdout.is_terminal()`.
+#[cfg(unix)]
 #[test]
 fn tty_neutralizes_hostile_pipeline_bytes() {
     let directory = tempfile::tempdir().unwrap();
@@ -164,6 +176,8 @@ fn tty_neutralizes_hostile_pipeline_bytes() {
     );
 }
 
+// Unix-only: needs a real pty slave for `stdout.is_terminal()`.
+#[cfg(unix)]
 #[test]
 fn tty_final_write_is_escaped_while_files_stay_raw() {
     let directory = tempfile::tempdir().unwrap();
@@ -182,6 +196,8 @@ fn tty_final_write_is_escaped_while_files_stay_raw() {
     );
 }
 
+// Unix-only: needs a real pty slave for `stdout.is_terminal()`.
+#[cfg(unix)]
 #[test]
 fn persistent_stream_records_are_escaped_on_a_tty_and_raw_on_a_pipe() {
     let directory = tempfile::tempdir().unwrap();
@@ -199,6 +215,8 @@ fn persistent_stream_records_are_escaped_on_a_tty_and_raw_on_a_pipe() {
 
 /// The acceptance object itself: an `llm.ask` fixture response carrying
 /// OSC/CSI/bidi is neutralized on a TTY and byte-exact on a pipe.
+// Unix-only: needs a real pty slave for `stdout.is_terminal()`.
+#[cfg(unix)]
 #[test]
 #[cfg(feature = "model")]
 fn model_fixture_text_is_neutralized_on_tty_and_raw_on_pipe() {

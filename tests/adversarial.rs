@@ -1,5 +1,5 @@
-#![cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
 use std::process::{Command, Output};
@@ -16,6 +16,9 @@ fn run(directory: &Path, catalog: &Path, source: &str) -> Output {
         .unwrap()
 }
 
+// Unix-only: a symlinked multicall applet reports its invoked name; Windows
+// cannot execute the script target directly.
+#[cfg(unix)]
 #[test]
 fn symlink_applet_identity_is_preserved_for_commands_and_listeners() {
     let temp = tempfile::tempdir().unwrap();
@@ -87,6 +90,9 @@ fn impossible_reference_types_fail_before_an_earlier_save() {
     assert!(!temp.path().join("must-not-exist").exists());
 }
 
+// Unix-only: compares the `pwd` applet output byte-for-byte with
+// `fs::canonicalize`, whose spellings differ on Windows.
+#[cfg(unix)]
 #[test]
 fn cd_and_folder_directive_can_both_set_up_a_service() {
     let temp = tempfile::tempdir().unwrap();

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 use flow::{
     ast::{StepKind, Value},
     manifest::Registry,

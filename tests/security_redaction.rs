@@ -1,8 +1,9 @@
-#![cfg(unix)]
-
 use flow::{manifest::Registry, parser, runtime};
 use serde_json::json;
 use std::time::Duration;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 #[test]
 fn failed_child_echoing_declared_environment_secret_redacts_errors_but_keeps_raw_capture() {
@@ -10,7 +11,7 @@ fn failed_child_echoing_declared_environment_secret_redacts_errors_but_keeps_raw
     let sentinel = "fixture-secret-that-must-not-appear-in-errors";
     let source = json!({
         "name": "secret.echo",
-        "binary": "/bin/sh",
+        "binary": portable_shell::shell_binary("/bin/sh"),
         "arguments": [
             {"literal": "-c"},
             {"literal": "printf '%s' \"$FLOW_SENTINEL\" >&2; exit 7"}

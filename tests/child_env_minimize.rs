@@ -1,13 +1,25 @@
-#![cfg(unix)]
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
-const SCRIPT: &str = "run \"/usr/bin/env\" with arguments []\n";
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
+
 const SECRET: &str = "not-for-child-6bfea8";
+
+/// `run` program for the environment printer: absolute on Unix, the MSYS
+/// absolute path on Windows.
+fn env_script(extra: &str) -> String {
+    format!(
+        "run {} with arguments []{extra}\n",
+        portable_shell::shell_binary("/usr/bin/env")
+    )
+}
 
 fn base(dir: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
@@ -34,7 +46,7 @@ fn finite_runs_filter_ambient_environment_and_records_but_default_inherits() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.program");
     let record = dir.path().join("run.record");
-    fs::write(&file, SCRIPT).unwrap();
+    fs::write(&file, env_script("")).unwrap();
     let output = base(dir.path())
         .arg("run")
         .arg(&file)
@@ -76,7 +88,7 @@ fn finite_runs_filter_ambient_environment_and_records_but_default_inherits() {
 fn command_line_environment_flags_work_without_a_capability_policy() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.program");
-    fs::write(&file, SCRIPT).unwrap();
+    fs::write(&file, env_script("")).unwrap();
     let allowed = base(dir.path())
         .arg("run")
         .arg(&file)
@@ -97,7 +109,7 @@ fn command_line_environment_flags_work_without_a_capability_policy() {
 fn malformed_allowlists_and_unlisted_command_overrides_fail_closed() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.program");
-    fs::write(&file, SCRIPT).unwrap();
+    fs::write(&file, env_script("")).unwrap();
     for allow in ["LANE_SAFE,,PATH", "LD_PRELOAD", "BAD=NAME"] {
         let output = base(dir.path())
             .arg("run")
@@ -110,7 +122,7 @@ fn malformed_allowlists_and_unlisted_command_overrides_fail_closed() {
     }
     fs::write(
         &file,
-        "run \"/usr/bin/env\" with arguments [] and environment {\"LANE_PRIVATE\": \"explicit\"}\n",
+        env_script(" and environment {\"LANE_PRIVATE\": \"explicit\"}"),
     )
     .unwrap();
     let output = base(dir.path())
@@ -139,7 +151,7 @@ fn run_parts_and_listener_handlers_apply_the_same_environment_limit() {
     let dir = tempfile::tempdir().unwrap();
     let parts = dir.path().join("parts");
     fs::create_dir(&parts).unwrap();
-    fs::write(parts.join("run.program"), SCRIPT).unwrap();
+    fs::write(parts.join("run.program"), env_script("")).unwrap();
     let output = base(dir.path())
         .arg("run-parts")
         .arg(&parts)
@@ -154,7 +166,11 @@ fn run_parts_and_listener_handlers_apply_the_same_environment_limit() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("LANE_SAFE=yes"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
     let file = dir.path().join("listen.program");
-    fs::write(&file, "listen to stdin\nwhenever a line arrives as record\n  run \"/usr/bin/env\" with arguments []\n").unwrap();
+    fs::write(
+        &file,
+        format!("listen to stdin\nwhenever a line arrives as record\n  {}", env_script("")),
+    )
+    .unwrap();
     let mut child = base(dir.path())
         .arg("run")
         .arg(&file)
@@ -176,6 +192,9 @@ fn run_parts_and_listener_handlers_apply_the_same_environment_limit() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("LANE_SAFE=yes"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
 }
+// Unix-only: drives the daemon serve/status transport, which needs the
+// Unix-domain socket daemon.
+#[cfg(unix)]
 #[test]
 fn opted_in_daemon_uses_the_callers_environment_limit() {
     struct Daemon(std::process::Child);
@@ -214,7 +233,7 @@ fn opted_in_daemon_uses_the_callers_environment_limit() {
         thread::sleep(Duration::from_millis(20));
     }
     let file = work.path().join("main.program");
-    fs::write(&file, SCRIPT).unwrap();
+    fs::write(&file, env_script("")).unwrap();
     let output = base(work.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
@@ -238,7 +257,7 @@ fn named_applets_intersect_the_host_allowlist_with_policy() {
     let dir = tempfile::tempdir().unwrap();
     let manifest_dir = dir.path().join("manifests");
     fs::create_dir(&manifest_dir).unwrap();
-    fs::write(manifest_dir.join("env.json"), r#"{"name":"fixture.env","binary":"/usr/bin/env","arguments":[],"contract":{"version":1,"capabilities":["process.exec"],"effects":[]}}"#).unwrap();
+    fs::write(manifest_dir.join("env.json"), serde_json::json!({"name":"fixture.env","binary":portable_shell::shell_binary("/usr/bin/env"),"arguments":[],"contract":{"version":1,"capabilities":["process.exec"],"effects":[]}}).to_string()).unwrap();
     let file = dir.path().join("main.program");
     fs::write(&file, "run fixture.env\n").unwrap();
     let policy = dir.path().join("policy.json");
@@ -280,7 +299,7 @@ fn manifest_environment_overrides_must_be_allowlisted() {
     let dir = tempfile::tempdir().unwrap();
     let manifests = dir.path().join("manifests");
     fs::create_dir(&manifests).unwrap();
-    fs::write(manifests.join("env.json"), r#"{"name":"fixture.env","binary":"/usr/bin/env","arguments":[],"contract":{"version":1,"environment":{"set":{"LANE_PRIVATE":"manifest-value"}}}}"#).unwrap();
+    fs::write(manifests.join("env.json"), serde_json::json!({"name":"fixture.env","binary":portable_shell::shell_binary("/usr/bin/env"),"arguments":[],"contract":{"version":1,"environment":{"set":{"LANE_PRIVATE":"manifest-value"}}}}).to_string()).unwrap();
     let file = dir.path().join("main.program");
     fs::write(&file, "run fixture.env\n").unwrap();
     let output = base(dir.path())
@@ -302,12 +321,7 @@ fn manifest_environment_overrides_must_be_allowlisted() {
 
 #[test]
 fn persistent_worker_receives_only_allowed_ambient_variables() {
-    let Some(python) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|dir| dir.join("python3"))
-        .find(|path| path.is_file())
-    else {
-        panic!("python3 required by worker fixture")
-    };
+    let python = portable_shell::python();
     let dir = tempfile::tempdir().unwrap();
     let manifests = dir.path().join("manifests");
     fs::create_dir(&manifests).unwrap();

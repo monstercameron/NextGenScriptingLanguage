@@ -1,12 +1,15 @@
-#![cfg(unix)]
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 fn fixture() -> (TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
@@ -71,12 +74,9 @@ fn invoke(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
         .spawn()
         .unwrap();
     let status = wait_bounded(&mut child, Duration::from_secs(5)).unwrap_or_else(|| {
-        // SAFETY: kill takes only integers and touches no memory. `wait_bounded` returned
-        // None, which happens only when try_wait reported the child still running or failed,
-        // never Ok(Some); so the child has not been reaped and `child.id()` still names it.
-        unsafe {
-            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-        }
+        // The watchdog only fires when try_wait reported the child still running
+        // or failed, never Ok(Some), so the child has not been reaped.
+        portable_shell::terminate_child(&mut child);
         if wait_bounded(&mut child, Duration::from_secs(1)).is_none() {
             let _ = child.kill();
             let _ = child.wait();
@@ -134,12 +134,9 @@ struct ChildCleanup(Child);
 impl Drop for ChildCleanup {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
-            // SAFETY: kill takes only integers. The try_wait above returned Ok(None) or an
-            // error (both map to is_none), never Ok(Some), so the child has not been reaped
-            // and `self.0.id()` still names it.
-            unsafe {
-                libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
-            }
+            // try_wait above returned Ok(None) or an error (both map to
+            // is_none), never Ok(Some), so the child has not been reaped.
+            portable_shell::terminate_child(&mut self.0);
             if wait_bounded(&mut self.0, Duration::from_secs(1)).is_none() {
                 let _ = self.0.kill();
                 let _ = self.0.wait();
@@ -353,6 +350,9 @@ fn comments_and_line_number_changes_do_not_invalidate_completed_nodes() {
     assert_eq!(resumed.stdout, b"fixed suffix\n");
 }
 
+// Unix-only: the pinned binary is a shebang script executed directly, which
+// has no Windows equivalent.
+#[cfg(unix)]
 #[test]
 fn resume_rejects_a_changed_binary_in_a_completed_node() {
     let (directory, standard_manifests) = fixture();
@@ -617,6 +617,9 @@ fn resume_refuses_a_corrupted_checkpoint_blob() {
     );
 }
 
+// Unix-only: the failing worker is a shebang script executed directly and
+// rewritten mid-test, so binary identity is a script file.
+#[cfg(unix)]
 #[test]
 fn failed_native_pipe_group_restarts_from_frozen_read_input() {
     let (directory, standard_manifests) = fixture();
@@ -750,13 +753,9 @@ fn active_checkpoint_is_exclusively_locked() {
         String::from_utf8_lossy(&second.stderr)
     );
 
-    // Ensure the still-running scheduled service is cleaned up promptly.
-    // SAFETY: kill takes only integers. `child` was spawned at line 669 and has only been
-    // checked for its journal file, never through try_wait or wait, so it has not been
-    // reaped and `child.0.id()` still names the running scheduled service.
-    unsafe {
-        libc::kill(child.0.id() as libc::pid_t, libc::SIGTERM);
-    }
+    // Ensure the still-running scheduled service is cleaned up promptly. The
+    // child has only been checked for its journal file, never reaped.
+    portable_shell::terminate_child(&mut child.0);
     let status = wait_bounded(&mut child.0, Duration::from_secs(3));
     assert!(status.is_some(), "checkpointed service ignored SIGTERM");
 }
@@ -768,22 +767,37 @@ fn uncertain_in_flight_invocation_requires_explicit_retry() {
     fs::create_dir(&manifest_dir).unwrap();
     let marker = directory.path().join("started.marker");
     let applet = directory.path().join("controlled-applet.sh");
+    // Direct execution on Unix keeps the shebang with an executable bit;
+    // Windows invokes the same script through the platform shell instead.
+    let header = if cfg!(windows) { "" } else { "#!/bin/sh\n" };
     fs::write(
         &applet,
         format!(
-            "#!/bin/sh\nif [ ! -f '{}' ]; then\n  : > '{}'\n  exec /bin/sleep 30\nfi\nprintf 'retried\\n'\n",
+            "{header}if [ ! -f '{}' ]; then\n  : > '{}'\n  exec /bin/sleep 30\nfi\nprintf 'retried\\n'\n",
             marker.display(),
             marker.display()
         ),
     )
     .unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&applet, fs::Permissions::from_mode(0o755)).unwrap();
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            portable_shell::shell_binary("sh"),
+            serde_json::json!([{"literal": applet.to_str().unwrap()}]),
+        )
+    } else {
+        (
+            applet.to_string_lossy().into_owned(),
+            serde_json::json!([]),
+        )
+    };
     fs::write(
         manifest_dir.join("controlled.json"),
         serde_json::json!({
             "name": "controlled",
-            "binary": applet,
-            "arguments": []
+            "binary": binary,
+            "arguments": arguments
         })
         .to_string(),
     )
@@ -817,13 +831,9 @@ fn uncertain_in_flight_invocation_requires_explicit_retry() {
         "controlled applet never reached its uncertain side effect"
     );
 
-    // SAFETY: kill takes only integers. The pid names the runner spawned at line 742 only
-    // while that child is unreaped. The loop at lines 756-761 can exit through the try_wait
-    // Ok(Some) break at line 758, which reaps the child; nothing here rules that out, so this
-    // relies on the child still running, which the loop does not verify.
-    unsafe {
-        libc::kill(child.0.id() as libc::pid_t, libc::SIGTERM);
-    }
+    // This relies on the child still running, which the loop above does not
+    // verify: the try_wait break may already have reaped it.
+    portable_shell::terminate_child(&mut child.0);
     assert!(
         wait_bounded(&mut child.0, Duration::from_secs(3)).is_some(),
         "runner ignored cancellation during an applet invocation"
@@ -874,22 +884,37 @@ fn scheduled_pending_tick_is_resumed_before_waiting_for_a_new_interval() {
     fs::create_dir(&manifest_dir).unwrap();
     let marker = directory.path().join("started.marker");
     let applet = directory.path().join("scheduled-applet.sh");
+    // Direct execution on Unix keeps the shebang with an executable bit;
+    // Windows invokes the same script through the platform shell instead.
+    let header = if cfg!(windows) { "" } else { "#!/bin/sh\n" };
     fs::write(
         &applet,
         format!(
-            "#!/bin/sh\nif [ ! -f '{}' ]; then\n  : > '{}'\n  exec /bin/sleep 30\nfi\nprintf 'resumed tick\\n'\n",
+            "{header}if [ ! -f '{}' ]; then\n  : > '{}'\n  exec /bin/sleep 30\nfi\nprintf 'resumed tick\\n'\n",
             marker.display(),
             marker.display()
         ),
     )
     .unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&applet, fs::Permissions::from_mode(0o755)).unwrap();
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            portable_shell::shell_binary("sh"),
+            serde_json::json!([{"literal": applet.to_str().unwrap()}]),
+        )
+    } else {
+        (
+            applet.to_string_lossy().into_owned(),
+            serde_json::json!([]),
+        )
+    };
     fs::write(
         manifest_dir.join("scheduled.json"),
         serde_json::json!({
             "name": "scheduled",
-            "binary": applet,
-            "arguments": []
+            "binary": binary,
+            "arguments": arguments
         })
         .to_string(),
     )
@@ -920,13 +945,9 @@ fn scheduled_pending_tick_is_resumed_before_waiting_for_a_new_interval() {
     }
     assert!(marker.exists(), "scheduled tick never launched its applet");
 
-    // SAFETY: kill takes only integers. The pid names the runner spawned at line 848 only
-    // while that child is unreaped. The loop at lines 862-867 can exit through the try_wait
-    // Ok(Some) break at line 864, which reaps the child; nothing here rules that out, so this
-    // relies on the child still running, which the loop does not verify.
-    unsafe {
-        libc::kill(child.0.id() as libc::pid_t, libc::SIGTERM);
-    }
+    // This relies on the child still running, which the loop above does not
+    // verify: the try_wait break may already have reaped it.
+    portable_shell::terminate_child(&mut child.0);
     assert!(
         wait_bounded(&mut child.0, Duration::from_secs(3)).is_some(),
         "scheduled runner ignored cancellation"
@@ -992,12 +1013,9 @@ fn checkpointed_listener_replays_failed_record_before_reopening_stdin() {
         .unwrap();
     drop(first.stdin.take());
     let first_status = wait_bounded(&mut first, Duration::from_secs(5)).unwrap_or_else(|| {
-        // SAFETY: kill takes only integers. `wait_bounded` returned None, which happens only
-        // when try_wait reported the child still running or failed, never Ok(Some); so the
-        // child has not been reaped and `first.id()` still names it.
-        unsafe {
-            libc::kill(first.id() as libc::pid_t, libc::SIGTERM);
-        }
+        // The watchdog only fires when try_wait reported the child still
+        // running or failed, never Ok(Some), so it has not been reaped.
+        portable_shell::terminate_child(&mut first);
         if wait_bounded(&mut first, Duration::from_secs(1)).is_none() {
             let _ = first.kill();
             let _ = first.wait();
@@ -1036,6 +1054,8 @@ fn checkpointed_listener_replays_failed_record_before_reopening_stdin() {
     assert_eq!(resumed.stdout, b"original record\n");
 }
 
+// Unix-only: asserts symlink checkpoint paths are refused with mode checks.
+#[cfg(unix)]
 #[test]
 fn checkpoint_directory_symlinks_are_rejected_without_touching_the_target() {
     use std::os::unix::fs::symlink;
@@ -1075,6 +1095,8 @@ fn checkpoint_directory_symlinks_are_rejected_without_touching_the_target() {
     }
 }
 
+// Unix-only: asserts symlink blob paths are refused with mode checks.
+#[cfg(unix)]
 #[test]
 fn checkpoint_blob_directory_symlinks_are_rejected_for_fresh_and_resume() {
     use std::os::unix::fs::symlink;

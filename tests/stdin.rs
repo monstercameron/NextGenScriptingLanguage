@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Finite stdin composition through the real CLI, native pipes and checkpoints.
 use std::{
     fs,
@@ -150,6 +149,8 @@ fn check_explain_and_inspect_never_read_a_quiet_stdin_pipe() {
     }
 }
 
+// Unix-only: delivers SIGTERM to the runner and asserts fcntl deadline flags.
+#[cfg(unix)]
 #[test]
 fn quiet_stdin_captures_observe_deadlines_and_signals() {
     let root = tempfile::tempdir().unwrap();
@@ -193,6 +194,8 @@ fn quiet_stdin_captures_observe_deadlines_and_signals() {
     }
 }
 
+// Unix-only: asserts fcntl file-status flags survive stdin capture.
+#[cfg(unix)]
 #[test]
 fn inherited_stdin_capture_preserves_shared_descriptor_flags() {
     use std::os::fd::AsRawFd;
@@ -219,6 +222,8 @@ fn inherited_stdin_capture_preserves_shared_descriptor_flags() {
     );
 }
 
+// Unix-only: asserts no control socket is opened for process-stdin rejection.
+#[cfg(unix)]
 #[test]
 fn managed_programs_reject_process_stdin_without_opening_a_control_socket() {
     let root = tempfile::tempdir().unwrap();

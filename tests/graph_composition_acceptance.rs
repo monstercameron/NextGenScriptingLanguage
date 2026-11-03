@@ -1,5 +1,4 @@
 #![cfg(feature = "graph")]
-#![cfg(unix)]
 
 use anyhow::{anyhow, bail, Context, Result};
 use flow::ast::Value;
@@ -20,6 +19,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
+
 #[cfg_attr(not(feature = "remote"), allow(dead_code))]
 const COMPOSITION_DIR: &str = "examples/composition/graph-runtime";
 
@@ -520,10 +523,7 @@ fn write_projection_module(
 
 #[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn python3() -> PathBuf {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|directory| directory.join("python3"))
-        .find(|candidate| candidate.is_file())
-        .expect("Python 3 is available for the persistent-worker fixture")
+    PathBuf::from(portable_shell::python())
 }
 
 #[cfg_attr(not(feature = "remote"), allow(dead_code))]
@@ -807,6 +807,9 @@ fn wait_for_metric(metric: impl Fn() -> usize, count: usize, timeout: Duration) 
     Ok(())
 }
 
+// Unix-only: signal 0 probes whether the reaped worker was collected.
+// Windows has no signal 0; reaping is still asserted through the session.
+#[cfg(unix)]
 #[cfg_attr(not(feature = "remote"), allow(dead_code))]
 fn assert_process_reaped(pid: i32) {
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -930,6 +933,7 @@ fn parsed_runtime_graph_composes_services_workers_streams_and_reconfiguration() 
     assert_eq!(session.context().revision, 2);
     assert_eq!(first_metrics.launched_processes(), 2);
     server.wait_closed(1)?;
+    #[cfg(unix)]
     assert_process_reaped(first_worker_pid);
 
     let second_metrics = Arc::clone(&session.context().metrics);
@@ -956,6 +960,7 @@ fn parsed_runtime_graph_composes_services_workers_streams_and_reconfiguration() 
 
     session.cancel_and_join()?;
     server.wait_closed(2)?;
+    #[cfg(unix)]
     assert_process_reaped(worker_pid);
     server.finish()?;
     drain_updates(&updates_receiver, &mut observed);

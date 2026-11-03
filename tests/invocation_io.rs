@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use flow::{manifest::Registry, parser, runtime};
 use serde_json::json;
 use std::{path::Path, time::Duration};

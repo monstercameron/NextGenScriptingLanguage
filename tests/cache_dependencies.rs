@@ -1,7 +1,10 @@
-#![cfg(unix)]
-
 use serde_json::json;
-use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+use std::{fs, process::Command};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 #[test]
 fn dependency_mutated_during_cached_call_is_not_stored_or_replayed() {
@@ -17,15 +20,29 @@ fn dependency_mutated_during_cached_call_is_not_stored_or_replayed() {
         "#!/bin/sh\nset -eu\nvalue=$(cat state.txt)\nprintf '%s\\n' \"$value\"\nif [ \"$value\" = before ]; then printf after > state.txt; fi\n",
     )
     .unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    // Direct execution needs a shebang with an executable bit, which Windows
+    // cannot provide; there the helper runs through the platform shell.
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            portable_shell::shell_binary("sh"),
+            serde_json::json!([{"literal": helper.to_str().unwrap()}]),
+        )
+    } else {
+        (
+            helper.to_string_lossy().into_owned(),
+            serde_json::json!([]),
+        )
+    };
     fs::write(
         manifests.join("mutator.json"),
         serde_json::to_vec(&json!({
             "name": "mutator",
-            "binary": "./mutate-dependency",
+            "binary": binary,
             "cacheable": true,
             "cache_dependencies": ["state.txt"],
-            "arguments": []
+            "arguments": arguments
         }))
         .unwrap(),
     )

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Agent discovery must never execute application steps or require missing inputs.
 use serde_json::{json, Value};
 use std::{

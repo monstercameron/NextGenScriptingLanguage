@@ -1,7 +1,8 @@
-#![cfg(unix)]
-
 use flow::{manifest::Registry, parser, runtime};
 use std::time::Duration;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 #[test]
 fn applet_listener_uses_its_child_scoped_environment_overlay() {
@@ -9,7 +10,7 @@ fn applet_listener_uses_its_child_scoped_environment_overlay() {
     let variable = "EXECUTE_SERVICE_LISTENER_CANARY";
     let source = serde_json::json!({
         "name": "fixture.listener",
-        "binary": "/bin/sh",
+        "binary": portable_shell::shell_binary("/bin/sh"),
         "arguments": [
             {"literal": "-c"},
             {"literal": format!("printf '%s\\n' \"${variable}\"")}

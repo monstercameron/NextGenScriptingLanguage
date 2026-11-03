@@ -69,6 +69,51 @@ class UnixOnlyListTests(unittest.TestCase):
         ci_file = pathlib.Path(os.environ.get("LANE_W3_CI_FILE", ROOT / ".github/workflows/ci.yml"))
         self.assertIn("python3 tools/test_unix_only_tests.py", ci_file.read_text(encoding="utf-8"))
 
+    # Every suite converted for #521 must run in the Native Windows job.
+    CONVERTED_SUITES = [
+        "adversarial",
+        "cache_dependencies",
+        "child_env_minimize",
+        "cli",
+        "conditions",
+        "cpu",
+        "direct_commands",
+        "github_actions",
+        "graph_composition_acceptance",
+        "graph_result_events",
+        "inspection",
+        "invocation_io",
+        "lane_a_cli",
+        "lane_o_init",
+        "loops",
+        "manifest_catalog_cli",
+        "model_cli",
+        "model_control",
+        "native_status",
+        "opt_child_wakeup",
+        "opt_diagnostics_poll",
+        "opt_local_child_observer",
+        "opt_services_checkpoint_listener",
+        "opt_small_input",
+        "opt_stdin_prefill",
+        "process_inputs",
+        "program_inputs",
+        "program_module_accounting",
+        "resume",
+        "reusable_programs",
+        "security_dataflow_runtime",
+        "security_redaction",
+        "service_environment",
+        "stdin",
+        "streaming",
+        "structured_json",
+        "terminal_output_escape",
+        "timeout",
+        "typed_contracts",
+        "ui",
+        "worker_backend",
+    ]
+
     def test_converted_suites_run_on_windows(self) -> None:
         ci_file = pathlib.Path(os.environ.get("LANE_W3_CI_FILE", ROOT / ".github/workflows/ci.yml"))
         windows = ci_file.read_text(encoding="utf-8").split("  windows:\n", maxsplit=1)[1]
@@ -79,6 +124,9 @@ class UnixOnlyListTests(unittest.TestCase):
         )
         self.assertIn("--test robustness", command)
         self.assertIn("--test applet_boundaries_bench", command)
+        for suite in self.CONVERTED_SUITES:
+            with self.subTest(suite=suite):
+                self.assertIn(f"--test {suite}", command)
 
 
 if __name__ == "__main__":

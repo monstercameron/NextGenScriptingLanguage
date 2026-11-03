@@ -1,13 +1,16 @@
-#![cfg(unix)]
 use flow::manifest::Registry;
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 fn registry(directory: &Path, name: &str, binary: &str, accepts_stdin: bool) -> Registry {
     let manifest = serde_json::json!({
@@ -20,9 +23,33 @@ fn registry(directory: &Path, name: &str, binary: &str, accepts_stdin: bool) -> 
     Registry::load(directory).unwrap()
 }
 
+/// Manifest for a script worker: direct execution on Unix, through the given
+/// interpreter on Windows (which cannot execute the script file itself).
+fn script_registry(
+    directory: &Path,
+    name: &str,
+    script: &Path,
+    interpreter: &str,
+    accepts_stdin: bool,
+) -> Registry {
+    if cfg!(windows) {
+        let manifest = serde_json::json!({
+            "name": name,
+            "binary": interpreter,
+            "accepts_stdin": accepts_stdin,
+            "arguments": [{"literal": script.to_str().unwrap()}]
+        });
+        fs::write(directory.join(format!("{name}.json")), manifest.to_string()).unwrap();
+        Registry::load(directory).unwrap()
+    } else {
+        registry(directory, name, &script.to_string_lossy(), accepts_stdin)
+    }
+}
+
 fn executable(directory: &Path, name: &str, source: &str) -> std::path::PathBuf {
     let path = directory.join(name);
     fs::write(&path, source).unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     path
 }
@@ -81,7 +108,13 @@ fn large_owned_stderr_is_drained_before_stdout_completion() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("stderr-data"), stderr_blob()).unwrap();
     make_stderr_worker(directory.path(), false);
-    let registry = registry(directory.path(), "worker", "./worker", false);
+    let registry = script_registry(
+        directory.path(),
+        "worker",
+        &directory.path().join("worker"),
+        &portable_shell::python(),
+        false,
+    );
 
     let result = run(
         directory.path(),
@@ -100,7 +133,13 @@ fn every_pipeline_stage_can_fill_stderr_before_writing_stdout() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("stderr-data"), stderr_blob()).unwrap();
     make_stderr_worker(directory.path(), false);
-    let registry = registry(directory.path(), "worker", "./worker", true);
+    let registry = script_registry(
+        directory.path(),
+        "worker",
+        &directory.path().join("worker"),
+        &portable_shell::python(),
+        true,
+    );
 
     let result = run(
         directory.path(),
@@ -119,7 +158,13 @@ fn large_failure_stderr_keeps_the_bounded_diagnostic_prefix() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("stderr-data"), stderr_blob()).unwrap();
     make_stderr_worker(directory.path(), true);
-    let registry = registry(directory.path(), "worker", "./worker", false);
+    let registry = script_registry(
+        directory.path(),
+        "worker",
+        &directory.path().join("worker"),
+        &portable_shell::python(),
+        false,
+    );
 
     let error = run(
         directory.path(),
@@ -148,14 +193,15 @@ fn closed_stderr_worker(directory: &Path) {
     );
 }
 
+// Unix-only: signal 0 probes whether the reaped worker leaked. `pid` is the
+// worker shell's PID, written to the `pid` file before the worker runs
+// `exec sleep 30`; exec keeps the PID.
+#[cfg(unix)]
 fn assert_worker_reaped(directory: &Path) {
     let pid: libc::pid_t = fs::read_to_string(directory.join("pid"))
         .unwrap()
         .parse()
         .unwrap();
-    // SAFETY: signal 0 delivers nothing. `pid` is the worker shell's PID, written to the `pid`
-    // file before the worker runs `exec sleep 30`; exec keeps the PID, so the probe names the
-    // worker process itself.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),
@@ -167,7 +213,13 @@ fn assert_worker_reaped(directory: &Path) {
 fn closed_stderr_on_live_stdout_remains_cancellable() {
     let directory = tempfile::tempdir().unwrap();
     closed_stderr_worker(directory.path());
-    let registry = registry(directory.path(), "worker", "./worker", false);
+    let registry = script_registry(
+        directory.path(),
+        "worker",
+        &directory.path().join("worker"),
+        &portable_shell::shell_binary("sh"),
+        false,
+    );
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancelled_thread = cancelled.clone();
     let ready = directory.path().join("ready");
@@ -192,6 +244,7 @@ fn closed_stderr_on_live_stdout_remains_cancellable() {
         Err(error) => error,
     };
     assert!(format!("{error:#}").contains("workflow cancelled"));
+    #[cfg(unix)]
     assert_worker_reaped(directory.path());
 }
 
@@ -199,7 +252,13 @@ fn closed_stderr_on_live_stdout_remains_cancellable() {
 fn closed_stderr_on_live_stdout_remains_subject_to_timeout() {
     let directory = tempfile::tempdir().unwrap();
     closed_stderr_worker(directory.path());
-    let registry = registry(directory.path(), "worker", "./worker", false);
+    let registry = script_registry(
+        directory.path(),
+        "worker",
+        &directory.path().join("worker"),
+        &portable_shell::shell_binary("sh"),
+        false,
+    );
 
     let error = run(
         directory.path(),
@@ -215,6 +274,7 @@ fn closed_stderr_on_live_stdout_remains_subject_to_timeout() {
 
     assert!(format!("{error:#}").contains("timed out"));
     assert!(directory.path().join("ready").exists());
+    #[cfg(unix)]
     assert_worker_reaped(directory.path());
 }
 
@@ -227,8 +287,20 @@ fn profile_captured_one_mib_stderr_against_quiet_worker() {
     let quiet_script = "#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(b'ok\\n')\n";
     executable(directory.path(), "noisy", noisy_script);
     executable(directory.path(), "quiet", quiet_script);
-    let noisy = registry(directory.path(), "noisy", "./noisy", false);
-    let quiet = registry(directory.path(), "quiet", "./quiet", false);
+    let noisy = script_registry(
+        directory.path(),
+        "noisy",
+        &directory.path().join("noisy"),
+        &portable_shell::python(),
+        false,
+    );
+    let quiet = script_registry(
+        directory.path(),
+        "quiet",
+        &directory.path().join("quiet"),
+        &portable_shell::python(),
+        false,
+    );
 
     // Warm both paths, then alternate so startup/cache effects are shared.
     assert_eq!(

@@ -1,8 +1,8 @@
 # Replacement challenge: evidence before scores
 
 The [supplied challenge](replacement-challenge-source.md) defines fifteen proof
-gates for a Bash replacement and universal applet platform. **Execute 0.6.0 does
-not meet that bar.** No overall score is assigned. Passing one local probe does
+gates for a Bash replacement and universal applet platform. The current release
+does not meet that bar. No overall score is assigned. Passing one local probe does
 not close a gate whose platform, workload, or reliability requirements remain open.
 
 This work retains the project's small Unix-glue scope. Remote protocols, QML
@@ -16,23 +16,27 @@ The [machine-readable ledger](replacement-gates.json) carries the same gate IDs,
 evidence, and remaining acceptance work. `partial` means narrower evidence exists;
 `not implemented` and `not measured` are not passes.
 
+<!-- replacement-gates:generated:start -->
+**Ledger snapshot:** Execute `0.9.0-rc.5` at `b84d4cc883fbebeff7428bc657cc56cc2dc7782b`.
+
 | Gate | Requirement | Status | Evidence and remaining work |
 | --- | --- | --- | --- |
 | 1 · P0 | Unix compatibility | Partial | Native pipes, binary files, cwd, signals, and PTY tests exist. No stratified 100-command differential matrix; generic CLI exit 1, finite buffering, and literal arguments differ from Bash. |
 | 2 · P0 | 1 GB real streaming | Partial | New local 1,000,000,000-byte probe verifies exact output hash, binary bytes, and two native launches. Compare a small input's high-water usage; Linux execution and broader slow-consumer/memory observations remain open. |
-| 3 · P0 | Lifecycle, 10,000 repetitions | Partial | New seven-case repeatable suite checks record cutoff, signals, timeout, blocked output, failures, and reaping. Latest local run: 1,000 cycles / 7,000 probes. The 10,000-cycle target, crash/descendant cases, and Linux run remain open. |
-| 4 · P0 | Complete scripting control flow | Not implemented | Named results, sequences, events, and schedules exist. General conditions, loops, functions, CLI input declarations, and parallel jobs are missing. |
-| 5 · P0 | 150 real Omarchy ports | Not measured | The 150 local utilities are **not** Omarchy ports. No pinned upstream sample or disposable-desktop differential run exists. |
+| 3 · P0 | Lifecycle, 10,000 repetitions | Partial | New seven-case repeatable suite checks record cutoff, signals, timeout, blocked output, failures, and reaping. Local run: 1,000 cycles / 7,000 probes. The 10,000-cycle target, crash/descendant cases, and Linux run remain open. |
+| 4 · P0 | Complete scripting control flow | Not Implemented | Typed CLI input declarations now feed native parameters and argv, services and live bindings; 144 utilities expose 161 path inputs. General conditions, loops, functions and parallel jobs remain missing. |
+| 5 · P0 | 150 real Omarchy ports | Not Measured | The 150 local utilities are **not** Omarchy ports. No pinned upstream sample or disposable-desktop differential run exists. |
 | 6 · P0 | Failure semantics | Partial | Pipeline failure, timeout, cancellation, uncertain checkpoint retry, and cleanup tests exist. Numeric statuses and stderr are not structured script-visible results; recovery branches are missing. |
-| 7 · P1 | 1,000 applets across backends | Not implemented | There are 28 shipped manifest entries, covering executables and builtin cwd. No native/IPC/QML/remote backend abstraction or agent-facing registry discovery API. Aliases are not evidence of distinct integrations. |
-| 8 · P1 | Five levels of nested programs | Not implemented | Same-file terminal components have text ports. A `.program` cannot become an imported, typed, lifecycle-owned applet. |
-| 9 · P1 | Structured typed dataflow | Partial | Finite byte payloads, UTF-8 bindings, binary stream records, and text UI ports exist. JSON projection is available in widgets; schema-checked records/lists/events and connection typing are missing. |
-| 10 · P1 | 1,000 concurrent operations | Not implemented | Bounded UI workers and stale-result rejection are covered at current scale. There is no general 1,000-operation concurrency primitive or randomized acceptance run. |
-| 11 · P1 | Remote reliability | Not implemented | A CLI such as `gh` can perform a request. Runtime-owned auth, reconnection, offline/version semantics, and fault-injected transports are absent. |
-| 12 · P1 | 20 Quickshell integrations | Not implemented | Execute renders terminal widgets. No Quickshell bridge or twenty-widget desktop acceptance suite exists. |
+| 7 · P1 | 1,000 applets across backends | Not Implemented | There are 28 shipped manifest entries plus manifest-free direct executable calls in 0.7.0. Arbitrary installed executables can run with literal argv, but this is not 1,000 verified backend integrations. Native/IPC/QML/remote backend abstraction remains absent. |
+| 8 · P1 | Five levels of nested programs | Not Implemented | Same-file terminal components have text ports. A `.program` cannot become an imported, typed, lifecycle-owned applet. |
+| 9 · P1 | Structured typed dataflow | Partial | Typed declared text/integer/boolean/text-list inputs now validate against native parameter contracts, with scalar argv formatting. Raw byte pipelines, text bindings and UI projections exist. Native JSON/CSV record transforms, structured streams and typed component ports remain incomplete. |
+| 10 · P1 | 1,000 concurrent operations | Not Implemented | Bounded UI workers and stale-result rejection are covered at current scale. There is no general 1,000-operation concurrency primitive or randomized acceptance run. |
+| 11 · P1 | Remote reliability | Not Implemented | A CLI such as `gh` can perform a request. Runtime-owned auth, reconnection, offline/version semantics, and fault-injected transports are absent. |
+| 12 · P1 | 20 Quickshell integrations | Not Implemented | Execute renders terminal widgets. No Quickshell bridge or twenty-widget desktop acceptance suite exists. |
 | 13 · P2 | Performance and idle behavior | Partial | Warm-cache 0.6.0 local control/render measurements and historical matched Bash workloads exist. True cold-cache p95, idle-spawn guards, Linux parity, and representative end-to-end wins are unproven. |
-| 14 · P2 | AI advantage on 200 tasks | Not measured | No held-out comparative generation study, token ledger, or repair-cost dataset. Source length and this project's successful examples do not establish productivity gains. |
+| 14 · P2 | AI advantage on 200 tasks | Not Measured | No held-out comparative generation study, token ledger, or repair-cost dataset. Source length and this project's successful examples do not establish productivity gains. |
 | 15 · P2 | Production/security/month of use | Partial | Private local control sockets, revision checks, tracing, bounds, and recovery tests exist. Applets retain user privileges; scoped permissions, credential policy, safe contract upgrades, and a month-long deployment study are absent. |
+<!-- replacement-gates:generated:end -->
 
 The [0.6.1 full audit](full-testing.md) extends the local evidence with CLI panic
 fixes, source coverage, and 1,000 lifecycle cycles. The broad replacement verdict

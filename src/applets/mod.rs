@@ -356,10 +356,9 @@ pub fn execute_with_context(
         "json.unique_by" => structured::unique_by(args, input, context),
         "json.sum" => structured::sum(args, input, context),
         "json.sort_by" => structured::sort_by(args, input, context),
-        "hash.sha256" | "hash.sha512" | "encode.base64" | "decode.base64" | "encode.hex"
-        | "decode.hex" | "encode.url" | "decode.url" | "encode.form" => {
-            hash::run(operation, args, input, context)
-        }
+        "hash.sha256" | "hash.sha512" | "hash.digest" | "hash.hmac_sha256" | "encode.base64"
+        | "decode.base64" | "encode.hex" | "decode.hex" | "encode.url" | "decode.url"
+        | "encode.form" => hash::run(operation, args, input, cwd, context),
         "time.now" | "time.format" | "time.parse" | "time.add" | "time.diff" => {
             time::run(operation, args, context)
         }

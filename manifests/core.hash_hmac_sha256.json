@@ -1,0 +1,99 @@
+{
+  "name": "hash.hmac_sha256",
+  "description": "Computes the RFC 2104 HMAC-SHA256 of text or input-stream bytes under a key, for signing requests; returns lowercase hex (default) or base64.",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "key": {
+      "type": "string",
+      "required": true,
+      "description": "HMAC key text."
+    },
+    "text": {
+      "type": "string",
+      "required": false,
+      "description": "Optional message to sign; when omitted, the applet signs bytes from its input stream."
+    },
+    "output": {
+      "type": "string",
+      "required": false,
+      "description": "Signature rendering: hex (default) or base64."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "hash.hmac_sha256"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "capabilities": [
+      "hash.compute"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "output": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "hex",
+              "base64"
+            ]
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "hmac sha256"
+  ],
+  "examples": [
+    {
+      "program": "run hash.hmac_sha256 with key \"Jefe\" and text \"what do ya want for nothing?\" as signature",
+      "expected_output": "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+    }
+  ]
+}

@@ -1,8 +1,12 @@
 use super::{
-    checkpoint_work, invalid, optional_bool, required_string, AppletError, ExecutionContext,
+    checkpoint_work, invalid, io_error, optional_bool, required_string, AppletError,
+    ExecutionContext,
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256, Sha512};
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 
 /// Chunk between budget checks so hashing or recoding a large input stops
 /// promptly on cancellation or deadline. Each chunk is plain CPU work; no
@@ -13,14 +17,26 @@ pub(super) fn run(
     operation: &str,
     args: &Map<String, Value>,
     input: &[u8],
+    cwd: &Path,
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     context.checkpoint()?;
-    let bytes = match args.get("text") {
-        Some(Value::String(text)) => text.as_bytes(),
-        Some(_) => return Err(invalid("args.text must be a string")),
-        None => input,
-    };
+    if operation == "hash.digest" {
+        let algorithm = select_algorithm(args)?;
+        let output = select_output(args)?;
+        let raw = digest_source(args, input, algorithm, cwd, context)?;
+        return Ok(Value::String(render_digest(&raw, output, context)?));
+    }
+    if operation == "hash.hmac_sha256" {
+        let key = required_string(args, "key")?;
+        let output = select_output(args)?;
+        let message = text_or_input(args, input)?;
+        context.checkpoint()?;
+        let raw = crate::agent::what_if_key::hmac_sha256(key.as_bytes(), message);
+        context.checkpoint()?;
+        return Ok(Value::String(render_digest(&raw, output, context)?));
+    }
+    let bytes = text_or_input(args, input)?;
     match operation {
         "hash.sha256" => Ok(Value::String(hex(&digest_sha256(bytes, context)?))),
         "hash.sha512" => Ok(Value::String(hex(&digest_sha512(bytes, context)?))),
@@ -73,6 +89,143 @@ pub(super) fn run(
         )?)),
         _ => Err(invalid("unsupported hash or encoding operation")),
     }
+}
+
+/// Explicit `text` wins over pipeline bytes; anything else in `text` is a
+/// coded error rather than a silent coercion.
+fn text_or_input<'a>(
+    args: &'a Map<String, Value>,
+    input: &'a [u8],
+) -> Result<&'a [u8], AppletError> {
+    match args.get("text") {
+        Some(Value::String(text)) => Ok(text.as_bytes()),
+        Some(_) => Err(invalid("args.text must be a string")),
+        None => Ok(input),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Algorithm {
+    Sha256,
+    Sha512,
+}
+
+fn select_algorithm(args: &Map<String, Value>) -> Result<Algorithm, AppletError> {
+    match args.get("algorithm") {
+        None => Ok(Algorithm::Sha256),
+        Some(Value::String(name)) => match name.as_str() {
+            "sha256" => Ok(Algorithm::Sha256),
+            "sha512" => Ok(Algorithm::Sha512),
+            _ => Err(invalid(
+                "args.algorithm must be \"sha256\" or \"sha512\"; blake3, md5 and sha1 are not supported",
+            )),
+        },
+        Some(_) => Err(invalid("args.algorithm must be a string")),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Output {
+    Hex,
+    Base64,
+}
+
+fn select_output(args: &Map<String, Value>) -> Result<Output, AppletError> {
+    match args.get("output") {
+        None => Ok(Output::Hex),
+        Some(Value::String(name)) => match name.as_str() {
+            "hex" => Ok(Output::Hex),
+            "base64" => Ok(Output::Base64),
+            _ => Err(invalid("args.output must be \"hex\" or \"base64\"")),
+        },
+        Some(_) => Err(invalid("args.output must be a string")),
+    }
+}
+
+fn render_digest(
+    raw: &[u8],
+    output: Output,
+    context: &ExecutionContext<'_>,
+) -> Result<String, AppletError> {
+    match output {
+        Output::Hex => Ok(hex(raw)),
+        Output::Base64 => base64(raw, context),
+    }
+}
+
+/// Digest `text`/input bytes, or stream a file when `args.path` is set. A
+/// file digest reads in bounded chunks so a large file never lands fully in
+/// memory; every chunk rechecks the execution budget for cancellation. A
+/// digest of a file is a `filesystem.read` effect, visible to policy.
+fn digest_source(
+    args: &Map<String, Value>,
+    input: &[u8],
+    algorithm: Algorithm,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<u8>, AppletError> {
+    let path = match args.get("path") {
+        Some(Value::String(path)) => Some(path.as_str()),
+        Some(_) => return Err(invalid("args.path must be a string")),
+        None => None,
+    };
+    match path {
+        Some(path) => {
+            if args.contains_key("text") || !input.is_empty() {
+                return Err(invalid(
+                    "hash.digest takes exactly one of args.path or text/input bytes",
+                ));
+            }
+            if path.is_empty() || path.contains('\0') {
+                return Err(invalid("args.path must be nonempty and contain no NUL"));
+            }
+            let resolved = super::filesystem::resolve_path(path, cwd);
+            // Bounded open (threat model H7): a FIFO at the digest path must
+            // fail with the typed timeout instead of hanging the open.
+            let file = super::open_regular_input(&resolved, &resolved, false, context)?;
+            stream_digest(algorithm, file, &resolved, context)
+        }
+        None => {
+            let bytes = text_or_input(args, input)?;
+            let mut hasher = new_hasher(algorithm);
+            for chunk in bytes.chunks(HASH_CHUNK_BYTES) {
+                sha2::digest::DynDigest::update(hasher.as_mut(), chunk);
+                context.checkpoint()?;
+            }
+            context.checkpoint()?;
+            Ok(sha2::digest::DynDigest::finalize_reset(hasher.as_mut()).to_vec())
+        }
+    }
+}
+
+fn new_hasher(algorithm: Algorithm) -> Box<dyn sha2::digest::DynDigest> {
+    match algorithm {
+        Algorithm::Sha256 => Box::new(Sha256::new()),
+        Algorithm::Sha512 => Box::new(Sha512::new()),
+    }
+}
+
+fn stream_digest(
+    algorithm: Algorithm,
+    file: File,
+    display: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<u8>, AppletError> {
+    let mut file = file;
+    let mut hasher = new_hasher(algorithm);
+    let mut chunk = [0u8; HASH_CHUNK_BYTES];
+    loop {
+        let read = file
+            .read(&mut chunk)
+            .map_err(|error| io_error(error, format!("reading {}", display.display())))?;
+        if read == 0 {
+            break;
+        }
+        sha2::digest::DynDigest::update(hasher.as_mut(), &chunk[..read]);
+        context.checkpoint()?;
+    }
+    context.checkpoint()?;
+    Ok(sha2::digest::DynDigest::finalize_reset(hasher.as_mut()).to_vec())
 }
 
 fn digest_sha256(bytes: &[u8], context: &ExecutionContext<'_>) -> Result<[u8; 32], AppletError> {
@@ -312,26 +465,38 @@ fn url_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     fn unrestricted() -> ExecutionContext<'static> {
         ExecutionContext::unrestricted()
+    }
+    fn cwd() -> std::path::PathBuf {
+        std::path::PathBuf::from(".")
+    }
+    fn string_args(pairs: &[(&str, &str)]) -> Map<String, Value> {
+        Map::from_iter(
+            pairs
+                .iter()
+                .map(|(name, value)| ((*name).into(), Value::String((*value).into()))),
+        )
     }
     #[test]
     fn nist_hash_and_rfc_encodings() {
         let context = unrestricted();
+        let cwd = cwd();
         assert_eq!(
-            run("hash.sha256", &Map::new(), b"abc", &context).unwrap(),
+            run("hash.sha256", &Map::new(), b"abc", &cwd, &context).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(
-            run("hash.sha512", &Map::new(), b"abc", &context).unwrap(),
+            run("hash.sha512", &Map::new(), b"abc", &cwd, &context).unwrap(),
             "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
         );
         assert_eq!(
-            run("encode.hex", &Map::new(), b"foo", &context).unwrap(),
+            run("encode.hex", &Map::new(), b"foo", &cwd, &context).unwrap(),
             "666f6f"
         );
         assert_eq!(
-            run("encode.base64", &Map::new(), b"foo", &context).unwrap(),
+            run("encode.base64", &Map::new(), b"foo", &cwd, &context).unwrap(),
             "Zm9v"
         );
         assert_eq!(
@@ -339,13 +504,14 @@ mod tests {
                 "decode.base64",
                 &Map::from_iter([("text".into(), Value::String("Zm9v".into()))]),
                 b"",
+                &cwd,
                 &context,
             )
             .unwrap(),
             "foo"
         );
         assert_eq!(
-            run("encode.url", &Map::new(), b"a b/~", &context).unwrap(),
+            run("encode.url", &Map::new(), b"a b/~", &cwd, &context).unwrap(),
             "a%20b%2F~"
         );
         assert_eq!(
@@ -353,6 +519,7 @@ mod tests {
                 "decode.url",
                 &Map::from_iter([("text".into(), Value::String("a+b%2Fc".into()))]),
                 b"",
+                &cwd,
                 &context,
             )
             .unwrap(),
@@ -364,17 +531,19 @@ mod tests {
             ("padding".into(), Value::Bool(false)),
         ]);
         assert_eq!(
-            run("decode.base64", &url_args, b"", &context).unwrap(),
+            run("decode.base64", &url_args, b"", &cwd, &context).unwrap(),
             "foo"
         );
     }
     #[test]
     fn malformed_encodings_return_errors() {
         let context = unrestricted();
+        let cwd = cwd();
         assert!(run(
             "decode.base64",
             &Map::from_iter([("text".into(), Value::String("A===".into()))]),
             b"",
+            &cwd,
             &context,
         )
         .is_err());
@@ -382,8 +551,207 @@ mod tests {
             "decode.hex",
             &Map::from_iter([("text".into(), Value::String("0g".into()))]),
             b"",
+            &cwd,
             &context,
         )
         .is_err());
+    }
+    #[test]
+    fn hash_digest_known_answers() {
+        let context = unrestricted();
+        let cwd = cwd();
+        // The default algorithm is SHA-256 over explicit text.
+        assert_eq!(
+            run(
+                "hash.digest",
+                &string_args(&[("text", "abc")]),
+                b"",
+                &cwd,
+                &context,
+            )
+            .unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // Pipeline bytes hash identically when no text is given.
+        assert_eq!(
+            run("hash.digest", &Map::new(), b"abc", &cwd, &context).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            run(
+                "hash.digest",
+                &string_args(&[("text", "abc"), ("algorithm", "sha512")]),
+                b"",
+                &cwd,
+                &context,
+            )
+            .unwrap(),
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        );
+        assert_eq!(
+            run(
+                "hash.digest",
+                &string_args(&[("text", "abc"), ("output", "base64")]),
+                b"",
+                &cwd,
+                &context,
+            )
+            .unwrap(),
+            "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0="
+        );
+        assert_eq!(
+            run(
+                "hash.digest",
+                &string_args(&[
+                    ("text", "abc"),
+                    ("algorithm", "sha512"),
+                    ("output", "base64")
+                ]),
+                b"",
+                &cwd,
+                &context,
+            )
+            .unwrap(),
+            "3a81oZNherrMQXNJriBBMRLm+k6JqX6iCp7u5ktV05ohkpkqJ0/BqDa6PCOj/uu9RU1EI2Q86A4qmslPpUyknw=="
+        );
+    }
+    #[test]
+    fn hash_hmac_sha256_matches_rfc_4231() {
+        let context = unrestricted();
+        let cwd = cwd();
+        // RFC 4231 case 1: key of twenty 0x0b bytes, message "Hi There".
+        let case_one = Map::from_iter([
+            ("key".into(), Value::String("\u{b}".repeat(20))),
+            ("text".into(), Value::String("Hi There".into())),
+        ]);
+        assert_eq!(
+            run("hash.hmac_sha256", &case_one, b"", &cwd, &context).unwrap(),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        // RFC 4231 case 2: ASCII key and message, both output encodings.
+        assert_eq!(
+            run(
+                "hash.hmac_sha256",
+                &string_args(&[("key", "Jefe"), ("text", "what do ya want for nothing?")]),
+                b"",
+                &cwd,
+                &context,
+            )
+            .unwrap(),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        assert_eq!(
+            run(
+                "hash.hmac_sha256",
+                &string_args(&[
+                    ("key", "Jefe"),
+                    ("text", "what do ya want for nothing?"),
+                    ("output", "base64")
+                ]),
+                b"",
+                &cwd,
+                &context,
+            )
+            .unwrap(),
+            "W9zBRr9gdU5qBCQmCJV1x1oAPwidJzmDnexYuWTsOEM="
+        );
+        // Pipeline bytes sign identically when no text is given.
+        assert_eq!(
+            run(
+                "hash.hmac_sha256",
+                &string_args(&[("key", "Jefe")]),
+                b"what do ya want for nothing?",
+                &cwd,
+                &context,
+            )
+            .unwrap(),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+    #[test]
+    fn hash_digest_file_streams_with_bounded_chunks() {
+        let context = unrestricted();
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        std::fs::write(cwd.join("abc.txt"), b"abc").unwrap();
+        assert_eq!(
+            run(
+                "hash.digest",
+                &string_args(&[("path", "abc.txt")]),
+                b"",
+                cwd,
+                &context,
+            )
+            .unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // A file spanning several 64 KiB chunks digests exactly like the
+        // same bytes given as text, so the streaming path changes nothing.
+        let big: Vec<u8> = (0..3 * HASH_CHUNK_BYTES + 7)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        {
+            let mut file = File::create(cwd.join("big.bin")).unwrap();
+            file.write_all(&big).unwrap();
+        }
+        let via_path = run(
+            "hash.digest",
+            &string_args(&[("path", "big.bin"), ("algorithm", "sha512")]),
+            b"",
+            cwd,
+            &context,
+        )
+        .unwrap();
+        let via_text = run(
+            "hash.digest",
+            &string_args(&[("algorithm", "sha512")]),
+            &big,
+            cwd,
+            &context,
+        )
+        .unwrap();
+        assert_eq!(via_path, via_text);
+    }
+    #[test]
+    fn hash_digest_and_hmac_reject_bad_input_with_codes() {
+        let context = unrestricted();
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        for args in [
+            string_args(&[("algorithm", "blake3"), ("text", "abc")]),
+            string_args(&[("algorithm", "md5"), ("text", "abc")]),
+            string_args(&[("output", "raw"), ("text", "abc")]),
+            string_args(&[("text", "abc"), ("path", "abc.txt")]),
+            string_args(&[("path", "")]),
+            string_args(&[("path", "abc.txt\0")]),
+        ] {
+            let error = run("hash.digest", &args, b"", cwd, &context).unwrap_err();
+            assert_eq!(error.code, "invalid_request", "{args:?}");
+        }
+        let error = run(
+            "hash.digest",
+            &string_args(&[("path", "abc.txt")]),
+            b"leftover input",
+            cwd,
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        let error = run(
+            "hash.digest",
+            &string_args(&[("path", "missing.txt")]),
+            b"",
+            cwd,
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "not_found");
+        for args in [
+            Map::new(),
+            string_args(&[("key", "Jefe"), ("output", "raw")]),
+        ] {
+            let error = run("hash.hmac_sha256", &args, b"", cwd, &context).unwrap_err();
+            assert_eq!(error.code, "invalid_request", "{args:?}");
+        }
     }
 }

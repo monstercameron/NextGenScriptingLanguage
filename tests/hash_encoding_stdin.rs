@@ -29,7 +29,7 @@ fn inspect(root: &Path, operation: &str, disk_manifests: bool) -> std::process::
     invocation.output().unwrap()
 }
 
-fn operations() -> [(&'static str, &'static str); 5] {
+fn operations() -> [(&'static str, &'static str); 6] {
     [
         (
             "hash.sha256",
@@ -42,6 +42,10 @@ fn operations() -> [(&'static str, &'static str); 5] {
         ("encode.hex", "616263"),
         ("encode.base64", "YWJj"),
         ("encode.url", "abc"),
+        (
+            "hash.digest",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
     ]
 }
 
@@ -113,6 +117,10 @@ fn hash_and_encoding_applets_keep_binary_pipeline_bytes() {
         ("encode.hex", "ff"),
         ("encode.base64", "/w=="),
         ("encode.url", "%FF"),
+        (
+            "hash.digest",
+            "a8100ae6aa1940d0b663bb31cd466142ebbdbd5187131b92d93818987832eb89",
+        ),
     ] {
         assert_eq!(
             applets::execute(operation, args, &[0xff]).unwrap(),
@@ -139,6 +147,10 @@ fn native_non_utf8_bytes_reach_each_hash_and_encoding_applet() {
             ("encode.hex", "ff"),
             ("encode.base64", "/w=="),
             ("encode.url", "%FF"),
+            (
+                "hash.digest",
+                "a8100ae6aa1940d0b663bb31cd466142ebbdbd5187131b92d93818987832eb89",
+            ),
         ] {
             let source = format!(
                 "run \"printf\" with arguments [\"%b\", \"\\\\377\"]\nthen {operation}\n"
@@ -183,6 +195,46 @@ fn every_hash_and_encoding_applet_exposes_raw_stdin_in_its_contract() {
                 report["applet"]["ports"]["inputs"]["stdin"]["encoding"], "raw",
                 "{operation}"
             );
+        }
+    }
+}
+
+#[test]
+fn hash_digest_options_and_hmac_sha256_run_from_cli() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("input.bin"), b"abc").unwrap();
+    let cases = [
+        (
+            "run hash.digest with text \"abc\" and output \"base64\" as digest",
+            "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=",
+        ),
+        (
+            "run hash.digest with path \"input.bin\" as digest",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+        (
+            "run hash.hmac_sha256 with key \"Jefe\" and text \"what do ya want for nothing?\" as signature",
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+        ),
+    ];
+    for disk_manifests in [false, true] {
+        for (program, expected) in cases {
+            let source = format!("{program}\n");
+            for command in ["check", "run"] {
+                let output = invoke(root.path(), &source, command, disk_manifests);
+                assert!(
+                    output.status.success(),
+                    "{command} {program}, disk_manifests={disk_manifests}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                if command == "run" {
+                    assert_eq!(
+                        String::from_utf8_lossy(&output.stdout).trim_end_matches('\n'),
+                        expected,
+                        "{program}, disk_manifests={disk_manifests}"
+                    );
+                }
+            }
         }
     }
 }

@@ -2871,6 +2871,10 @@ fn applet_search_score(query: &str, contract: &serde_json::Value) -> f64 {
                 "sort sorting order ordered list array records"
             } else if name == "hash.sha256" {
                 "sha256 sha 256 checksum digest hash"
+            } else if name == "hash.digest" {
+                "sha256 sha512 sha 256 512 checksum digest hash file"
+            } else if name == "hash.hmac_sha256" {
+                "hmac sha256 signature signed request checksum hash"
             } else if name == "fs.read" {
                 "file files read reading content contents"
             } else if name == "fs.write_atomic" {

@@ -1,0 +1,117 @@
+{
+  "name": "hash.digest",
+  "description": "Computes the SHA-256 (default) or SHA-512 digest of text, input-stream bytes or a file, returning lowercase hex (default) or base64. A file digest streams in bounded chunks and is a filesystem.read effect.",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": false,
+      "description": "Optional text to digest; when omitted, the applet digests bytes from its input stream, unless path is set."
+    },
+    "path": {
+      "type": "path",
+      "required": false,
+      "description": "Optional file to digest instead of text or input bytes; relative paths resolve from the program working directory. Cannot be combined with text or input bytes."
+    },
+    "algorithm": {
+      "type": "string",
+      "required": false,
+      "description": "Digest algorithm: sha256 (default) or sha512."
+    },
+    "output": {
+      "type": "string",
+      "required": false,
+      "description": "Digest rendering: hex (default) or base64."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "hash.digest"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "capabilities": [
+      "hash.compute",
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "algorithm": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "sha256",
+              "sha512"
+            ]
+          },
+          "delivery": "single"
+        },
+        "output": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "hex",
+              "base64"
+            ]
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "hash digest"
+  ],
+  "examples": [
+    {
+      "program": "run hash.digest with text \"abc\" as digest",
+      "expected_output": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    }
+  ]
+}

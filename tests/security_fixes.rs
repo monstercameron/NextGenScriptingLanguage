@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+// The only callers are the unix-gated modules below, so Windows builds never use it.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[path = "support/private_answers.rs"]
 mod private_answers;
 

@@ -1896,8 +1896,8 @@ impl PinnedExecutable {
                     // bytes do not. Let ctime move only when the link count
                     // moved; a rewrite that keeps the link count still fails.
                     let links_moved = stat.st_nlink as u64 != nlink;
-                    let ctime_moved = stat.st_ctime as i64 != ctime
-                        || stat.st_ctime_nsec as i64 != ctime_nsec;
+                    let ctime_moved =
+                        stat.st_ctime as i64 != ctime || stat.st_ctime_nsec as i64 != ctime_nsec;
                     if stat.st_dev as u64 != dev
                         || stat.st_ino as u64 != ino
                         || stat.st_size as u64 != size

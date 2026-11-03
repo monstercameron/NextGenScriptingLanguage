@@ -1407,7 +1407,8 @@ fn select_credential(
 /// skipped without being parsed, so unrelated lines cannot affect a request.
 fn parse_env_file(path: &str, wanted: &[&str]) -> Result<BTreeMap<String, String>> {
     // Credentials demand the bearer-file checks (owner, private mode, no
-    // reparse point): a group-readable or linked file fails closed here.
+    // reparse point, and no macOS extended ACL): a group-readable, linked, or
+    // ACL-granted file fails closed here.
     // Ancestor swaps between parent authorization and this open remain
     // unpinned; see `open_regular_no_follow` and `docs/models.md`.
     let mut file = crate::security::open_private_file(std::path::Path::new(path))
@@ -3038,6 +3039,38 @@ mod credential_policy_tests {
         let path = directory.path().join("group.env");
         std::fs::write(&path, "OPENAI_API_KEY=group-key\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let error = parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("opening explicit environment file"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_acl_env_file_is_rejected_before_parsing() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("acl.env");
+        std::fs::write(&path, "OPENAI_API_KEY=file-key\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let acl = Command::new("chmod")
+            .args(["+a", "everyone allow read"])
+            .arg(&path)
+            .status();
+        let Ok(status) = acl else {
+            return;
+        };
+        if !status.success() {
+            return;
+        }
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o077,
+            0,
+            "the test must exercise ACL access that mode bits do not reveal"
+        );
         let error = parse_env_file(path.to_str().unwrap(), &["OPENAI_API_KEY"]).unwrap_err();
         assert!(
             format!("{error:#}").contains("opening explicit environment file"),

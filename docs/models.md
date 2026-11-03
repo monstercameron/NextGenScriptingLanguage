@@ -230,7 +230,9 @@ over values in the file. Keep secrets out of `.program` source and manifests.
 The helper emits sanitized error classes without provider response bodies,
 request values, paths, or credentials. The file must be a private regular
 file (owner-only permissions, no links): group-readable or symlinked files
-are rejected fail-closed. Under a capability policy the parent additionally
+are rejected fail-closed, and on macOS files carrying an extended ACL are
+refused even when their mode bits look private. Under a capability policy
+the parent additionally
 authorizes every resolved `path`-typed parameter (`fixture`, `env_file`)
 against the applet's own filesystem grant before spawn, after bindings
 resolve, including background jobs.

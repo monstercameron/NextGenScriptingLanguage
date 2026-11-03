@@ -2027,12 +2027,15 @@ fn checkpoint_xattr_list_has_unsupported_acl(names: &[u8]) -> Result<bool> {
     Ok(false)
 }
 
+/// Whether the already-open file carries a macOS extended ACL. Descriptor-side
+/// probe so a path swap cannot hide an entry attached between the path check
+/// and the open. Darwin's ACL API reports ENOENT when no extended ACL is
+/// attached; any other inspection failure is returned so callers fail closed
+/// instead of treating an unverifiable file as private.
 #[cfg(target_os = "macos")]
-fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+pub(crate) fn has_macos_extended_acl(file: &File) -> Result<bool, std::io::Error> {
     use std::os::unix::io::AsRawFd;
 
-    // Darwin's ACL API reports ENOENT when no extended ACL is attached. Any
-    // other failure to inspect it is a refusal to resume.
     #[link(name = "System")]
     extern "C" {
         fn acl_get_fd_np(fd: libc::c_int, acl_type: libc::c_int) -> *mut std::ffi::c_void;
@@ -2048,14 +2051,21 @@ fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
         return if error.raw_os_error() == Some(libc::ENOENT) {
             Ok(false)
         } else {
-            Err(error).context("checking checkpoint root macOS ACL")
+            Err(error)
         };
     }
     // SAFETY: acl_get_fd_np returned a live ACL allocation owned by this call.
     if unsafe { acl_free(acl) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("releasing checkpoint root macOS ACL");
+        return Err(std::io::Error::last_os_error());
     }
     Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn checkpoint_directory_has_acl(file: &File) -> Result<bool> {
+    // Any failure to inspect the descriptor, including releasing the probed
+    // ACL allocation, is a refusal to resume.
+    has_macos_extended_acl(file).context("checking checkpoint root macOS ACL")
 }
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
@@ -2737,6 +2747,32 @@ pub(crate) fn open_private_file(path: &Path) -> std::io::Result<File> {
             ));
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        // Mode bits cannot attest ACL grants: on filesystems and directories
+        // that supply permissive inherited ACLs, a mode-0600 file can still
+        // expose credentials to another local principal. Refuse the file when
+        // an extended ACL is present, and fail closed when the ACL cannot be
+        // inspected. Remove the ACL or move the file before retrying.
+        match has_macos_extended_acl(&file) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "security-sensitive file {} has an extended ACL; remove the ACL or move the file",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(error) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("cannot verify privacy of {}: {error}", path.display()),
+                ));
+            }
+        }
+    }
     #[cfg(windows)]
     if crate::platform::windows::is_reparse(&metadata) {
         return Err(std::io::Error::new(
@@ -3363,6 +3399,39 @@ mod tests {
         let metadata = std::fs::symlink_metadata(directory.path()).unwrap();
         verify_private_checkpoint_directory(directory.path(), &metadata)
             .expect("the owner and trusted platform principals may access the checkpoint");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_files_reject_a_macos_extended_acl() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credential");
+        std::fs::write(&path, b"0123456789abcdef0123456789abcdef\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let acl = Command::new("chmod")
+            .args(["+a", "everyone allow read"])
+            .arg(&path)
+            .status();
+        let Ok(status) = acl else {
+            return;
+        };
+        if !status.success() {
+            return;
+        }
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o077,
+            0,
+            "the test must exercise ACL access that mode bits do not reveal"
+        );
+        let error = open_private_file(&path)
+            .expect_err("a file with a macOS extended ACL must not load as private");
+        assert!(
+            error.to_string().contains("extended ACL"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

@@ -56,12 +56,10 @@ fn assert_graph_result(output: &Output) {
         )
     });
     assert_eq!(result["protocol"], "execute.graph-run/1", "{result}");
-    assert!(
-        output
-            .stdout
-            .windows(b"hello graph".len())
-            .any(|bytes| bytes == b"hello graph")
-    );
+    assert!(output
+        .stdout
+        .windows(b"hello graph".len())
+        .any(|bytes| bytes == b"hello graph"));
 }
 
 #[test]

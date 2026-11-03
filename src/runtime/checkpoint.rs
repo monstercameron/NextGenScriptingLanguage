@@ -544,7 +544,7 @@ pub(super) struct Journal {
     element_replay: Option<ElementReplay>,
     /// Reused for element and binding JSON; erased after every write, including errors.
     element_buffer: Vec<u8>,
-    _lock: File,
+    _lock: DirectoryLock,
 }
 
 impl Journal {
@@ -1943,9 +1943,31 @@ fn write_envelope(
     Ok(())
 }
 
+/// The exclusive lock of a checkpoint directory, held for as long as its journal is open.
+///
+/// On Unix the lock is a `flock` on an open file description. A `fork` copies that
+/// description into the child, and the lock stays held until every copy closes. Closing
+/// this descriptor alone can therefore leave the directory locked while a child forked
+/// just before the drop has not yet exec'd, and a reopen in that window fails with
+/// "already locked". Dropping the guard releases the lock explicitly, whichever copies
+/// are still open.
+struct DirectoryLock(#[cfg_attr(not(unix), allow(dead_code))] File);
+
+impl Drop for DirectoryLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY: LOCK_UN takes a descriptor and an operation and reads no memory; the
+            // descriptor belongs to `self.0`, which is still open during this call.
+            unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
 /// Take the exclusive lock of a checkpoint directory. Every journal mode, program or
 /// graph, holds it for as long as the journal is open.
-fn lock_directory(directory: &Path, #[cfg(unix)] pinned_directory: &File) -> Result<File> {
+fn lock_directory(directory: &Path, #[cfg(unix)] pinned_directory: &File) -> Result<DirectoryLock> {
     #[cfg(not(unix))]
     let lock_path = directory.join("lock");
     #[cfg(unix)]
@@ -1974,7 +1996,7 @@ fn lock_directory(directory: &Path, #[cfg(unix)] pinned_directory: &File) -> Res
         }
         return Err(error).context("locking checkpoint");
     }
-    Ok(lock)
+    Ok(DirectoryLock(lock))
 }
 
 /// Whether the in-flight node tracks per-element records: a `for each` loop

@@ -1949,12 +1949,16 @@ fn sealed_copy(contents: &[u8], canonical: &Path, keep_open_across_exec: bool) -
     }
     if keep_open_across_exec {
         // The interpreter of a script reopens `/proc/self/fd/N` after exec, so
-        // the copy must survive that exec. SAFETY: F_GETFD/F_SETFD take integers
-        // and read no memory; failures return -1, checked here.
+        // the copy must survive that exec.
+        // SAFETY: F_GETFD takes an integer descriptor and reads no memory.
         let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
-        if flags == -1
-            || unsafe { libc::fcntl(raw, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1
-        {
+        if flags == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("pinning a copy of {}", canonical.display()));
+        }
+        // SAFETY: F_SETFD takes an integer descriptor and a flags word and reads no memory.
+        let cleared = unsafe { libc::fcntl(raw, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
+        if cleared == -1 {
             return Err(std::io::Error::last_os_error())
                 .with_context(|| format!("pinning a copy of {}", canonical.display()));
         }

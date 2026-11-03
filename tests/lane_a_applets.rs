@@ -2,10 +2,10 @@
 //! use owned temporary directories and avoid names Windows cannot store.
 
 use flow::applets::{
-    execute, execute_in_cwd, AppletError, AppletErrorKind, ExecutionBudgetExceeded,
-    ExecutionContext,
+    AppletError, AppletErrorKind, ExecutionBudgetExceeded, ExecutionContext, execute,
+    execute_in_cwd,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::fs;
 use std::path::Path;
 
@@ -122,6 +122,61 @@ fn fs_test_symlink_inspects_the_link_and_other_kinds_follow_it() {
     assert_eq!(test_kind(&dangling, "symlink").unwrap(), json!(true));
     assert_eq!(test_kind(&dangling, "exists").unwrap(), json!(false));
     assert_eq!(test_kind(&target, "symlink").unwrap(), json!(false));
+}
+
+#[test]
+fn exec_which_searches_path_and_checks_relative_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = temp.path().join("tool.exe");
+    fs::write(&executable, b"fixture").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let non_executable = temp.path().join("plain");
+        fs::write(&non_executable, b"fixture").unwrap();
+        fs::set_permissions(&non_executable, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    fs::create_dir(temp.path().join("directory.exe")).unwrap();
+    let path = temp.path().to_string_lossy().to_string();
+    let result = execute_in_cwd(
+        "exec.which",
+        &args(json!({"name": "tool.exe", "path": path})),
+        &[],
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(result["found"], json!(true));
+    assert_eq!(result["path"], json!(executable.to_string_lossy()));
+    assert_eq!(result["all"].as_array().unwrap().len(), 1);
+
+    let relative = execute_in_cwd(
+        "exec.which",
+        &args(json!({"name": "./tool.exe", "path": ""})),
+        &[],
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(relative["found"], json!(true));
+    let missing = execute_in_cwd(
+        "exec.which",
+        &args(json!({"names": ["directory", "absent-command"], "path": path})),
+        &[],
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(missing, json!({"found": false, "path": null, "all": []}));
+    #[cfg(unix)]
+    {
+        let non_executable = execute_in_cwd(
+            "exec.which",
+            &args(json!({"name": "plain", "path": temp.path().to_string_lossy()})),
+            &[],
+            temp.path(),
+        )
+        .unwrap();
+        assert_eq!(non_executable["found"], json!(false));
+    }
 }
 
 #[test]

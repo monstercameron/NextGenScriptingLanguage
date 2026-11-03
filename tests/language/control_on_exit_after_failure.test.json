@@ -1,1 +1,1 @@
-{"expect": {"status": 1, "files": {"marker.txt": "cleanup"}}}
+{"expect": {"status": 1, "stdout": "", "files": {"marker.txt": "cleanup"}}}

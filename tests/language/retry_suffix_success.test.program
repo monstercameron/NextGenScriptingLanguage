@@ -1,0 +1,1 @@
+run json.parse with text "{\"a\": 1}" and retry up to 2 times

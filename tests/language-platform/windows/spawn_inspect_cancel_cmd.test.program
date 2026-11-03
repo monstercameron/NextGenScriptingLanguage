@@ -1,0 +1,6 @@
+spawn as job
+  run "cmd" with arguments ["/c", "echo slowly & ping -n 3 127.0.0.1 >nul"]
+inspect job as state
+cancel job
+use value "cancelled"
+then encode "cancelled" as json

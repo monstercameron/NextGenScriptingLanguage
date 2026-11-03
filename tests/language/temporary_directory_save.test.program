@@ -1,0 +1,5 @@
+with temporary directory as scratch
+  use value "x"
+  then save to "note.txt"
+  use value "dir ok"
+  then encode "dir ok" as json

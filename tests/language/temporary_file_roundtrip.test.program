@@ -1,0 +1,6 @@
+with temporary file as scratch
+  use value "tmp data"
+  then save to scratch
+  read scratch as back
+  use value back
+  then encode back as json

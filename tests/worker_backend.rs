@@ -276,7 +276,6 @@ fn assert_reaped(pid: i32) {
             !process_exists(pid),
             "worker process {pid} is still present"
         );
-        return;
     }
     #[cfg(unix)]
     {

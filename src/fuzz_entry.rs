@@ -25,6 +25,11 @@ pub const TARGETS: &[&str] = &[
     "record_run",
     "element_log",
     "completed_log",
+    "capability_policy",
+    "data_flow_policy",
+    "sandbox_profile",
+    "model_response",
+    "remote_response",
 ];
 
 /// Feed one input to a named target. Malformed input returns an error, which is the
@@ -55,6 +60,15 @@ pub fn run(target: &str, data: &[u8]) {
         "record_run" => record_run(data),
         "element_log" => element_log(data),
         "completed_log" => completed_log(data),
+        "capability_policy" => {
+            let _ = crate::capabilities::fuzz_parse_capability_policy(data);
+        }
+        "data_flow_policy" => {
+            let _ = crate::security::fuzz_parse_data_flow_policy(data);
+        }
+        "sandbox_profile" => sandbox_profile(data),
+        "model_response" => model_response(data),
+        "remote_response" => remote_response(data),
         other => panic!("unknown fuzz target {other:?}"),
     }
 }
@@ -166,6 +180,72 @@ fn completed_log(data: &[u8]) {
     };
     let _ = crate::runtime::checkpoint::fuzz_read_completed_log(scratch.path(), data);
 }
+
+/// Build sandbox argv/profiles for every grant in a fuzzed capability
+/// policy, plus one synthetic grant over the scratch directory whose
+/// network/write flags come from the input, so builders that succeed are
+/// checked against the no-widening invariant on every run.
+fn sandbox_profile(data: &[u8]) {
+    let Some(scratch) = Scratch::new("sandbox") else {
+        return;
+    };
+    let binary = scratch.path().join("applet");
+    if std::fs::write(&binary, b"fuzz").is_err() {
+        return;
+    }
+    if let Ok(policy) = crate::capabilities::fuzz_parse_capability_policy(data) {
+        for grant in policy.applets.values() {
+            crate::platform::sandbox::fuzz_sandbox_profile(grant, &binary, scratch.path());
+        }
+    }
+    let network = data.first().is_some_and(|byte| byte % 2 == 1);
+    let writable = data.get(1).is_some_and(|byte| byte % 2 == 1);
+    let mut capabilities = std::collections::BTreeSet::from(["filesystem.read".to_owned()]);
+    if writable {
+        capabilities.insert("filesystem.write".to_owned());
+    }
+    if network {
+        capabilities.insert("network.connect".to_owned());
+    }
+    let synthetic = crate::capabilities::AppletGrant {
+        capabilities,
+        binary_sha256: None,
+        environment: std::collections::BTreeSet::new(),
+        filesystem: crate::capabilities::FilesystemGrant {
+            read: vec![scratch.path().to_path_buf()],
+            write: if writable {
+                vec![scratch.path().to_path_buf()]
+            } else {
+                Vec::new()
+            },
+        },
+        network,
+        network_origins: std::collections::BTreeSet::new(),
+        sandbox_required: true,
+        resource_limits: None,
+    };
+    crate::platform::sandbox::fuzz_sandbox_profile(&synthetic, &binary, scratch.path());
+}
+
+/// The model normalizer lives behind the `model` feature; the fuzz crate
+/// enables it, plain `fuzzing` replays skip the body.
+#[cfg(feature = "model")]
+fn model_response(data: &[u8]) {
+    crate::models::fuzz_normalize_model_response(data);
+}
+
+#[cfg(not(feature = "model"))]
+fn model_response(_data: &[u8]) {}
+
+/// The remote response parser lives behind the `remote` feature; the fuzz
+/// crate enables it, plain `fuzzing` replays skip the body.
+#[cfg(feature = "remote")]
+fn remote_response(data: &[u8]) {
+    let _ = crate::remote::fuzz_parse_remote_response(data);
+}
+
+#[cfg(not(feature = "remote"))]
+fn remote_response(_data: &[u8]) {}
 
 /// A directory for one fuzz iteration, removed when dropped.
 struct Scratch(PathBuf);

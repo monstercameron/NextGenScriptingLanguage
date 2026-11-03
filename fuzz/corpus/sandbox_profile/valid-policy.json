@@ -1,0 +1,1 @@
+{"version":1,"applets":{"fs.cat":{"capabilities":["filesystem.read"],"filesystem":{"read":["data"]}}}}

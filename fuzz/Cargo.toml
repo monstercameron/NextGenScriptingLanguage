@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-flow = { package = "execute", path = "..", features = ["fuzzing"] }
+flow = { package = "execute", path = "..", features = ["fuzzing", "model", "remote"] }
 
 # Detached from the parent workspace; the fuzz crate has its own lockfile.
 [workspace]
@@ -87,6 +87,41 @@ bench = false
 [[bin]]
 name = "completed_log"
 path = "fuzz_targets/completed_log.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "capability_policy"
+path = "fuzz_targets/capability_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "data_flow_policy"
+path = "fuzz_targets/data_flow_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sandbox_profile"
+path = "fuzz_targets/sandbox_profile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "model_response"
+path = "fuzz_targets/model_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "remote_response"
+path = "fuzz_targets/remote_response.rs"
 test = false
 doc = false
 bench = false

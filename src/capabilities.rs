@@ -246,6 +246,16 @@ mod execution_tests {
     }
 
     #[test]
+    fn fuzz_hook_capability_policy_accepts_valid_and_rejects_bad_input() {
+        let valid = br#"{"version":1,"applets":{"fs.cat":{"capabilities":["filesystem.read"],"filesystem":{"read":["data"]}}}}"#;
+        let policy = fuzz_parse_capability_policy(valid).unwrap();
+        assert_eq!(policy.applets.len(), 1);
+        assert!(fuzz_parse_capability_policy(b"not json").is_err());
+        let widened = br#"{"version":1,"applets":{"fs.cat":{"capabilities":["filesystem.read"],"network":true}}}"#;
+        assert!(fuzz_parse_capability_policy(widened).is_err());
+    }
+
+    #[test]
     fn native_effects_without_an_enforcement_mechanism_are_typed_refusals() {
         let error = validate_native_enforcement(&grant(), &["account.delete".into()]).unwrap_err();
         assert!(error.downcast_ref::<SandboxRefused>().is_some());
@@ -1489,6 +1499,101 @@ impl CapabilityPolicy {
         }
         Ok(())
     }
+}
+
+/// Fuzz entry: parse a capability policy and assert the validated grants
+/// never exceed the grants present in the input document. Malformed input
+/// returns a typed error; only a panic or a widened grant is a finding.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn fuzz_parse_capability_policy(data: &[u8]) -> Result<CapabilityPolicy> {
+    fn string_set(value: Option<&serde_json::Value>) -> BTreeSet<String> {
+        value
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    fn path_set(paths: &[PathBuf]) -> BTreeSet<String> {
+        paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
+    let text = std::str::from_utf8(data).context("capability policy is not UTF-8")?;
+    let policy = CapabilityPolicy::from_json(text)?;
+    policy
+        .validate()
+        .expect("a policy returned by from_json stays validated");
+    let input: serde_json::Value =
+        serde_json::from_str(text).expect("a validated policy document re-parses as JSON");
+    let input_applets = input.get("applets").and_then(serde_json::Value::as_object);
+    for (name, grant) in &policy.applets {
+        let given = input_applets
+            .and_then(|applets| applets.get(name))
+            .unwrap_or_else(|| panic!("validated applet {name:?} was not in the input"));
+        assert!(
+            grant
+                .capabilities
+                .is_subset(&string_set(given.get("capabilities"))),
+            "validated capabilities exceed the input for {name:?}"
+        );
+        assert!(
+            grant
+                .environment
+                .is_subset(&string_set(given.get("environment"))),
+            "validated environment exceeds the input for {name:?}"
+        );
+        assert!(
+            grant
+                .network_origins
+                .is_subset(&string_set(given.get("network_origins"))),
+            "validated network origins exceed the input for {name:?}"
+        );
+        assert!(
+            !grant.network
+                || given.get("network").and_then(serde_json::Value::as_bool) == Some(true),
+            "validated network grant was not requested for {name:?}"
+        );
+        let given_fs = given.get("filesystem");
+        assert!(
+            path_set(&grant.filesystem.read)
+                .is_subset(&string_set(given_fs.and_then(|fs| fs.get("read")))),
+            "validated filesystem reads exceed the input for {name:?}"
+        );
+        assert!(
+            path_set(&grant.filesystem.write)
+                .is_subset(&string_set(given_fs.and_then(|fs| fs.get("write")))),
+            "validated filesystem writes exceed the input for {name:?}"
+        );
+    }
+    assert!(
+        policy
+            .host_environment
+            .is_subset(&string_set(input.get("host_environment"))),
+        "validated host environment exceeds the input"
+    );
+    assert!(
+        policy
+            .allow_wrappers
+            .is_subset(&string_set(input.get("allow_wrappers"))),
+        "validated wrappers exceed the input"
+    );
+    if let Some(host) = &policy.host {
+        let given = input
+            .get("host")
+            .expect("a validated host grant was in the input");
+        assert!(
+            host.capabilities
+                .is_subset(&string_set(given.get("capabilities"))),
+            "validated host capabilities exceed the input"
+        );
+    }
+    Ok(policy)
 }
 
 /// Executable identities pinned by a `run --confirm` review. `--what-if`

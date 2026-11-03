@@ -1,0 +1,1 @@
+{"version":1,"remote_sinks":{"https://api.example":{"allow":["public"]}},"persistence":{"cache":["internal"]}}

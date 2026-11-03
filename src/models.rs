@@ -2330,9 +2330,68 @@ fn encode_bounded(value: &Value, limit: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Fuzz entry: normalize an untrusted provider response under fixed Jev
+/// and OpenAI option sets. Input above the default byte cap is skipped;
+/// malformed responses return typed errors inside `normalize_response`.
+/// Only a panic, or a normalized document with the wrong protocol or
+/// inconsistent token totals, is a finding.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn fuzz_normalize_model_response(data: &[u8]) {
+    if data.len() > DEFAULT_MAX_BYTES {
+        return;
+    }
+    let Ok(raw) = serde_json::from_slice::<Value>(data) else {
+        return;
+    };
+    let option_sets: [&[&str]; 2] = [
+        &[
+            "classify",
+            "--question",
+            "Choose",
+            "--labels",
+            "urgent",
+            "other",
+        ],
+        &[
+            "generate",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-fuzz",
+            "--instruction",
+            "Write one line",
+        ],
+    ];
+    for args in option_sets {
+        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let Ok(options) = parse_args(&args) else {
+            continue;
+        };
+        if let Ok(normalized) = normalize_response(&options, &json!({}), &raw, "fuzz") {
+            assert_eq!(normalized["protocol"], "execute.model/1");
+            let usage = &normalized["usage"];
+            let input = usage["input_tokens"].as_u64().unwrap_or_default();
+            let output = usage["output_tokens"].as_u64().unwrap_or_default();
+            assert_eq!(
+                usage["total_tokens"].as_u64(),
+                input.checked_add(output),
+                "normalized token totals must stay consistent"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+
+    #[test]
+    fn fuzz_hook_model_response_accepts_valid_and_rejects_bad_input() {
+        let valid = br#"{"model":"jev-latest","answers":{"decision":{"type":"choice","choice":"urgent","confidence":0.9,"probabilities":{"urgent":0.9,"other":0.1}}},"usage":{"input_tokens":11,"output_tokens":4}}"#;
+        fuzz_normalize_model_response(valid);
+        fuzz_normalize_model_response(b"not json");
+        fuzz_normalize_model_response(&vec![b'x'; DEFAULT_MAX_BYTES + 1]);
+    }
 
     #[test]
     fn offline_mode_rejects_live_calls_but_allows_fixture_calls() {

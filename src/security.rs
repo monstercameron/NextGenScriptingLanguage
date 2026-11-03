@@ -1988,10 +1988,11 @@ fn linux_xattr_names(file: &File) -> Result<Vec<u8>> {
     }
 
     let mut names = vec![0; size];
-    // SAFETY: names is a writable buffer of `size` bytes and file is a live fd.
-    // If the list grew since the size query, Linux returns ERANGE and we fail closed.
-    let actual =
-        unsafe { libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len()) };
+    let actual = {
+        // SAFETY: names is a writable buffer of `size` bytes and file is a live fd.
+        // If the list grew since the size query, Linux returns ERANGE and we fail closed.
+        unsafe { libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len()) }
+    };
     if actual < 0 {
         return Err(std::io::Error::last_os_error()).context("reading checkpoint root xattr list");
     }

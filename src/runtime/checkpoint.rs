@@ -4276,9 +4276,9 @@ mod tests {
         let error = Journal::open(&options, &cwd, "finite", 1024)
             .err()
             .expect("a root owned by another uid must not be resumed");
-        // SAFETY: as the owner-changing privileged test process, restoring the
-        // original owner allows TempDir to clean up normally.
         assert_eq!(
+            // SAFETY: as the owner-changing privileged test process, restoring the
+            // original owner allows TempDir to clean up normally.
             unsafe { libc::chown(path.as_ptr(), libc::geteuid(), u32::MAX) },
             0
         );

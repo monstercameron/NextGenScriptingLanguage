@@ -168,7 +168,10 @@ fn run_parts_and_listener_handlers_apply_the_same_environment_limit() {
     let file = dir.path().join("listen.program");
     fs::write(
         &file,
-        format!("listen to stdin\nwhenever a line arrives as record\n  {}", env_script("")),
+        format!(
+            "listen to stdin\nwhenever a line arrives as record\n  {}",
+            env_script("")
+        ),
     )
     .unwrap();
     let mut child = base(dir.path())

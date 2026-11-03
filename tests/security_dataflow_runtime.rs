@@ -321,7 +321,11 @@ fn secret_producer(path: &Path) -> String {
     #[cfg(not(unix))]
     let (binary, script_argument) = {
         let script = path.with_extension("py");
-        fs::write(&script, "import sys;sys.stdout.write('TOP-SECRET-MARKER')\n").unwrap();
+        fs::write(
+            &script,
+            "import sys;sys.stdout.write('TOP-SECRET-MARKER')\n",
+        )
+        .unwrap();
         (
             PathBuf::from("python"),
             Some(script.to_string_lossy().into_owned()),

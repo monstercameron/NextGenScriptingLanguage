@@ -8,6 +8,12 @@ use flow::{
     runtime::{self, RunOptions, RunResult},
 };
 use serde_json::json;
+#[cfg(unix)]
+use std::collections::BTreeSet;
+#[cfg(unix)]
+use std::hint::black_box;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::BTreeMap,
     fs,
@@ -17,12 +23,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-#[cfg(unix)]
-use std::hint::black_box;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::collections::BTreeSet;
 
 #[path = "common/portable_shell.rs"]
 mod portable_shell;

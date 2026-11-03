@@ -2004,6 +2004,7 @@ fn linux_xattr_names(file: &File) -> Result<Vec<u8>> {
     Ok(names)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn checkpoint_xattr_list_has_unsupported_acl(names: &[u8]) -> Result<bool> {
     let mut rest = names;
     while !rest.is_empty() {

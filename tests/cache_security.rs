@@ -3,6 +3,8 @@
 //! that plant symlinks, FIFOs, or Unix permission bits stay Unix-only. The
 //! pipe-draining harness uses reader threads instead of `fcntl` so it runs on
 //! both platforms.
+#[cfg(unix)]
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::{
     fs,
     io::Read,
@@ -10,8 +12,6 @@ use std::{
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
-#[cfg(unix)]
-use std::os::unix::fs::{symlink, PermissionsExt};
 
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
 

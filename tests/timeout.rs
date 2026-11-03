@@ -1,4 +1,6 @@
 //! All workers and effects are owned temporary fixtures; no host processes targeted.
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     io::Read,
@@ -7,8 +9,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 #[path = "common/portable_shell.rs"]
 mod portable_shell;
@@ -73,7 +73,11 @@ fn fixture() -> tempfile::TempDir {
     // The worker runs through the pinned interpreter on Windows; direct
     // execution with a shebang needs an executable bit it cannot provide.
     let manifest = if cfg!(windows) {
-        let script = dir.path().join("worker").to_string_lossy().replace('\\', "/");
+        let script = dir
+            .path()
+            .join("worker")
+            .to_string_lossy()
+            .replace('\\', "/");
         serde_json::json!({
             "name": "worker",
             "binary": portable_shell::python(),
@@ -90,7 +94,11 @@ fn fixture() -> tempfile::TempDir {
             "arguments": [{"parameter": "mode"}]
         })
     };
-    fs::write(dir.path().join("manifests/worker.json"), manifest.to_string()).unwrap();
+    fs::write(
+        dir.path().join("manifests/worker.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
     dir
 }
 
@@ -110,7 +118,11 @@ fn assert_observed_children_reaped(output: &Output) {
         {
             let pid: i32 = event["pid"].as_u64().unwrap().try_into().unwrap();
             // SAFETY: signal 0 only probes whether `pid` exists; it sends no signal and touches no memory.
-            assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "owned child {pid} leaked");
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "owned child {pid} leaked"
+            );
             assert_eq!(
                 std::io::Error::last_os_error().raw_os_error(),
                 Some(libc::ESRCH)

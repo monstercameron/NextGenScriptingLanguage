@@ -336,7 +336,7 @@ fn is_priority_bytes(line: &[u8]) -> bool {
 /// that could shed a genuine `stop`. Admission still never bypasses
 /// authentication: the handler re-authorizes every admitted request before
 /// touching state, and this predicate never grants access on its own.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn reserve_eligible(line: &[u8], policy: Option<&AgentAuthPolicy>) -> bool {
     reserve_eligible_allowing(line, policy, false)
 }

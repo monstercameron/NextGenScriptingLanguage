@@ -118,7 +118,11 @@ fn lock_worker_tests() -> std::sync::MutexGuard<'static, ()> {
 /// The worker script reads `sys.argv[1:]`, which is identical on both
 /// platforms, so the fixture itself is unchanged.
 fn python3() -> PathBuf {
-    let binary = if cfg!(windows) { "python.exe" } else { "python3" };
+    let binary = if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python3"
+    };
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|directory| directory.join(binary))
         .find(|candidate| candidate.is_file())
@@ -598,10 +602,7 @@ fn pool_rejects_new_identities_at_capacity_without_evicting_state() {
         .lines()
         .map(|line| line.parse::<i32>().expect("numeric worker pid"))
         .collect::<HashSet<_>>();
-    let live_workers = pids
-        .iter()
-        .filter(|pid| process_exists(**pid))
-        .count();
+    let live_workers = pids.iter().filter(|pid| process_exists(**pid)).count();
     assert_eq!(live_workers, 16, "pool must retain at most 16 workers");
 
     let continued = pool

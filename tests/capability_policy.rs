@@ -553,7 +553,9 @@ fn command_for_borrows_one_applet_lookup_for_launch_and_environment() {
         .map(|(name, value)| {
             (
                 name.to_os_string(),
-                value.expect("filtered launch sets every variable").to_os_string(),
+                value
+                    .expect("filtered launch sets every variable")
+                    .to_os_string(),
             )
         })
         .collect::<Vec<_>>();
@@ -595,10 +597,7 @@ fn command_for_borrows_one_applet_lookup_for_launch_and_environment() {
         &flow::working_dir::WorkingDirectory::plain("."),
     )
     .unwrap();
-    assert_eq!(
-        direct.get_program(),
-        std::ffi::OsStr::new("/usr/bin/env")
-    );
+    assert_eq!(direct.get_program(), std::ffi::OsStr::new("/usr/bin/env"));
     assert_eq!(direct.get_envs().count(), 0);
 }
 

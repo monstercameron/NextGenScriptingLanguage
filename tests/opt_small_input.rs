@@ -6,14 +6,14 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 #[cfg(unix)]
 use std::thread;
 use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
-#[cfg(unix)]
-use std::sync::atomic::Ordering;
 
 #[path = "common/portable_shell.rs"]
 mod portable_shell;
@@ -54,11 +54,7 @@ fn script_registry(directory: &Path, script: &Path) -> Registry {
             json!([{"literal": script.to_str().unwrap()}]),
         )
     } else {
-        registry(
-            directory,
-            &script.to_string_lossy(),
-            json!([]),
-        )
+        registry(directory, &script.to_string_lossy(), json!([]))
     }
 }
 
@@ -132,9 +128,7 @@ fn small_and_threaded_inputs_preserve_bytes_and_eof() {
 fn prefetched_input_flows_through_a_live_pipe_group() {
     let directory = tempfile::tempdir().unwrap();
     let registry = cat_registry(directory.path());
-    let input: Vec<_> = (0..=PIPE_BUF)
-        .map(|index| (index % 239) as u8)
-        .collect();
+    let input: Vec<_> = (0..=PIPE_BUF).map(|index| (index % 239) as u8).collect();
 
     let output = run_with_input(
         directory.path(),

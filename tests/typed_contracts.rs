@@ -362,11 +362,7 @@ fn absence_and_failure_envelopes_route_as_distinct_declared_outcomes() {
             {"status": 4, "name": "failed", "kind": "failure"}
         ]
     });
-    let catalog = registry(&[argument_manifest(
-        "outcome.fixture",
-        &fixture,
-        contract,
-    )]);
+    let catalog = registry(&[argument_manifest("outcome.fixture", &fixture, contract)]);
 
     for (status, expected_kind) in [(3, "absence"), (4, "failure")] {
         let source = format!(

@@ -2838,7 +2838,7 @@ where
         && resolved_manifest
             .as_ref()
             .ok()
-            .map_or(true, |manifest| manifest.environment().is_none())
+            .is_none_or(|manifest| manifest.environment().is_none())
         && !crate::security::declares_secret_environment(registry, applet_name);
     let environment = if inherits_environment {
         None
@@ -2957,7 +2957,6 @@ where
         // sandbox, where a held descriptor of this process does not name
         // the file; the pin above still re-hashed the reviewed bytes, and
         // SECURITY.md names the residual hash-to-`exec` window here.
-        drop(pinned);
         crate::platform::sandbox::command(binary, arguments, grant, cwd)
             .map_err(|error| SandboxRefused(format!("{error:#}")))?
     } else {

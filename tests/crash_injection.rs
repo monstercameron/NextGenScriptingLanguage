@@ -1128,8 +1128,7 @@ fn crash_kill_window_lands_in_flight() {
                 "trial {trial}: the kill invented a foreign effect {line:?}: {killed:?}"
             );
         }
-        if alive && !killed.is_empty() && is_strict_subrun(Shape::Sequential, &expected, &killed)
-        {
+        if alive && !killed.is_empty() && is_strict_subrun(Shape::Sequential, &expected, &killed) {
             interrupted += 1;
         }
     }

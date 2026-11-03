@@ -1,4 +1,6 @@
 use flow::{ast::StepKind, manifest::Registry, parser, runtime, stream};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::{
     collections::BTreeMap,
     fs,
@@ -7,8 +9,6 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 
 #[path = "common/portable_shell.rs"]
 mod portable_shell;

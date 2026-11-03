@@ -2432,6 +2432,7 @@ fn check_trusted_windows_handle(
     const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
     const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
     const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
+    const INHERIT_ONLY_ACE_FLAG: u8 = 0x08;
 
     let mut owner = std::ptr::null_mut();
     let mut dacl = std::ptr::null_mut();
@@ -2589,6 +2590,11 @@ fn check_trusted_windows_handle(
             }
             // SAFETY: GetAce returned an ACE stored inside the live ACL.
             let header = unsafe { &*(raw_ace.cast::<windows_sys::Win32::Security::ACE_HEADER>()) };
+            // An inherit-only ACE applies only to objects created beneath this
+            // one; it never grants access to the object itself (issue #913).
+            if header.AceFlags & INHERIT_ONLY_ACE_FLAG != 0 {
+                continue;
+            }
             // Only allow ACEs can grant writes; deny/audit ACEs are ignored.
             let (mask, ace_sid) = if header.AceType == ACCESS_ALLOWED_ACE_TYPE {
                 // SAFETY: this ACE type guarantees the ACCESS_ALLOWED_ACE layout.

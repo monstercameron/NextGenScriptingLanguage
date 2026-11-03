@@ -1,7 +1,6 @@
 {
     "_comment":  "Checked list of integration test files that stay Unix-only for #521. Each entry names the Unix-only mechanism that still blocks a Windows port (real signal delivery, Unix-domain sockets, PTYs, unix file metadata, or the direct native-execution trust model). Converted files are removed from this list. tools/test_unix_only_tests.py refuses any #![cfg(...unix...)] test file that is not listed here, and refuses stale entries.",
     "applet_executable_pinning.rs":  "shell applets plus symlink confinement and PATH executable-bit assertions",
-    "cache_security.rs":  "shell applets plus symlink and fcntl file-flag assertions",
     "daemon_cli.rs":  "UnixListener/UnixStream daemon socket plus unix process/file metadata",
     "demo_walkthrough.rs":  "fake compositor is a shell script launched via sh",
     "fs_deadlines.rs":  "POSIX mkfifo utility plus unix file-type assertions",

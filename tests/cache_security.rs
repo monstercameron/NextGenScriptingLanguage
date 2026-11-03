@@ -1,17 +1,19 @@
-#![cfg(unix)]
 //! Real CLI cache boundaries with private files and bounded owned processes.
+//! The cache validation logic is portable; only the fixture-creation tests
+//! that plant symlinks, FIFOs, or Unix permission bits stay Unix-only. The
+//! pipe-draining harness uses reader threads instead of `fcntl` so it runs on
+//! both platforms.
 use std::{
     fs,
-    io::{self, Read},
-    os::unix::fs::{symlink, PermissionsExt},
-    os::unix::io::AsRawFd,
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use std::os::unix::fs::{symlink, PermissionsExt};
 
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
-const MAX_DRAIN_BYTES_PER_POLL: usize = 64 * 1024;
 
 struct Fixture {
     directory: tempfile::TempDir,
@@ -70,24 +72,18 @@ impl Fixture {
         let mut child = command.spawn().unwrap();
         // Drain both pipes while the child runs. Trace output can exceed the
         // platform pipe capacity; polling for exit before reading either pipe
-        // would then block the CLI in its next trace write. Nonblocking reads
-        // keep the watchdog bounded even if an unexpected descendant inherits
-        // either pipe after the owned CLI child is killed.
-        let mut stdout = child.stdout.take().unwrap();
-        let mut stderr = child.stderr.take().unwrap();
-        set_nonblocking(&stdout).unwrap();
-        set_nonblocking(&stderr).unwrap();
-        let mut output = Vec::new();
-        let mut errors = Vec::new();
-        let mut output_truncated = false;
-        let mut errors_truncated = false;
+        // would then block the CLI in its next trace write. Reader threads
+        // keep the watchdog bounded; these fixtures spawn no pipe-inheriting
+        // descendants, so joining after the child exits always terminates.
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let out_handle = std::thread::spawn(move || read_all(stdout));
+        let err_handle = std::thread::spawn(move || read_all(stderr));
         let deadline = Instant::now() + Duration::from_secs(4);
         loop {
-            drain_pipe(&mut stdout, &mut output, &mut output_truncated).unwrap();
-            drain_pipe(&mut stderr, &mut errors, &mut errors_truncated).unwrap();
             if let Some(status) = child.try_wait().unwrap() {
-                drain_pipe(&mut stdout, &mut output, &mut output_truncated).unwrap();
-                drain_pipe(&mut stderr, &mut errors, &mut errors_truncated).unwrap();
+                let (output, output_truncated) = out_handle.join().unwrap();
+                let (errors, errors_truncated) = err_handle.join().unwrap();
                 assert!(
                     !output_truncated && !errors_truncated,
                     "owned cache fixture exceeded its bounded output capture"
@@ -101,8 +97,8 @@ impl Fixture {
             if Instant::now() >= deadline {
                 child.kill().unwrap();
                 let status = child.wait().unwrap();
-                drain_pipe(&mut stdout, &mut output, &mut output_truncated).unwrap();
-                drain_pipe(&mut stderr, &mut errors, &mut errors_truncated).unwrap();
+                let (output, _) = out_handle.join().unwrap();
+                let (errors, _) = err_handle.join().unwrap();
                 let output = Output {
                     status,
                     stdout: output,
@@ -130,41 +126,23 @@ impl Fixture {
     }
 }
 
-fn set_nonblocking(file: &impl AsRawFd) -> io::Result<()> {
-    let descriptor = file.as_raw_fd();
-    // SAFETY: `file` is borrowed for this whole call, so `descriptor` is an open fd owned by
-    // that value. F_GETFL takes no pointer argument and only reads the status flags.
-    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-    if flags == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: `flags` is the successful F_GETFL result checked just above (`flags == -1`
-    // returns early), OR'd with O_NONBLOCK. F_SETFL takes an int and no pointer, and `file`
-    // is still borrowed, so the fd remains open.
-    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-fn drain_pipe(reader: &mut impl Read, bytes: &mut Vec<u8>, truncated: &mut bool) -> io::Result<()> {
+/// Read a piped stream to EOF with the same bounded capture the `fcntl`
+/// harness enforced: at most `MAX_CAPTURE_BYTES` retained, with a flag when
+/// longer output is truncated away.
+fn read_all(mut reader: impl Read) -> (Vec<u8>, bool) {
+    let mut bytes = Vec::new();
     let mut chunk = [0; 4096];
-    let mut drained = 0;
+    let mut truncated = false;
     loop {
         match reader.read(&mut chunk) {
-            Ok(0) => return Ok(()),
+            Ok(0) => return (bytes, truncated),
             Ok(count) => {
                 let retained = count.min(MAX_CAPTURE_BYTES.saturating_sub(bytes.len()));
                 bytes.extend_from_slice(&chunk[..retained]);
-                *truncated |= retained != count;
-                drained += count;
-                if drained >= MAX_DRAIN_BYTES_PER_POLL {
-                    return Ok(());
-                }
+                truncated |= retained != count;
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => panic!("owned cache fixture pipe failed: {error}"),
         }
     }
 }
@@ -214,6 +192,9 @@ fn missing_cache_tag_fails_closed_without_native_launch_or_later_save() {
     fixture.rejects(None, "no integrity tag");
 }
 
+// Unix-only: plants a symlink cache entry, which Windows cannot create without
+// extra privilege and which the Windows trust model judges by ACL, not links.
+#[cfg(unix)]
 #[test]
 fn cache_symlink_never_exposes_target_or_runs_later_save() {
     let fixture = Fixture::new();
@@ -225,6 +206,8 @@ fn cache_symlink_never_exposes_target_or_runs_later_save() {
     assert_eq!(fs::read(canary).unwrap(), b"owned private canary");
 }
 
+// Unix-only: plants a FIFO cache entry via mkfifo; Windows has no FIFO files.
+#[cfg(unix)]
 #[test]
 fn fifo_cache_entry_is_rejected_without_waiting_for_a_writer() {
     let fixture = Fixture::new();
@@ -236,6 +219,9 @@ fn fifo_cache_entry_is_rejected_without_waiting_for_a_writer() {
     fixture.rejects(None, "regular file");
 }
 
+// Unix-only: swaps the cache directory for a symlink, exercising Unix link
+// traversal; the Windows trust model judges directories by ACL instead.
+#[cfg(unix)]
 #[test]
 fn linked_cache_directory_is_rejected_including_trailing_separators() {
     let fixture = Fixture::new();
@@ -250,6 +236,9 @@ fn linked_cache_directory_is_rejected_including_trailing_separators() {
     assert_eq!(fs::metadata(target).unwrap().permissions().mode(), before);
 }
 
+// Unix-only: asserts the Unix mode-bit ownership contract (0o777/0o666);
+// Windows judges cache privacy by ACL, not mode bits.
+#[cfg(unix)]
 #[test]
 fn caches_writable_by_other_users_fail_closed_without_permission_changes() {
     let fixture = Fixture::new();

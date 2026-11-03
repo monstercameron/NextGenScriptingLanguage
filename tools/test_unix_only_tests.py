@@ -73,6 +73,7 @@ class UnixOnlyListTests(unittest.TestCase):
     CONVERTED_SUITES = [
         "adversarial",
         "cache_dependencies",
+        "cache_security",
         "child_env_minimize",
         "cli",
         "conditions",

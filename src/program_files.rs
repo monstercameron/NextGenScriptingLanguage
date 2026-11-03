@@ -373,7 +373,7 @@ fn parse_source_resolved_inner<'a>(
     snapshot: Option<&'a std::cell::RefCell<SourceLoadSnapshot>>,
 ) -> Result<Program> {
     #[cfg(feature = "lsp")]
-    if scope.is_some_and(|scope| !identity_key(canonical).starts_with(&identity_key(scope.root))) {
+    if scope.is_some_and(|scope| !identity_key(canonical).starts_with(identity_key(scope.root))) {
         bail!("program file is outside the language server workspace");
     }
     let mut loader = Loader {
@@ -588,7 +588,7 @@ impl Loader<'_> {
         #[cfg(feature = "lsp")]
         if self
             .scope
-            .is_some_and(|scope| !identity_key(&canonical).starts_with(&identity_key(scope.root)))
+            .is_some_and(|scope| !identity_key(&canonical).starts_with(identity_key(scope.root)))
         {
             bail!("line {line}: called program file is outside the language server workspace");
         }

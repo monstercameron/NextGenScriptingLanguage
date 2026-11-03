@@ -118,11 +118,8 @@ fn assert_observed_children_reaped(output: &Output) {
         {
             let pid: i32 = event["pid"].as_u64().unwrap().try_into().unwrap();
             // SAFETY: signal 0 only probes whether `pid` exists; it sends no signal and touches no memory.
-            assert_eq!(
-                unsafe { libc::kill(pid, 0) },
-                -1,
-                "owned child {pid} leaked"
-            );
+            let probe = unsafe { libc::kill(pid, 0) };
+            assert_eq!(probe, -1, "owned child {pid} leaked");
             assert_eq!(
                 std::io::Error::last_os_error().raw_os_error(),
                 Some(libc::ESRCH)

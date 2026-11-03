@@ -860,10 +860,9 @@ fn evict_pinned(
                     // SAFETY: the name is a single path component copied from
                     // this directory's listing and the pinned descriptor
                     // remains open through unlinkat.
-                    let unlinked =
-                        unsafe { libc::unlinkat(directory.as_raw_fd(), temp.as_ptr(), 0) } == 0
-                            || std::io::Error::last_os_error().kind()
-                                == std::io::ErrorKind::NotFound;
+                    let status = unsafe { libc::unlinkat(directory.as_raw_fd(), temp.as_ptr(), 0) };
+                    let unlinked = status == 0
+                        || std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound;
                     if unlinked {
                         remaining = 0;
                     }

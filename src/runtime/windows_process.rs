@@ -616,10 +616,10 @@ fn execute_group_with_sink(
                             // Check the process handle before closing its stdout
                             // reader. The producer cannot observe our induced
                             // broken pipe and exit until after this check.
+                            let producer = producer_handle.as_raw_handle();
                             // SAFETY: the duplicated process handle remains owned
                             // by this bridge for the duration of the wait call.
-                            let wait =
-                                unsafe { WaitForSingleObject(producer_handle.as_raw_handle(), 0) };
+                            let wait = unsafe { WaitForSingleObject(producer, 0) };
                             let state = DOWNSTREAM_CLOSED
                                 | if wait == WAIT_TIMEOUT {
                                     DOWNSTREAM_CLOSED_WHILE_RUNNING

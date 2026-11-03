@@ -833,21 +833,28 @@ fn execute_group_with_sink(
                                 let retained = signals.reserve_job_output(requested);
                                 output.extend_from_slice(&chunk[..retained]);
                                 if retained < count {
-                                    let message = if job_exceeded {
-                                        crate::runtime::output_limit_message(
-                                            false,
-                                            options.max_output_bytes,
+                                    let (message, scope) = if job_exceeded {
+                                        (
+                                            crate::runtime::output_limit_message(
+                                                false,
+                                                options.max_output_bytes,
+                                            ),
+                                            execution_result::OutputLimitScope::Element,
                                         )
                                     } else {
-                                        crate::runtime::output_limit_message(
-                                            true,
-                                            signals
-                                                .job_output_limit
-                                                .unwrap_or(options.max_output_bytes),
+                                        (
+                                            crate::runtime::output_limit_message(
+                                                true,
+                                                signals
+                                                    .job_output_limit
+                                                    .unwrap_or(options.max_output_bytes),
+                                            ),
+                                            execution_result::OutputLimitScope::Shared,
                                         )
                                     };
                                     return Err(native_output_limit_failure(
                                         message,
+                                        scope,
                                         output,
                                         calls,
                                         &children,

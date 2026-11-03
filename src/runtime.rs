@@ -3462,6 +3462,7 @@ pub(crate) fn check_retained_status(
             )],
             message: Some(message),
             effect_certainty,
+            output_limit_scope: None,
         };
         return Err(execution_result::ExecutionFailure::new(result).into());
     }
@@ -5270,7 +5271,16 @@ fn reserve_group_capture(budget: &AtomicUsize, limit: usize, requested: usize) -
             .checked_add(requested)
             .filter(|next| *next <= limit)
         else {
-            bail!("captured output exceeds the shared group limit of {limit} bytes");
+            // Typed so the group loop can recognise a genuine shared-limit
+            // breach without matching this message in formatted text, where
+            // untrusted child stderr could impersonate it.
+            let mut result = execution_result::ExecutionResult::runtime_failure(
+                execution_result::ExecutionKind::OutputLimit,
+                format!("captured output exceeds the shared group limit of {limit} bytes"),
+                execution_result::EffectCertainty::Uncertain,
+            );
+            result.output_limit_scope = Some(execution_result::OutputLimitScope::Shared);
+            return Err(execution_result::ExecutionFailure::new(result).into());
         };
         match budget.compare_exchange_weak(retained, next, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => return Ok(()),

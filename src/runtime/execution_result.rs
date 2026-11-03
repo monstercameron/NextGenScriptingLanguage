@@ -60,6 +60,18 @@ impl ExecutionKind {
     }
 }
 
+/// Which capture budget a genuine output-limit failure exhausted. The
+/// runtime's capture code sets this when its own limit check fails, so
+/// callers never have to recognise a limit failure from formatted text,
+/// which can contain untrusted child stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputLimitScope {
+    /// The single invocation's own output limit.
+    Element,
+    /// The shared parallel-group output budget.
+    Shared,
+}
+
 /// The observed state of one command in a native pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageState {
@@ -605,6 +617,10 @@ pub struct ExecutionResult {
     pub stages: Vec<StageResult>,
     pub message: Option<String>,
     pub effect_certainty: EffectCertainty,
+    /// Set only by the runtime's own capture-limit check on an
+    /// `ExecutionKind::OutputLimit` failure; `None` for every other result,
+    /// including limit failures classified after a completed response.
+    pub output_limit_scope: Option<OutputLimitScope>,
 }
 
 impl ExecutionResult {
@@ -630,6 +646,7 @@ impl ExecutionResult {
             stages,
             message: None,
             effect_certainty,
+            output_limit_scope: None,
         }
     }
 
@@ -649,6 +666,7 @@ impl ExecutionResult {
             stages: Vec::new(),
             message: Some(message.into()),
             effect_certainty,
+            output_limit_scope: None,
         }
     }
 
@@ -875,6 +893,18 @@ pub(crate) fn result_for_error(error: &anyhow::Error) -> ExecutionResult {
         error.to_string(),
         EffectCertainty::Uncertain,
     )
+}
+
+/// The typed output-limit scope carried by a runtime error, when the
+/// runtime's own capture check produced the failure. Only typed error data
+/// is consulted: formatted diagnostic text can contain untrusted child
+/// stderr, so a child that prints a limit message never matches here.
+pub(crate) fn output_limit_scope(error: &anyhow::Error) -> Option<OutputLimitScope> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ExecutionFailure>())
+        .filter(|failure| failure.result.kind == ExecutionKind::OutputLimit)
+        .and_then(|failure| failure.result.output_limit_scope)
 }
 
 /// Convert a typed worker failure into an execution record, attaching the
@@ -1381,6 +1411,37 @@ mod tests {
             result.get("effect_certainty"),
             Some(&Value::String("known_response".into()))
         );
+    }
+
+    #[test]
+    fn output_limit_scope_ignores_limit_text_in_child_diagnostics() {
+        // A signalled child whose stderr copies the limit message: the
+        // formatted diagnostic carries the phrase, but the typed kind is
+        // `Signaled`, so no limit scope may be derived from it.
+        let mut signalled = ExecutionResult::runtime_failure(
+            ExecutionKind::Signaled,
+            "output exceeds the limit of 999 bytes",
+            EffectCertainty::Uncertain,
+        );
+        signalled.stderr = Some(b"output exceeds the limit of 999 bytes".to_vec());
+        let signalled: anyhow::Error = ExecutionFailure::new(signalled).into();
+        assert_eq!(output_limit_scope(&signalled), None);
+
+        // The same phrase as a bare formatted error is not a typed signal.
+        let bare = anyhow!("captured output exceeds the shared group limit of 12 bytes");
+        assert_eq!(output_limit_scope(&bare), None);
+
+        // A genuine capture-limit failure carries its scope as typed data.
+        for scope in [OutputLimitScope::Element, OutputLimitScope::Shared] {
+            let mut limited = ExecutionResult::runtime_failure(
+                ExecutionKind::OutputLimit,
+                "task group output exceeds the limit of 12 bytes",
+                EffectCertainty::Uncertain,
+            );
+            limited.output_limit_scope = Some(scope);
+            let limited: anyhow::Error = ExecutionFailure::new(limited).into();
+            assert_eq!(output_limit_scope(&limited), Some(scope));
+        }
     }
 
     #[test]

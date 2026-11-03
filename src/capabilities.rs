@@ -1778,6 +1778,9 @@ impl ConfirmedExecutables {
             // word and read no memory; failures return -1, checked below.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
             if flags == -1
+                // SAFETY: F_SETFD takes an integer descriptor and a flags word and reads
+                // no memory; clearing FD_CLOEXEC keeps the reviewed descriptor alive
+                // across exec, and a failure returns -1, checked here.
                 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1
             {
                 return Err(std::io::Error::last_os_error()).with_context(|| {

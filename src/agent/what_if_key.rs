@@ -393,8 +393,8 @@ mod tests {
             return;
         }
         let error = load_or_create_at(&path).expect_err("a foreign-owned key must be refused");
-        // SAFETY: as above; restoring the owner lets TempDir clean up.
         assert_eq!(
+            // SAFETY: as above; restoring the owner lets TempDir clean up.
             unsafe { libc::chown(c_path.as_ptr(), libc::geteuid(), u32::MAX) },
             0
         );

@@ -156,11 +156,9 @@ jobs:
           retention-days: 14
   arch:
     name: Arch packages (x86_64)
-    # The image is pinned to a dated base tag and its digest (Docker Hub
-    # library/archlinux base-20261101.0.620205; same digest as :latest on
-    # 2026-11-02). pacman -Syu in tools/arch_test.sh still uses the rolling
-    # repositories rather than an archive date, so this smoke test stays
-    # non-blocking. Pin an archive date before making it blocking.
+    # Match pacman to the Arch archive snapshot dated 2026-11-01, the date of
+    # the pinned base image below. Stays non-blocking until a CI run has
+    # passed this job on the snapshot.
     continue-on-error: true
     needs: packages
     runs-on: ubuntu-24.04
@@ -182,7 +180,7 @@ jobs:
           python3 tools/aur.py render --out pkgs \
             --linux-x64 "dist/execute-$version-linux-x64.tar.gz" \
             --source "stage/NextGenScriptingLanguage-$version.tar.gz"
-      - name: Build, install, and smoke-test both packages in Arch
+      - name: Build, install, and smoke-test both packages in Arch (snapshot 2026-11-01)
         run: docker run --rm -v "$PWD:/work" -w /work archlinux:base-20261101.0.620205@sha256:ece6c971fec3c532fd508bce299a446deaf469feecbfe7c353e995bc1a5e7bba sh /work/tools/arch_test.sh
   sbom:
     name: CycloneDX SBOM

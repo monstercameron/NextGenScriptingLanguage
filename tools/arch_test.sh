@@ -5,7 +5,10 @@
 # mounted at /work and tools/aur.py output in /work/pkgs.
 set -eu
 
-pacman -Syu --noconfirm --needed base-devel rust python >/dev/null
+# Keep the package set aligned with the dated Arch base image and independent
+# of the live rolling mirrors.
+printf '%s\n' 'Server = https://archive.archlinux.org/repos/2026/11/01/$repo/os/$arch' > /etc/pacman.d/mirrorlist
+pacman -Sy --noconfirm --needed base-devel rust python >/dev/null
 id builder >/dev/null 2>&1 || useradd -m builder
 want=$(python3 /work/tools/release.py version)
 

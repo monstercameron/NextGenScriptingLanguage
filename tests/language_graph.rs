@@ -4,6 +4,25 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
+
+/// The `execute` binary and its `execute-applet` helper, copied into a fresh
+/// directory. Cargo hard-links the helper into `deps/`, and the trust gate refuses
+/// a helper with extra links, so the tests run single-link copies instead.
+fn isolated_execute() -> &'static Path {
+    static ISOLATED: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+    let (_directory, binary) = ISOLATED.get_or_init(|| {
+        let source = Path::new(env!("CARGO_BIN_EXE_execute"));
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join(source.file_name().unwrap());
+        fs::copy(source, &binary).unwrap();
+        let helper =
+            source.with_file_name(format!("execute-applet{}", std::env::consts::EXE_SUFFIX));
+        fs::copy(&helper, directory.path().join(helper.file_name().unwrap())).unwrap();
+        (directory, binary)
+    });
+    binary
+}
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -28,7 +47,7 @@ impl Fixture {
     }
 
     fn command(&self, action: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+        let mut command = Command::new(isolated_execute());
         command
             .current_dir(&self.root)
             .arg(action)
@@ -82,7 +101,7 @@ fn graph_checkpoint_status_resume_and_source_identity_work_through_the_cli() {
         .unwrap();
     assert_graph_result(&run);
 
-    let status = Command::new(env!("CARGO_BIN_EXE_execute"))
+    let status = Command::new(isolated_execute())
         .current_dir(&fixture.root)
         .args(["checkpoint", "status", "--json", &checkpoint])
         .output()

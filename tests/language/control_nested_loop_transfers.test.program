@@ -1,0 +1,12 @@
+for each outer in ["first", "skip", "last"]
+  if outer is "skip"
+    continue
+  for each inner in ["one", "stop", "three"]
+    if inner is "one"
+      continue
+    if inner is "stop"
+      break
+  use value outer
+  then encode outer as json
+  if outer is "last"
+    break

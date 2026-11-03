@@ -1,0 +1,4 @@
+on exit
+  use value "cleanup"
+  then save to "marker.txt"
+run "false" with arguments []

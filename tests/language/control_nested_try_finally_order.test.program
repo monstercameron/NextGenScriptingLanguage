@@ -1,0 +1,13 @@
+try
+  try
+    run "false" with arguments []
+  catch inner
+    take text at "/kind" from inner as kind
+    then encode kind as json
+    then save to "caught-kind.json"
+  finally
+    then encode "inner-finally" as json
+catch outer
+  then encode "outer" as json
+finally
+  then encode "outer-finally" as json

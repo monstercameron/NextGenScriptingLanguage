@@ -1,0 +1,8 @@
+parallel for each item in [] at most 2 as empty
+  run "false" with arguments []
+take integer at "/succeeded" from empty as empty_succeeded
+parallel for each item in ["{\"ok\":true}", "{bad"] at most 2 as mixed
+  run json.parse with text item
+take integer at "/succeeded" from mixed as mixed_succeeded
+take integer at "/failed" from mixed as mixed_failed
+then "printf" with arguments ["%s|%s|%s", empty_succeeded, mixed_failed, mixed_succeeded]

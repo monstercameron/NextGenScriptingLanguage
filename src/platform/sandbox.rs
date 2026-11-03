@@ -506,7 +506,7 @@ fn describe_status(status: ExitStatus) -> String {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn sanitize_probe_stderr(stderr: &[u8]) -> String {
     if stderr.is_empty() {
         return String::new();
@@ -648,14 +648,14 @@ fn probe_bwrap(bwrap: &Path, grant: &AppletGrant, binary: &Path, cwd: &Path) -> 
     let stderr = child.stderr.take();
     let status = wait_bounded(child, "applet-specific bubblewrap")?;
     if !status.success() {
-        let mut detail = String::new();
+        let mut bytes = Vec::new();
         if let Some(stderr) = stderr {
             let mut capped = std::io::Read::take(stderr, 2048);
-            let _ = std::io::Read::read_to_string(&mut capped, &mut detail);
+            let _ = std::io::Read::read_to_end(&mut capped, &mut bytes);
         }
         bail!(
-            "bubblewrap could not establish the applet-specific sandbox: {}",
-            detail.trim()
+            "bubblewrap could not establish the applet-specific sandbox{}",
+            sanitize_probe_stderr(&bytes)
         );
     }
     Ok(())

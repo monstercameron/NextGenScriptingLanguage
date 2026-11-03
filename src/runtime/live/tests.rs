@@ -70,6 +70,7 @@ fn live_empty_node_preserves_input_and_cancelled_node_returns_no_state() -> Resu
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "needs POSIX printf; Windows has no such executable")]
 fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let program = parser::parse(
@@ -126,6 +127,7 @@ fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "needs POSIX sh; Windows has no such executable")]
 fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let started = directory.path().join("job-started");

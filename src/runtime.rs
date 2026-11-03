@@ -7048,6 +7048,7 @@ mod drain_tests {
     const INTERRUPTIBLE: &str = "on interrupt\n  run printf with message \"drained\"\n  then save to file \"drained.txt\"\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs POSIX printf; Windows has no such executable")]
     fn requested_drain_runs_only_the_interrupt_body() {
         let (directory, result) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_REQUESTED, false);
@@ -7058,6 +7059,7 @@ mod drain_tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs POSIX printf; Windows has no such executable")]
     fn run_without_an_interrupt_skips_the_interrupt_body() {
         let (directory, result) = run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_IDLE, false);
         assert!(result.expect("ordinary run").exit.is_none());
@@ -7066,6 +7068,7 @@ mod drain_tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs POSIX printf; Windows has no such executable")]
     fn hard_cancel_skips_the_interrupt_body() {
         let (directory, result) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_CANCELLED, true);
@@ -7078,6 +7081,7 @@ mod drain_tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs POSIX printf; Windows has no such executable")]
     fn drain_runs_the_interrupt_body_then_the_exit_body() {
         let source = "on interrupt\n  run printf with message \"interrupted\"\n  then save to file \"interrupted.txt\"\non exit\n  run printf with message \"exit\"\n  then save to file \"exit.txt\"\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
         let (directory, result) = run_with_drain(source, crate::platform::DRAIN_REQUESTED, false);
@@ -7351,6 +7355,7 @@ mod drain_tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs POSIX printf; Windows has no such executable")]
     fn restored_parallel_elements_are_not_started_again() {
         use crate::runtime::checkpoint::elements::ElementOutcome;
         use crate::runtime::tasks::{ElementPlan, GroupSink};

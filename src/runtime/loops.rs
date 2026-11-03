@@ -224,10 +224,18 @@ enum Iterations {
 struct Frame {
     header: usize,
     outer: BTreeSet<String>,
+    /// Names introduced inside this loop body, learned from the first cleanup
+    /// scan. Later boundaries remove only these names instead of scanning
+    /// every live binding; any divergence falls back to a full scan that
+    /// merges into this cache, so dynamic and restored scopes keep exact behavior.
+    locals: Option<Vec<String>>,
     iterations: Iterations,
     entered: usize,
     job_parent: usize,
     job_scope: Option<usize>,
+    /// Full-scan cleanups performed for this frame (test builds only).
+    #[cfg(test)]
+    full_scans: usize,
 }
 pub(super) struct LoopStack {
     frames: Vec<Frame>,
@@ -308,10 +316,13 @@ impl LoopStack {
             self.frames.push(Frame {
                 header: index,
                 outer: bindings.keys().cloned().collect(),
+                locals: None,
                 iterations,
                 entered: 0,
                 job_parent: 0,
                 job_scope: None,
+                #[cfg(test)]
+                full_scans: 0,
             });
         }
         let frame = self.frames.last_mut().expect("loop frame was pushed");
@@ -349,8 +360,8 @@ impl LoopStack {
             },
         };
         if !active {
-            let frame = self.frames.pop().expect("active loop frame");
-            bindings.retain(|name, _| frame.outer.contains(name));
+            let mut frame = self.frames.pop().expect("active loop frame");
+            Self::remove_frame_locals(&mut frame, bindings);
             return Ok(false);
         }
         let entered = self.shared_entered.as_mut().unwrap_or(&mut frame.entered);
@@ -410,6 +421,7 @@ impl LoopStack {
         self.frames.push(Frame {
             header,
             outer,
+            locals: None,
             entered: consumed,
             iterations: Iterations::ForEach {
                 binding: binding.to_owned(),
@@ -419,8 +431,53 @@ impl LoopStack {
             },
             job_parent: 0,
             job_scope: None,
+            #[cfg(test)]
+            full_scans: 0,
         });
         Ok(())
+    }
+
+    /// Drop the bindings a loop body introduced while keeping outer updates.
+    /// The first boundary learns the introduced names with one full scan;
+    /// later boundaries remove only those names. Loop bodies only insert
+    /// bindings (removals happen at temporary-scope ends, catch unwinds, and
+    /// here), so matching lengths after targeted removal mean the sets match.
+    /// Any leftover names mean a dynamic scope added new ones, so fall back
+    /// to the full scan and merge the result into the cache. Restored frames
+    /// learn the same way, keeping the previous full-scan behavior until
+    /// equivalence holds.
+    fn remove_frame_locals(frame: &mut Frame, bindings: &mut BTreeMap<String, Value>) {
+        let Frame {
+            outer, locals, ..
+        } = frame;
+        if let Some(locals) = locals.as_deref() {
+            for name in locals {
+                bindings.remove(name);
+            }
+            if bindings.len() == outer.len() {
+                return;
+            }
+        }
+        let mut learned = Vec::new();
+        bindings.retain(|name, _| {
+            let keep = outer.contains(name);
+            if !keep {
+                learned.push(name.clone());
+            }
+            keep
+        });
+        // Keep names learned earlier: a branch that defined them before can
+        // define them again, and removing an absent name is a no-op.
+        if let Some(previous) = std::mem::take(locals) {
+            learned.extend(previous);
+            learned.sort();
+            learned.dedup();
+        }
+        #[cfg(test)]
+        {
+            frame.full_scans += 1;
+        }
+        *locals = Some(learned);
     }
 
     pub fn end_iteration(
@@ -439,7 +496,7 @@ impl LoopStack {
             .job_scope
             .take()
             .map(|scope| (frame.job_parent, scope));
-        bindings.retain(|name, _| frame.outer.contains(name));
+        Self::remove_frame_locals(frame, bindings);
         Ok(scope)
     }
 
@@ -472,11 +529,11 @@ impl LoopStack {
         }
         let mut scopes = Vec::new();
         while self.frames.len() > depth {
-            let frame = self.frames.pop().expect("loop depth checked");
+            let mut frame = self.frames.pop().expect("loop depth checked");
             if let Some(scope) = frame.job_scope {
                 scopes.push((frame.job_parent, scope));
             }
-            bindings.retain(|name, _| frame.outer.contains(name));
+            Self::remove_frame_locals(&mut frame, bindings);
         }
         Ok(scopes)
     }
@@ -667,6 +724,78 @@ mod tests {
             &mut bindings
         )?);
         assert_eq!(before, bindings);
+        Ok(())
+    }
+
+    #[test]
+    fn iteration_boundaries_drop_only_body_locals_without_rescanning() -> Result<()> {
+        let mut bindings = BTreeMap::new();
+        for index in 0..200 {
+            bindings.insert(format!("outer{index:03}"), Value::Integer(index));
+        }
+        let kind = LoopKind::Repeat {
+            count: Value::Integer(4),
+        };
+        let mut stack = LoopStack::default();
+        for round in 0..4 {
+            assert!(stack.header(0, &kind, &mut bindings)?);
+            bindings.insert("outer005".into(), Value::Integer(1000 + round));
+            bindings.insert("scratch".into(), Value::Bool(true));
+            stack.end_iteration(0, &mut bindings)?;
+            assert!(!bindings.contains_key("scratch"));
+            assert_eq!(bindings["outer005"], Value::Integer(1000 + round));
+            assert_eq!(bindings.len(), 200);
+        }
+        assert_eq!(stack.frames[0].full_scans, 1);
+        assert!(!stack.header(0, &kind, &mut bindings)?);
+        assert_eq!(bindings.len(), 200);
+        assert_eq!(bindings["outer005"], Value::Integer(1003));
+        Ok(())
+    }
+
+    #[test]
+    fn unwind_to_restores_each_popped_frame() -> Result<()> {
+        let mut bindings = BTreeMap::from([("outer".into(), Value::Integer(1))]);
+        let kind = LoopKind::Repeat {
+            count: Value::Integer(2),
+        };
+        let mut stack = LoopStack::default();
+        assert!(stack.header(0, &kind, &mut bindings)?);
+        bindings.insert("middle".into(), Value::Bool(true));
+        assert!(stack.header(8, &kind, &mut bindings)?);
+        bindings.insert("inner".into(), Value::Bool(false));
+        bindings.insert("outer".into(), Value::Integer(2));
+        stack.unwind_to(0, &mut bindings)?;
+        assert_eq!(
+            bindings,
+            BTreeMap::from([("outer".into(), Value::Integer(2))])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn genuinely_new_names_fall_back_to_a_full_scan() -> Result<()> {
+        let mut bindings = BTreeMap::from([("outer".into(), Value::Integer(1))]);
+        let kind = LoopKind::Repeat {
+            count: Value::Integer(3),
+        };
+        let mut stack = LoopStack::default();
+        assert!(stack.header(0, &kind, &mut bindings)?);
+        bindings.insert("first".into(), Value::Bool(true));
+        stack.end_iteration(0, &mut bindings)?;
+        assert_eq!(stack.frames[0].full_scans, 1);
+        assert!(stack.header(0, &kind, &mut bindings)?);
+        bindings.insert("second".into(), Value::Bool(false));
+        stack.end_iteration(0, &mut bindings)?;
+        assert_eq!(
+            bindings,
+            BTreeMap::from([("outer".into(), Value::Integer(1))])
+        );
+        assert_eq!(stack.frames[0].full_scans, 2);
+        assert!(stack.header(0, &kind, &mut bindings)?);
+        stack.end_iteration(0, &mut bindings)?;
+        assert_eq!(stack.frames[0].full_scans, 2);
+        assert!(!stack.header(0, &kind, &mut bindings)?);
         Ok(())
     }
 }

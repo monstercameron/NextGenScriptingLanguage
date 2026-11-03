@@ -7,7 +7,12 @@ name: Fuzz
 on:
   push:
     branches: [main]
+    # Docs-only changes skip the replay lanes; the nightly schedule is unaffected (#441).
+    paths-ignore:
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
   schedule:
     - cron: '23 2 * * *'
   workflow_dispatch:

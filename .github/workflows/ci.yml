@@ -2,7 +2,12 @@ name: Native checks
 on:
   push:
     branches: [main]
+    # Docs-only changes skip the native builds; pages still validates docs (#441).
+    paths-ignore:
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
   workflow_dispatch:
   workflow_call:
 permissions:
@@ -347,6 +352,10 @@ jobs:
           python3 tools/check_binary_size.py target/release/execute tools/linux-minimal-binary-budget.json
           cargo test --locked --no-default-features --lib
   unix:
+    # Tiered pipeline (#441): the full platform matrix runs on merge to main,
+    # manual dispatch, and release calls. Pull requests run the fast Linux
+    # lane (feature-matrix, linux-budgets, workflows).
+    if: github.event_name != 'pull_request'
     name: Unix (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -404,6 +413,9 @@ jobs:
     # 60 minutes as the feature-matrix Clippy job. The macos-15 leg of the
     # unix job still runs Clippy as part of its full make check.
     name: Unix Clippy (ubuntu-24.04)
+    # Tiered pipeline (#441): covered on pull requests by the feature-matrix
+    # Clippy job; the dedicated full-feature pass runs on merge to main.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -418,6 +430,9 @@ jobs:
       - name: Run Clippy (full feature set)
         run: make clippy-check
   windows:
+    # Tiered pipeline (#441): Native Windows legs run on merge to main,
+    # manual dispatch, and release calls, not on every pull request.
+    if: github.event_name != 'pull_request'
     name: Native Windows (${{ matrix.os }})
     strategy:
       fail-fast: false

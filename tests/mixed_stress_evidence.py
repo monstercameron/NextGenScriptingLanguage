@@ -32,7 +32,7 @@ class MixedStressEvidenceTests(unittest.TestCase):
         self.assertEqual(summary["active_window_observed_us"], 300_000_000)
 
     def test_workflow_rejects_three_five_minute_trials_before_checkout_or_smoke(self):
-        workflow_path = ROOT / ".github/workflows/mixed-runtime-probe.yml"
+        workflow_path = ROOT / "workflows-archive/mixed-runtime-probe.yml"
         workflow = workflow_path.read_text()
         validation_name = "Validate requested 1,000-actor trial bounds"
         self.assertIn(f"      - name: {validation_name}\n", workflow)

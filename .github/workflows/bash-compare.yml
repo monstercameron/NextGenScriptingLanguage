@@ -2,7 +2,12 @@ name: Execute vs bash
 on:
   push:
     branches: [main]
+    # Docs-only changes skip the native comparison; pages still validates docs (#441).
+    paths-ignore:
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       base_sha:

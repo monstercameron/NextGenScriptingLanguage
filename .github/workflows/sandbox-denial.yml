@@ -22,7 +22,12 @@ name: Sandbox denial
 on:
   push:
     branches: [main]
+    # Docs-only changes skip the denial lanes; pages still validates docs (#441).
+    paths-ignore:
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
   workflow_dispatch:
 permissions:
   contents: read

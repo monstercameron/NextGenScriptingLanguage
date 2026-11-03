@@ -89,23 +89,34 @@ pub fn warm(source: Source, build: impl FnOnce() -> Result<Registry>) -> Result<
     Ok(())
 }
 
-/// Hash each manifest in a directory, or the bytes of one catalog.
+/// Hash every manifest under a directory tree, or the bytes of one catalog. The
+/// walk is recursive so a daemon warming this source reloads instead of serving
+/// a stale entry when a manifest changes anywhere under the tree (#447).
+/// Symlinked directories are not descended into; symlinked manifests keep the
+/// previous behavior of missing the registry fingerprint, so they never cache.
 fn stamp(source: &Source) -> std::io::Result<Stamp> {
     match source {
         Source::Directory(path) => {
             let mut files = Vec::new();
-            for entry in fs::read_dir(path)? {
-                let entry = entry?;
-                let name = entry.file_name();
-                if Path::new(&name)
-                    .extension()
-                    .is_some_and(|ext| ext == "json")
-                {
-                    let path = entry.path();
-                    files.push((name, fs::canonicalize(&path)?, digest(&path)?));
+            let mut dirs = vec![path.clone()];
+            while let Some(dir) = dirs.pop() {
+                for entry in fs::read_dir(&dir)? {
+                    let entry = entry?;
+                    if entry.file_type()?.is_dir() {
+                        dirs.push(entry.path());
+                        continue;
+                    }
+                    let name = entry.file_name();
+                    if Path::new(&name)
+                        .extension()
+                        .is_some_and(|ext| ext == "json")
+                    {
+                        let path = entry.path();
+                        files.push((name, fs::canonicalize(&path)?, digest(&path)?));
+                    }
                 }
             }
-            files.sort_by(|a, b| a.0.cmp(&b.0));
+            files.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
             Ok(Stamp(files))
         }
         Source::Catalog(path) => Ok(Stamp(vec![(
@@ -262,6 +273,69 @@ mod tests {
         assert_eq!(
             names(&registry),
             vec!["alpha".to_owned(), "beta".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_nested_manifest_change_rebuilds_the_entry() {
+        let directory = manifest_dir(&["alpha"]);
+        let source = directory_source(&directory);
+        load(source.clone(), || Registry::load(directory.path())).unwrap();
+        // Manifest sources are a tree, not a flat listing (#447): a manifest
+        // added or edited anywhere under the source directory must not keep
+        // serving the cached entry. Nested manifests are stamped but never
+        // loaded, so the registry keeps serving the top-level names, freshly.
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        write_manifest(&nested, "beta");
+        let mut builds = 0;
+        let registry = load(source.clone(), || {
+            builds += 1;
+            Registry::load(directory.path())
+        })
+        .unwrap();
+        assert_eq!(
+            builds, 1,
+            "a manifest added under the source tree must rebuild"
+        );
+        assert_eq!(names(&registry), vec!["alpha".to_owned()]);
+        let path = nested.join("beta.json");
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(b" ");
+        fs::write(&path, bytes).unwrap();
+        let mut builds = 0;
+        load(source, || {
+            builds += 1;
+            Registry::load(directory.path())
+        })
+        .unwrap();
+        assert_eq!(
+            builds, 1,
+            "a manifest edited under the source tree must rebuild"
+        );
+    }
+
+    #[test]
+    fn nested_manifests_join_the_source_stamp() {
+        let directory = manifest_dir(&["alpha"]);
+        let source = directory_source(&directory);
+        let before = stamp(&source).unwrap();
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        write_manifest(&nested, "beta");
+        let added = stamp(&source).unwrap();
+        assert_ne!(
+            added, before,
+            "a manifest added under the source tree must join the stamp"
+        );
+        let path = nested.join("beta.json");
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(b" ");
+        fs::write(&path, bytes).unwrap();
+        assert_ne!(
+            stamp(&source).unwrap(),
+            added,
+            "a manifest edited under the source tree must change the stamp"
         );
     }
 

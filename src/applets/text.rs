@@ -551,8 +551,16 @@ pub(super) fn lower(args: &Map<String, Value>, input: &[u8]) -> Result<Value, Ap
 }
 
 /// Unicode default uppercase mapping. It is locale-independent.
+/// ASCII input uses the standard library bytewise fast path, which is
+/// identical to [`str::to_uppercase`] over the ASCII range; every non-ASCII
+/// string keeps the Unicode mapping (including expanding mappings).
 pub(super) fn upper(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
-    text_output(text_input(args, input)?.to_uppercase())
+    let text = text_input(args, input)?;
+    if text.is_ascii() {
+        text_output(text.to_ascii_uppercase())
+    } else {
+        text_output(text.to_uppercase())
+    }
 }
 
 fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletError> {
@@ -609,5 +617,45 @@ mod tests {
                 Value::String(text.to_lowercase())
             );
         }
+    }
+
+    #[test]
+    fn upper_ascii_fast_path_matches_unicode_mapping() {
+        // Empty, boundary-length, and all-ASCII-byte inputs stay on the
+        // ASCII path yet match the Unicode mapping.
+        let all_ascii: String = (0u8..128).map(|byte| byte as char).collect();
+        let mut cases = vec!["".to_owned(), "a".to_owned(), all_ascii];
+        for len in [1, 2, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+            cases.push("aBcDeF 123 zZ!".repeat(len));
+        }
+        // Deterministic pseudo-random ASCII.
+        let mut seed = 0x1234_5678u32;
+        let mut random = String::new();
+        for _ in 0..1024 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            random.push((seed % 128) as u8 as char);
+        }
+        cases.push(random);
+        for text in &cases {
+            assert!(text.is_ascii(), "case must stay on the ASCII path");
+            let args = Map::from_iter([("text".to_owned(), Value::String(text.clone()))]);
+            assert_eq!(
+                upper(&args, &[]).unwrap(),
+                Value::String(text.to_uppercase()),
+                "text={text:?}"
+            );
+        }
+        // Non-ASCII input keeps the Unicode mapping, including mappings
+        // that expand to multiple characters.
+        for text in ["ß", "ﬀ", "ﬁ", "ŉ", "Straße", "éclair ıß", "İΣῳ"] {
+            assert!(!text.is_ascii());
+            let args = Map::from_iter([("text".to_owned(), Value::String(text.to_owned()))]);
+            assert_eq!(
+                upper(&args, &[]).unwrap(),
+                Value::String(text.to_uppercase()),
+                "text={text:?}"
+            );
+        }
+        assert_eq!("ß".to_uppercase(), "SS");
     }
 }

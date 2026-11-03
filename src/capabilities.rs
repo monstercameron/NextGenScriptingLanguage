@@ -1807,6 +1807,7 @@ impl ConfirmedExecutables {
                 mtime_nsec,
                 ctime,
                 ctime_nsec,
+                nlink: after.nlink(),
             }),
         })
     }
@@ -1836,6 +1837,9 @@ struct LinuxPinnedExecutable {
     mtime_nsec: i64,
     ctime: i64,
     ctime_nsec: i64,
+    // Link count at pin time. Replacing the pathname unlinks the reviewed inode,
+    // which changes its ctime without changing its bytes; see `attach`.
+    nlink: u64,
 }
 
 impl PinnedExecutable {
@@ -1870,6 +1874,7 @@ impl PinnedExecutable {
                 mtime_nsec,
                 ctime,
                 ctime_nsec,
+                nlink,
                 ..
             } = pinned;
             let fd = file.as_raw_fd();
@@ -1886,13 +1891,19 @@ impl PinnedExecutable {
                     if libc::fstat(fd, &mut stat) == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
+                    // Replacing the pathname (rename over it) unlinks the
+                    // reviewed inode: its link count and ctime move while its
+                    // bytes do not. Let ctime move only when the link count
+                    // moved; a rewrite that keeps the link count still fails.
+                    let links_moved = stat.st_nlink as u64 != nlink;
+                    let ctime_moved = stat.st_ctime as i64 != ctime
+                        || stat.st_ctime_nsec as i64 != ctime_nsec;
                     if stat.st_dev as u64 != dev
                         || stat.st_ino as u64 != ino
                         || stat.st_size as u64 != size
                         || stat.st_mtime as i64 != mtime
                         || stat.st_mtime_nsec as i64 != mtime_nsec
-                        || stat.st_ctime as i64 != ctime
-                        || stat.st_ctime_nsec as i64 != ctime_nsec
+                        || (ctime_moved && !links_moved)
                     {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -2957,6 +2968,10 @@ where
         // sandbox, where a held descriptor of this process does not name
         // the file; the pin above still re-hashed the reviewed bytes, and
         // SECURITY.md names the residual hash-to-`exec` window here.
+        // On Linux the pin owns an open descriptor, so release it before the
+        // sandbox spawn. Elsewhere the pin is empty and `drop` would be a no-op.
+        #[cfg(target_os = "linux")]
+        drop(pinned);
         crate::platform::sandbox::command(binary, arguments, grant, cwd)
             .map_err(|error| SandboxRefused(format!("{error:#}")))?
     } else {

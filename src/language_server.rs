@@ -795,7 +795,8 @@ fn uri_for_source_path<'a>(
                     .and_then(|document| document.canonical_path.clone())
             })
             .unwrap_or(document_path);
-        candidate.as_path() == path
+        crate::program_files::identity_key(candidate.as_path())
+            == crate::program_files::identity_key(path)
     })
 }
 

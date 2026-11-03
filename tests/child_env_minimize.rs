@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 #[path = "common/portable_shell.rs"]
 mod portable_shell;
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 const SECRET: &str = "not-for-child-6bfea8";
 
 /// `run` program for the environment printer: absolute on Unix, the MSYS
@@ -265,6 +268,7 @@ fn named_applets_intersect_the_host_allowlist_with_policy() {
     fs::write(&file, "run fixture.env\n").unwrap();
     let policy = dir.path().join("policy.json");
     fs::write(&policy, r#"{"version":1,"applets":{"fixture.env":{"capabilities":["process.exec"],"environment":["LANE_SAFE","LANE_PRIVATE"]}}}"#).unwrap();
+    private_answers::make_private(&policy);
     let output = base(dir.path())
         .arg("run")
         .arg(&file)
@@ -278,6 +282,7 @@ fn named_applets_intersect_the_host_allowlist_with_policy() {
         .unwrap();
     assert_minimized(&output);
     fs::write(&policy, r#"{"version":1,"applets":{"fixture.env":{"capabilities":["process.exec"],"environment":["LANE_PRIVATE"]}}}"#).unwrap();
+    private_answers::make_private(&policy);
     let output = base(dir.path())
         .arg("run")
         .arg(&file)

@@ -4,6 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 fn manifests() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
 }
@@ -124,6 +127,7 @@ mod links {
             r#"{{"version":1,"applets":{{"text.concat":{{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{{"read":["{granted}"],"write":["{granted}"]}}}}}}}}"#
         );
         fs::write(root.join("policy.json"), body).unwrap();
+        private_answers::make_private(&root.join("policy.json"));
     }
 
     fn run(root: &Path, source: &str) -> Output {
@@ -389,6 +393,7 @@ mod swap_after_use_folder {
             format!(r#"{{"version":1,"applets":{{"swap.link":{grant_entry},"echo.stdin":{grant_entry}}}}}"#),
         )
         .unwrap();
+        private_answers::make_private(&root.path().join("policy.json"));
         fs::write(
             root.path().join("main.program"),
             "use folder \"inside/link\"\nrun swap.link\nread \"secret.txt\"\npipe to echo.stdin\n",

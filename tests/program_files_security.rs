@@ -19,16 +19,25 @@ fn write(root: &Path, relative: &str, text: &str) {
 
 /// A capability policy file. `read` names the host's allowed read and write directory.
 fn policy(root: &Path, read: Option<&str>) -> String {
+    // Host grant roots must be absolute; "." stands for the test's own directory.
+    let absolute = root.display().to_string();
     let body = match read {
-        Some(directory) => serde_json::json!({
-            "version": 1,
-            "host": {
-                "capabilities": ["filesystem.read", "filesystem.write"],
-                "filesystem": {"read": [directory], "write": [directory]}
-            },
-            "applets": {}
-        })
-        .to_string(),
+        Some(directory) => {
+            let directory = if directory == "." {
+                absolute.as_str()
+            } else {
+                directory
+            };
+            serde_json::json!({
+                "version": 1,
+                "host": {
+                    "capabilities": ["filesystem.read", "filesystem.write"],
+                    "filesystem": {"read": [directory], "write": [directory]}
+                },
+                "applets": {}
+            })
+            .to_string()
+        }
         None => r#"{"version":1,"applets":{}}"#.to_owned(),
     };
     let path = root.join("policy.json");

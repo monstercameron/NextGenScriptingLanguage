@@ -200,6 +200,7 @@ fn execution_modes_are_forwarded_and_untrusted_without_policy_fails_early() {
     fs::write(root.join("a.test.program"), "run fixture.native\n").unwrap();
     fs::write(root.join("manifest.json"), r#"{"name":"fixture.native","binary":"printf","parameters":{},"arguments":[{"literal":"ok"}],"contract":{"version":1,"capabilities":["process.exec","clock.read"],"effects":["clock.read"]}}"#).unwrap();
     fs::write(root.join("cap.json"), r#"{"version":1,"applets":{"fixture.native":{"capabilities":["process.exec","clock.read"]}}}"#).unwrap();
+    private_answers::make_private(&root.join("cap.json"));
     for (command, target) in [
         ("run-parts", Some("parts")),
         ("test", Some("a.test.program")),

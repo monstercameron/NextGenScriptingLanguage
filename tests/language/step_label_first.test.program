@@ -1,0 +1,2 @@
+fetch: use value "one"
+then encode "one" as json

@@ -1,0 +1,3 @@
+spawn as job
+  run "cmd" with arguments ["/c", "echo joined"]
+await job

@@ -1,0 +1,4 @@
+execute 1
+accept name as text with default "x"
+use value name
+then encode name as json

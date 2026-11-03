@@ -1,0 +1,3 @@
+accept name as text with default "world"
+use value name
+then encode name as json

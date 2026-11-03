@@ -1,0 +1,3 @@
+spawn as job
+  run "printf" with arguments ["joined"]
+await job

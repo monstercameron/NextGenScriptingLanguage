@@ -1,0 +1,1 @@
+{"inputs": {"name": "bob"}, "expect": {"status": 0, "stdout": "\"bob\""}}

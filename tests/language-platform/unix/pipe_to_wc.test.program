@@ -1,0 +1,2 @@
+run "printf" with arguments ["a\nb\n"]
+pipe to "wc" with arguments ["-l"]

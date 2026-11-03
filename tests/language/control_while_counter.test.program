@@ -1,0 +1,7 @@
+run json.parse with text "{\"n\": 0}" as state
+take integer at "/n" from state as count
+while count is not 3
+  run json.set with document state and pointer "/n" and value 3 as state
+  take integer at "/n" from state as count
+use value "done"
+then encode "done" as json

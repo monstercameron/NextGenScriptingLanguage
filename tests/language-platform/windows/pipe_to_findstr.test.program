@@ -1,0 +1,2 @@
+run "cmd" with arguments ["/c", "echo alpha & echo beta"]
+pipe to "findstr" with arguments ["beta"]

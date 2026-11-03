@@ -1,0 +1,3 @@
+run json.parse with text "{\"x\": 1, \"y\": 2}" as doc
+run json.keys with document doc as names
+then encode names as json

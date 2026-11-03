@@ -1,0 +1,4 @@
+run json.parse with text "{\"name\": \"ada\", \"ok\": true}" as reply
+take text at "/name" from reply as name
+take boolean at "/ok" from reply as ok
+then encode ok as json

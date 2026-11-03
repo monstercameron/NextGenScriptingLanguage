@@ -1,0 +1,10 @@
+accept mode as text with default "dark"
+if mode is "dark"
+  use value "night"
+  then encode "night" as json
+otherwise if mode is "light"
+  use value "day"
+  then encode "day" as json
+otherwise
+  use value "other"
+  then encode "other" as json

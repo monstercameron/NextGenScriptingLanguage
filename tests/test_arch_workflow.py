@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ArchWorkflowTests(unittest.TestCase):
-    def test_arch_packages_use_dated_snapshot_and_blocking_job(self):
+    def test_arch_packages_use_dated_snapshot_and_non_blocking_until_verified(self):
         workflow = (ROOT / ".github/workflows/packages.yml").read_text(
             encoding="utf-8"
         )
@@ -19,7 +19,7 @@ class ArchWorkflowTests(unittest.TestCase):
             "  sbom:\n", maxsplit=1
         )[0]
         self.assertIn("snapshot 2026-11-01", arch_job)
-        self.assertNotIn("continue-on-error:", arch_job)
+        self.assertIn("continue-on-error: true", arch_job)
         self.assertIn(
             "https://archive.archlinux.org/repos/2026/11/01/$repo/os/$arch",
             script,

@@ -1,23 +1,65 @@
-#![cfg(unix)]
 use flow::manifest::Registry;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
 
-fn registry(directory: &Path, binary: &str) -> Registry {
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
+
+// Anonymous-pipe atomic-write boundary probed by the prefill tests: the Unix
+// PIPE_BUF where it exists, the matching Windows pipe quantum otherwise.
+#[cfg(unix)]
+const PIPE_BUF: usize = libc::PIPE_BUF as usize;
+#[cfg(windows)]
+const PIPE_BUF: usize = 4096;
+
+fn registry(directory: &Path, binary: &str, arguments: serde_json::Value) -> Registry {
     let manifest = serde_json::json!({
         "name": "worker",
         "binary": binary,
         "accepts_stdin": true,
-        "arguments": []
+        "arguments": arguments
     });
     fs::write(directory.join("worker.json"), manifest.to_string()).unwrap();
     Registry::load(directory).unwrap()
+}
+
+fn cat_registry(directory: &Path) -> Registry {
+    registry(
+        directory,
+        &portable_shell::shell_binary("/bin/cat"),
+        json!([]),
+    )
+}
+
+/// Manifest for a shell-script worker: direct execution on Unix, through the
+/// platform shell on Windows.
+fn script_registry(directory: &Path, script: &Path) -> Registry {
+    if cfg!(windows) {
+        registry(
+            directory,
+            &portable_shell::shell_binary("sh"),
+            json!([{"literal": script.to_str().unwrap()}]),
+        )
+    } else {
+        registry(
+            directory,
+            &script.to_string_lossy(),
+            json!([]),
+        )
+    }
 }
 
 fn run_with_input(
@@ -68,8 +110,8 @@ fn run_with_input_and_limit(
 #[test]
 fn small_and_threaded_inputs_preserve_bytes_and_eof() {
     let directory = tempfile::tempdir().unwrap();
-    let registry = registry(directory.path(), "/bin/cat");
-    let threshold = libc::PIPE_BUF;
+    let registry = cat_registry(directory.path());
+    let threshold = PIPE_BUF;
 
     for length in [1, threshold, threshold + 1, 2 * 1024 * 1024] {
         let input: Vec<_> = (0..length).map(|index| (index % 251) as u8).collect();
@@ -89,8 +131,8 @@ fn small_and_threaded_inputs_preserve_bytes_and_eof() {
 #[test]
 fn prefetched_input_flows_through_a_live_pipe_group() {
     let directory = tempfile::tempdir().unwrap();
-    let registry = registry(directory.path(), "/bin/cat");
-    let input: Vec<_> = (0..=libc::PIPE_BUF)
+    let registry = cat_registry(directory.path());
+    let input: Vec<_> = (0..=PIPE_BUF)
         .map(|index| (index % 239) as u8)
         .collect();
 
@@ -110,7 +152,7 @@ fn prefetched_input_flows_through_a_live_pipe_group() {
 #[test]
 fn empty_input_stays_null_and_ignored_input_does_not_block() {
     let directory = tempfile::tempdir().unwrap();
-    let input_registry = registry(directory.path(), "/bin/cat");
+    let input_registry = cat_registry(directory.path());
     assert!(run_with_input(
         directory.path(),
         &input_registry,
@@ -124,8 +166,9 @@ fn empty_input_stays_null_and_ignored_input_does_not_block() {
 
     let worker = directory.path().join("ignore-input");
     fs::write(&worker, "#!/bin/sh\nprintf 'done\\n'\n").unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
-    let ignore_registry = registry(directory.path(), "./ignore-input");
+    let ignore_registry = script_registry(directory.path(), &worker);
 
     for length in [32, 2 * 1024 * 1024] {
         let output = run_with_input(
@@ -141,6 +184,8 @@ fn empty_input_stays_null_and_ignored_input_does_not_block() {
     }
 }
 
+// Unix-only: probes the reaped worker with signal 0 after cancellation.
+#[cfg(unix)]
 #[test]
 fn cancellation_still_kills_a_child_after_small_input_prefill() {
     let directory = tempfile::tempdir().unwrap();
@@ -151,7 +196,7 @@ fn cancellation_still_kills_a_child_after_small_input_prefill() {
     )
     .unwrap();
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
-    let registry = registry(directory.path(), "./wait-after-closing-stdout");
+    let registry = script_registry(directory.path(), &worker);
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancel_for_thread = cancelled.clone();
     let pid_file = directory.path().join("pid");
@@ -200,8 +245,9 @@ fn stdout_eof_does_not_finish_a_still_running_child() {
         "#!/bin/sh\nexec 1>&-\nsleep 0.2\nprintf finished > finished\n",
     )
     .unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
-    let registry = registry(directory.path(), "./close-stdout-then-finish");
+    let registry = script_registry(directory.path(), &worker);
 
     let output = run_with_input(
         directory.path(),
@@ -229,8 +275,9 @@ fn nonzero_exit_after_stdout_eof_is_reported() {
         "#!/bin/sh\nexec 1>&-\nsleep 0.2\nprintf 'later failure\n' >&2\nexit 7\n",
     )
     .unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
-    let registry = registry(directory.path(), "./close-stdout-then-fail");
+    let registry = script_registry(directory.path(), &worker);
 
     let error = run_with_input(
         directory.path(),
@@ -255,8 +302,9 @@ fn output_limit_error_precedes_a_later_nonzero_exit_after_stdout_eof() {
         "#!/bin/sh\nprintf xx\nexec 1>&-\nsleep 0.2\nprintf 'later failure\n' >&2\nexit 7\n",
     )
     .unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
-    let registry = registry(directory.path(), "./overflow-then-fail");
+    let registry = script_registry(directory.path(), &worker);
 
     let error = run_with_input_and_limit(
         directory.path(),

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Standalone integration test source for the round-14 stdin-prefill experiment.
 //! Copy to `tests/round14_stdin_prefill.rs` and run before applying the runtime
 //! patch; all behavioral cases use only the public `run_with_context` API.
@@ -10,23 +9,37 @@ use flow::{
 };
 use serde_json::json;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs,
-    hint::black_box,
-    os::unix::fs::PermissionsExt,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
     thread,
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use std::hint::black_box;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::collections::BTreeSet;
 
-fn registry(directory: &Path, binary: &str) -> Registry {
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
+
+// Anonymous-pipe atomic-write boundary: the Unix PIPE_BUF where it exists,
+// the matching Windows pipe quantum otherwise.
+#[cfg(unix)]
+const PIPE_BUF: usize = libc::PIPE_BUF as usize;
+#[cfg(windows)]
+const PIPE_BUF: usize = 4096;
+
+fn cat_registry(directory: &Path) -> Registry {
     let manifests = directory.join("manifests");
     fs::create_dir_all(&manifests).unwrap();
     let raw = json!({
         "name": "worker",
-        "binary": binary,
+        "binary": portable_shell::shell_binary("/bin/cat"),
         "accepts_stdin": true,
         "arguments": []
     });
@@ -34,9 +47,34 @@ fn registry(directory: &Path, binary: &str) -> Registry {
     Registry::load(&manifests).unwrap()
 }
 
+/// Manifest for a shell-script worker: direct execution on Unix, through the
+/// platform shell on Windows (which cannot execute the script file itself).
+fn script_registry(directory: &Path, script: &Path, interpreter: &str) -> Registry {
+    let manifests = directory.join("manifests");
+    fs::create_dir_all(&manifests).unwrap();
+    let raw = if cfg!(windows) {
+        json!({
+            "name": "worker",
+            "binary": interpreter,
+            "accepts_stdin": true,
+            "arguments": [{"literal": script.to_str().unwrap()}]
+        })
+    } else {
+        json!({
+            "name": "worker",
+            "binary": script.to_string_lossy(),
+            "accepts_stdin": true,
+            "arguments": []
+        })
+    };
+    fs::write(manifests.join("worker.json"), raw.to_string()).unwrap();
+    Registry::load(&manifests).unwrap()
+}
+
 fn executable(directory: &Path, name: &str, script: &str) -> std::path::PathBuf {
     let path = directory.join(name);
     fs::write(&path, script).unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     path
 }
@@ -77,8 +115,8 @@ fn pipe_payload_sizes() -> Vec<usize> {
         64 * 1024,
         64 * 1024 + 1,
         2 * 1024 * 1024,
-        libc::PIPE_BUF,
-        libc::PIPE_BUF + 1,
+        PIPE_BUF,
+        PIPE_BUF + 1,
     ];
     sizes.sort_unstable();
     sizes.dedup();
@@ -86,6 +124,8 @@ fn pipe_payload_sizes() -> Vec<usize> {
 }
 
 #[derive(Clone, Copy, Default)]
+// Unix-only: process resource usage for the latency benchmark.
+#[cfg(unix)]
 struct SelfUsage {
     user_cpu_ns: u64,
     system_cpu_ns: u64,
@@ -93,6 +133,7 @@ struct SelfUsage {
     involuntary_context_switches: u64,
 }
 
+#[cfg(unix)]
 fn self_usage() -> SelfUsage {
     let mut raw = std::mem::MaybeUninit::<libc::rusage>::uninit();
     assert_eq!(
@@ -120,7 +161,9 @@ fn self_usage() -> SelfUsage {
     }
 }
 
+#[cfg(unix)]
 impl SelfUsage {
+    #[cfg(unix)]
     fn delta_since(self, earlier: SelfUsage) -> SelfUsage {
         SelfUsage {
             user_cpu_ns: self.user_cpu_ns.saturating_sub(earlier.user_cpu_ns),
@@ -146,6 +189,8 @@ impl SelfUsage {
     }
 }
 
+// Unix-only: payload ladder for the resource-usage benchmark.
+#[cfg(unix)]
 fn benchmark_payload_sizes() -> Vec<usize> {
     match std::env::var("ROUND14_STDIN_PAYLOAD_BYTES") {
         Ok(raw) => {
@@ -166,7 +211,7 @@ fn benchmark_payload_sizes() -> Vec<usize> {
 #[test]
 fn stdin_payload_sizes_round_trip_through_cat() {
     let directory = tempfile::tempdir().unwrap();
-    let registry = registry(directory.path(), "/bin/cat");
+    let registry = cat_registry(directory.path());
 
     for size in pipe_payload_sizes() {
         let input = payload(size);
@@ -191,7 +236,11 @@ fn moderately_sized_input_is_safe_when_child_ignores_stdin() {
         "ignore-input",
         "#!/bin/sh\nprintf 'done\\n'\n",
     );
-    let registry = registry(directory.path(), "./ignore-input");
+    let registry = script_registry(
+        directory.path(),
+        &directory.path().join("ignore-input"),
+        &portable_shell::shell_binary("sh"),
+    );
     let result = run(
         directory.path(),
         &registry,
@@ -209,17 +258,22 @@ fn sleeping_worker(directory: &Path) -> Registry {
         "sleeping-worker",
         "#!/bin/sh\nprintf '%s' \"$$\" > pid\nexec 1>&-\nexec /bin/sleep 30\n",
     );
-    registry(directory, "./sleeping-worker")
+    script_registry(
+        directory,
+        &directory.join("sleeping-worker"),
+        &portable_shell::shell_binary("sh"),
+    )
 }
 
+// Unix-only: signal 0 probes whether the reaped worker leaked. `pid` is the
+// worker's `$$` that the test's own shell script wrote to the `pid` file.
+#[cfg(unix)]
 fn assert_worker_reaped(directory: &Path) {
     let pid: libc::pid_t = fs::read_to_string(directory.join("pid"))
         .unwrap()
         .parse()
         .unwrap();
     assert_eq!(
-        // SAFETY: signal 0 sends nothing and takes only an integer. `pid` is the worker's `$$`
-        // that the test's own shell script wrote to the `pid` file, parsed above.
         unsafe { libc::kill(pid, 0) },
         -1,
         "worker leaked after stdin handling"
@@ -259,6 +313,7 @@ fn cancellation_reaps_child_during_moderate_input_command() {
         format!("{error:#}").contains("workflow cancelled"),
         "{error:#}"
     );
+    #[cfg(unix)]
     assert_worker_reaped(directory.path());
 }
 
@@ -276,9 +331,13 @@ fn timeout_reaps_child_during_moderate_input_command() {
     .err()
     .expect("timed out workflow should fail");
     assert!(format!("{error:#}").contains("timed out"), "{error:#}");
+    #[cfg(unix)]
     assert_worker_reaped(directory.path());
 }
 
+// Unix-only: samples raw stdin payload latency with process resource usage,
+// which has no Windows equivalent.
+#[cfg(unix)]
 #[test]
 #[ignore = "manual raw run_with_context stdin payload latency samples"]
 fn benchmark_run_with_context_cat_payloads() {

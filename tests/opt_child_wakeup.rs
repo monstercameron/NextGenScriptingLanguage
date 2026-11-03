@@ -1,7 +1,7 @@
-#![cfg(unix)]
 use flow::manifest::Registry;
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -9,14 +9,30 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-fn registry(directory: &Path, binary: &str) -> Registry {
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
+
+fn registry(directory: &Path, worker: &Path) -> Registry {
+    // The worker runs through the platform shell on Windows; direct execution
+    // needs a shebang with an executable bit.
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            portable_shell::shell_binary("sh"),
+            serde_json::json!([{"literal": worker.to_str().unwrap()}]),
+        )
+    } else {
+        (
+            worker.to_string_lossy().into_owned(),
+            serde_json::json!([]),
+        )
+    };
     fs::write(
         directory.join("worker.json"),
         serde_json::json!({
             "name": "worker",
             "binary": binary,
             "accepts_stdin": false,
-            "arguments": []
+            "arguments": arguments
         })
         .to_string(),
     )
@@ -56,8 +72,9 @@ fn independent_contexts_receive_their_own_child_exit_wakeups() {
                     "#!/bin/sh\nexec 1>&-\nsleep 0.1\nprintf done > done\n",
                 )
                 .unwrap();
+                #[cfg(unix)]
                 fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
-                let registry = registry(directory.path(), "./worker");
+                let registry = registry(directory.path(), &worker);
 
                 let result = run(directory.path(), &registry, "run worker\n").unwrap();
                 assert!(result.output.is_empty());
@@ -76,8 +93,9 @@ fn rapid_child_exits_do_not_lose_notifications_or_wait_forever() {
     let directory = tempfile::tempdir().unwrap();
     let worker = directory.path().join("worker");
     fs::write(&worker, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
-    let registry = registry(directory.path(), "./worker");
+    let registry = registry(directory.path(), &worker);
     let source = "run worker\n".repeat(64);
 
     let result = run(directory.path(), &registry, &source).unwrap();

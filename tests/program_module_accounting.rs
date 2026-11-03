@@ -1,14 +1,16 @@
-#![cfg(unix)]
-
 use flow::modules::{ProgramModuleSession, PROGRAM_MODULE_INTERFACE_VERSION};
 use flow::{manifest::Registry, runtime};
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 fn write_program_module(catalog: &Path, name: &str, source: &str) {
     fs::create_dir_all(catalog).unwrap();
@@ -41,18 +43,35 @@ fn write_program_module(catalog: &Path, name: &str, source: &str) {
 }
 
 fn write_failing_applet(catalog: &Path, script: &Path) {
+    // The script runs through the platform shell on Windows; direct execution
+    // needs a shebang with an executable bit.
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            portable_shell::shell_binary("sh"),
+            serde_json::json!([
+                {"literal": script.to_str().unwrap()},
+                {"parameter": "started"},
+                {"parameter": "other"}
+            ]),
+        )
+    } else {
+        (
+            script.to_string_lossy().into_owned(),
+            serde_json::json!([
+                {"parameter": "started"},
+                {"parameter": "other"}
+            ]),
+        )
+    };
     let manifest = serde_json::json!({
         "name": "fixture.fail",
-        "binary": script,
+        "binary": binary,
         "accepts_stdin": false,
         "parameters": {
             "started": {"type": "string", "required": true},
             "other": {"type": "string", "required": true}
         },
-        "arguments": [
-            {"parameter": "started"},
-            {"parameter": "other"}
-        ],
+        "arguments": arguments,
         "contract": {
             "version": 1,
             "backend": "command",
@@ -95,7 +114,7 @@ fn write_bad_interpreter_applet(catalog: &Path, binary: &Path) {
 fn write_failing_task_applet(catalog: &Path) {
     let manifest = serde_json::json!({
         "name": "fixture.task-fail",
-        "binary": "/usr/bin/false",
+        "binary": portable_shell::shell_binary("/usr/bin/false"),
         "accepts_stdin": false,
         "parameters": {"value": {"type": "string", "required": true}},
         "arguments": [{"parameter": "value"}],
@@ -234,6 +253,9 @@ fn partial_background_pipeline_spawn_is_included_when_module_fails() {
     fs::create_dir_all(&catalog).unwrap();
     let binary = catalog.join("bad-interpreter");
     fs::write(&binary, "#!/execute-test-missing-interpreter\nexit 0\n").unwrap();
+    // Direct execution fails on both platforms here (missing interpreter on
+    // Unix, no association on Windows); only Unix needs the executable bit.
+    #[cfg(unix)]
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
     write_bad_interpreter_applet(&catalog, &binary);
     write_program_module(
@@ -297,6 +319,7 @@ fn parallel_module_tasks_report_each_child_spawn_once_on_failure() {
         "#!/bin/sh\ntouch \"$1\"\nwhile [ ! -f \"$2\" ]; do :; done\nexit 7\n",
     )
     .unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     write_failing_applet(&catalog, &script);
     write_program_module(

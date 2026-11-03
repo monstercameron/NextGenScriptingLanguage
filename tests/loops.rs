@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Loops use actual native applets in disposable directories.
 use flow::{manifest::Registry, parser, runtime};
 use std::{

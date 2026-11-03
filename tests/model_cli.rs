@@ -1,5 +1,4 @@
 #![cfg(feature = "model")]
-#![cfg(unix)]
 use std::{fs, process::Command};
 
 #[test]

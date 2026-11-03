@@ -1,9 +1,11 @@
 //! `run --init` supervises the workflow as PID 1 would: it returns the worker's
 //! status and forwards termination signals to it.
-#![cfg(unix)]
 
 use std::fs;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::Command;
+#[cfg(unix)]
+use std::process::{Child, ExitStatus, Stdio};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
@@ -14,6 +16,8 @@ fn write_program(text: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     (directory, program)
 }
 
+// Only the Unix signal tests below supervise a worker through `--init`.
+#[cfg(unix)]
 fn spawn_init(program: &std::path::Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["run", "--init"])
@@ -24,6 +28,7 @@ fn spawn_init(program: &std::path::Path) -> Child {
         .unwrap()
 }
 
+#[cfg(unix)]
 fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + limit;
     loop {
@@ -51,6 +56,7 @@ fn init_returns_the_worker_exit_status() {
 
 /// A program that writes a marker just before its 30-second sleep. The marker lets a test
 /// signal the worker once it is inside the sleep, instead of after a guessed delay.
+#[cfg(unix)]
 fn sleeping_program() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let directory = tempdir().unwrap();
     let program = directory.path().join("init.program");
@@ -66,6 +72,7 @@ fn sleeping_program() -> (tempfile::TempDir, std::path::PathBuf, std::path::Path
     (directory, program, marker)
 }
 
+#[cfg(unix)]
 fn wait_for_marker(marker: &std::path::Path) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !marker.exists() {
@@ -77,6 +84,9 @@ fn wait_for_marker(marker: &std::path::Path) {
     }
 }
 
+// Unix-only: delivers SIGTERM to the supervisor and asserts it is forwarded
+// to the worker; Windows termination does not forward.
+#[cfg(unix)]
 #[test]
 fn init_forwards_sigterm_to_the_worker_and_exits() {
     let (_directory, program, marker) = sleeping_program();
@@ -89,6 +99,8 @@ fn init_forwards_sigterm_to_the_worker_and_exits() {
     assert!(!status.success());
 }
 
+// Unix-only: asserts the 128+SIGHUP exit code; Windows has no SIGHUP.
+#[cfg(unix)]
 #[test]
 fn init_reports_worker_death_by_sighup_as_129() {
     let (_directory, program, marker) = sleeping_program();

@@ -1,6 +1,5 @@
 //! Explicit applet-boundary benchmark. Run the prebuilt release test binary
 //! through benchmarks/applet_boundaries.py; this test never compiles itself.
-#![cfg(unix)]
 
 use flow::{
     ast::Value,
@@ -243,7 +242,6 @@ fn frame_samples(expected_stdout: &[u8], samples: usize) -> JsonValue {
     })
 }
 
-#[cfg(unix)]
 #[test]
 #[ignore = "explicit release applet-boundary measurements; run through the Python harness"]
 fn applet_boundaries() {

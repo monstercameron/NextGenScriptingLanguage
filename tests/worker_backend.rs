@@ -1,4 +1,7 @@
-#![cfg(unix)]
+//! White-box worker backend tests: the `json_lines` worker protocol runs over
+//! pipes on every platform (the backend itself is `cfg(any(unix, windows))`),
+//! so only the Unix FFI harness below stays gated, alongside the per-platform
+//! liveness probes and interpreter name.
 
 #[path = "../src/runtime/worker_backend.rs"]
 mod worker_backend;
@@ -21,14 +24,65 @@ mod working_dir {
 
 // A `#[path]` inside an inline module resolves under `tests/platform/`, which does not
 // exist, so Linux cannot resolve `..` through it. Declare the file at the crate root.
+// Unix-only: these tests pin the Unix FFI helpers the backend is built on;
+// the Windows backend has its own `worker_backend_windows.rs` suite.
+#[cfg(unix)]
 #[path = "../src/platform/unix_ffi.rs"]
 pub(crate) mod unix_ffi_source;
 
+#[cfg(unix)]
 mod platform {
     pub(crate) use super::unix_ffi_source as unix_ffi;
 }
 
+// The white-box backend refers to `crate::platform::windows` for its job and
+// pump types. This mirrors the standalone harness in
+// `tests/worker_backend_windows.rs`: include the real module by path and hang
+// it under `mod platform`, with the same parent surface (`publish`, the drain
+// helpers) it reaches through `super::`.
+#[cfg(windows)]
+#[path = "../src/platform/windows.rs"]
+#[allow(dead_code)]
+pub(crate) mod windows_platform;
+
+#[cfg(windows)]
+mod platform {
+    pub(crate) use crate::windows_platform as windows;
+}
+
+/// The included platform module records the cancelling signal through its
+/// parent; these worker tests never install console handlers, so this is a
+/// no-op like in the standalone harness.
+#[cfg(windows)]
+pub(crate) fn record_cancel_signal(_signal: i32) {}
+
+/// Drain-state helpers mirror `src/platform.rs`, which the included module
+/// reaches through its parent.
+#[cfg(windows)]
+pub(crate) const DRAIN_CANCELLED: u8 = 3;
+
+#[cfg(windows)]
+pub(crate) fn request_drain(state: &std::sync::atomic::AtomicU8) -> bool {
+    state
+        .compare_exchange(
+            0,
+            1,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
+/// Parent surface for the standalone `windows_platform` include above, whose
+/// `super::publish::` paths resolve through this module. Same source the
+/// library builds, so this harness cannot drift from publish ordering.
+#[cfg(windows)]
+#[path = "../src/platform/publish.rs"]
+#[allow(dead_code)]
+mod publish;
+
 // The harness includes the whole FFI module but uses only some of its functions.
+#[cfg(unix)]
 const _: fn() = || {
     let _ = (
         platform::unix_ffi::set_close_on_exec,
@@ -59,11 +113,46 @@ fn lock_worker_tests() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Interpreter that runs the `json_lines_worker.py` fixture: `python3` on Unix,
+/// plain `python` on Windows (the `python3` alias does not exist there).
+/// The worker script reads `sys.argv[1:]`, which is identical on both
+/// platforms, so the fixture itself is unchanged.
 fn python3() -> PathBuf {
+    let binary = if cfg!(windows) { "python.exe" } else { "python3" };
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|directory| directory.join("python3"))
+        .map(|directory| directory.join(binary))
         .find(|candidate| candidate.is_file())
         .expect("Python 3 is available for fixture tests")
+}
+
+/// Cross-platform liveness probe for worker PIDs recorded in launch markers.
+/// Unix uses signal 0; Windows opens the process without affecting it.
+#[cfg(unix)]
+fn process_exists(pid: i32) -> bool {
+    // SAFETY: signal 0 sends nothing and takes only an integer parsed from a
+    // launch marker this test wrote through its own workers.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn process_exists(pid: i32) -> bool {
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+    // SAFETY: `pid` is parsed from a launch marker this test wrote through its
+    // own workers. A null return means no live process has that id; a valid
+    // handle is closed immediately without affecting the process.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
+    if handle.is_null() {
+        return false;
+    }
+    unsafe { CloseHandle(handle) };
+    true
+}
+
+fn assert_alive(pid: i32) {
+    assert!(process_exists(pid), "worker process {pid} is not running");
 }
 
 fn fixture() -> PathBuf {
@@ -73,7 +162,7 @@ fn fixture() -> PathBuf {
 fn fixture_registry() -> manifest::Registry {
     let source = serde_json::json!({
         "name": "worker.fixture",
-        "binary": "python3",
+        "binary": python3().to_string_lossy(),
         "arguments": [],
         "contract": {
             "version": 1,
@@ -87,7 +176,7 @@ fn fixture_registry() -> manifest::Registry {
 fn secret_fixture_registry() -> manifest::Registry {
     let source = serde_json::json!({
         "name": "worker.fixture",
-        "binary": "python3",
+        "binary": python3().to_string_lossy(),
         "arguments": [],
         "contract": {
             "version": 1,
@@ -176,16 +265,27 @@ fn recorded_pid(directory: &TempDir) -> i32 {
 }
 
 fn assert_reaped(pid: i32) {
-    // SAFETY: signal 0 sends nothing and kill takes no pointers. `pid` is an integer parsed
-    // from the worker's launch marker by recorded_pid. errno is read by the assert below,
-    // with no other libc call in between, so it still holds this call's failure code.
-    let result = unsafe { libc::kill(pid, 0) };
-    assert_eq!(result, -1, "worker process {pid} is still present");
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH),
-        "worker process {pid} was not reaped"
-    );
+    #[cfg(windows)]
+    {
+        assert!(
+            !process_exists(pid),
+            "worker process {pid} is still present"
+        );
+        return;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: signal 0 sends nothing and kill takes no pointers. `pid` is an integer parsed
+        // from the worker's launch marker by recorded_pid. errno is read by the assert below,
+        // with no other libc call in between, so it still holds this call's failure code.
+        let result = unsafe { libc::kill(pid, 0) };
+        assert_eq!(result, -1, "worker process {pid} is still present");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH),
+            "worker process {pid} was not reaped"
+        );
+    }
 }
 
 fn worker_error(error: &anyhow::Error) -> &worker_backend::WorkerError {
@@ -228,9 +328,14 @@ fn one_worker_serves_multiple_requests_and_preserves_input_bytes() {
     assert!(!second.spawned_process);
     assert!(!second_spawned.load(Ordering::Relaxed));
 
+    // The fixture appends one PID line per worker start in text mode, which is
+    // `\r\n` on Windows; compare lines so both platforms match.
     assert_eq!(
-        std::fs::read_to_string(directory.path().join("launches")).expect("launch count marker"),
-        format!("{}\n", recorded_pid(&directory)),
+        std::fs::read_to_string(directory.path().join("launches"))
+            .expect("launch count marker")
+            .lines()
+            .collect::<Vec<_>>(),
+        [recorded_pid(&directory).to_string()],
         "one process should serve both records"
     );
     let retained_pid = recorded_pid(&directory);
@@ -433,10 +538,9 @@ fn registry_lifetime_owns_persistent_worker_cleanup() {
     let pid = recorded_pid(&directory);
 
     drop(registry);
-    // SAFETY: signal 0 sends nothing and takes only an integer. `pid` came from the launch
-    // marker of the worker this test just invoked. `final_registry` is a clone that still
-    // owns the pool, so the worker has not been reaped and the pid still names it.
-    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+    // `final_registry` is a clone that still owns the pool, so the worker this
+    // test just invoked has not been reaped and the pid still names it.
+    assert_alive(pid);
     drop(final_registry);
     assert_reaped(pid);
 }
@@ -495,9 +599,7 @@ fn pool_rejects_new_identities_at_capacity_without_evicting_state() {
         .collect::<HashSet<_>>();
     let live_workers = pids
         .iter()
-        // SAFETY: signal 0 only probes existence and sends nothing. Each `pid` is an integer
-        // parsed from a launch marker that this test wrote through its own workers.
-        .filter(|pid| unsafe { libc::kill(**pid, 0) } == 0)
+        .filter(|pid| process_exists(**pid))
         .count();
     assert_eq!(live_workers, 16, "pool must retain at most 16 workers");
 
@@ -651,9 +753,14 @@ fn serialized_reuse_rechecks_worker_history_before_sending_a_request() {
     assert!(public_error.to_string().contains("request was not started"));
     assert!(!worker_error(&public_error).uncertain_effect);
     assert_eq!(worker_error(&public_error).completed_status, None);
+    // The fixture writes effect lines in text mode (`\r\n` on Windows);
+    // compare lines so both platforms match.
     assert_eq!(
-        std::fs::read_to_string(&effects).expect("worker request marker"),
-        "received\n",
+        std::fs::read_to_string(&effects)
+            .expect("worker request marker")
+            .lines()
+            .collect::<Vec<_>>(),
+        ["received"],
         "the rejected request must not reach the worker"
     );
 
@@ -754,10 +861,9 @@ fn output_and_stderr_limits_are_enforced() {
         1,
         "a complete oversized diagnostic should leave the worker reusable"
     );
-    // SAFETY: signal 0 sends nothing and takes only an integer. `stderr_pid` is the worker
-    // recorded in stderr_directory; `pool` still owns it until the drop on the next line,
+    // `pool` still owns the `stderr_pid` worker until the drop on the next line,
     // so it has not been reaped and the pid still names it.
-    assert_eq!(unsafe { libc::kill(stderr_pid, 0) }, 0);
+    assert_alive(stderr_pid);
     drop(pool);
     assert_reaped(stderr_pid);
     assert_reaped(oversized_output_pid);

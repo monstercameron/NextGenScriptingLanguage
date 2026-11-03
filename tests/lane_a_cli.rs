@@ -1,7 +1,7 @@
 //! End-to-end `.program` checks for fs.test, fs.glob and text.lines through the
 //! CLI, including the typed binding paths used by `if ... is true` and
-//! `for each`. Unix-only because the programs call `cat` and `printf`.
-#![cfg(unix)]
+//! `for each`. The programs call `cat` and `printf`, which the Windows CI job
+//! provides through its MSYS shell tools on `PATH`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,14 +1,17 @@
-#![cfg(unix)]
 //! All workers and effects are owned temporary fixtures; no host processes targeted.
 use std::{
     fs,
     io::Read,
-    os::unix::fs::PermissionsExt,
     path::Path,
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 fn invoke(dir: &Path, args: &[&str]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
@@ -65,8 +68,29 @@ fn fixture() -> tempfile::TempDir {
     )
     .unwrap();
     fs::write(dir.path().join("worker"), "#!/usr/bin/env python3\nimport os, sys, time\nopen('pid', 'w').write(str(os.getpid()))\nopen('effect', 'a').write('started\\n')\nif sys.argv[1] == 'closed':\n os.close(1)\n time.sleep(30)\nelse:\n while True:\n  os.write(1, b'x' * 1000)\n  time.sleep(.01)\n").unwrap();
+    #[cfg(unix)]
     fs::set_permissions(dir.path().join("worker"), fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(dir.path().join("manifests/worker.json"), r#"{"name":"worker","binary":"./worker","accepts_stdin":true,"parameters":{"mode":{"type":"string","required":true}},"arguments":[{"parameter":"mode"}]}"#).unwrap();
+    // The worker runs through the pinned interpreter on Windows; direct
+    // execution with a shebang needs an executable bit it cannot provide.
+    let manifest = if cfg!(windows) {
+        let script = dir.path().join("worker").to_string_lossy().replace('\\', "/");
+        serde_json::json!({
+            "name": "worker",
+            "binary": portable_shell::python(),
+            "accepts_stdin": true,
+            "parameters": {"mode": {"type": "string", "required": true}},
+            "arguments": [{"literal": script}, {"parameter": "mode"}]
+        })
+    } else {
+        serde_json::json!({
+            "name": "worker",
+            "binary": "./worker",
+            "accepts_stdin": true,
+            "parameters": {"mode": {"type": "string", "required": true}},
+            "arguments": [{"parameter": "mode"}]
+        })
+    };
+    fs::write(dir.path().join("manifests/worker.json"), manifest.to_string()).unwrap();
     dir
 }
 
@@ -80,18 +104,17 @@ fn assert_observed_children_reaped(output: &Output) {
         if event["event"] != "spawn" {
             continue;
         }
-        let pid: i32 = event["pid"].as_u64().unwrap().try_into().unwrap();
-        assert_eq!(
-            // SAFETY: signal 0 delivers nothing. `pid` comes from a completed `spawn` event that
-            // the interpreter logged for a child it started, so it names an interpreter child.
-            unsafe { libc::kill(pid, 0) },
-            -1,
-            "owned child {pid} leaked"
-        );
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
+        // Unix-only: signal 0 probes whether the reaped child leaked. `pid`
+        // comes from a completed `spawn` event for an interpreter child.
+        #[cfg(unix)]
+        {
+            let pid: i32 = event["pid"].as_u64().unwrap().try_into().unwrap();
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "owned child {pid} leaked");
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
     }
 }
 

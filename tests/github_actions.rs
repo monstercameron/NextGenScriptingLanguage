@@ -1,9 +1,9 @@
 //! GitHub Actions hardening end to end: forged workflow commands are
 //! neutralized in streamed output, final output and captured stderr under
 //! `GITHUB_ACTIONS=true`, registered secrets emit `::add-mask::` lines, and
-//! output stays byte-identical without the marker. Unix-only because the
-//! fixtures drive `/bin/sh` through the default registry.
-#![cfg(unix)]
+//! output stays byte-identical without the marker. The fixtures drive `sh`
+//! through the default registry, which the Windows CI job provides through
+//! its MSYS shell tools on `PATH`.
 
 use std::fs;
 use std::process::{Command, Output};

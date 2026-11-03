@@ -1,4 +1,3 @@
-#![cfg(unix)]
 use flow::{
     ast::{StepKind, Value},
     manifest::Registry,
@@ -536,17 +535,22 @@ fn checkpoint_pins_absent_tools_in_unselected_branches_without_running_them() {
         dir.path(),
         &["resume", "main.program", "--checkpoint", "journal"],
     ));
-    let native_true = ["/usr/bin/true", "/bin/true"]
-        .into_iter()
-        .find(|path| Path::new(path).is_file())
-        .unwrap();
-    std::os::unix::fs::symlink(native_true, dir.path().join("optional-tool")).unwrap();
-    let rejected = cli(
-        dir.path(),
-        &["resume", "main.program", "--checkpoint", "journal"],
-    );
-    assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("completed checkpoint node"));
+    // Unix-only: the pinned-absent tool reappears as a symlink, which needs
+    // symlink privileges with no Windows equivalent in this flow.
+    #[cfg(unix)]
+    {
+        let native_true = ["/usr/bin/true", "/bin/true"]
+            .into_iter()
+            .find(|path| Path::new(path).is_file())
+            .unwrap();
+        std::os::unix::fs::symlink(native_true, dir.path().join("optional-tool")).unwrap();
+        let rejected = cli(
+            dir.path(),
+            &["resume", "main.program", "--checkpoint", "journal"],
+        );
+        assert!(!rejected.status.success());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("completed checkpoint node"));
+    }
 }
 
 #[test]

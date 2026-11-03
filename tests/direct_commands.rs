@@ -1,15 +1,17 @@
-#![cfg(unix)]
-
 use flow::{ast::StepKind, manifest::Registry, parser, runtime, stream};
 use std::{
     collections::BTreeMap,
     fs,
-    os::unix::fs::symlink,
     path::Path,
     process::Command,
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
@@ -69,14 +71,29 @@ fn direct_argv_preserves_empty_unicode_and_shell_looking_arguments() {
 #[test]
 fn quoted_relative_executable_with_spaces_and_named_arguments_work() {
     let directory = tempfile::tempdir().unwrap();
-    let printf = ["/usr/bin/printf", "/bin/printf"]
-        .into_iter()
-        .find(|p| Path::new(p).is_file())
-        .unwrap();
-    symlink(printf, directory.path().join("my printer")).unwrap();
-    let source = "run \"printf\" with arguments [\"%s\", \"first\"] as message\nthen \"./my printer\" with arguments [\"<%s>\", message]\n";
+    // A real executable whose path contains a space: a symlink on Unix, a copy
+    // of the MSYS printf next to its DLL on Windows.
+    #[cfg(unix)]
+    let printer = {
+        let printf = ["/usr/bin/printf", "/bin/printf"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .unwrap();
+        symlink(printf, directory.path().join("my printer")).unwrap();
+        "./my printer".to_owned()
+    };
+    #[cfg(windows)]
+    let printer = {
+        let source = portable_shell::shell_binary("printf");
+        let sibling = Path::new(&source).parent().unwrap().join("msys-2.0.dll");
+        fs::copy(&sibling, directory.path().join("msys-2.0.dll")).unwrap();
+        let printer = directory.path().join("my printer.exe");
+        fs::copy(Path::new(&source), &printer).unwrap();
+        "./my printer.exe".to_owned()
+    };
+    let source = format!("run \"printf\" with arguments [\"%s\", \"first\"] as message\nthen \"{printer}\" with arguments [\"<%s>\", message]\n");
     let result = runtime::run(
-        &parser::parse(source).unwrap(),
+        &parser::parse(&source).unwrap(),
         &Registry::default(),
         &options(directory.path()),
     )

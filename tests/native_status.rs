@@ -1,17 +1,11 @@
-#![cfg(unix)]
 use flow::{
     ast::{StepKind, Value},
     manifest::Registry,
     parser, runtime, stream,
 };
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::Path,
-    process::Command,
-    sync::{atomic::AtomicBool, Arc},
-    time::Duration,
-};
+use std::{fs, path::Path, process::Command, time::Duration};
+#[cfg(unix)]
+use std::{collections::BTreeMap, sync::{atomic::AtomicBool, Arc}};
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
@@ -95,6 +89,9 @@ fn invalid_status_uses_fail_before_prior_effects() {
     }
 }
 
+// Unix-only: asserts signal deaths stay signals and are never converted to
+// exit status; Windows has no signals to preserve.
+#[cfg(unix)]
 #[test]
 fn signals_timeout_spawn_and_cancel_are_never_converted_to_exit_status() {
     let dir = tempfile::tempdir().unwrap();
@@ -282,6 +279,9 @@ fn cli_preserves_unhandled_native_statuses_and_keeps_handled_failures_successful
     assert_eq!(output.stdout, b"42");
 }
 
+// Unix-only: asserts the 143 (128+SIGTERM) shell status for a signalled
+// child; Windows has no signalled exits.
+#[cfg(unix)]
 #[test]
 fn cli_reports_signaled_native_children_with_conventional_shell_status() {
     let directory = tempfile::tempdir().unwrap();

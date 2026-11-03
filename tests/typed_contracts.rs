@@ -1,15 +1,17 @@
-#![cfg(unix)]
-
 use flow::ast::Value;
 use flow::manifest::Registry;
 use flow::{parser, runtime};
 use serde_json::{json, Value as JsonValue};
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
+
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
@@ -30,17 +32,46 @@ fn registry(manifests: &[JsonValue]) -> Registry {
 
 fn executable(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
-    let mut permissions = fs::metadata(path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).unwrap();
+    // Direct execution keeps the executable bit on Unix; Windows invokes the
+    // same script through the platform shell instead.
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
 }
 
-fn argument_manifest(name: &str, binary: &str, contract: JsonValue) -> JsonValue {
+/// Manifest binary/arguments pair for `script`: the script itself on Unix,
+/// the platform shell plus the script on Windows.
+fn script_binary(script: &Path) -> (String, JsonValue) {
+    if cfg!(windows) {
+        (
+            portable_shell::shell_binary("sh"),
+            json!([{"literal": script.to_str().unwrap()}]),
+        )
+    } else {
+        (script.to_string_lossy().into_owned(), json!([]))
+    }
+}
+
+fn argument_manifest(name: &str, script: &Path, contract: JsonValue) -> JsonValue {
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            portable_shell::shell_binary("sh"),
+            json!([{"literal": script.to_str().unwrap()}, {"parameter": "status"}]),
+        )
+    } else {
+        (
+            script.to_string_lossy().into_owned(),
+            json!([{"parameter": "status"}]),
+        )
+    };
     json!({
         "name": name,
         "binary": binary,
         "parameters": {"status": {"type": "integer", "required": true}},
-        "arguments": [{"parameter": "status"}],
+        "arguments": arguments,
         "contract": contract
     })
 }
@@ -49,7 +80,7 @@ fn argument_manifest(name: &str, binary: &str, contract: JsonValue) -> JsonValue
 fn invalid_typed_output_schemas_fail_during_manifest_load() {
     let invalid = json!({
         "name": "invalid.integer",
-        "binary": "/bin/true",
+        "binary": portable_shell::shell_binary("/bin/true"),
         "arguments": [],
         "contract": {
             "version": 1,
@@ -72,10 +103,11 @@ fn record_outputs_feed_existing_take_and_condition_syntax() {
         &fixture,
         "#!/bin/sh\nprintf '{\"found\":true,\"message\":\"ready\"}\\n'\n",
     );
+    let (binary, arguments) = script_binary(&fixture);
     let catalog = registry(&[json!({
         "name": "record.fixture",
-        "binary": fixture,
-        "arguments": [],
+        "binary": binary,
+        "arguments": arguments,
         "contract": {
             "version": 1,
             "output": {
@@ -102,7 +134,7 @@ fn finite_programs_can_use_typed_references_in_nested_record_parameters() {
     let directory = tempfile::tempdir().unwrap();
     let catalog = registry(&[json!({
         "name": "record.echo",
-        "binary": "/usr/bin/printf",
+        "binary": portable_shell::shell_binary("/usr/bin/printf"),
         "parameters": {
             "config": {
                 "type": "record",
@@ -226,14 +258,23 @@ fn in_process_json_output_binding_preserves_result_envelope_and_stdout_bytes() {
 fn cli_deep_in_process_json_binding_matches_cache_hit_byte_decoding() {
     let directory = tempfile::tempdir().unwrap();
     let manifest_directory = directory.path().join("manifests");
-    let mut manifest_builder = fs::DirBuilder::new();
-    manifest_builder
+    // Private cache and manifest directories: the mode is Unix-only, plain
+    // creation is equivalent elsewhere for these tests.
+    #[cfg(unix)]
+    fs::DirBuilder::new()
         .mode(0o700)
         .create(&manifest_directory)
         .unwrap();
+    #[cfg(not(unix))]
+    fs::create_dir(&manifest_directory).unwrap();
     let cache_directory = directory.path().join("cache");
-    let mut cache_builder = fs::DirBuilder::new();
-    cache_builder.mode(0o700).create(&cache_directory).unwrap();
+    #[cfg(unix)]
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&cache_directory)
+        .unwrap();
+    #[cfg(not(unix))]
+    fs::create_dir(&cache_directory).unwrap();
     let mut manifest: JsonValue =
         serde_json::from_str(include_str!("../manifests/core.json_get.json")).unwrap();
     manifest["cacheable"] = json!(true);
@@ -323,7 +364,7 @@ fn absence_and_failure_envelopes_route_as_distinct_declared_outcomes() {
     });
     let catalog = registry(&[argument_manifest(
         "outcome.fixture",
-        fixture.to_str().unwrap(),
+        &fixture,
         contract,
     )]);
 
@@ -424,11 +465,12 @@ fn statically_known_output_type_fails_before_earlier_effects() {
             marker
         ),
     );
+    let (binary, arguments) = script_binary(&producer);
     let catalog = registry(&[
         json!({
             "name": "producer.fixture",
-            "binary": producer,
-            "arguments": [],
+            "binary": binary,
+            "arguments": arguments,
             "contract": {
                 "version": 1,
                 "output": {"type": "text", "encoding": "raw"}
@@ -436,7 +478,7 @@ fn statically_known_output_type_fails_before_earlier_effects() {
         }),
         json!({
             "name": "integer.consumer",
-            "binary": "/bin/true",
+            "binary": portable_shell::shell_binary("/bin/true"),
             "parameters": {"value": {"type": "integer", "required": true}},
             "arguments": [{"parameter": "value"}]
         }),

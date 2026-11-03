@@ -1,31 +1,81 @@
-#![cfg(all(unix, feature = "screens"))]
+#![cfg(feature = "screens")]
 //! UI tests never contact GitHub; the gh fixture records argv and returns controlled JSON.
+//! The fixture is a Python script executed directly on Unix. Windows cannot
+//! execute extensionless scripts (and refuses `.cmd` batch files as applet
+//! binaries), so there the same script runs through the `python` interpreter:
+//! the overlay manifest below keeps the repo `gh.repo.json` arguments and only
+//! swaps the binary to `python` with the script as the first literal argument.
+//! `sys.argv[1:]` is identical on both platforms, so the fixture is unchanged.
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output},
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 const TRACKER: &str = include_str!("../examples/github-stars.program");
 fn fixture() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("gh"), include_str!("fixtures/gh.py")).unwrap();
-    fs::set_permissions(dir.path().join("gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(dir.path().join("gh.py"), include_str!("fixtures/gh.py")).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(
+        dir.path().join("gh"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     dir
+}
+/// Manifest directory for `invoke`: the repo manifests on Unix, and a small
+/// overlay on Windows where `gh.repo.json` runs the fixture script through
+/// the `python` interpreter instead of executing it directly.
+fn manifest_dir(dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        let _ = dir;
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
+    }
+    #[cfg(not(unix))]
+    {
+        let overlay = dir.join("manifests-overlay");
+        fs::create_dir_all(&overlay).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let mut gh: serde_json::Value = serde_json::from_slice(
+            &fs::read(repo.join("gh.repo.json")).unwrap(),
+        )
+        .unwrap();
+        let script = dir.join("gh.py").to_string_lossy().into_owned();
+        gh["binary"] = serde_json::Value::String("python".to_owned());
+        if let Some(arguments) = gh.get_mut("arguments").and_then(|a| a.as_array_mut()) {
+            arguments.insert(0, serde_json::json!({"literal": script}));
+        }
+        fs::write(
+            overlay.join("gh.repo.json"),
+            serde_json::to_string(&gh).unwrap(),
+        )
+        .unwrap();
+        overlay
+    }
 }
 fn invoke(dir: &Path, source: &str, mode: &str, args: &[&str]) -> Output {
     let file = dir.join("test.program");
     fs::write(&file, source).unwrap();
+    let separator = if cfg!(windows) { ';' } else { ':' };
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .current_dir(dir)
         .args(args)
         .arg(file)
         .arg("--manifest-dir")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"))
+        .arg(manifest_dir(dir))
         .env(
             "PATH",
-            format!("{}:{}", dir.display(), std::env::var("PATH").unwrap()),
+            format!(
+                "{}{}{}",
+                dir.display(),
+                separator,
+                std::env::var("PATH").unwrap()
+            ),
         )
         .env("GH_FIXTURE_DIR", dir)
         .env("GH_FIXTURE_MODE", mode)
@@ -209,7 +259,8 @@ fn invalid_shortcuts_and_button_cycles_fail_before_launching_gh() {
     }
     assert!(!dir.path().join("calls.jsonl").exists());
 }
-#[cfg(feature = "tui")]
+// Unix-only: drives the dashboard through a pty, which Windows has no equivalent of.
+#[cfg(all(unix, feature = "tui"))]
 #[test]
 fn terminal_interaction_restoration_and_worker_cancellation() {
     let output = Command::new("python3")

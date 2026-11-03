@@ -1,4 +1,3 @@
-#![cfg(unix)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -1471,6 +1470,7 @@ fn help_and_version_cannot_replace_required_option_values() {
     }
 }
 
+#[cfg(unix)]
 fn copy_manifest_bundle(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).unwrap();
     for entry in fs::read_dir(source).unwrap() {
@@ -1485,6 +1485,7 @@ fn copy_manifest_bundle(source: &Path, destination: &Path) {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn installed_symlink_resolves_manifest_bundle_without_the_build_checkout() {
     let directory = tempfile::tempdir().unwrap();
@@ -1512,6 +1513,7 @@ fn installed_symlink_resolves_manifest_bundle_without_the_build_checkout() {
     assert_eq!(output.stdout, b"installed bundle\n");
 }
 
+#[cfg(unix)]
 fn local_file_uri(path: &Path) -> String {
     use std::os::unix::ffi::OsStrExt;
     let mut result = String::from("file://");
@@ -1524,6 +1526,7 @@ fn local_file_uri(path: &Path) -> String {
     }
     result
 }
+#[cfg(unix)]
 #[test]
 fn file_uri_runs_the_same_script_and_supports_localhost_and_percent_escapes() {
     let (directory, manifests) = fixture();
@@ -1562,6 +1565,7 @@ fn file_uri_runs_the_same_script_and_supports_localhost_and_percent_escapes() {
         }
     }
 }
+#[cfg(unix)]
 #[test]
 fn file_uri_preserves_literal_plus_and_non_utf8_unix_filename_bytes() {
     use std::os::unix::ffi::OsStringExt;
@@ -1624,6 +1628,7 @@ fn invalid_or_remote_file_uris_fail_with_specific_diagnostics() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn invalid_utf8_cli_argument_is_a_normal_error_instead_of_a_panic() {
     use std::os::unix::ffi::OsStringExt;
@@ -1641,6 +1646,7 @@ fn invalid_utf8_cli_argument_is_a_normal_error_instead_of_a_panic() {
     assert!(!error.contains("panicked"), "{error}");
 }
 
+#[cfg(unix)]
 #[test]
 fn percent_encoded_non_utf8_workflow_path_is_handled_without_panicking() {
     use std::os::unix::ffi::OsStringExt;
@@ -1672,6 +1678,8 @@ fn percent_encoded_non_utf8_workflow_path_is_handled_without_panicking() {
     assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
 }
 
+// Unix-only: asserts the 141 (128+SIGPIPE) closed-stdout contract.
+#[cfg(unix)]
 #[test]
 fn closed_stdout_is_a_normal_error_for_cli_and_live_responses() {
     use std::process::Stdio;

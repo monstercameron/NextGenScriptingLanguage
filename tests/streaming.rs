@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use flow::{manifest::Registry, parser, runtime, stream};
 use serde_json::{json, Value};
 use std::fs;
@@ -18,6 +16,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[path = "common/portable_shell.rs"]
+mod portable_shell;
+
 fn fixture() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("manifests")).unwrap();
@@ -29,6 +30,14 @@ fn manifest_dir(dir: &TempDir) -> PathBuf {
 }
 
 fn executable(name: &str) -> PathBuf {
+    // Windows cannot execute the bare system name from the test PATH the way
+    // Unix can; pin the interpreter or MSYS tool instead.
+    if cfg!(windows) {
+        if name == "python3" {
+            return PathBuf::from(portable_shell::python());
+        }
+        return PathBuf::from(portable_shell::shell_binary(name));
+    }
     [Path::new("/usr/bin"), Path::new("/bin")]
         .into_iter()
         .map(|directory| directory.join(name))
@@ -167,7 +176,7 @@ fn add_idle_closed_stdout_child(dir: &TempDir) {
     );
 }
 
-fn wait_for_child_pid(path: &Path) -> libc::pid_t {
+fn wait_for_child_pid(path: &Path) -> i32 {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         if let Ok(contents) = fs::read_to_string(path) {
@@ -185,6 +194,9 @@ fn wait_for_child_pid(path: &Path) -> libc::pid_t {
     }
 }
 
+// Unix-only: process groups have no Windows equivalent; the runtime starts
+// applets with setpgid on Unix only.
+#[cfg(unix)]
 fn assert_process_group_reaped(pid: libc::pid_t) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -310,6 +322,8 @@ impl Running {
         }
     }
 
+    // Only the target-gated tail tests read streamed lines record by record.
+    #[cfg(unix)]
     fn line_reader(&mut self) -> mpsc::Receiver<Vec<u8>> {
         let stdout = self.stdout.take().expect("stdout reader already started");
         let (tx, rx) = mpsc::channel();
@@ -372,12 +386,9 @@ impl Drop for Running {
     fn drop(&mut self) {
         // Signal only the owned CLI child. Its runtime owns and reaps its applet groups.
         if self.child.try_wait().ok().flatten().is_none() {
-            // SAFETY: kill takes only integers. The try_wait above returned Ok(None) or an
-            // error (both map to is_none), never Ok(Some), so the child has not been reaped
-            // and `self.child.id()` still names it.
-            unsafe {
-                libc::kill(self.child.id() as libc::pid_t, libc::SIGINT);
-            }
+            // The try_wait above returned Ok(None) or an error (both map to
+            // is_none), never Ok(Some), so the child has not been reaped.
+            portable_shell::interrupt_child(&mut self.child);
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
                 if self.child.try_wait().ok().flatten().is_some() {
@@ -393,6 +404,8 @@ impl Drop for Running {
     }
 }
 
+// Only the target-gated tail tests read streamed lines record by record.
+#[cfg(unix)]
 fn receive_line(lines: &mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
     lines
         .recv_timeout(Duration::from_secs(5))
@@ -417,14 +430,15 @@ fn assert_spawn_lines(stderr: &str, expected: &[&str]) {
         );
     }
     assert_eq!(spawns.len(), expected.len(), "spawn trace: {spawns:?}");
+    // Unix-only: signal 0 probes whether the runner reaped its applets. `pid`
+    // is the applet pid the runner reported for a child it owns.
+    #[cfg(unix)]
     for pid in events
         .iter()
         .filter(|e| e["event"] == "spawn")
         .filter_map(|e| e["pid"].as_u64())
     {
         assert_eq!(
-            // SAFETY: signal 0 sends nothing and takes only an integer. `pid` is the applet
-            // pid the runner reported in its own spawn trace for a child it owns.
             unsafe { libc::kill(pid as libc::pid_t, 0) },
             -1,
             "owned applet still alive after runner exit"
@@ -867,13 +881,15 @@ fn blocked_stdout_remains_deadline_bounded_and_cancellable() {
         thread::sleep(Duration::from_millis(100));
         if cancel {
             runner.assert_still_running();
+            // `assert_still_running` just asserted that try_wait returned
+            // Ok(None), so the runner has not exited or been reaped.
+            #[cfg(unix)]
             assert_eq!(
-                // SAFETY: kill takes only integers. `assert_still_running` just asserted that
-                // try_wait returned Ok(None), so the runner has not exited or been reaped and
-                // `runner.child.id()` still names it.
                 unsafe { libc::kill(runner.child.id() as libc::pid_t, libc::SIGINT) },
                 0
             );
+            #[cfg(windows)]
+            portable_shell::interrupt_child(&mut runner.child);
         }
         assert!(!runner.wait(Duration::from_secs(5)).success());
         let error = runner.stderr_text();
@@ -920,7 +936,8 @@ fn shared_cancellation_kills_idle_child_after_stdout_closes() {
         },
     );
     let elapsed = started.elapsed();
-    let pid = watcher.join().unwrap();
+    // Only the Unix process-group check below consumes the leader pid.
+    let _pid = watcher.join().unwrap();
     assert!(result.is_err(), "idle child unexpectedly succeeded");
     assert!(
         format!("{:#}", result.unwrap_err()).contains("cancelled"),
@@ -934,7 +951,8 @@ fn shared_cancellation_kills_idle_child_after_stdout_closes() {
         elapsed < Duration::from_secs(2),
         "cancellation took {elapsed:?}"
     );
-    assert_process_group_reaped(pid);
+    #[cfg(unix)]
+    assert_process_group_reaped(_pid);
 }
 
 #[test]
@@ -964,7 +982,8 @@ fn inherited_absolute_deadline_kills_idle_child_after_stdout_closes() {
         },
     );
     let elapsed = started.elapsed();
-    let pid = wait_for_child_pid(&dir.path().join("child.pid"));
+    // Only the Unix process-group check below consumes the leader pid.
+    let _pid = wait_for_child_pid(&dir.path().join("child.pid"));
     assert!(
         result.is_err(),
         "idle child outlived the inherited deadline"
@@ -974,7 +993,8 @@ fn inherited_absolute_deadline_kills_idle_child_after_stdout_closes() {
         elapsed < Duration::from_secs(3),
         "deadline took {elapsed:?}"
     );
-    assert_process_group_reaped(pid);
+    #[cfg(unix)]
+    assert_process_group_reaped(_pid);
 }
 
 #[test]
@@ -994,10 +1014,12 @@ fn total_and_command_timeouts_still_bound_idle_stream_children() {
         let started = Instant::now();
         let result = runtime::run_stream(&program, &registry, &options, 1024, |_, _, _| Ok(()));
         let elapsed = started.elapsed();
-        let pid = wait_for_child_pid(&dir.path().join("child.pid"));
+        // Only the Unix process-group check below consumes the leader pid.
+        let _pid = wait_for_child_pid(&dir.path().join("child.pid"));
         assert!(result.is_err(), "idle child outlived timeout configuration");
         assert!(elapsed < Duration::from_secs(3), "timeout took {elapsed:?}");
-        assert_process_group_reaped(pid);
+        #[cfg(unix)]
+        assert_process_group_reaped(_pid);
     }
 }
 

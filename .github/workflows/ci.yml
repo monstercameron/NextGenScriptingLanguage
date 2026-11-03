@@ -35,6 +35,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check test feature requirements
         run: python3 tools/test_ci_feature_matrix.py
+      - name: Check Unix-only integration test list
+        run: python3 tools/test_unix_only_tests.py
       - name: Check sandbox-denial lane guards
         run: python3 tools/test_sandbox_denial_workflow.py
       - name: Regenerate and check replacement gate summary
@@ -509,6 +511,11 @@ jobs:
             throw "Git for Windows MSYS printf.exe and sibling msys-2.0.dll are required for the Windows argv regression."
           }
           Write-Host "Verified MSYS printf fixture: $fixture"
+      - name: Put MSYS shell tools on PATH for the Unix-ported suites
+        shell: pwsh
+        run: |
+          "$env:ProgramFiles\Git\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "$env:ProgramFiles\Git\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Install manifest fixture beside the release test binaries
         shell: pwsh
         run: |
@@ -516,7 +523,7 @@ jobs:
           if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
           Copy-Item -Path manifests -Destination $fixture -Recurse
 
-      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test applet_executable_pinning_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff --test checkpoint_resolve_elements --test crash_injection -- --test-threads=1
+      - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test applet_executable_pinning_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff --test checkpoint_resolve_elements --test crash_injection --test robustness --test applet_boundaries_bench--test adversarial --test cache_dependencies --test cache_security --test child_env_minimize --test cli --test conditions --test cpu --test direct_commands --test github_actions --test graph_composition_acceptance --test graph_result_events --test inspection --test invocation_io --test lane_a_cli --test lane_o_init --test loops --test manifest_catalog_cli --test model_cli --test model_control --test native_status --test opt_child_wakeup --test opt_diagnostics_poll --test opt_local_child_observer --test opt_services_checkpoint_listener --test opt_small_input --test opt_stdin_prefill --test process_inputs --test program_inputs --test program_module_accounting --test resume --test reusable_programs --test security_dataflow_runtime --test security_redaction --test service_environment --test stdin --test streaming --test structured_json --test terminal_output_escape --test timeout --test typed_contracts --test ui --test worker_backend -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test repair_from_record recorded_failure_repairs_and_resumes_without_repeating_completed_effects_portable -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test repair_from_record repair_and_resume_refuse_an_oversize_executable_without_rerunning -- --test-threads=1
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --lib -- --test-threads=1

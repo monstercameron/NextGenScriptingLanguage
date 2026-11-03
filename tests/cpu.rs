@@ -1,31 +1,88 @@
-#![cfg(all(unix, feature = "screens"))]
+#![cfg(feature = "screens")]
 //! Ranking and scheduling belong to the .program; only ps is replaced in fixtures.
+//! The fixture is a Python script executed directly on Unix. Windows cannot
+//! execute extensionless scripts (and refuses `.cmd` batch files as applet
+//! binaries), so there the same script runs through the `python` interpreter:
+//! the overlay manifest below keeps the repo `ps.json` arguments and only
+//! swaps the binary to `python` with the script as the first literal argument.
+//! `sys.argv[1:]` is identical on both platforms, so the fixture is unchanged.
+//! The ranking stage still uses the real `jq` binary on both platforms.
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output},
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 const SOURCE: &str = include_str!("../examples/top-cpu.program");
 fn fixture() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("ps"), include_str!("fixtures/ps.py")).unwrap();
-    fs::set_permissions(dir.path().join("ps"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(dir.path().join("ps.py"), include_str!("fixtures/ps.py")).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(
+        dir.path().join("ps"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     dir
+}
+/// Manifest directory for `invoke`: the repo manifests on Unix, and a small
+/// overlay on Windows where `ps.json` runs the fixture script through the
+/// `python` interpreter instead of executing it directly. `jq.ps.json` is
+/// copied unchanged so the ranking stage keeps using the real `jq` binary.
+fn manifest_dir(dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        let _ = dir;
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
+    }
+    #[cfg(not(unix))]
+    {
+        let overlay = dir.join("manifests-overlay");
+        fs::create_dir_all(&overlay).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let mut ps: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.join("ps.json")).unwrap()).unwrap();
+        let script = dir.join("ps.py").to_string_lossy().into_owned();
+        ps["binary"] = serde_json::Value::String("python".to_owned());
+        if let Some(arguments) = ps.get_mut("arguments").and_then(|a| a.as_array_mut()) {
+            arguments.insert(0, serde_json::json!({"literal": script}));
+        }
+        fs::write(
+            overlay.join("ps.json"),
+            serde_json::to_string(&ps).unwrap(),
+        )
+        .unwrap();
+        for name in ["jq.ps.json", "jq.json"] {
+            fs::write(
+                overlay.join(name),
+                fs::read(repo.join(name)).unwrap(),
+            )
+            .unwrap();
+        }
+        overlay
+    }
 }
 fn invoke(dir: &Path, source: &str, mode: &str, args: &[&str]) -> Output {
     let file = dir.join("cpu.program");
     fs::write(&file, source).unwrap();
+    let separator = if cfg!(windows) { ';' } else { ':' };
     Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(args)
         .arg(file)
         .arg("--manifest-dir")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"))
+        .arg(manifest_dir(dir))
         .current_dir(dir)
         .env(
             "PATH",
-            format!("{}:{}", dir.display(), std::env::var("PATH").unwrap()),
+            format!(
+                "{}{}{}",
+                dir.display(),
+                separator,
+                std::env::var("PATH").unwrap()
+            ),
         )
         .env("CPU_FIXTURE_DIR", dir)
         .env("CPU_FIXTURE_MODE", mode)
@@ -158,7 +215,8 @@ fn invalid_bar_declarations_fail_before_any_process_query() {
     }
     assert!(!dir.path().join("ps-calls.jsonl").exists());
 }
-#[cfg(feature = "tui")]
+// Unix-only: drives the dashboard through a pty, which Windows has no equivalent of.
+#[cfg(all(unix, feature = "tui"))]
 #[test]
 fn cpu_terminal_refresh_timer_and_quit() {
     let output = Command::new("python3")
@@ -174,6 +232,8 @@ fn cpu_terminal_refresh_timer_and_quit() {
     );
 }
 
+// Unix-only: snapshots the real system `ps`, which Windows does not have.
+#[cfg(unix)]
 #[test]
 fn installed_ps_and_jq_produce_a_valid_real_cpu_snapshot() {
     let dir = tempfile::tempdir().unwrap();

@@ -1,0 +1,17 @@
+{
+  "_comment": "Checked list of integration test files that stay Unix-only for #521. Each entry names the Unix-only mechanism that still blocks a Windows port (real signal delivery, Unix-domain sockets, PTYs, unix file metadata, or the direct native-execution trust model). Converted files are removed from this list. tools/test_unix_only_tests.py refuses any #![cfg(...unix...)] test file that is not listed here, and refuses stale entries.",
+  "applet_executable_pinning.rs": "shell applets plus symlink confinement and PATH executable-bit assertions",
+  "daemon_cli.rs": "product daemon has no Windows transport (imp::serve/stop bail: this build has none); 35/36 tests need a running daemon over AF_UNIX plus unix metadata",
+  "demo_walkthrough.rs": "fake compositor is a shell script the runtime executes directly (no Windows equivalent), plus program-created symlinks asserted via readlink",
+  "fs_deadlines.rs": "POSIX mkfifo utility plus unix file-type assertions",
+  "ladder.rs": "150-program unix utility harness with signal/stat-based runner (SIGTERM is only its timeout path); programs assume unix tools",
+  "lane_a_demo.rs": "fake demo tool is a shell script the runtime executes directly, plus program-created symlinks asserted via read_link",
+  "lane_b_drain_signals.rs": "real SIGINT delivery to a running program",
+  "lane_o_double_interrupt_cleanup.rs": "real PTY Ctrl-C with SIGINT process-group semantics",
+  "lane_o_interrupt.rs": "asserts 128+signal exit codes for SIGINT/SIGTERM/SIGHUP",
+  "lane_o_terminal.rs": "needs a Linux controlling PTY for terminal handoff",
+  "live.rs": "tests speak AF_UNIX directly (UnixStream + raw JSON lines); product has a Windows named-pipe transport but tests have no pipe client",
+  "manifest_trust.rs": "symlink/permission/setuid trust assertions with shell applets",
+  "model_workflows.rs": "100-workflow unix model harness with process-group timeout kill; workflows assume unix fixtures",
+  "staged_helpers.rs": "asserts unix nlink/uid/mode single-link executable contract"
+}

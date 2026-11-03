@@ -47,6 +47,8 @@ fn send_interrupt(child: &std::process::Child) -> anyhow::Result<()> {
     unsafe extern "system" {
         fn GenerateConsoleCtrlEvent(event: u32, process_group_id: u32) -> i32;
     }
+    // SAFETY: GenerateConsoleCtrlEvent takes an event code and a process group id
+    // and reads no memory; the group is the child this test started.
     let result = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) };
     anyhow::ensure!(
         result != 0,

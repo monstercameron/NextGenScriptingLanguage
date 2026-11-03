@@ -637,15 +637,26 @@ fn probe_bwrap(bwrap: &Path, grant: &AppletGrant, binary: &Path, cwd: &Path) -> 
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(test)]
     TEST_BWRAP_PROBE_CHILDREN.with(|count| count.set(count.get() + 1));
-    let child = command
+    let mut child = command
         .spawn()
         .context("probing applet-specific bubblewrap mounts")?;
+    // bubblewrap writes its refusal to stderr, so keep that text for the error.
+    // It is read only after the child exits, and capped, so it cannot block.
+    let stderr = child.stderr.take();
     let status = wait_bounded(child, "applet-specific bubblewrap")?;
     if !status.success() {
-        bail!("bubblewrap could not establish the applet-specific sandbox");
+        let mut detail = String::new();
+        if let Some(stderr) = stderr {
+            let mut capped = std::io::Read::take(stderr, 2048);
+            let _ = std::io::Read::read_to_string(&mut capped, &mut detail);
+        }
+        bail!(
+            "bubblewrap could not establish the applet-specific sandbox: {}",
+            detail.trim()
+        );
     }
     Ok(())
 }

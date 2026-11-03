@@ -33,6 +33,8 @@ fn interrupt_runtime_child() -> anyhow::Result<()> {
 
 #[cfg(unix)]
 fn send_interrupt(child: &std::process::Child) -> anyhow::Result<()> {
+    // SAFETY: kill takes a pid and a signal number and reads no memory; the pid
+    // belongs to a child this test started and has not yet reaped.
     let result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) };
     anyhow::ensure!(result == 0, "failed to send SIGINT");
     Ok(())
@@ -46,7 +48,10 @@ fn send_interrupt(child: &std::process::Child) -> anyhow::Result<()> {
         fn GenerateConsoleCtrlEvent(event: u32, process_group_id: u32) -> i32;
     }
     let result = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) };
-    anyhow::ensure!(result != 0, "failed to send Ctrl-Break to child process group");
+    anyhow::ensure!(
+        result != 0,
+        "failed to send Ctrl-Break to child process group"
+    );
     Ok(())
 }
 

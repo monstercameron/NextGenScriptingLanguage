@@ -41,17 +41,6 @@ fn success(output: &Output) {
     );
 }
 
-fn wait_for(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    path.exists()
-}
-
 fn long_sleep_source() -> String {
     if cfg!(windows) {
         "run \"C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe\" with arguments [\"-NoProfile\", \"-NonInteractive\", \"-Command\", \"Start-Sleep -Seconds 30\"]\n".into()

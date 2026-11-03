@@ -1,1 +1,1 @@
-{"expect": {"status": 0, "stdout": "{\"a\":1}"}}
+{"expect": {"status": 0, "stdout": "{\"a\":1}\n"}}

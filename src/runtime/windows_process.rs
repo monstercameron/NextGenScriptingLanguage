@@ -56,12 +56,7 @@ fn child_exited(child: &Child) -> bool {
     // zero timeout never blocks. Any failure (WAIT_FAILED) reads as still
     // running, so teardown stays bounded by the grace wait rather than
     // skipping a wait the drop would still perform.
-    let status = unsafe {
-        WaitForSingleObject(
-            child.as_handle().as_raw_handle(),
-            0,
-        )
-    };
+    let status = unsafe { WaitForSingleObject(child.as_handle().as_raw_handle(), 0) };
     status == WAIT_OBJECT_0
 }
 
@@ -522,21 +517,19 @@ fn execute_group_with_sink(
                 let (resolved_binary, argv) = match prepared_first_call.take() {
                     Some((path, argv)) => (path, GroupArguments::Owned(argv)),
                     None => (
-                        binary_path_for_launch(manifest, call, cwd, registry).map_err(
-                            |error| {
-                                native_spawn_failure(
-                                    format!(
-                                        "line {line}: resolving executable for {}: {error:#}",
-                                        manifest.name_for(call)
-                                    ),
-                                    index,
-                                    calls,
-                                    &children,
-                                    &mut observed_stages,
-                                    signals,
-                                )
-                            },
-                        )?,
+                        binary_path_for_launch(manifest, call, cwd, registry).map_err(|error| {
+                            native_spawn_failure(
+                                format!(
+                                    "line {line}: resolving executable for {}: {error:#}",
+                                    manifest.name_for(call)
+                                ),
+                                index,
+                                calls,
+                                &children,
+                                &mut observed_stages,
+                                signals,
+                            )
+                        })?,
                         arguments_for_group_call(call, manifest, bindings)?,
                     ),
                 };
@@ -568,10 +561,7 @@ fn execute_group_with_sink(
                     bindings,
                     &sensitivities,
                 )? {
-                    command.env(
-                        crate::capabilities::MODEL_GRANTED_ORIGIN_ENV,
-                        granted,
-                    );
+                    command.env(crate::capabilities::MODEL_GRANTED_ORIGIN_ENV, granted);
                 }
             }
             let resolved_io = resolved_call_stdio(call, manifest, signals);
@@ -628,9 +618,8 @@ fn execute_group_with_sink(
                             // broken pipe and exit until after this check.
                             // SAFETY: the duplicated process handle remains owned
                             // by this bridge for the duration of the wait call.
-                            let wait = unsafe {
-                                WaitForSingleObject(producer_handle.as_raw_handle(), 0)
-                            };
+                            let wait =
+                                unsafe { WaitForSingleObject(producer_handle.as_raw_handle(), 0) };
                             let state = DOWNSTREAM_CLOSED
                                 | if wait == WAIT_TIMEOUT {
                                     DOWNSTREAM_CLOSED_WHILE_RUNNING

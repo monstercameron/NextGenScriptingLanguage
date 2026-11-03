@@ -52,6 +52,16 @@ jobs:
           bwrap --version
           test -f /usr/bin/python3 || test -f /bin/python3
           python3 --version
+      - name: Allow unprivileged user namespaces for bubblewrap
+        # Ubuntu 24.04 runners ship AppArmor's unprivileged-userns restriction
+        # on, which stops bwrap from creating its loopback namespace. Turning it
+        # off here lets the probe below test real namespaces; the probe still
+        # fails the job closed if they are still unavailable.
+        run: |
+          set -euo pipefail
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Diagnose the required bubblewrap namespaces
         shell: bash
         run: |

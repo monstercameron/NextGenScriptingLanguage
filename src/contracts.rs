@@ -268,6 +268,19 @@ pub struct ProgramModule {
     pub source: PathBuf,
     pub entry: String,
     pub interface_version: u32,
+    /// SHA-256 of the `.program` source bytes. Required at load time for a
+    /// direct-source module unless `allow_unpinned` is set; when present in
+    /// package mode it must also match the locked export source.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub source_sha256: Option<String>,
+    /// Explicit opt-out of the direct-source hash pin. Default is fail-closed:
+    /// an unpinned direct-source module is refused at load time.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_unpinned: bool,
     #[serde(
         default,
         deserialize_with = "deserialize_present",
@@ -302,6 +315,19 @@ impl ProgramModule {
         }
         if let Some(path) = &self.package_lock {
             validate_manifest_relative_path(path, "program module package_lock")?;
+        }
+        if let Some(pin) = &self.source_sha256 {
+            if pin.len() != 64 || !pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                bail!("program module source_sha256 must be a 64-character SHA-256 hex digest");
+            }
+        }
+        if self.allow_unpinned && self.source_sha256.is_some() {
+            bail!("program module allow_unpinned cannot be combined with source_sha256");
+        }
+        if self.allow_unpinned && self.package_manifest.is_some() {
+            bail!(
+                "program module allow_unpinned applies only to direct-source modules, not package mode"
+            );
         }
         Ok(())
     }

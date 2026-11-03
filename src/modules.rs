@@ -831,6 +831,8 @@ fn build_dependency_scope(
                 source: relative_source,
                 entry: source_entry,
                 interface_version: exported.export.interface_version,
+                source_sha256: Some(exported.source_sha256.clone()),
+                allow_unpinned: false,
                 package_manifest: None,
                 package_lock: None,
             };
@@ -1146,6 +1148,8 @@ impl LoadedProgramModulePackage {
                 // `export.entry` names its private definition in source.
                 entry: name.to_owned(),
                 interface_version: export.interface_version,
+                source_sha256: Some(self.source_sha256.clone()),
+                allow_unpinned: false,
                 package_manifest: None,
                 package_lock: None,
             },
@@ -1259,6 +1263,23 @@ pub fn load_program_module(
                     "program module source",
                 )?;
                 let source_sha256 = sha256_hex(&source_bytes);
+                match &reference.source_sha256 {
+                    Some(pinned) => {
+                        if !pinned.eq_ignore_ascii_case(&source_sha256) {
+                            bail!(
+                                "program module source {} hash mismatch: pinned source_sha256 {pinned} does not match actual {source_sha256}",
+                                source_path.display()
+                            );
+                        }
+                    }
+                    None if !reference.allow_unpinned => {
+                        bail!(
+                            "program module source {} is unpinned: set source_sha256 to {source_sha256} in the applet manifest, use package mode with a lock, or explicitly set allow_unpinned",
+                            source_path.display()
+                        );
+                    }
+                    None => {}
+                }
                 let source = std::str::from_utf8(&source_bytes).with_context(|| {
                     format!(
                         "program module source {} is not UTF-8",
@@ -1331,6 +1352,15 @@ pub fn load_program_module(
                         source_path.display(),
                         export.source_path.display()
                     );
+                }
+                if let Some(pinned) = &reference.source_sha256 {
+                    if !pinned.eq_ignore_ascii_case(&export.source_sha256) {
+                        bail!(
+                            "program module source {} hash mismatch: pinned source_sha256 {pinned} does not match locked package source {}",
+                            source_path.display(),
+                            export.source_sha256
+                        );
+                    }
                 }
                 if export.reference.interface_version != reference.interface_version {
                     bail!(
@@ -2889,6 +2919,8 @@ mod tests {
             source: PathBuf::from("modules/clean.program"),
             entry: "clean".into(),
             interface_version: 1,
+            source_sha256: None,
+            allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
         }
@@ -2898,6 +2930,8 @@ mod tests {
             source: PathBuf::from("/tmp/clean.program"),
             entry: "clean".into(),
             interface_version: 1,
+            source_sha256: None,
+            allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
         }
@@ -2907,6 +2941,8 @@ mod tests {
             source: PathBuf::from("clean.program"),
             entry: PROGRAM_MODULE_SERVICE_ROOT_ENTRY.into(),
             interface_version: 2,
+            source_sha256: None,
+            allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
         }
@@ -2916,6 +2952,8 @@ mod tests {
             source: PathBuf::from("clean.program"),
             entry: PROGRAM_MODULE_SERVICE_ROOT_ENTRY.into(),
             interface_version: 3,
+            source_sha256: None,
+            allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
         }
@@ -2938,6 +2976,8 @@ mod tests {
                 source: PathBuf::from("../modules/text.program"),
                 entry: "normalize".into(),
                 interface_version: 1,
+                source_sha256: None,
+                allow_unpinned: true,
                 package_manifest: None,
                 package_lock: None,
             },
@@ -2952,6 +2992,8 @@ mod tests {
                 source: PathBuf::from("../modules/text.program"),
                 entry: "missing".into(),
                 interface_version: 1,
+                source_sha256: None,
+                allow_unpinned: true,
                 package_manifest: None,
                 package_lock: None,
             },
@@ -2961,6 +3003,58 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("does not export entry"));
+    }
+
+    #[test]
+    fn direct_module_source_pin_is_verified_and_unpinned_is_refused_by_default() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("packages");
+        fs::create_dir_all(root.join("applets")).unwrap();
+        fs::create_dir_all(root.join("modules")).unwrap();
+        let source = "define a program named normalize\n  accept text as text\n  run \"printf\" with arguments [\"%s\", text]\n";
+        let source_path = root.join("modules/text.program");
+        fs::write(&source_path, source).unwrap();
+        let applet_manifest_path = root.join("applets/normalize.json");
+        fs::write(&applet_manifest_path, "{}").unwrap();
+        let reference = |source_sha256: Option<String>, allow_unpinned: bool| ProgramModule {
+            source: PathBuf::from("../modules/text.program"),
+            entry: "normalize".into(),
+            interface_version: 1,
+            source_sha256,
+            allow_unpinned,
+            package_manifest: None,
+            package_lock: None,
+        };
+        let pin = sha256_hex(source.as_bytes());
+
+        // A matching pin loads.
+        let loaded = load_program_module(
+            &reference(Some(pin.clone()), false),
+            &applet_manifest_path,
+            &root,
+        )
+        .unwrap();
+        assert_eq!(loaded.source_sha256, pin);
+
+        // An unpinned direct-source module is refused by default.
+        let error = load_program_module(&reference(None, false), &applet_manifest_path, &root)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unpinned"), "{error}");
+
+        // Explicitly allowing an unpinned module still loads it.
+        load_program_module(&reference(None, true), &applet_manifest_path, &root).unwrap();
+
+        // Editing the body after pinning is a hash mismatch.
+        fs::write(
+            &source_path,
+            "define a program named normalize\n  accept text as text\n  run \"printf\" with arguments [\"changed\"]\n",
+        )
+        .unwrap();
+        let error = load_program_module(&reference(Some(pin), false), &applet_manifest_path, &root)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("hash mismatch"), "{error}");
     }
 
     #[cfg(windows)]

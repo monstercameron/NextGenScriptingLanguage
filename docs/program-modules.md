@@ -22,7 +22,8 @@ interface version under its versioned execution contract:
     "program": {
       "source": "../records.program",
       "entry": "echo_record",
-      "interface_version": 1
+      "interface_version": 1,
+      "source_sha256": "64 lowercase or uppercase hexadecimal characters"
     },
     "lifecycle": { "kind": "oneshot" },
     "output": {
@@ -40,7 +41,16 @@ interface version under its versioned execution contract:
 
 `source` is relative to the applet manifest that declares it, regardless of
 the caller's current directory. The runtime resolves and hashes source during
-preflight. For interface 1, the entry must be a top-level
+preflight. A direct-source descriptor (no package manifest and lock, below)
+must pin that hash: set `source_sha256` in `contract.program` to the SHA-256
+of the source bytes, and the loader verifies it on every run before parsing.
+Editing the source after pinning fails with a hash mismatch; update the pin
+when the source intentionally changes. A direct-source descriptor with no
+`source_sha256` is refused unless it explicitly sets `"allow_unpinned": true`,
+which opts out of the pin and should be reserved for local development.
+`allow_unpinned` cannot be combined with `source_sha256` or package mode.
+When `source_sha256` is present in package mode, it must also match the
+locked export source. For interface 1, the entry must be a top-level
 `define a program named ...` in a definitions-only file. Its `accept`
 declarations are checked against the exported input contract. Interface 2
 selects the persistent source root `main`, as described below. Unknown entries,
@@ -52,7 +62,10 @@ For a package export, also set both `package_manifest` and `package_lock` in
 descriptor's `source` must resolve to the source selected by the named package
 export, and `entry` selects that package's public export name. The loader checks
 the explicit lock before execution. Direct source descriptors omit both package
-paths and do not discover package dependencies implicitly.
+paths and do not discover package dependencies implicitly; they rely on the
+inline `source_sha256` pin described above instead of a lock. `modules lock`
+writes its `--output` file atomically (temporary file plus rename) and refuses
+to write through a symbolic link.
 
 ## Package manifest
 
@@ -167,7 +180,8 @@ A direct service descriptor selects the reserved source root `main`:
     "program": {
       "source": "poller.program",
       "entry": "main",
-      "interface_version": 2
+      "interface_version": 2,
+      "source_sha256": "64 lowercase or uppercase hexadecimal characters"
     },
     "lifecycle": { "kind": "program_service" },
     "output": {

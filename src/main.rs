@@ -3122,15 +3122,15 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
             if source_path == destination {
                 bail!("--out must not name the source program");
             }
-            write_compiled_script_atomically(&path, script.as_bytes())?;
+            write_file_atomically(&path, script.as_bytes())?;
         }
         None => io::stdout().write_all(script.as_bytes())?,
     }
     Ok(())
 }
 
-#[cfg(feature = "tooling")]
-fn write_compiled_script_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+#[cfg(any(feature = "tooling", feature = "module-tools"))]
+fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::ErrorKind;
 
@@ -3143,7 +3143,7 @@ fn write_compiled_script_atomically(path: &Path, contents: &[u8]) -> Result<()> 
     let mut temporary_file = None;
     for attempt in 0..100u32 {
         let candidate = parent.join(format!(
-            ".execute-compile-{}.{}.tmp",
+            ".execute-write-{}.{}.tmp",
             std::process::id(),
             attempt
         ));
@@ -3173,7 +3173,7 @@ fn write_compiled_script_atomically(path: &Path, contents: &[u8]) -> Result<()> 
         file.sync_all()?;
         drop(file);
         fs::rename(&temporary_path, path)
-            .with_context(|| format!("atomically replacing compiled script {}", path.display()))?;
+            .with_context(|| format!("atomically replacing output {}", path.display()))?;
         Ok(())
     })();
     if write_result.is_err() {
@@ -3323,7 +3323,14 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
             }
             let snapshot = package.lock_snapshot(&root)?;
             let bytes = serde_json::to_vec_pretty(&snapshot)?;
-            fs::write(&output, bytes)
+            if fs::symlink_metadata(&output).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                bail!(
+                    "refusing to write module lock through symbolic link {}",
+                    output.display()
+                );
+            }
+            write_file_atomically(&output, &bytes)
                 .with_context(|| format!("writing module lock {}", output.display()))?;
             write_json(&serde_json::json!({
                 "protocol": "execute.modules/1",

@@ -81,7 +81,8 @@ fn service_fixture(source: &str) -> (TempDir, Registry) {
             "program": {
                 "source": "service.program",
                 "entry": "main",
-                "interface_version": 2
+                "interface_version": 2,
+                "allow_unpinned": true
             },
             "lifecycle": { "kind": "program_service" },
             "output": count_output_schema(),
@@ -761,7 +762,8 @@ fn graph_metrics_keep_process_count_when_finite_module_decode_fails() {
             "program": {
                 "source": "failure.program",
                 "entry": "entry",
-                "interface_version": 1
+                "interface_version": 1,
+                "allow_unpinned": true
             },
             "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "json"}

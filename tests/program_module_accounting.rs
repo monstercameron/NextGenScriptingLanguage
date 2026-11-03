@@ -26,7 +26,8 @@ fn write_program_module(catalog: &Path, name: &str, source: &str) {
             "program": {
                 "source": source_name,
                 "entry": "entry",
-                "interface_version": PROGRAM_MODULE_INTERFACE_VERSION
+                "interface_version": PROGRAM_MODULE_INTERFACE_VERSION,
+                "allow_unpinned": true
             },
             "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "json"}

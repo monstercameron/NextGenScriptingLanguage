@@ -70,6 +70,8 @@ jobs:
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             dist/SHA256SUMS
+      - name: Check documented artifacts are present
+        run: python3 tools/release.py verify-publication-assets dist
       - name: Publish verified complete release
         run: python3 tools/publish_release.py
         env:

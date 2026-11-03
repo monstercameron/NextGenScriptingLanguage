@@ -69,6 +69,61 @@ pub fn execute_model() -> &'static Path {
         .as_path()
 }
 
+/// A private directory holding single-link copies of `execute`, `execute-model` and
+/// `execute-applet`, and the path to the staged `execute`.
+///
+/// Cargo hard-links each bundled binary into `deps/`, so a spawned `execute` finds its
+/// sibling helpers refused as multi-linked. Running the staged `execute` makes the
+/// sibling helper lookup find single-link copies, which the trust gate accepts.
+#[cfg(feature = "model")]
+#[allow(dead_code)]
+pub fn execute_bundle() -> &'static str {
+    static BUNDLE: OnceLock<Staged> = OnceLock::new();
+    BUNDLE
+        .get_or_init(|| {
+            let source = Path::new(env!("CARGO_BIN_EXE_execute"));
+            let directory = source.parent().expect("Cargo binaries have a parent");
+            let directory_stage =
+                tempfile::tempdir().expect("stage a private directory for the bundle");
+            let suffix = if cfg!(windows) { ".exe" } else { "" };
+            let mut execute = None;
+            for name in ["execute", "execute-model", "execute-applet"] {
+                let file_name = format!("{name}{suffix}");
+                let source = directory.join(&file_name);
+                if !source.exists() {
+                    continue;
+                }
+                let destination = directory_stage.path().join(&file_name);
+                std::fs::copy(&source, &destination).expect("copy a bundled binary");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                    std::fs::set_permissions(
+                        &destination,
+                        std::fs::Permissions::from_mode(0o755),
+                    )
+                    .expect("make the staged binary executable");
+                    assert_eq!(
+                        std::fs::metadata(&destination).expect("stat").nlink(),
+                        1,
+                        "a fresh copy of {} must have exactly one link",
+                        destination.display()
+                    );
+                }
+                if name == "execute" {
+                    execute = Some(destination);
+                }
+            }
+            Staged {
+                _dir: directory_stage,
+                path: execute.expect("the execute binary is staged"),
+            }
+        })
+        .path
+        .to_str()
+        .expect("the staged execute path is UTF-8")
+}
+
 /// The staged `native-fixture` helper for manifests and programs under test.
 ///
 /// Staged once per test process for the same fingerprint-stability reason as

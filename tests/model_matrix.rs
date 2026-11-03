@@ -295,6 +295,9 @@ fn chat_base(base: &str) -> String {
 // 1. Argument validation: invalid sets fail as configuration before any I/O.
 // ---------------------------------------------------------------------------
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
 #[test]
 fn invalid_argument_sets_fail_as_configuration_before_any_request() {
     let directory = tempfile::tempdir().unwrap();
@@ -1511,7 +1514,7 @@ fn run_program(dir: &Path, source: &str, expected: Value, response: Value) -> Ou
     let body = source.replace("FIXTURE", &serde_json::to_string(&fixture).unwrap());
     std::fs::write(&program, body).unwrap();
     let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    let mut command = Command::new(staged_helpers::execute_bundle());
     command
         .arg(&program)
         .arg("--manifest-dir")
@@ -2065,7 +2068,7 @@ fn batched_ask_branches_a_program_on_two_answers() {
         + "\n";
     std::fs::write(directory.path().join("branch.program"), program).unwrap();
     let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    let mut command = Command::new(staged_helpers::execute_bundle());
     command
         .arg("branch.program")
         .arg("--manifest-dir")
@@ -2177,7 +2180,7 @@ take text at \"/missing\" from result as bad\n",
 
 fn run_execute(directory: &Path, args: &[&str]) -> Output {
     let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    let mut command = Command::new(staged_helpers::execute_bundle());
     command
         .args(args)
         .arg("--manifest-dir")

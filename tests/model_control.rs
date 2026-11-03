@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 mod portable_shell;
 
 const MODEL_HELPER: &str = env!("CARGO_BIN_EXE_execute-model");
-const EXECUTE: &str = env!("CARGO_BIN_EXE_execute");
+fn execute() -> &'static str {
+    staged_helpers::execute_bundle()
+}
 
 fn run_helper(args: &[String], input: &[u8], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(MODEL_HELPER);
@@ -146,7 +148,7 @@ fn collect_output(child: &mut Child, status: ExitStatus) -> Output {
 }
 
 fn invoke_execute(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
-    let mut child = Command::new(EXECUTE)
+    let mut child = Command::new(execute())
         .current_dir(directory)
         .args(args)
         .arg("--manifest-dir")
@@ -206,6 +208,9 @@ fn openai_args(endpoint: &str) -> Vec<String> {
     .map(str::to_owned)
     .collect()
 }
+
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
 
 #[test]
 fn fixture_replay_never_reads_env_file_or_contacts_loopback() {
@@ -1162,7 +1167,7 @@ fn cancelled_native_model_call_closes_socket_requires_retry_and_completed_resume
     )
     .unwrap();
 
-    let mut child = Command::new(EXECUTE)
+    let mut child = Command::new(execute())
         .current_dir(directory.path())
         .arg(&workflow)
         .arg("--manifest-dir")

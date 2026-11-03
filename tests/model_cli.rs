@@ -1,9 +1,12 @@
 #![cfg(feature = "model")]
 use std::{fs, process::Command};
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
 #[test]
 fn model_subcommand_exposes_the_bundled_applet_without_credentials() {
-    let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+    let result = Command::new(staged_helpers::execute_bundle())
         .args(["model", "--help"])
         .env_remove("OPENAI_API_KEY")
         .env_remove("JEV_API_KEY")
@@ -22,7 +25,7 @@ fn model_subcommand_exposes_the_bundled_applet_without_credentials() {
 fn missing_bundled_applet_does_not_fall_back_to_a_path_version() {
     let directory = tempfile::tempdir().unwrap();
     let executable = directory.path().join("execute");
-    fs::copy(env!("CARGO_BIN_EXE_execute"), &executable).unwrap();
+    fs::copy(staged_helpers::execute_bundle(), &executable).unwrap();
     let helper_directory = std::path::Path::new(env!("CARGO_BIN_EXE_execute-model"))
         .parent()
         .unwrap();
@@ -54,7 +57,7 @@ fn model_manifest_contracts_reject_known_invalid_inputs_before_earlier_effects()
             format!("run \"printf\" with arguments [\"forbidden\"]\nthen save to \"forbidden\"\n{invalid}\n"),
         )
         .unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+        let result = Command::new(staged_helpers::execute_bundle())
             .arg(&file)
             .arg("--manifest-dir")
             .arg(project.join("manifests"))
@@ -80,7 +83,7 @@ fn jev_classify_requires_exactly_one_label_source_in_check_and_offline_run() {
     for source in invalid {
         fs::write(&file, source).unwrap();
         for mode in ["check", "run"] {
-            let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+            let result = Command::new(staged_helpers::execute_bundle())
                 .arg(mode)
                 .arg(&file)
                 .arg("--manifest-dir")
@@ -112,7 +115,7 @@ fn jev_classify_requires_exactly_one_label_source_in_check_and_offline_run() {
         "run jev.classify with question \"Pick one\" and criteria {\"a\": \"first\", \"b\": \"second\"} as raw\n",
     ] {
         fs::write(&file, source).unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+        let result = Command::new(staged_helpers::execute_bundle())
             .arg("check")
             .arg(&file)
             .arg("--manifest-dir")
@@ -146,7 +149,7 @@ fn jev_classify_alternatives_accept_dynamic_label_or_criteria_references() {
 
     for (source, input) in cases {
         fs::write(&file, source).unwrap();
-        let checked = Command::new(env!("CARGO_BIN_EXE_execute"))
+        let checked = Command::new(staged_helpers::execute_bundle())
             .arg("check")
             .arg(&file)
             .arg("--manifest-dir")
@@ -162,7 +165,7 @@ fn jev_classify_alternatives_accept_dynamic_label_or_criteria_references() {
             String::from_utf8_lossy(&checked.stderr)
         );
 
-        let ran = Command::new(env!("CARGO_BIN_EXE_execute"))
+        let ran = Command::new(staged_helpers::execute_bundle())
             .arg("run")
             .arg(&file)
             .arg("--manifest-dir")

@@ -2576,6 +2576,40 @@ fn json_matches_schema(schema: &ValueSchema, value: &Value) -> bool {
     schema.validate_value(&json_to_ast(value)).is_ok()
 }
 
+/// Fuzz entry: parse an untrusted `execute.applet/1` response (and, failing
+/// that, a discovery descriptor) under the default response byte cap.
+/// Oversize and malformed inputs return typed [`RemoteError`]s; only a
+/// panic, or a parsed response with an unsupported protocol version or an
+/// invalid output port name passing unchecked, is a finding.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn fuzz_parse_remote_response(data: &[u8]) -> Result<RemoteResponse, RemoteError> {
+    if data.len() > DEFAULT_MAX_RESPONSE_BYTES {
+        return Err(RemoteError::new(
+            RemoteErrorKind::ResponseTooLarge,
+            EffectCertainty::Uncertain,
+        ));
+    }
+    if let Ok(descriptor) = parse_strict_json::<RemoteAppletDescriptor>(data) {
+        let _ = descriptor.validate();
+    }
+    let response: RemoteResponse = parse_strict_json(data).map_err(|_| {
+        RemoteError::new(RemoteErrorKind::InvalidResponse, EffectCertainty::Uncertain)
+    })?;
+    if response.protocol_version != PROTOCOL_VERSION {
+        return Err(RemoteError::new(
+            RemoteErrorKind::UnsupportedProtocolVersion(response.protocol_version),
+            EffectCertainty::Uncertain,
+        ));
+    }
+    if response.outputs.keys().any(|name| !valid_port_name(name)) {
+        return Err(RemoteError::new(
+            RemoteErrorKind::InvalidResponse,
+            EffectCertainty::Uncertain,
+        ));
+    }
+    Ok(response)
+}
+
 fn json_to_ast(value: &Value) -> ast::Value {
     match value {
         Value::Null => ast::Value::Null,
@@ -2592,5 +2626,22 @@ fn json_to_ast(value: &Value) -> ast::Value {
                 .map(|(name, value)| (name.clone(), json_to_ast(value)))
                 .collect(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod fuzz_hook_tests {
+    use super::*;
+
+    #[test]
+    fn fuzz_hook_remote_response_accepts_valid_and_rejects_bad_input() {
+        let valid = br#"{"protocol_version":1,"request_id":"req-1","status":0,"outputs":{}}"#;
+        let response = fuzz_parse_remote_response(valid).unwrap();
+        assert_eq!(response.protocol_version, PROTOCOL_VERSION);
+        let error = fuzz_parse_remote_response(b"not json").unwrap_err();
+        assert_eq!(error.kind, RemoteErrorKind::InvalidResponse);
+        let oversize = vec![b'x'; DEFAULT_MAX_RESPONSE_BYTES + 1];
+        let error = fuzz_parse_remote_response(&oversize).unwrap_err();
+        assert_eq!(error.kind, RemoteErrorKind::ResponseTooLarge);
     }
 }

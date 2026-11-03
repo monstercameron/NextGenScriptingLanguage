@@ -408,6 +408,92 @@ impl DataFlowPolicy {
     }
 }
 
+/// Fuzz entry: parse a data-flow policy and assert the validated sinks,
+/// persistence grants, and trusted applets never exceed the input document.
+/// Malformed input returns a typed [`PolicyError`]; a panic or a widened
+/// grant is a finding.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn fuzz_parse_data_flow_policy(data: &[u8]) -> Result<DataFlowPolicy, PolicyError> {
+    fn string_set(value: Option<&serde_json::Value>) -> BTreeSet<String> {
+        value
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    fn label_set(labels: &BTreeSet<Sensitivity>) -> BTreeSet<String> {
+        labels
+            .iter()
+            .filter_map(|label| {
+                serde_json::to_value(label)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+            })
+            .collect()
+    }
+    let policy = DataFlowPolicy::from_json(data)?;
+    assert!(policy.is_active(), "a parsed data-flow policy is active");
+    let input: serde_json::Value =
+        serde_json::from_slice(data).expect("a validated policy document re-parses as JSON");
+    let input_sinks = input
+        .get("remote_sinks")
+        .and_then(serde_json::Value::as_object);
+    for (origin, labels) in &policy.remote_sinks {
+        let given = input_sinks
+            .and_then(|sinks| sinks.get(origin))
+            .unwrap_or_else(|| panic!("validated origin {origin:?} was not in the input"));
+        assert!(
+            label_set(labels).is_subset(&string_set(given.get("allow"))),
+            "validated sink labels exceed the input for {origin:?}"
+        );
+    }
+    let input_persistence = input
+        .get("persistence")
+        .and_then(serde_json::Value::as_object);
+    for (kind, labels) in &policy.persistence {
+        assert!(
+            !labels.contains(&Sensitivity::Secret) && !labels.contains(&Sensitivity::Unknown),
+            "plaintext persistence must never grant secret or unknown data"
+        );
+        let kind_name = match kind {
+            PersistenceKind::Cache => "cache",
+            PersistenceKind::Checkpoint => "checkpoint",
+            PersistenceKind::Save => "save",
+            PersistenceKind::Record => "record",
+        };
+        let given = input_persistence.and_then(|sinks| sinks.get(kind_name));
+        assert!(
+            label_set(labels).is_subset(&string_set(given)),
+            "validated persistence labels exceed the input for {kind_name}"
+        );
+    }
+    assert!(
+        policy.trusted_cache_applets.is_subset(&string_set(
+            input
+                .get("cache_purity")
+                .and_then(|grant| grant.get("trusted_applets"))
+        )),
+        "validated trusted cache applets exceed the input"
+    );
+    let input_secrets = input
+        .get("secrets")
+        .and_then(|secrets| secrets.get("environment"))
+        .and_then(serde_json::Value::as_object);
+    for (applet, names) in &policy.secret_environment {
+        let given = input_secrets.and_then(|secrets| secrets.get(applet));
+        assert!(
+            names.is_subset(&string_set(given)),
+            "validated secret environment exceeds the input for {applet:?}"
+        );
+    }
+    Ok(policy)
+}
+
 /// Shared exact-value redaction registry. Values enter only through explicit
 /// credential sources or applet-scoped environment declarations. It does not
 /// attempt to infer secrets from arbitrary content.
@@ -3009,6 +3095,21 @@ mod tests {
 
     fn policy(text: &str) -> DataFlowPolicy {
         DataFlowPolicy::from_json(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn fuzz_hook_data_flow_policy_accepts_valid_and_rejects_bad_input() {
+        let valid = br#"{"version":1,"remote_sinks":{"https://api.example":{"allow":["public"]}},"persistence":{"cache":["internal"]}}"#;
+        assert!(fuzz_parse_data_flow_policy(valid).is_ok());
+        assert_eq!(
+            fuzz_parse_data_flow_policy(b"not json"),
+            Err(PolicyError::InvalidPolicy)
+        );
+        let secret = br#"{"version":1,"persistence":{"cache":["secret"]}}"#;
+        assert_eq!(
+            fuzz_parse_data_flow_policy(secret),
+            Err(PolicyError::InvalidPolicy)
+        );
     }
 
     #[test]

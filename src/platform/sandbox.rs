@@ -1142,6 +1142,95 @@ fn resolved_path(path: &Path, cwd: &Path) -> Result<PathBuf> {
     crate::capabilities::canonicalize_for_grant(path, cwd)
 }
 
+/// Fuzz entry: build the sandbox argv/profile for `grant` and assert it
+/// contains no writable bind and no network allow the grant did not
+/// request. A builder error is a typed refusal; only a panic or a widened
+/// grant is a finding. Other platforms have no builder to check.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn fuzz_sandbox_profile(grant: &AppletGrant, binary: &Path, cwd: &Path) {
+    #[cfg(target_os = "linux")]
+    if let Ok(args) = linux_prefix(grant, binary, cwd) {
+        let args: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            grant.network || args.iter().any(|arg| arg == "--unshare-net"),
+            "linux prefix allows networking the grant did not request"
+        );
+        for (index, arg) in args.iter().enumerate() {
+            if arg == "--bind" {
+                let target = Path::new(args.get(index + 2).expect("a writable bind has a target"));
+                let granted = grant.filesystem.write.iter().any(|path| {
+                    path_aliases_linux(path, cwd).is_ok_and(|aliases| {
+                        aliases
+                            .iter()
+                            .any(|root| target == root || target.starts_with(root))
+                    })
+                });
+                assert!(
+                    granted,
+                    "linux prefix writable-binds {} without a write grant",
+                    target.display()
+                );
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(profile) = macos_profile(grant, binary, cwd) {
+        assert!(
+            grant.network || !profile.contains("(allow network"),
+            "macOS profile allows networking the grant did not request"
+        );
+        for line in profile.lines().filter(|line| line.contains("file-write*")) {
+            let granted = grant.filesystem.write.iter().any(|path| {
+                path_aliases(path, cwd).is_ok_and(|aliases| {
+                    aliases.iter().any(|alias| {
+                        sbpl_quote(alias).is_ok_and(|quoted| line.contains(quoted.as_str()))
+                    })
+                })
+            });
+            assert!(
+                granted,
+                "macOS profile grants a write the grant did not request: {line}"
+            );
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = (grant, binary, cwd);
+}
+
+#[cfg(test)]
+mod fuzz_hook_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn fuzz_hook_sandbox_profile_never_widens_a_grant() {
+        let grant = AppletGrant {
+            capabilities: BTreeSet::new(),
+            binary_sha256: None,
+            environment: BTreeSet::new(),
+            filesystem: crate::capabilities::FilesystemGrant {
+                read: Vec::new(),
+                write: Vec::new(),
+            },
+            network: false,
+            network_origins: BTreeSet::new(),
+            sandbox_required: true,
+            resource_limits: None,
+        };
+        // Known-good (empty) and known-bad (nonexistent paths) grants both
+        // end in a typed builder refusal or a checked profile, never a panic.
+        fuzz_sandbox_profile(&grant, Path::new("."), Path::new("."));
+        fuzz_sandbox_profile(
+            &grant,
+            Path::new("/definitely-missing-execute-fuzz-binary"),
+            Path::new("/definitely-missing-execute-fuzz-cwd"),
+        );
+    }
+}
+
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;

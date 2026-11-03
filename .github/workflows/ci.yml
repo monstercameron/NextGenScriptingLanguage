@@ -53,6 +53,12 @@ jobs:
                       "--no-default-features --features module-tools" \
                       "--no-default-features --features agent-advisory" \
                       "--no-default-features --features model" \
+                      "--no-default-features --features tui" \
+                      "--no-default-features --features desktop" \
+                      "--no-default-features --features dap" \
+                      "--no-default-features --features remote" \
+                      "--no-default-features --features live" \
+                      "--no-default-features --features lsp" \
                       ""; do
             echo "::group::cargo clippy $args"
             # shellcheck disable=SC2086

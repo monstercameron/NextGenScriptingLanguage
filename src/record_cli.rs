@@ -22,6 +22,7 @@ pub fn run_recorded(
     program: &Program,
     registry: &flow::manifest::Registry,
     options: &RunOptions,
+    provenance: record::RecordProvenance<'_>,
 ) -> Result<RunResult> {
     if program.trigger.is_some() {
         bail!("--record applies to finite programs; triggered programs cannot be recorded");
@@ -53,6 +54,11 @@ pub fn run_recorded(
         registry,
         working_directory: &options.working_directory,
         audit_key,
+        capability_policy_path: provenance.capability_policy_path,
+        data_flow_policy_path: provenance.data_flow_policy_path,
+        program_arguments: provenance.program_arguments,
+        allow: provenance.allow,
+        what_if_fingerprint: provenance.what_if_fingerprint,
     })?);
     recorder.set_loop_budget(options.max_loop_iterations, options.loop_budget_scope)?;
     let guard = runtime::observe::install(recorder.clone())?;
@@ -235,6 +241,10 @@ pub fn replay(arguments: &[String]) -> Result<()> {
     let directory = directory.context("usage: execute replay RECORD [--until LINE]")?;
     let record = StoredRecord::open(&directory)?;
     record::check_replayable_after_redaction(&record)?;
+    // A record edited after the run replays nothing: refuse it before any
+    // blob is trusted. Records without a seal predate it and keep the older
+    // behavior.
+    record::check_record_seal_for_reuse(&record)?;
     let source_path = if let Some(path) = program_path.as_ref() {
         fs::canonicalize(path).with_context(|| format!("resolving program {}", path.display()))?
     } else {

@@ -731,7 +731,7 @@ fn long_recorded_runs_stop_growing_the_trace_at_its_limit() {
 }
 
 #[test]
-fn record_and_replay_use_the_recorded_loop_limit() {
+fn replay_refuses_a_record_with_edited_limits() {
     let work = tempfile::tempdir().unwrap();
     fs::write(
         work.path().join("loop.program"),
@@ -759,15 +759,24 @@ fn record_and_replay_use_the_recorded_loop_limit() {
     let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(document["limits"]["loop_iterations_max"], 4);
     assert_eq!(document["limits"]["loop_iterations_scope"], "per_loop");
+    // The untouched record replays under its recorded limit.
+    let replay = execute(work.path(), &["replay", record.to_str().unwrap()]);
+    assert!(
+        replay.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    // Editing the recorded limit after the run is tampering: replay refuses
+    // the edited record instead of enforcing the edited limit.
     document["limits"]["loop_iterations_max"] = 3.into();
     fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
     let replay = execute(work.path(), &["replay", record.to_str().unwrap()]);
     assert!(
         !replay.status.success(),
-        "replay should enforce the stored limit"
+        "replay should refuse the edited record"
     );
     assert!(
-        String::from_utf8_lossy(&replay.stderr).contains("budget of 3"),
+        String::from_utf8_lossy(&replay.stderr).contains("record-integrity"),
         "{}",
         String::from_utf8_lossy(&replay.stderr)
     );
@@ -806,6 +815,13 @@ fn legacy_record_replay_preserves_shared_loop_budget_across_loops() {
         .as_object_mut()
         .unwrap()
         .remove("loop_iterations_scope");
+    // Read the document as written before the record seal existed: without a
+    // seal it keeps the legacy default instead of failing as tampered.
+    document.as_object_mut().unwrap().remove("record_mac");
+    document
+        .as_object_mut()
+        .unwrap()
+        .remove("record_seal_version");
     fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
     let replay = execute(work.path(), &["replay", record.to_str().unwrap()]);
     assert!(!replay.status.success());
@@ -973,6 +989,27 @@ fn a_real_record_without_a_policy_is_sealed_and_shows_its_baseline() {
         document["audit_mac"].as_str().map(str::len) == Some(64),
         "{document}"
     );
+    // The record states the invocation that produced it: binary version,
+    // argv, working directory, policy file paths, approval set and reviewed
+    // fingerprint. No policy was configured, so the paths stay null.
+    assert_eq!(
+        document["invocation"]["execute_version"],
+        env!("CARGO_PKG_VERSION"),
+        "{document}"
+    );
+    assert_eq!(document["invocation"]["argv"], Value::Array(Vec::new()));
+    assert!(document["invocation"]["cwd"].is_string());
+    assert_eq!(
+        document["invocation"]["capability_policy_path"],
+        Value::Null
+    );
+    assert_eq!(document["invocation"]["data_flow_policy_path"], Value::Null);
+    assert_eq!(document["invocation"]["allow"], Value::Array(Vec::new()));
+    assert_eq!(document["invocation"]["what_if_fingerprint"], Value::Null);
+    assert!(
+        document["record_mac"].as_str().map(str::len) == Some(64),
+        "{document}"
+    );
 
     let summary = execute(
         work.path(),
@@ -986,6 +1023,8 @@ fn a_real_record_without_a_policy_is_sealed_and_shows_its_baseline() {
     let report: Value = serde_json::from_slice(&summary.stdout).unwrap();
     assert_eq!(report["audit_verified"], true);
     assert_eq!(report["audit_error"], Value::Null);
+    assert_eq!(report["record_verified"], true);
+    assert_eq!(report["record_error"], Value::Null);
     let text = execute(work.path(), &["show-run", record.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&text.stdout).into_owned();
     assert!(

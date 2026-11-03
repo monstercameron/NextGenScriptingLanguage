@@ -10,32 +10,35 @@
 //!   directory, and the identity of every observed executable) a repair or
 //!   resume must still match, the policy in force (execution mode and each
 //!   configured policy's version and content digest, never policy contents),
-//!   and the bounded policy-decision audit: what effects were allowed or
-//!   denied and why. `truncated` marks a record that kept hashes without
-//!   bytes; repair and resume refuse such records, as they refuse a torn
-//!   trace, a finished trace shorter than its step count, and an unfinished
-//!   record with a nonzero step count, instead of re-running completed
-//!   effects. That provenance carries no authentication code of its own
-//!   (see `check_from_record_usable` for the exact checks and the residual
-//!   tampering limits). Each kept decision carries a link in a hash chain
-//!   headed by `audit_head`, and the head plus the truncation accounting
-//!   carry a keyed seal (`audit_mac`, an HMAC under the per-user key,
-//!   versioned by `audit_seal_version`). The v2 seal also binds the record
-//!   identity (`record_id`, the program and plan hashes) and the policy
-//!   context, so copying an audit into another record — or editing the
-//!   recorded policy, program or plan — breaks the seal. The retired v1
-//!   seal bound only the total, the flag and the head: it is still checked
-//!   so old records stay readable, but a match is shown as an explicitly
-//!   weak legacy seal and never as verified. `show-run` is warn-open: it
-//!   always presents the audit and labels anything short of a fully
-//!   verified chain and seal as unsealed or untrusted, so a tampered record
+//!   the invocation (execute version, argv, working directory, policy file
+//!   paths, approval set and reviewed fingerprint), and the bounded
+//!   policy-decision audit: what effects were allowed or denied and why.
+//!   `truncated` marks a record that kept hashes without bytes; repair and
+//!   resume refuse such records, as they refuse a torn trace, a finished
+//!   trace shorter than its step count, and an unfinished record with a
+//!   nonzero step count, instead of re-running completed effects.
+//!   `record_mac` is a keyed seal (HMAC under the per-user key, versioned by
+//!   `record_seal_version`) over the run document, the recorded program
+//!   copy, the trace and every kept blob, so editing any record file after
+//!   the run breaks the seal. Each kept decision carries a link in a hash
+//!   chain headed by `audit_head`, and the head plus the truncation
+//!   accounting carry a keyed seal (`audit_mac`, an HMAC under the
+//!   per-user key, versioned by `audit_seal_version`). The v2 audit seal
+//!   also binds the record identity (`record_id`, the program and plan
+//!   hashes) and the policy context, so copying an audit into another
+//!   record — or editing the recorded policy, program or plan — breaks the
+//!   seal. The retired v1 seal bound only the total, the flag and the head:
+//!   it is still checked so old records stay readable, but a match is shown
+//!   as an explicitly weak legacy seal and never as verified. `show-run` is
+//!   warn-open: it always presents the record and labels anything short of
+//!   fully verified seals as unsealed or untrusted, so a tampered record
 //!   stays reviewable instead of hiding its own evidence. `audit_verified`
-//!   covers the policy audit only — never the result, steps, trace or
-//!   blobs, which are shown as recorded. The chain evidences edits made
-//!   without recomputing it; the seal raises the bar to key holders, but a
-//!   same-user forger with key access can still rewrite the audit and
-//!   reseal it, and key rotation is indistinguishable from tampering.
-//!   Whole-record tamper evidence belongs to the record-integrity work.
+//!   covers the policy audit only; `record_verified` covers the whole
+//!   record (run document, program copy, trace and blobs). The seals raise
+//!   the bar to key holders, but a same-user forger with key access can
+//!   still rewrite a record and reseal it, and key rotation is
+//!   indistinguishable from tampering. Records sealed before the record
+//!   seal stay readable through the older checks only.
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
 //!   resolved argv, status, declared outcome, wall time, and the stdout and stderr
@@ -107,6 +110,25 @@ pub struct RunSummary {
     pub output: Vec<u8>,
 }
 
+/// Invocation provenance for a run record: where the policies were loaded
+/// from, the program's positional arguments, the approval set and the
+/// reviewed fingerprint. The CLI collects it; [`Recorder::start`] stores it
+/// on the record beside the policy digests.
+#[derive(Debug, Clone, Copy)]
+pub struct RecordProvenance<'a> {
+    /// Where the capability policy was loaded from, if any.
+    pub capability_policy_path: Option<&'a Path>,
+    /// Where the data-flow policy was loaded from, if any.
+    pub data_flow_policy_path: Option<&'a Path>,
+    /// The program's positional arguments (`execute FILE ... -- ARGS`).
+    pub program_arguments: &'a [String],
+    /// Effect categories approved for this run, if any.
+    pub allow: &'a [String],
+    /// The reviewed `--what-if` fingerprint this run was bound to
+    /// (`--confirm FINGERPRINT`), if any.
+    pub what_if_fingerprint: Option<&'a str>,
+}
+
 /// What a record needs to know about a run before it starts.
 pub struct RecordStart<'a> {
     pub directory: &'a Path,
@@ -119,12 +141,27 @@ pub struct RecordStart<'a> {
     /// provenance so a resume elsewhere refuses rather than replaying the
     /// completed prefix under different file and executable resolution.
     pub working_directory: &'a Path,
-    /// The per-user key that seals the policy-decision audit (`audit_mac`).
-    /// `None` writes an unsealed record: the hash chain is still checked, but
-    /// `show-run` warns that the seal is missing. A key holder can always
-    /// rewrite the audit and reseal it, so the seal evidences naive edits and
-    /// corruption, not a same-user forger with key access.
+    /// The per-user key that seals the policy-decision audit (`audit_mac`) and
+    /// the whole record (`record_mac`). `None` writes an unsealed record:
+    /// the hash chain is still checked, but `show-run` warns that the seals
+    /// are missing. A key holder can always rewrite the record and reseal
+    /// it, so the seals evidence naive edits and corruption, not a
+    /// same-user forger with key access.
     pub audit_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
+    /// Where the capability policy was loaded from, if any. The record
+    /// stores this path beside the policy digest so a reviewer can tell
+    /// which file was in force; never policy contents.
+    pub capability_policy_path: Option<&'a Path>,
+    /// Where the data-flow policy was loaded from, if any.
+    pub data_flow_policy_path: Option<&'a Path>,
+    /// The program's positional arguments (`execute FILE ... -- ARGS`).
+    pub program_arguments: &'a [String],
+    /// Effect categories approved for this run, if any. Empty when no gate
+    /// approved the run (the CLI only accepts `--allow` for `explain --json`).
+    pub allow: &'a [String],
+    /// The reviewed `--what-if` fingerprint this run was bound to
+    /// (`--confirm FINGERPRINT`), if any. Null when the run was not reviewed.
+    pub what_if_fingerprint: Option<&'a str>,
 }
 
 /// Identity of the applet manifests a record was taken under: every manifest
@@ -208,11 +245,20 @@ pub struct Recorder {
     redactor: Arc<SecretRedactor>,
     /// Consulted for the data-flow persistence policy before any output is kept.
     registry: Registry,
-    /// Key for the audit seal, or `None` for an unsealed record.
+    /// Key for the audit and record seals, or `None` for an unsealed record.
     audit_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
     /// Random per-record identity, covered by the audit seal so a copied
     /// audit does not verify in another record.
     record_id: String,
+    /// SHA-256 of the redacted program bytes captured when the record
+    /// started. It never changes afterwards, so editing `program.program`
+    /// mid-run cannot move the recorded source hash; the mismatch is
+    /// detected instead, by the program-copy check and the record seal.
+    program_sha256: String,
+    /// The invocation provenance published with every run document: execute
+    /// version, argv, working directory, policy file paths, approval set
+    /// and reviewed fingerprint.
+    invocation: Json,
     started: Instant,
     started_unix_ms: u128,
     plan_sha256: String,
@@ -458,6 +504,223 @@ fn audit_seal_hex_v1(key: &[u8], total: u64, truncated: bool, head_hex: &str) ->
     ))
 }
 
+/// Domain string for the whole-record seal. A seal is only meaningful next
+/// to the algorithm and fields it covers; changing this string retires old
+/// seals.
+const RECORD_SEAL_DOMAIN: &str = "execute.record-seal/1";
+
+/// Version of the whole-record seal written by new records.
+const RECORD_SEAL_VERSION: u32 = 1;
+
+fn push_bytes_field(encoding: &mut Vec<u8>, bytes: &[u8]) {
+    encoding.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    encoding.extend_from_slice(bytes);
+}
+
+/// Length-prefixed encoding of everything the record seal binds: the run
+/// document in canonical form, the recorded program bytes, the trace bytes,
+/// and every kept blob by name and bytes, in name order. Length prefixes
+/// (not separators) keep the encoding injective whatever the file contents
+/// hold.
+fn record_seal_encoding(
+    canonical_run: &[u8],
+    program_bytes: &[u8],
+    trace_bytes: &[u8],
+    blobs: &[(String, Vec<u8>)],
+) -> Vec<u8> {
+    let mut encoding = Vec::new();
+    push_audit_field(&mut encoding, RECORD_SEAL_DOMAIN);
+    push_bytes_field(&mut encoding, canonical_run);
+    push_bytes_field(&mut encoding, program_bytes);
+    push_bytes_field(&mut encoding, trace_bytes);
+    encoding.extend_from_slice(&(blobs.len() as u64).to_le_bytes());
+    for (name, bytes) in blobs {
+        push_audit_field(&mut encoding, name);
+        push_bytes_field(&mut encoding, bytes);
+    }
+    encoding
+}
+
+/// The keyed seal over a whole record: HMAC-SHA256 under the per-user key.
+/// Like the audit seal it evidences edits made without the key, not a
+/// same-user forger with key access.
+fn record_seal_hex(
+    key: &[u8],
+    canonical_run: &[u8],
+    program_bytes: &[u8],
+    trace_bytes: &[u8],
+    blobs: &[(String, Vec<u8>)],
+) -> String {
+    security::hex_encode(&crate::agent::what_if_key::hmac_sha256(
+        key,
+        &record_seal_encoding(canonical_run, program_bytes, trace_bytes, blobs),
+    ))
+}
+
+/// Canonical bytes of a JSON value for the record seal: objects with keys
+/// sorted, no whitespace. The recorder and the verifier both hash these
+/// bytes, so an edit of any covered value breaks the seal whatever
+/// pretty-printing the file on disk uses.
+fn canonical_json(value: &Json) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_canonical_json(value, &mut out);
+    out
+}
+
+fn write_canonical_json(value: &Json, out: &mut Vec<u8>) {
+    match value {
+        Json::Null => out.extend_from_slice(b"null"),
+        Json::Bool(true) => out.extend_from_slice(b"true"),
+        Json::Bool(false) => out.extend_from_slice(b"false"),
+        Json::Number(number) => out.extend_from_slice(number.to_string().as_bytes()),
+        Json::String(text) => {
+            out.extend_from_slice(&serde_json::to_vec(text).expect("a string serializes"))
+        }
+        Json::Array(items) => {
+            out.push(b'[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                write_canonical_json(item, out);
+            }
+            out.push(b']');
+        }
+        Json::Object(fields) => {
+            let mut keys: Vec<&String> = fields.keys().collect();
+            keys.sort();
+            out.push(b'{');
+            for (index, key) in keys.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                out.extend_from_slice(&serde_json::to_vec(key).expect("a key serializes"));
+                out.push(b':');
+                write_canonical_json(&fields[*key], out);
+            }
+            out.push(b'}');
+        }
+    }
+}
+
+/// What verification of the whole-record seal concluded. `show-run` is
+/// warn-open: every state is presented, and anything short of `Verified`
+/// carries a warning plus a `record_error` in JSON output. Verification
+/// covers the run document, the recorded program copy, the trace and every
+/// kept blob:
+///
+/// Trust boundary: a same-user editor who also holds the per-user key can
+/// rewrite the record files and reseal them, and key rotation is
+/// indistinguishable from tampering. A seal stripped from the document
+/// reads as a pre-seal legacy record and keeps only the older checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecordVerification {
+    /// No `record_mac` key at all: a record written before the record seal.
+    Legacy,
+    /// The seal cannot be checked: either the record was written without a
+    /// key, or no key is available to check with. Shown with an "unsealed"
+    /// warning.
+    Unsealed { reason: &'static str },
+    /// A covered file is missing or unreadable, the program copy no longer
+    /// matches its recorded hash, or the seal does not match.
+    Untrusted { error: String },
+    /// The seal, the covered files and the program copy all check.
+    Verified,
+}
+
+/// Verify a stored run document against the record files on disk: the
+/// recorded program copy, the trace bytes, and every kept blob by name and
+/// bytes.
+fn verify_record_seal(
+    run: &Json,
+    program_bytes: &[u8],
+    trace_bytes: &[u8],
+    blobs: &[(String, Vec<u8>)],
+    seal_key: &SealKey,
+) -> RecordVerification {
+    let Some(mac_value) = run.get("record_mac") else {
+        return RecordVerification::Legacy;
+    };
+    let Some(stored) = mac_value.as_str() else {
+        // Null (or another non-string): the record was written without a key.
+        return RecordVerification::Unsealed {
+            reason: "this record carries no record seal; it was recorded without a key, so edits after the run may not be detectable",
+        };
+    };
+    if seal_key.is_malformed() {
+        return RecordVerification::Untrusted {
+            error: "the explicit record seal key has the wrong length, so the seal was not checked"
+                .to_owned(),
+        };
+    }
+    let Some(key) = seal_key.resolve() else {
+        return RecordVerification::Unsealed {
+            reason: "the per-user key is unavailable, so the record seal was not checked",
+        };
+    };
+    // The program copy must still match the source hash captured at record
+    // start: a mid-run edit is baked into the sealed bytes, so only this
+    // binding still names the original source.
+    if let Some(expected) = run
+        .get("program")
+        .and_then(|program| program.get("sha256"))
+        .and_then(Json::as_str)
+    {
+        if sha256_hex(program_bytes) != expected {
+            return RecordVerification::Untrusted {
+                error: "the record program copy does not match its recorded source hash; the program was edited during or after the run"
+                    .to_owned(),
+            };
+        }
+    }
+    let mut bare = run.clone();
+    if let Some(fields) = bare.as_object_mut() {
+        fields.remove("record_mac");
+        fields.remove("record_seal_version");
+    }
+    let expected = record_seal_hex(
+        &key,
+        &canonical_json(&bare),
+        program_bytes,
+        trace_bytes,
+        blobs,
+    );
+    if expected != stored {
+        return RecordVerification::Untrusted {
+            error: "the record seal does not match run.json, the recorded program, the trace and the kept blobs; the record was modified after the run, or sealed under a different key (key rotation is indistinguishable from tampering)"
+                .to_owned(),
+        };
+    }
+    RecordVerification::Verified
+}
+
+/// Refuse reuse of a sealed record whose whole-record seal does not verify.
+/// Records without a seal predate it and keep the older checks only; a
+/// present seal that cannot be checked (no key) also refuses, rather than
+/// replaying effects that may have been rewritten.
+fn check_record_seal_with_key(record: &StoredRecord, seal_key: &SealKey) -> Result<()> {
+    if record.run.get("record_mac").is_none_or(Json::is_null) {
+        return Ok(());
+    }
+    match record.record_integrity(seal_key) {
+        RecordVerification::Verified | RecordVerification::Legacy => Ok(()),
+        RecordVerification::Unsealed { reason } => bail!(
+            "the record {} carries a record seal but {reason}; restore the key before reusing this record",
+            record.directory.display()
+        ),
+        RecordVerification::Untrusted { error } => bail!(
+            "the record {} failed its record-integrity check: {error}",
+            record.directory.display()
+        ),
+    }
+}
+
+/// Refuse reuse of a sealed record whose whole-record seal does not verify,
+/// against the per-user key from its usual location.
+pub fn check_record_seal_for_reuse(record: &StoredRecord) -> Result<()> {
+    check_record_seal_with_key(record, &SealKey::System)
+}
+
 /// The v2 seal binding read back from a stored record: the values the seal
 /// must reproduce. `None` when a bound field is missing, which itself means
 /// the record was edited after the run.
@@ -500,6 +763,36 @@ fn policy_context_json(registry: &Registry) -> Json {
         "execution_mode": crate::capabilities::execution_mode(registry).as_str(),
         "capability_policy": capability,
         "data_flow_policy": data_flow,
+    })
+}
+
+/// The invocation a run record pins: what binary ran it, with what
+/// arguments, and under what reviewed and configured provenance. Everything
+/// here is public by construction (version, argument list, directory,
+/// policy file paths, approval names, fingerprint), so it names the run's
+/// context without recording policy contents or secrets.
+fn invocation_json(
+    capability_policy_path: Option<&Path>,
+    data_flow_policy_path: Option<&Path>,
+    program_arguments: &[String],
+    allow: &[String],
+    what_if_fingerprint: Option<&str>,
+    pinned_cwd: &str,
+) -> Json {
+    let path_json = |path: Option<&Path>| match path {
+        Some(path) => Json::String(path.to_string_lossy().into_owned()),
+        None => Json::Null,
+    };
+    json!({
+        "execute_version": env!("CARGO_PKG_VERSION"),
+        "argv": program_arguments,
+        "cwd": pinned_cwd,
+        "capability_policy_path": path_json(capability_policy_path),
+        "data_flow_policy_path": path_json(data_flow_policy_path),
+        "allow": allow,
+        "what_if_fingerprint": what_if_fingerprint
+            .map(|fingerprint| Json::String(fingerprint.to_owned()))
+            .unwrap_or(Json::Null),
     })
 }
 
@@ -704,9 +997,10 @@ impl AuditVerification {
 /// them (mistakes, corruption, naive tampering), not a same-user editor who
 /// rewrites the decisions, the total, the head and the seal together
 /// (threat-model A4). The seal raises the bar from "recompute hashes" to
-/// "hold the key", and it still does not stop the key holder. Whole-record
-/// tamper evidence, which would also cover that forger, belongs to the
-/// record-integrity work (issue #414), not to this chain and seal.
+/// "hold the key", and it still does not stop the key holder. The
+/// whole-record seal (`record_mac`) evidences the same class of edits across
+/// the run document, the program copy, the trace and the blobs; a forger
+/// holding the key can reseal those too.
 fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
     let Some(decisions_value) = run.get("decisions") else {
         return AuditVerification::PreAudit;
@@ -950,6 +1244,18 @@ impl Recorder {
         let (plan_text, plan_sha256) = prepare_plan(&redactor, start.plan);
         let provenance_manifests = registry_fingerprint(start.registry)?;
         let provenance_cwd = pin_working_directory(start.working_directory);
+        // The recorded source hash is captured here, from the redacted bytes
+        // just written to `program.program`, and never recomputed: an edit of
+        // the on-disk copy mid-run cannot move it.
+        let program_sha256 = sha256_hex(&program_source);
+        let invocation = invocation_json(
+            start.capability_policy_path,
+            start.data_flow_policy_path,
+            start.program_arguments,
+            start.allow,
+            start.what_if_fingerprint,
+            &provenance_cwd,
+        );
         // The identity is random per record: uniqueness (not secrecy) is what
         // stops a copied audit from verifying elsewhere.
         let mut id_bytes = [0u8; 16];
@@ -965,6 +1271,8 @@ impl Recorder {
             registry: start.registry.clone(),
             audit_key: start.audit_key,
             record_id,
+            program_sha256,
+            invocation,
             started: Instant::now(),
             started_unix_ms: unix_ms(),
             plan_sha256,
@@ -1053,10 +1361,11 @@ impl Recorder {
         // Snapshot after the persistence checks above, so the record's own
         // persistence decisions are part of the audit too.
         let policy = policy_context_json(&self.registry);
-        let program_sha256 = sha256_hex(&self.read_program()?);
+        // The program hash is the one captured at record start, never a
+        // re-read of the on-disk copy: see `Recorder::start`.
         let binding = SealBinding {
             record_id: self.record_id.as_str(),
-            program_sha256: program_sha256.as_str(),
+            program_sha256: self.program_sha256.as_str(),
             plan_sha256: self.plan_sha256.as_str(),
             policy: &policy,
         };
@@ -1066,13 +1375,13 @@ impl Recorder {
                 self.audit_key.as_ref().map(|key| &key[..]),
                 &binding,
             );
-        let document = json!({
+        let mut document = json!({
             "protocol": PROTOCOL,
             "finished": finished,
             "record_id": self.record_id,
             "program": {
                 "file": PROGRAM_FILE,
-                "sha256": program_sha256,
+                "sha256": self.program_sha256,
             },
             "plan": {
                 "sha256": self.plan_sha256,
@@ -1097,6 +1406,7 @@ impl Recorder {
             "terminal": terminal,
             "truncated": state.truncated,
             "policy": policy,
+            "invocation": self.invocation,
             "decisions": decisions,
             "decision_count": decision_count,
             "decisions_truncated": decisions_truncated,
@@ -1123,6 +1433,12 @@ impl Recorder {
                 "executables": state.executables,
             },
         });
+        // Seal the whole record after every other field is set: the seal
+        // covers the run document itself plus the recorded program copy, the
+        // trace and every kept blob, so any post-run edit breaks it.
+        let record_mac = self.record_mac_for(state, &document)?;
+        document["record_mac"] = record_mac;
+        document["record_seal_version"] = json!(RECORD_SEAL_VERSION);
         let text = serde_json::to_string_pretty(&document)?;
         #[cfg(unix)]
         atomic_write_private_at(&self.directory_handle, RUN_FILE, text.as_bytes())?;
@@ -1141,6 +1457,67 @@ impl Recorder {
         {
             fs::read(self.directory.join(PROGRAM_FILE)).context("reading recorded program")
         }
+    }
+
+    /// Seal the run document just built: HMAC-SHA256 under the per-user key
+    /// over the canonical document plus the live program, trace and blob
+    /// bytes. With no key the seal is JSON null and the record is unsealed.
+    /// A same-user holder of the key can recompute this seal over rewritten
+    /// files, so it evidences edits made without the key, not a forger with
+    /// key access.
+    fn record_mac_for(&self, state: &mut RecorderState, document: &Json) -> Result<Json> {
+        let Some(key) = self.audit_key.as_ref().map(|key| &key[..]) else {
+            return Ok(Json::Null);
+        };
+        let mut bare = document.clone();
+        if let Some(fields) = bare.as_object_mut() {
+            fields.remove("record_mac");
+            fields.remove("record_seal_version");
+        }
+        // Flush the trace before hashing what is on disk: the seal must bind
+        // the bytes a later read sees, not what is still buffered.
+        state.trace.flush()?;
+        let program_bytes = self.read_program()?;
+        let trace_bytes = self.read_trace_bytes()?;
+        let blobs = self.read_sealed_blobs(state)?;
+        Ok(Json::String(record_seal_hex(
+            key,
+            &canonical_json(&bare),
+            &program_bytes,
+            &trace_bytes,
+            &blobs,
+        )))
+    }
+
+    fn read_trace_bytes(&self) -> Result<Vec<u8>> {
+        #[cfg(unix)]
+        {
+            read_regular_no_follow_at(&self.directory_handle, TRACE_FILE)
+                .context("reading recorded trace")
+        }
+        #[cfg(not(unix))]
+        {
+            read_regular_no_follow(&self.directory.join(TRACE_FILE))
+                .context("reading recorded trace")
+        }
+    }
+
+    /// The blobs the seal binds, in name order: every blob stored so far with
+    /// its current bytes, named as the trace and run document reference them
+    /// (`blobs/<sha256>`). An added, removed or rewritten blob changes this
+    /// list and breaks the seal.
+    fn read_sealed_blobs(&self, state: &RecorderState) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut blobs = Vec::new();
+        for name in &state.blobs_written {
+            #[cfg(unix)]
+            let bytes = read_regular_no_follow_at(&self.blobs_handle, name)
+                .with_context(|| format!("reading recorded blob {name}"))?;
+            #[cfg(not(unix))]
+            let bytes = read_regular_no_follow(&self.directory.join(BLOB_DIR).join(name))
+                .with_context(|| format!("reading recorded blob {name}"))?;
+            blobs.push((format!("{BLOB_DIR}/{name}"), bytes));
+        }
+        Ok(blobs)
     }
 
     /// Store bytes as a content-addressed blob and describe them. `bytes` must
@@ -1358,15 +1735,16 @@ pub struct StoredRecord {
 /// are refused with a re-record hint. An executable larger than the
 /// 64 MiB identity limit is refused on either side of the comparison — even
 /// when the recorded and current markers are equal — because equal lengths
-/// do not prove equal bytes.
+/// do not prove equal bytes. A sealed record whose record seal does not
+/// verify was modified after the run and is refused last, after the older
+/// specific checks, so those keep their precise errors.
 ///
-/// What this still does not cover: `run.json` and `trace.jsonl` carry no
-/// authentication code (unlike checkpoint journals), so an edit that rewrites
-/// those files fully consistently — flipping a step's failure flag together
-/// with its status and outcome while keeping every count, or deleting whole
-/// trailing trace lines while zeroing the step count of an unfinished record
-/// — is not detected. Only resume records written on this machine by a run you
-/// trust, from a directory only you can write.
+/// What this still does not cover: a same-user editor holding the per-user
+/// key can rewrite the record files and reseal them; a seal stripped from
+/// the document reads as a pre-seal legacy record and keeps only the older
+/// checks; key rotation is indistinguishable from tampering. Only reuse
+/// records written on this machine by a run you trust, from a directory
+/// only you can write.
 /// Refuse replay of a record whose structural text was redacted. The
 /// stored bytes stay redacted (a matching secret is never written back),
 /// so replaying would parse altered source or bind inputs under altered
@@ -1392,6 +1770,18 @@ pub fn check_from_record_usable(
     record: &StoredRecord,
     registry: &Registry,
     working_directory: &Path,
+) -> Result<()> {
+    check_from_record_usable_with_key(record, registry, working_directory, &SealKey::System)
+}
+
+/// [`check_from_record_usable`] with an explicit seal key. Unit and
+/// integration tests pass [`SealKey::Explicit`] so the seal check does not
+/// depend on ambient user state; reuse gates pass [`SealKey::System`].
+pub fn check_from_record_usable_with_key(
+    record: &StoredRecord,
+    registry: &Registry,
+    working_directory: &Path,
+    seal_key: &SealKey,
 ) -> Result<()> {
     check_replayable_after_redaction(record)?;
     // The program copy is content-addressed by run.json: a record whose
@@ -1501,6 +1891,9 @@ pub fn check_from_record_usable(
             );
         }
     }
+    // Last, after the older specific checks: a sealed record edited after
+    // the run in a way those checks cannot see is refused here instead.
+    check_record_seal_with_key(record, seal_key)?;
     Ok(())
 }
 
@@ -1635,6 +2028,103 @@ impl StoredRecord {
             read_regular_no_follow(&self.directory.join(PROGRAM_FILE))
                 .context("reading recorded program")
         }
+    }
+
+    /// Verify the whole-record seal against the files on disk: the recorded
+    /// program copy, the trace bytes, and every kept blob. Warn-open callers
+    /// (`show-run`) present every state; reuse gates refuse anything short
+    /// of verified (see `check_record_seal_for_reuse`).
+    pub(crate) fn record_integrity(&self, seal_key: &SealKey) -> RecordVerification {
+        if self.run.get("record_mac").is_none() {
+            return RecordVerification::Legacy;
+        }
+        let program_bytes = match self.program_source() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return RecordVerification::Untrusted {
+                    error: format!(
+                        "the record program copy cannot be read ({error:#}); the record was modified after the run"
+                    ),
+                };
+            }
+        };
+        let trace_bytes = match self.trace_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return RecordVerification::Untrusted {
+                    error: format!(
+                        "the record trace cannot be read ({error:#}); the record was modified after the run"
+                    ),
+                };
+            }
+        };
+        let mut blobs = Vec::new();
+        for name in self.sealed_blob_names() {
+            let descriptor = self
+                .sealed_blob_descriptor(&name)
+                .expect("a collected blob name has its descriptor");
+            match self.blob(&descriptor) {
+                Ok(bytes) => blobs.push((name, bytes)),
+                Err(error) => {
+                    return RecordVerification::Untrusted {
+                        error: format!(
+                            "recorded blob {name} cannot be read ({error:#}); the record was modified after the run"
+                        ),
+                    };
+                }
+            }
+        }
+        verify_record_seal(&self.run, &program_bytes, &trace_bytes, &blobs, seal_key)
+    }
+
+    fn trace_bytes(&self) -> Result<Vec<u8>> {
+        #[cfg(unix)]
+        {
+            read_regular_no_follow_at(&self._directory_handle, TRACE_FILE)
+                .context("reading recorded trace")
+        }
+        #[cfg(not(unix))]
+        {
+            read_regular_no_follow(&self.directory.join(TRACE_FILE))
+                .context("reading recorded trace")
+        }
+    }
+
+    /// Names of the blobs the record seal binds: every blob the trace steps
+    /// and the run document reference, in name order. Withheld and truncated
+    /// outputs keep no blob and are skipped. An unreferenced file is inert —
+    /// nothing reads it — so only referenced blobs are bound.
+    fn sealed_blob_names(&self) -> Vec<String> {
+        let mut names = BTreeSet::new();
+        let mut descriptors = Vec::new();
+        for step in &self.steps {
+            descriptors.push(&step.stdout);
+            descriptors.push(&step.stderr);
+        }
+        descriptors.push(&self.run["result"]["output"]);
+        descriptors.push(&self.run["terminal"]);
+        for descriptor in descriptors {
+            if let Some(name) = descriptor.get("blob").and_then(Json::as_str) {
+                names.insert(name.to_owned());
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    /// The stored descriptor for a blob name collected by
+    /// `sealed_blob_names`, for the hash-checked read in `record_integrity`.
+    fn sealed_blob_descriptor(&self, name: &str) -> Option<Json> {
+        let mut descriptors = Vec::new();
+        for step in &self.steps {
+            descriptors.push(&step.stdout);
+            descriptors.push(&step.stderr);
+        }
+        descriptors.push(&self.run["result"]["output"]);
+        descriptors.push(&self.run["terminal"]);
+        descriptors
+            .into_iter()
+            .find(|descriptor| descriptor.get("blob").and_then(Json::as_str) == Some(name))
+            .cloned()
     }
 
     /// Read a stored blob and check its hash. A missing or truncated blob is an error.
@@ -1971,6 +2461,17 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
         .error()
         .map(|error| Json::String(error.to_owned()))
         .unwrap_or(Json::Null);
+    let integrity = record.record_integrity(&seal_key);
+    let record_verified = matches!(integrity, RecordVerification::Verified);
+    let record_error: Json = match &integrity {
+        RecordVerification::Verified => Json::Null,
+        RecordVerification::Legacy => Json::String(
+            "this record predates the record seal; edits after the run are not detectable"
+                .to_owned(),
+        ),
+        RecordVerification::Unsealed { reason } => Json::String((*reason).to_owned()),
+        RecordVerification::Untrusted { error } => Json::String(error.clone()),
+    };
     if as_json {
         let document = json!({
             "protocol": "execute.show-run/1",
@@ -1986,6 +2487,7 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
             "failed_step": failed,
             "slowest_steps": slowest,
             "policy": record.run.get("policy").cloned().unwrap_or(Json::Null),
+            "invocation": record.run.get("invocation").cloned().unwrap_or(Json::Null),
             "decisions": decisions,
             "decision_count": decision_count,
             "decisions_truncated": decisions_truncated,
@@ -1994,7 +2496,9 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
             "audit_verified": audit_verified,
             "audit_error": audit_error,
             "audit_scope": "policy-decisions-only",
-            "record_verified": false,
+            "record_mac": record.run.get("record_mac").cloned().unwrap_or(Json::Null),
+            "record_verified": record_verified,
+            "record_error": record_error,
         });
         return Ok(
             crate::terminal_text::escape_json_for_terminal(&serde_json::to_string_pretty(
@@ -2008,12 +2512,11 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
         directory.display(),
         if ok { "ok" } else { "failed" }
     ));
-    // The seal covers the policy audit, the record identity and the policy
-    // context only. Result, steps, trace and blobs are shown as recorded and
-    // are never covered by `audit_verified`: a verified audit still leaves
-    // whole-record tamper evidence to the record-integrity work (issue #414).
+    // The record seal covers the run document, the recorded program copy,
+    // the trace and every kept blob; the audit seal covers policy
+    // decisions, record identity and policy context.
     text.push_str(
-        "trust scope: the audit seal covers policy decisions, record identity and policy context only; result, steps, trace and blobs are shown as recorded\n",
+        "trust scope: the record seal covers run.json, the recorded program, the trace and every kept blob; the audit seal covers policy decisions, record identity and policy context\n",
     );
     if let Some(error) = record.run["result"]["error"].as_str() {
         text.push_str(&format!("error: {error}\n"));
@@ -2039,6 +2542,26 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
         ));
     }
     text.push_str(&policy_summary_text(&record.run));
+    // The record warning comes first: it qualifies the whole record,
+    // including the audit below it.
+    match &integrity {
+        RecordVerification::Verified => {}
+        RecordVerification::Legacy => {
+            text.push_str(
+                "warning: this record predates the record seal; edits after the run are not detectable (re-record for a verifiable record)\n",
+            );
+        }
+        RecordVerification::Unsealed { reason } => {
+            text.push_str(&format!(
+                "warning: the record is unsealed ({reason}); it is shown as recorded, but edits after the run may not be detectable\n"
+            ));
+        }
+        RecordVerification::Untrusted { error } => {
+            text.push_str(&format!(
+                "warning: the record failed verification ({error}); everything below is untrusted\n"
+            ));
+        }
+    }
     // The audit warning comes before the decisions it qualifies: steps and
     // decisions printed first would read as fact on a tampered record.
     match &audit {
@@ -2599,6 +3122,11 @@ mod tests {
             registry: &registry,
             working_directory: directory.path(),
             audit_key: None,
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
         })
         .unwrap();
         drop(recorder);
@@ -2892,6 +3420,11 @@ mod bounded_record_tests {
             registry: &registry,
             working_directory: directory.path(),
             audit_key: None,
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
         })
         .unwrap();
         drop(recorder);
@@ -2921,6 +3454,11 @@ mod bounded_record_tests {
             registry: &registry,
             working_directory: directory.path(),
             audit_key: None,
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
         })
         .unwrap();
         drop(recorder);
@@ -2946,6 +3484,11 @@ mod bounded_record_tests {
             registry: &registry,
             working_directory: directory.path(),
             audit_key: None,
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
         })
         .unwrap();
         drop(recorder);
@@ -2988,6 +3531,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -3090,6 +3638,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -3166,6 +3719,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -3229,6 +3787,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -3357,6 +3920,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -3533,6 +4101,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: None,
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -3627,6 +4200,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: target.path(),
         })
         .unwrap();
@@ -3774,9 +4352,9 @@ mod policy_audit_tests {
     }
 
     /// A key holder can rewrite the audit and reseal it, and `show-run` cannot
-    /// tell. This test pins that limitation: the seal raises the bar to key
-    /// holders, it does not stop them. Whole-record tamper evidence belongs
-    /// to the record-integrity work (issue #414), not to this seal.
+    /// tell. This test pins that limitation: the seals raise the bar to key
+    /// holders, they do not stop them. A forger holding the key reforges the
+    /// record seal over the rewritten files too.
     #[test]
     fn key_holder_rewrite_and_reseal_verifies() {
         let directory = tempfile::tempdir().unwrap();
@@ -3816,6 +4394,37 @@ mod policy_audit_tests {
             super::audit_seal_hex(&TEST_AUDIT_KEY, &binding, total, truncated, &head)
         };
         document["audit_mac"] = json!(seal);
+        // The forged run document breaks the record seal too, so the forger
+        // holding the key reforges it as well: canonicalize the forged
+        // document and seal it over the untouched program, trace and blobs,
+        // exactly as the recorder does.
+        let record_seal = {
+            let mut bare = document.clone();
+            let fields = bare.as_object_mut().expect("a run document is an object");
+            fields.remove("record_mac");
+            fields.remove("record_seal_version");
+            let program_bytes = std::fs::read(directory.path().join(super::PROGRAM_FILE)).unwrap();
+            let trace_bytes = std::fs::read(directory.path().join(super::TRACE_FILE)).unwrap();
+            let mut seen = std::collections::BTreeSet::new();
+            for pointer in [&document["result"]["output"], &document["terminal"]] {
+                if let Some(name) = pointer.get("blob").and_then(Value::as_str) {
+                    seen.insert(name.to_owned());
+                }
+            }
+            let mut blobs = Vec::new();
+            for name in seen {
+                let bytes = std::fs::read(directory.path().join(&name)).unwrap();
+                blobs.push((name, bytes));
+            }
+            super::record_seal_hex(
+                &TEST_AUDIT_KEY,
+                &super::canonical_json(&bare),
+                &program_bytes,
+                &trace_bytes,
+                &blobs,
+            )
+        };
+        document["record_mac"] = json!(record_seal);
         rewrite_run_document(&directory, &document);
 
         let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
@@ -3824,12 +4433,17 @@ mod policy_audit_tests {
             serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
                 .unwrap();
         assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["record_verified"], true);
+        assert_eq!(report["record_error"], Value::Null);
         assert_eq!(report["decisions"][0]["outcome"], flipped);
     }
 
     /// Downgrade: stripping `record_id` and resealing under the retired v1
     /// encoding must never verify as v2. The audit stays readable but is
     /// explicitly weak, so a copied v1 audit cannot pass as a bound seal.
+    /// The same edit breaks the record seal, which binds the record
+    /// identity: the record is untrusted even though the audit downgrade is
+    /// only legacy-weak.
     #[test]
     fn stripped_record_id_with_v1_seal_is_legacy_weak_not_verified() {
         let directory = tempfile::tempdir().unwrap();
@@ -3854,9 +4468,16 @@ mod policy_audit_tests {
                 .is_some_and(|error| error.contains("retired v1")),
             "{report}"
         );
-        assert!(!text.contains("untrusted"), "{text}");
         assert!(text.contains("unsealed"), "{text}");
         assert!(text.contains("could have been copied"), "{text}");
+        assert_eq!(report["record_verified"], false);
+        assert!(
+            report["record_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("record seal does not match")),
+            "{report}"
+        );
+        assert!(text.contains("record failed verification"), "{text}");
     }
 
     /// A legacy audit whose v1 seal does not match is tampering or a wrong
@@ -3903,30 +4524,31 @@ mod policy_audit_tests {
         assert!(!error.contains("retired v1"), "{report}");
     }
 
-    /// Displayed trust scope: verification covers policy decisions only.
-    /// Both renderings name that scope, and editing the result does not move
-    /// the audit — pinning the whole-record limitation (issue #414).
+    /// Displayed trust scope: the record seal covers the whole record while
+    /// the audit seal covers policy decisions only.
     #[test]
-    fn verified_output_names_policy_decisions_only_scope() {
+    fn verified_output_names_record_and_audit_scope() {
         let directory = tempfile::tempdir().unwrap();
         let document = audited_document(&directory);
         assert_eq!(document["audit_seal_version"], json!(2));
+        assert_eq!(document["record_seal_version"], json!(1));
 
         let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
         assert!(text.contains("trust scope"), "{text}");
+        assert!(text.contains("record seal"), "{text}");
         assert!(text.contains("policy decisions"), "{text}");
-        assert!(text.contains("shown as recorded"), "{text}");
 
         let report: Value =
             serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
                 .unwrap();
         assert_eq!(report["audit_verified"], true);
         assert_eq!(report["audit_scope"], "policy-decisions-only");
-        assert_eq!(report["record_verified"], false);
+        assert_eq!(report["record_verified"], true);
+        assert_eq!(report["record_error"], Value::Null);
     }
 
     #[test]
-    fn edited_result_keeps_audit_verified_with_scope_disclaimer() {
+    fn edited_result_keeps_audit_verified_but_breaks_the_record_seal() {
         let directory = tempfile::tempdir().unwrap();
         let mut document = audited_document(&directory);
         document["result"]["ok"] = json!(false);
@@ -3935,16 +4557,306 @@ mod policy_audit_tests {
 
         let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
         assert!(text.contains("trust scope"), "{text}");
+        assert!(text.contains("record failed verification"), "{text}");
         let report: Value =
             serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
                 .unwrap();
-        // The seal never covered the result: the audit still verifies while
-        // the forged result is shown as recorded. Whole-record binding is
-        // explicitly out of scope here (issue #414).
+        // The audit seal never covered the result, so the audit still
+        // verifies — while the forged result breaks the record seal instead,
+        // and `show-run` labels the record untrusted.
         assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["record_verified"], false);
+        assert!(
+            report["record_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("modified after the run")),
+            "{report}"
+        );
         assert_eq!(report["ok"], json!(false));
         assert_eq!(report["error"], json!("forged failure"));
         assert_eq!(report["audit_scope"], "policy-decisions-only");
+        assert_eq!(report["decisions"], document["decisions"]);
+    }
+
+    /// The run document states the policy and mode in force plus the
+    /// invocation that produced it, so a reviewer can tell what ran under
+    /// what confinement. Policy contents never reach the record: paths name
+    /// the files, digests name their content.
+    #[test]
+    fn run_document_states_policy_mode_and_invocation_provenance() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let arguments = vec!["--".to_owned(), "positional".to_owned()];
+        let approvals: Vec<String> = Vec::new();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            working_directory: directory.path(),
+            audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: Some(std::path::Path::new("policies/capability.json")),
+            data_flow_policy_path: Some(std::path::Path::new("policies/data-flow.json")),
+            program_arguments: &arguments,
+            allow: &approvals,
+            what_if_fingerprint: Some("reviewed-fingerprint"),
+        })
+        .unwrap();
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let document = run_document(&directory);
+        assert_eq!(document["policy"]["execution_mode"], "trusted");
+        assert_eq!(document["policy"]["capability_policy"]["status"], "absent");
+        let invocation = &document["invocation"];
+        assert_eq!(
+            invocation["execute_version"],
+            env!("CARGO_PKG_VERSION"),
+            "{invocation}"
+        );
+        assert_eq!(
+            invocation["argv"],
+            json!(["--", "positional"]),
+            "{invocation}"
+        );
+        assert!(
+            invocation["cwd"]
+                .as_str()
+                .is_some_and(|cwd| !cwd.is_empty()),
+            "{invocation}"
+        );
+        assert_eq!(
+            invocation["capability_policy_path"], "policies/capability.json",
+            "{invocation}"
+        );
+        assert_eq!(
+            invocation["data_flow_policy_path"], "policies/data-flow.json",
+            "{invocation}"
+        );
+        assert_eq!(invocation["allow"], json!([]), "{invocation}");
+        assert_eq!(
+            invocation["what_if_fingerprint"], "reviewed-fingerprint",
+            "{invocation}"
+        );
+        assert!(
+            document["record_mac"]
+                .as_str()
+                .is_some_and(|seal| seal.len() == 64),
+            "{document}"
+        );
+
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["record_verified"], true);
+        assert_eq!(report["record_error"], Value::Null);
+        assert_eq!(report["invocation"], *invocation);
+    }
+
+    /// The recorded source hash is captured at record start: editing the
+    /// on-disk copy mid-run cannot move it, and the mismatch is detected by
+    /// both `show-run` and the reuse gate.
+    #[test]
+    fn recorded_source_hash_survives_a_mid_run_program_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let original = b"run text.concat with parts []";
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: original,
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            working_directory: directory.path(),
+            audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
+        })
+        .unwrap();
+        // An edit of the editable on-disk copy mid-run, before the run ends.
+        std::fs::write(
+            directory.path().join(super::PROGRAM_FILE),
+            b"run text.concat with parts [\"edited\"]",
+        )
+        .unwrap();
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let document = run_document(&directory);
+        assert_eq!(
+            document["program"]["sha256"],
+            super::sha256_hex(original),
+            "the recorded hash still names the start bytes, not the edit"
+        );
+
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["record_verified"], false);
+        assert!(
+            report["record_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("does not match its recorded source hash")),
+            "{report}"
+        );
+
+        let record = StoredRecord::open(directory.path()).unwrap();
+        let error = super::check_from_record_usable_with_key(
+            &record,
+            &registry,
+            directory.path(),
+            &test_seal(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("does not match its recorded hash"),
+            "{error:#}"
+        );
+    }
+
+    /// Editing any record file after the run breaks the record seal:
+    /// `show-run` reports the tamper for run.json, the recorded program
+    /// copy, the trace and the kept blobs alike, and the reuse gate refuses
+    /// the record.
+    #[test]
+    fn edited_record_files_are_shown_as_untrusted_and_refused_for_reuse() {
+        for kind in ["run", "program", "trace", "blob", "blob-deleted"] {
+            let directory = tempfile::tempdir().unwrap();
+            audited_document(&directory);
+            match kind {
+                "run" => {
+                    let mut document = run_document(&directory);
+                    document["result"]["ok"] = json!(false);
+                    rewrite_run_document(&directory, &document);
+                }
+                "program" => {
+                    std::fs::write(
+                        directory.path().join(super::PROGRAM_FILE),
+                        b"run text.concat with parts [\"tampered\"]",
+                    )
+                    .unwrap();
+                }
+                "trace" => {
+                    use std::io::Write;
+                    let mut trace = std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(directory.path().join(super::TRACE_FILE))
+                        .unwrap();
+                    writeln!(trace, "{{\"event\":\"tampered\"}}").unwrap();
+                }
+                "blob" => {
+                    let document = run_document(&directory);
+                    let name = document["result"]["output"]["blob"]
+                        .as_str()
+                        .expect("the record keeps an output blob")
+                        .to_owned();
+                    std::fs::write(directory.path().join(name), b"tampered").unwrap();
+                }
+                "blob-deleted" => {
+                    let document = run_document(&directory);
+                    let name = document["result"]["output"]["blob"]
+                        .as_str()
+                        .expect("the record keeps an output blob")
+                        .to_owned();
+                    std::fs::remove_file(directory.path().join(name)).unwrap();
+                }
+                _ => unreachable!("a tampered record file"),
+            }
+
+            let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+            assert!(
+                text.contains("record failed verification"),
+                "{kind}: {text}"
+            );
+            let report: Value = serde_json::from_str(
+                &show_run_with_key(directory.path(), true, test_seal()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(report["record_verified"], false, "{kind}");
+            assert!(
+                report["record_error"].as_str().is_some_and(|error| {
+                    error.contains("modified after the run")
+                        || error.contains("does not match its recorded source hash")
+                }),
+                "{kind}: {report}"
+            );
+
+            let record = StoredRecord::open(directory.path()).unwrap();
+            let error = super::check_from_record_usable_with_key(
+                &record,
+                &crate::manifest::Registry::default(),
+                directory.path(),
+                &test_seal(),
+            )
+            .unwrap_err();
+            let message = format!("{error:#}");
+            // A rewritten program copy trips the older program-hash check
+            // first; every other edit trips the record-integrity check.
+            assert!(
+                message.contains("record-integrity")
+                    || message.contains("does not match its recorded hash"),
+                "{kind}: {message}"
+            );
+        }
+    }
+
+    /// A sealed record passes the reuse gate, and a record without a seal
+    /// keeps the older checks only: pre-seal records stay usable.
+    #[test]
+    fn sealed_record_passes_the_reuse_gate_and_legacy_records_keep_old_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        audited_document(&directory);
+        let record = StoredRecord::open(directory.path()).unwrap();
+        super::check_from_record_usable_with_key(
+            &record,
+            &registry,
+            directory.path(),
+            &test_seal(),
+        )
+        .expect("a sealed record verifies against its key");
+
+        let mut document = run_document(&directory);
+        document.as_object_mut().unwrap().remove("record_mac");
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove("record_seal_version");
+        rewrite_run_document(&directory, &document);
+        let legacy = StoredRecord::open(directory.path()).unwrap();
+        super::check_from_record_usable_with_key(
+            &legacy,
+            &registry,
+            directory.path(),
+            &test_seal(),
+        )
+        .expect("a pre-seal record keeps the older checks");
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["record_verified"], false);
+        assert!(
+            report["record_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("predates the record seal")),
+            "{report}"
+        );
     }
 
     /// A malformed ambient allowlist denies before any child exists, and that
@@ -3987,6 +4899,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -4071,6 +4988,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();
@@ -4129,6 +5051,11 @@ mod policy_audit_tests {
             inputs: json!({}),
             registry: &registry,
             audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
             working_directory: directory.path(),
         })
         .unwrap();

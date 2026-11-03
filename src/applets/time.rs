@@ -1,5 +1,5 @@
 use super::{invalid, optional_string, required_string, AppletError, ExecutionContext};
-use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, Local, TimeZone, Timelike, Utc};
 use serde_json::{Map, Number, Value};
 use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,6 +37,12 @@ pub(super) fn run(
             let dt = DateTime::parse_from_str(text, format)
                 .map_err(|e| invalid(format!("time text does not match format: {e}")))?;
             Ok(Value::Number(dt.timestamp().into()))
+        }
+        "time.parts" => {
+            let epoch = integer(args, "epoch")?;
+            let zone = optional_string(args, "zone", "utc")?;
+            let dt = at_epoch(epoch, zone)?;
+            Ok(parts(dt))
         }
         "time.add" => {
             let epoch = integer(args, "epoch")?;
@@ -156,6 +162,27 @@ fn at_epoch(epoch: i64, zone: &str) -> Result<DateTime<FixedOffset>, AppletError
     }
 }
 
+/// Calendar fields for one epoch second in the requested zone. Weekday
+/// names are chrono's fixed English words, not locale data: callers that
+/// need locale words keep using a native `date` with `LC_TIME` set.
+fn parts(dt: DateTime<FixedOffset>) -> Value {
+    let iso = dt.iso_week();
+    serde_json::json!({
+        "year": dt.year(),
+        "month": dt.month(),
+        "day": dt.day(),
+        "hour": dt.hour(),
+        "minute": dt.minute(),
+        "second": dt.second(),
+        "weekday": dt.weekday().number_from_monday(),
+        "weekday_name": dt.format("%A").to_string(),
+        "yearday": dt.ordinal(),
+        "iso_year": iso.year(),
+        "iso_week": iso.week(),
+        "offset": dt.offset().local_minus_utc(),
+    })
+}
+
 pub(super) fn valid_zone(zone: &str) -> bool {
     matches!(zone, "utc" | "local")
         || zone
@@ -203,6 +230,94 @@ mod tests {
             "2038-01-19 08:44:08"
         );
     }
+    fn format(epoch: i64, format: &str, zone: &str) -> Value {
+        let args = Map::from_iter([
+            ("epoch".into(), Value::from(epoch)),
+            ("format".into(), Value::String(format.into())),
+            ("zone".into(), Value::String(zone.into())),
+        ]);
+        run("time.format", &args, &ExecutionContext::unrestricted()).unwrap()
+    }
+
+    fn parse(text: &str, format: &str) -> Value {
+        let args = Map::from_iter([
+            ("text".into(), Value::String(text.into())),
+            ("format".into(), Value::String(format.into())),
+        ]);
+        run("time.parse", &args, &ExecutionContext::unrestricted()).unwrap()
+    }
+
+    fn parts(epoch: i64, zone: &str) -> Value {
+        let args = Map::from_iter([
+            ("epoch".into(), Value::from(epoch)),
+            ("zone".into(), Value::String(zone.into())),
+        ]);
+        run("time.parts", &args, &ExecutionContext::unrestricted()).unwrap()
+    }
+
+    #[test]
+    fn format_parse_round_trips_cover_dst_leap_negative_and_2038() {
+        // (epoch, zone, rendered text): format and parse must agree, and the
+        // fixed-offset rows pin both sides of the US Eastern spring-forward
+        // gap (2026-03-08 02:00 local never exists).
+        let table = [
+            (1_791_970_860i64, "utc", "2026-10-14T09:41:00+0000"),
+            (1_772_953_140i64, "-18000", "2026-03-08T01:59:00-0500"),
+            (1_772_953_200i64, "-14400", "2026-03-08T03:00:00-0400"),
+            (951_782_400i64, "utc", "2000-02-29T00:00:00+0000"),
+            (1_709_208_000i64, "utc", "2024-02-29T12:00:00+0000"),
+            (-1i64, "utc", "1969-12-31T23:59:59+0000"),
+            (-86_400i64, "utc", "1969-12-31T00:00:00+0000"),
+            (2_147_483_647i64, "utc", "2038-01-19T03:14:07+0000"),
+            (2_147_483_648i64, "utc", "2038-01-19T03:14:08+0000"),
+        ];
+        for (epoch, zone, text) in table {
+            assert_eq!(
+                format(epoch, "%Y-%m-%dT%H:%M:%S%z", zone),
+                Value::String(text.into()),
+                "format {epoch} in {zone}"
+            );
+            assert_eq!(
+                parse(text, "%Y-%m-%dT%H:%M:%S%z"),
+                Value::from(epoch),
+                "parse {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn parts_reports_calendar_fields_for_known_instants() {
+        let epoch_zero = parts(0, "utc");
+        assert_eq!(
+            epoch_zero,
+            serde_json::json!({
+                "year": 1970, "month": 1, "day": 1,
+                "hour": 0, "minute": 0, "second": 0,
+                "weekday": 4, "weekday_name": "Thursday",
+                "yearday": 1, "iso_year": 1970, "iso_week": 1,
+                "offset": 0,
+            })
+        );
+        let autumn = parts(1_791_970_860, "utc");
+        assert_eq!(autumn["weekday"], 3);
+        assert_eq!(autumn["weekday_name"], "Wednesday");
+        assert_eq!(autumn["yearday"], 287);
+        assert_eq!(autumn["iso_year"], 2026);
+        assert_eq!(autumn["iso_week"], 42);
+        let shifted = parts(1_791_970_860, "3600");
+        assert_eq!(shifted["hour"], 10);
+        assert_eq!(shifted["offset"], 3600);
+        // 2000 was a leap year: 29 February exists and is ordinal day 60.
+        let leap = parts(951_782_400, "utc");
+        assert_eq!(leap["month"], serde_json::json!(2));
+        assert_eq!(leap["day"], serde_json::json!(29));
+        assert_eq!(leap["yearday"], serde_json::json!(60));
+        let args = Map::from_iter([("epoch".into(), Value::from(0))]);
+        assert!(run("time.parts", &args, &ExecutionContext::unrestricted()).is_ok());
+        let missing = Map::new();
+        assert!(run("time.parts", &missing, &ExecutionContext::unrestricted()).is_err());
+    }
+
     #[test]
     fn epoch_units_check_both_fractional_boundaries() {
         assert_eq!(epoch_units(9_223_372_036, 854_775_807).unwrap().1, i64::MAX);

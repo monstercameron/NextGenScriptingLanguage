@@ -3258,15 +3258,25 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             if let Some(name) = &output_call.result_binding {
                                 // The full output bytes are retained only when
                                 // the source program explicitly asks for them.
-                                let execution = execution_result::ExecutionResult::from_outcome(
-                                    outcome,
-                                    reported_stdout_captured.then(|| bytes.clone()),
-                                    stderr.map(<[u8]>::to_vec),
-                                    output_value,
-                                    stages.clone(),
-                                );
+                                // The capture moves into the record and is
+                                // taken back afterwards, so the pipeline keeps
+                                // its single owned buffer instead of cloning it.
+                                let mut execution =
+                                    execution_result::ExecutionResult::from_outcome(
+                                        outcome,
+                                        reported_stdout_captured
+                                            .then(|| std::mem::take(&mut bytes)),
+                                        stderr.map(<[u8]>::to_vec),
+                                        output_value,
+                                        stages.clone(),
+                                    );
                                 let record = execution.to_source_value(line, applet);
                                 bindings.insert(name.clone(), record);
+                                if reported_stdout_captured {
+                                    bytes = execution.stdout.take().expect(
+                                        "captured stdout just moved into the result record",
+                                    );
+                                }
                             }
                         }
                         let bytes = match &mut redirect {
@@ -3781,5 +3791,64 @@ mod cleanup_retry_gate_tests {
             "genuinely effect-free cleanup must stay retry-safe"
         );
         drop(journal);
+    }
+}
+
+#[cfg(test)]
+mod result_record_capture_tests {
+    use super::*;
+
+    /// A result binding must expose the exact captured bytes in both the
+    /// bound record and the continuing pipeline value, while keeping a
+    /// single owned capture buffer (#291).
+    #[test]
+    fn result_binding_keeps_exact_bytes_for_record_and_pipeline() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry =
+            Registry::from_sources(&[include_str!("../../manifests/core.text_upper.json")])
+                .unwrap();
+        let payload: Vec<u8> = (0..65_536).map(|index| b'a' + (index % 26) as u8).collect();
+        let expected: Vec<u8> = payload.iter().map(u8::to_ascii_uppercase).collect();
+        let text = String::from_utf8(payload).unwrap();
+        let invocation = "run text.upper with text text and keep result as execution\n";
+        let run = |source: &str| {
+            let program = crate::parser::parse(source).unwrap();
+            let mut options = RunOptions::new(directory.path().to_path_buf());
+            options.max_output_bytes = 1024 * 1024;
+            super::run_with_context(
+                &program,
+                &registry,
+                &options,
+                [("text".to_owned(), Value::String(text.clone()))]
+                    .into_iter()
+                    .collect(),
+                Vec::new(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap()
+        };
+        // The pipeline still carries the exact captured bytes after the
+        // binding takes its record view of the same capture. The bound
+        // result withholds implicit program stdout by design, so a
+        // downstream consumer observes the pipeline instead.
+        let saved = run(&format!("{invocation}then save to \"out.bin\"\n"));
+        assert_eq!(
+            std::fs::read(directory.path().join("out.bin")).unwrap(),
+            expected,
+            "a downstream save must see the exact captured bytes"
+        );
+        assert_eq!(saved.output, expected);
+        // The bound record reports identical bytes, flags, and diagnostics.
+        let encoded = run(&format!("{invocation}then encode execution as json\n")).output;
+        let record: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(record["stdout_captured"], serde_json::Value::Bool(true));
+        assert_eq!(
+            record["stdout_bytes"].as_u64(),
+            Some(expected.len() as u64)
+        );
+        assert_eq!(
+            serde_json::to_vec(&record["stdout"]).unwrap(),
+            serde_json::to_vec(&expected).unwrap()
+        );
     }
 }

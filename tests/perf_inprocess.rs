@@ -317,7 +317,9 @@ fn lane_v2_result_binding_one_mib() {
         .unwrap();
         samples.push(start.elapsed());
         peak_extra = peak_extra.max(PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(baseline));
-        assert_eq!(result.output, expected);
+        // A bound result withholds implicit program stdout by design; the
+        // serialized record below carries the identical bytes instead.
+        assert!(result.output.is_empty());
         black_box(result);
     }
     // Validate the source-visible record through the language's public JSON

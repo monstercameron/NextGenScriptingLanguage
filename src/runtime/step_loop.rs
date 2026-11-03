@@ -411,7 +411,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // declarations. Validate their known loop inputs before earlier effects.
     let preflight_context =
         !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
-    let _step_ids = StepIdScope::enter(&program.steps, options.trace || observe::is_installed());
+    let step_ids = StepIdScope::enter(&program.steps, options.trace || observe::is_installed());
     let mut bindings = initial_bindings;
     let mut task_group_presentations: BTreeMap<String, (Value, Value)> = BTreeMap::new();
     // Raw captures from `then capture bytes as NAME`, kept apart from text bindings.
@@ -693,7 +693,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             }
         }
         let step = &program.steps[index];
-        set_current_step(index);
+        if step_ids.enabled {
+            set_current_step(index);
+        }
         // Markers only steer control flow; the statements they close are the stops.
         if depth == 0
             && !matches!(

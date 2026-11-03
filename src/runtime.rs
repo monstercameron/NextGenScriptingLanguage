@@ -2597,6 +2597,7 @@ thread_local! {
 struct StepIdScope {
     previous: Option<std::sync::Arc<[std::sync::Arc<str>]>>,
     previous_index: usize,
+    enabled: bool,
 }
 
 impl StepIdScope {
@@ -2614,6 +2615,7 @@ impl StepIdScope {
         Self {
             previous,
             previous_index,
+            enabled,
         }
     }
 }
@@ -2637,6 +2639,33 @@ pub(crate) fn current_step_id() -> Option<std::sync::Arc<str>> {
             .as_ref()
             .and_then(|ids| ids.get(STEP_INDEX.with(std::cell::Cell::get)).cloned())
     })
+}
+
+#[cfg(test)]
+mod step_id_scope_tests {
+    use super::*;
+
+    #[test]
+    fn step_index_tracking_is_enabled_only_with_ids_and_restores_nested_scope() {
+        let program = crate::parser::parse("use value \"value\"\n").unwrap();
+        let ids = crate::ast::step_ids(&program.steps);
+        assert_eq!(ids.len(), 1);
+
+        let outer = StepIdScope::enter(&program.steps, true);
+        assert!(outer.enabled);
+        set_current_step(0);
+        assert_eq!(current_step_id().as_deref(), Some(ids[0].as_str()));
+
+        {
+            let inner = StepIdScope::enter(&program.steps, false);
+            assert!(!inner.enabled);
+            assert_eq!(current_step_id(), None);
+        }
+
+        assert_eq!(current_step_id().as_deref(), Some(ids[0].as_str()));
+        drop(outer);
+        assert_eq!(current_step_id(), None);
+    }
 }
 
 /// Maximum diagnostic stderr retained per native process stage on every platform.

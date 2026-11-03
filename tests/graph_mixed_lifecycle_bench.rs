@@ -1304,7 +1304,7 @@ fn mixed_fixture(layout: ActorLayout) -> Result<MixedFixture> {
         "contract": {
             "version": 1,
             "backend": "program_module",
-            "program": {"source": "service.program", "entry": "main", "interface_version": 2},
+            "program": {"source": "service.program", "entry": "main", "interface_version": 2, "allow_unpinned": true},
             "lifecycle": {"kind": "program_service"},
             "output": {
                 "type": "record",

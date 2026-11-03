@@ -11,7 +11,8 @@
     "program": {
       "source": "scheduled.program",
       "entry": "main",
-      "interface_version": 2
+      "interface_version": 2,
+      "source_sha256": "08032acad9fa32f437f5ff8da78e30fc101e786ac4339de5f64f661f7cbf490a"
     },
     "lifecycle": { "kind": "program_service" },
     "output": {

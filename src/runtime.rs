@@ -6834,7 +6834,8 @@ mod typed_worker_json_reuse_tests {
                 "program": {
                     "source": "module.program",
                     "entry": "entry",
-                    "interface_version": 1
+                    "interface_version": 1,
+                    "allow_unpinned": true
                 },
                 "lifecycle": {"kind": "oneshot"},
                 "output": {

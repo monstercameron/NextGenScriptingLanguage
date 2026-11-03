@@ -219,6 +219,8 @@ fn source_direct_applet(root: &Path, source: &str) -> (ProgramModule, PathBuf) {
             source: PathBuf::from("../modules/service.program"),
             entry: PROGRAM_MODULE_SERVICE_ROOT_ENTRY.into(),
             interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+            source_sha256: None,
+            allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
         },
@@ -323,6 +325,8 @@ fn v2_listener_export_uses_the_persistent_service_root_and_typed_contract() {
         source: PathBuf::from("../package/src/service.program"),
         entry: "poll".into(),
         interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../package/program.modules.json")),
         package_lock: Some(PathBuf::from("../package/program.modules.lock.json")),
     };
@@ -365,6 +369,8 @@ fn listener_trigger_applet_is_retained_in_the_verified_package_scope() {
         source: PathBuf::from("package/src/service.program"),
         entry: "poll".into(),
         interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: false,
         package_manifest: Some(PathBuf::from("package/program.modules.json")),
         package_lock: Some(PathBuf::from("package/program.modules.lock.json")),
     };
@@ -600,6 +606,8 @@ fn service_event_uses_the_canonical_decoded_result_envelope_schema() {
         source: PathBuf::from("../package/src/service.program"),
         entry: "poll".into(),
         interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
     };
@@ -621,7 +629,7 @@ fn interface_lifecycle_pairing_is_explicit_and_package_ports_match_contract_exac
         "contract":{
             "version":1,
             "backend":"program_module",
-            "program":{"source":"service.program","entry":"main","interface_version":2},
+            "program":{"source":"service.program","entry":"main","interface_version":2, "allow_unpinned": true},
             "lifecycle":{"kind":"program_service"},
             "output":{"type":"record","encoding":"json","fields":{"count":{"type":"integer"}},"required":["count"]},
             "ports":{
@@ -668,6 +676,8 @@ fn interface_lifecycle_pairing_is_explicit_and_package_ports_match_contract_exac
         source: PathBuf::from("../package/src/service.program"),
         entry: "poll".into(),
         interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../package/program.modules.json")),
         package_lock: None,
     };
@@ -725,6 +735,8 @@ fn interface_lifecycle_pairing_is_explicit_and_package_ports_match_contract_exac
         source: PathBuf::from("../package/src/service.program"),
         entry: "poll".into(),
         interface_version: PROGRAM_MODULE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../package/program.modules.json")),
         package_lock: Some(PathBuf::from("../package/program.modules.lock.json")),
     };
@@ -748,6 +760,8 @@ fn scheduled_modules_are_rejected_from_finite_program_calls_during_preflight() {
         source: PathBuf::from("service.program"),
         entry: PROGRAM_MODULE_SERVICE_ROOT_ENTRY.into(),
         interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
     };

@@ -603,7 +603,7 @@ fn write_module_applet(dir: &Path, name: &str, source: &str) {
         "contract": {
             "version": 1,
             "backend": "program_module",
-            "program": {"source": source_name, "entry": "entry", "interface_version": 1},
+            "program": {"source": source_name, "entry": "entry", "interface_version": 1, "allow_unpinned": true},
             "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "json"}
         }

@@ -421,6 +421,8 @@ fn socket_module_source_is_refused_as_non_regular() {
         source: PathBuf::from("src/library.program"),
         entry: "describe".into(),
         interface_version: PROGRAM_MODULE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
     };
@@ -450,6 +452,8 @@ fn world_writable_module_source_is_refused_with_the_source_named() {
         source: PathBuf::from("src/library.program"),
         entry: "describe".into(),
         interface_version: PROGRAM_MODULE_INTERFACE_VERSION,
+        source_sha256: None,
+        allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
     };

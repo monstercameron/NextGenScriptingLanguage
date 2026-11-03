@@ -55,7 +55,8 @@ fn write_job_module(catalog: &Path, name: &str, stdout: &str) {
             "program": {
                 "source": source_name,
                 "entry": "entry",
-                "interface_version": 1
+                "interface_version": 1,
+                "allow_unpinned": true
             },
             "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "json"}
@@ -106,7 +107,8 @@ fn write_active_job_module(
             "program": {
                 "source": source_name,
                 "entry": "entry",
-                "interface_version": 1
+                "interface_version": 1,
+                "allow_unpinned": true
             },
             "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "json"}
@@ -594,7 +596,8 @@ fn service_handlers_can_use_jobs_from_imported_finite_modules() -> anyhow::Resul
             "program": {
                 "source": source_name,
                 "entry": "entry",
-                "interface_version": 1
+                "interface_version": 1,
+                "allow_unpinned": true
             },
             "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "json"}

@@ -50,7 +50,8 @@ fn module_manifest() -> String {
             "program": {
                 "source": "module.program",
                 "entry": "describe",
-                "interface_version": 1
+                "interface_version": 1,
+                "allow_unpinned": true
             },
             "lifecycle": { "kind": "oneshot" },
             "output": { "type": "text", "encoding": "json" }

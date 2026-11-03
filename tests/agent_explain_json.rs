@@ -269,7 +269,8 @@ fn program_module_body_effects_are_expanded() {
         "parameters": {"note": {"type": "string", "required": true}}, "arguments": [],
         "contract": {
             "version": 1, "backend": "program_module", "program": {
-                "source": "body.program", "entry": "helper", "interface_version": 1
+                "source": "body.program", "entry": "helper", "interface_version": 1,
+                "allow_unpinned": true
             }, "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "raw"}, "capabilities": [], "effects": []
         }

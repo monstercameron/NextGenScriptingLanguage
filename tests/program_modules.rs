@@ -31,7 +31,8 @@ fn write_direct_applet(dir: &Path, name: &str, source: &str) {
             "program": {
                 "source": source_name,
                 "entry": "entry",
-                "interface_version": 1
+                "interface_version": 1,
+                "allow_unpinned": true
             },
             "lifecycle": { "kind": "oneshot" },
             "output": { "type": "text", "encoding": "json" }
@@ -166,6 +167,8 @@ fn versioned_module_exports_typed_record_and_resolves_source_from_manifest_origi
             source: PathBuf::from("../libs/report/src/library.program"),
             entry: "describe".into(),
             interface_version: 1,
+            source_sha256: None,
+            allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
         },
@@ -357,6 +360,8 @@ fn package_descriptor_uses_manifest_origin_lock_and_transitive_checkpoint_identi
         source: PathBuf::from("../main/src/library.program"),
         entry: "describe".into(),
         interface_version: 1,
+        source_sha256: None,
+        allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../main/program.modules.json")),
         package_lock: Some(PathBuf::from("../main/program.modules.lock.json")),
     };
@@ -665,7 +670,8 @@ fn module_cache_key_tracks_resolved_typed_parameters() {
             "program": {
                 "source": "cache.program",
                 "entry": "entry",
-                "interface_version": 1
+                "interface_version": 1,
+                "allow_unpinned": true
             },
             "lifecycle": {"kind": "oneshot"},
             "output": {"type": "text", "encoding": "json"}

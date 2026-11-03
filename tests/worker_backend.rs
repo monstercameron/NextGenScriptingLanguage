@@ -328,9 +328,14 @@ fn one_worker_serves_multiple_requests_and_preserves_input_bytes() {
     assert!(!second.spawned_process);
     assert!(!second_spawned.load(Ordering::Relaxed));
 
+    // The fixture appends one PID line per worker start in text mode, which is
+    // `\r\n` on Windows; compare lines so both platforms match.
     assert_eq!(
-        std::fs::read_to_string(directory.path().join("launches")).expect("launch count marker"),
-        format!("{}\n", recorded_pid(&directory)),
+        std::fs::read_to_string(directory.path().join("launches"))
+            .expect("launch count marker")
+            .lines()
+            .collect::<Vec<_>>(),
+        [recorded_pid(&directory).to_string()],
         "one process should serve both records"
     );
     let retained_pid = recorded_pid(&directory);
@@ -748,9 +753,14 @@ fn serialized_reuse_rechecks_worker_history_before_sending_a_request() {
     assert!(public_error.to_string().contains("request was not started"));
     assert!(!worker_error(&public_error).uncertain_effect);
     assert_eq!(worker_error(&public_error).completed_status, None);
+    // The fixture writes effect lines in text mode (`\r\n` on Windows);
+    // compare lines so both platforms match.
     assert_eq!(
-        std::fs::read_to_string(&effects).expect("worker request marker"),
-        "received\n",
+        std::fs::read_to_string(&effects)
+            .expect("worker request marker")
+            .lines()
+            .collect::<Vec<_>>(),
+        ["received"],
         "the rejected request must not reach the worker"
     );
 

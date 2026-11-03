@@ -3133,6 +3133,15 @@ pub fn effective_environment(
     };
     let mut environment = std::env::vars_os()
         .filter(|(name, _)| {
+            // Windows process blocks carry cmd-internal drive-cwd markers (`=C:`,
+            // `=ExitCode`, ...). Win32 forbids `=` as the first character of a
+            // real variable name, so these are never legitimate applet input;
+            // worse, their values go stale when the child runs in another
+            // directory, and the worker backend refuses `=` in key names.
+            #[cfg(windows)]
+            if name.as_encoded_bytes().starts_with(b"=") {
+                return false;
+            }
             environment_name_allowed(configured.as_ref().as_ref(), applet_name, name)
                 && allowlist.as_ref().is_none_or(|list| {
                     list.iter()

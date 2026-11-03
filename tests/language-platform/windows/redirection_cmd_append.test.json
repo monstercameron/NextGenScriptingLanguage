@@ -1,0 +1,1 @@
+{"expect": {"status": 0, "stdout": "second\r\n", "files": {"append.txt": "first\r\nsecond\r\n"}}}

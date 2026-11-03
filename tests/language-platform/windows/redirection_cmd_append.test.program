@@ -1,0 +1,4 @@
+run "cmd" with arguments ["/c", "echo first"]
+then append to "append.txt"
+run "cmd" with arguments ["/c", "echo second"]
+then append to "append.txt"

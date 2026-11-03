@@ -1,0 +1,3 @@
+accept name as text
+use value name
+then encode name as json

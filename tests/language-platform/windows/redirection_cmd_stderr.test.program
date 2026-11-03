@@ -1,0 +1,1 @@
+run "cmd" with arguments ["/c", "echo visible & echo hidden 1>&2"] and stderr to "stderr.txt"

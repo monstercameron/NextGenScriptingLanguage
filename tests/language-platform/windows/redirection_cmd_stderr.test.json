@@ -1,0 +1,1 @@
+{"expect": {"status": 0, "stdout": "visible \r\n", "files": {"stderr.txt": "hidden \r\n"}}}

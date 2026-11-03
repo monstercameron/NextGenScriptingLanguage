@@ -1,0 +1,2 @@
+use value {"users": []} as document
+take text at "/users/0/name" from document as name

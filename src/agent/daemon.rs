@@ -28,6 +28,88 @@ use std::path::{Path, PathBuf};
 /// The wire protocol every request and reply names.
 pub const PROTOCOL: &str = "execute.daemon/1";
 
+/// The execute version of this process, sent with every run request and reported by
+/// `ping`/`status` so a client never silently forwards to a daemon from another build.
+pub const EXECUTE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// SHA-256 of the running executable, computed once per process. `None` when the
+/// executable cannot be located or read; identity checks treat that as a mismatch.
+pub fn binary_sha256() -> Option<String> {
+    static HASH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| {
+        let path = std::env::current_exe().ok()?;
+        hash_file(&path)
+    })
+    .clone()
+}
+
+fn hash_file(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = file.read(&mut buffer).ok()?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Why a run from a client with this identity must not be served by a daemon with the
+/// given identity, or `None` when they are the same build. A missing client version or
+/// hash (an older client), or an unhashable daemon binary, is a mismatch: an upgraded
+/// client must never keep running on a daemon started from the old binary.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn identity_mismatch(
+    client_version: Option<&str>,
+    client_binary_sha256: Option<&str>,
+    own_version: &str,
+    own_binary_sha256: Option<&str>,
+) -> Option<String> {
+    match (client_version, client_binary_sha256, own_binary_sha256) {
+        (Some(version), Some(hash), Some(own_hash))
+            if version == own_version && hash == own_hash =>
+        {
+            None
+        }
+        _ => Some(format!(
+            "daemon is running a different execute build (daemon execute_version={own_version}, \
+             client execute_version={}); restart the daemon with `execute daemon stop` \
+             and `execute daemon serve`",
+            client_version.unwrap_or("missing")
+        )),
+    }
+}
+
+/// [`identity_mismatch`] against this process's own version and binary hash.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn current_identity_mismatch(
+    client_version: Option<&str>,
+    client_binary_sha256: Option<&str>,
+) -> Option<String> {
+    identity_mismatch(
+        client_version,
+        client_binary_sha256,
+        EXECUTE_VERSION,
+        binary_sha256().as_deref(),
+    )
+}
+
+/// Add this daemon's identity and start time to a `ping`/`status` reply object.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn with_identity(mut value: Value, started_unix_ms: u64) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("execute_version".to_owned(), json!(EXECUTE_VERSION));
+        object.insert("binary_sha256".to_owned(), json!(binary_sha256()));
+        object.insert("started_unix_ms".to_owned(), json!(started_unix_ms));
+    }
+    value
+}
+
 /// Runs one forwarded request in a forked child and returns the program's status. The
 /// callback runs the normal execute path; it may call `std::process::exit` itself.
 pub type RunCallback = fn(&[String], &mut RunContext) -> i32;
@@ -162,8 +244,9 @@ fn not_running(socket: &Path, reason: Option<String>) -> Value {
 #[cfg(unix)]
 mod imp {
     use super::{
-        not_running, Forwarding, Path, PathBuf, PrepareHook, Registry, Result, RunCallback,
-        RunContext, Value, PROTOCOL,
+        binary_sha256, current_identity_mismatch, not_running, with_identity, Forwarding, Path,
+        PathBuf, PrepareHook, Registry, Result, RunCallback, RunContext, Value, EXECUTE_VERSION,
+        PROTOCOL,
     };
     use crate::ipc::peer::peer_is_owner;
 
@@ -464,6 +547,11 @@ mod imp {
             children: Vec::new(),
             max_runs,
             started: Instant::now(),
+            started_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| {
+                    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+                }),
             served: 0,
             wake,
             ownership_fd: ownership.file.as_raw_fd(),
@@ -711,6 +799,7 @@ mod imp {
         children: Vec<Child>,
         max_runs: usize,
         started: Instant,
+        started_unix_ms: u64,
         served: u64,
         wake: ChildWake,
         prepare: PrepareHook,
@@ -809,7 +898,10 @@ mod imp {
                 Some("ping") => {
                     let _ = write_line(
                         &mut stream,
-                        &json!({"ok": true, "protocol": PROTOCOL, "pid": std::process::id()}),
+                        &with_identity(
+                            json!({"ok": true, "protocol": PROTOCOL, "pid": std::process::id()}),
+                            self.started_unix_ms,
+                        ),
                     );
                     Flow::Continue
                 }
@@ -857,16 +949,19 @@ mod imp {
         }
 
         fn status_reply(&self) -> Value {
-            json!({
-                "ok": true,
-                "protocol": PROTOCOL,
-                "running": true,
-                "pid": std::process::id(),
-                "uptime_ms": u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                "requests_served": self.served,
-                "runs": self.children.len(),
-                "max_runs": self.max_runs,
-            })
+            with_identity(
+                json!({
+                    "ok": true,
+                    "protocol": PROTOCOL,
+                    "running": true,
+                    "pid": std::process::id(),
+                    "uptime_ms": u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    "requests_served": self.served,
+                    "runs": self.children.len(),
+                    "max_runs": self.max_runs,
+                }),
+                self.started_unix_ms,
+            )
         }
 
         /// Fork a child for a run request. The child takes over the client's stdio and
@@ -885,6 +980,16 @@ mod imp {
                     return;
                 }
             };
+            // Never serve a client from a different build: after an upgrade this daemon
+            // would otherwise keep running its old code and preloaded manifests. Decline
+            // as a fallback so the client runs locally and shows the restart note.
+            if let Some(reason) = current_identity_mismatch(
+                run.execute_version.as_deref(),
+                run.binary_sha256.as_deref(),
+            ) {
+                let _ = write_line(&mut stream, &json!({"event": "fallback", "reason": reason}));
+                return;
+            }
             if descriptors.len() != 3 {
                 let _ = write_line(
                     &mut stream,
@@ -1031,6 +1136,10 @@ mod imp {
         env: Vec<(String, String)>,
         umask: u32,
         limits: Vec<Limit>,
+        /// The client's execute version and binary hash. Missing on older clients,
+        /// which the identity check treats as a different build.
+        execute_version: Option<String>,
+        binary_sha256: Option<String>,
     }
 
     impl RunRequest {
@@ -1089,6 +1198,8 @@ mod imp {
                 env,
                 umask,
                 limits,
+                execute_version: request["execute_version"].as_str().map(str::to_owned),
+                binary_sha256: request["binary_sha256"].as_str().map(str::to_owned),
             })
         }
     }
@@ -1592,6 +1703,8 @@ mod imp {
             "protocol": PROTOCOL,
             "op": "run",
             "accept_daemon_context": true,
+            "execute_version": EXECUTE_VERSION,
+            "binary_sha256": binary_sha256(),
             "argv": arguments,
             "cwd": cwd,
             "env": environment,
@@ -1736,6 +1849,47 @@ mod imp {
     }
 
     #[cfg(test)]
+    mod run_request_identity_tests {
+        use super::RunRequest;
+        use serde_json::json;
+
+        fn request(identity: serde_json::Value) -> serde_json::Value {
+            let mut value = json!({
+                "argv": ["run", "workflow.program"],
+                "cwd": "/tmp",
+                "env": [],
+                "umask": 0o022,
+                "limits": {
+                    "nofile": [1, 2], "nproc": [1, 2], "as": [1, 2],
+                    "cpu": [1, 2], "fsize": [1, 2], "core": [1, 2],
+                },
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(identity.as_object().unwrap().clone());
+            value
+        }
+
+        #[test]
+        fn run_requests_carry_client_identity_when_sent() {
+            let parsed = RunRequest::from_json(&request(
+                json!({"execute_version": "9.9", "binary_sha256": "abc"}),
+            ))
+            .unwrap();
+            assert_eq!(parsed.execute_version.as_deref(), Some("9.9"));
+            assert_eq!(parsed.binary_sha256.as_deref(), Some("abc"));
+        }
+
+        #[test]
+        fn run_requests_without_identity_parse_as_missing() {
+            let parsed = RunRequest::from_json(&request(json!({}))).unwrap();
+            assert_eq!(parsed.execute_version, None);
+            assert_eq!(parsed.binary_sha256, None);
+        }
+    }
+
+    #[cfg(test)]
     mod socket_ownership_tests {
         use super::{ensure_socket_recoverable, SocketGuard, SocketOwnership};
         use std::io::Read;
@@ -1867,5 +2021,49 @@ mod imp {
 
     pub(super) fn forward(_arguments: &[String], _socket: &Path) -> Forwarding {
         Forwarding::Cold { note: None }
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::{binary_sha256, identity_mismatch, with_identity, EXECUTE_VERSION};
+    use serde_json::json;
+
+    #[test]
+    fn a_matching_client_is_served_and_any_difference_is_declined() {
+        let own = Some("a".repeat(64));
+        assert_eq!(
+            identity_mismatch(Some("1.0"), own.as_deref(), "1.0", own.as_deref()),
+            None
+        );
+        for (version, hash, own_hash) in [
+            (Some("2.0"), own.as_deref(), own.as_deref()),
+            (Some("1.0"), Some("b"), own.as_deref()),
+            (None, own.as_deref(), own.as_deref()),
+            (Some("1.0"), None, own.as_deref()),
+            (Some("1.0"), own.as_deref(), None),
+        ] {
+            let reason = identity_mismatch(version, hash, "1.0", own_hash)
+                .expect("a different or missing identity must be declined");
+            assert!(reason.contains("restart the daemon"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn binary_hash_is_a_stable_sha256_hex_digest() {
+        let hash = binary_sha256().expect("the running test binary is readable");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(binary_sha256().as_deref(), Some(hash.as_str()));
+    }
+
+    #[test]
+    fn ping_and_status_replies_carry_the_daemon_identity() {
+        let reply = with_identity(json!({"ok": true}), 1_700_000_000_000);
+        assert_eq!(reply["execute_version"], EXECUTE_VERSION);
+        assert_eq!(reply["execute_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(reply["started_unix_ms"], 1_700_000_000_000_u64);
+        let hash = reply["binary_sha256"].as_str().expect("hash reported");
+        assert_eq!(hash.len(), 64);
     }
 }

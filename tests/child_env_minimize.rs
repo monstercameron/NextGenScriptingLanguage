@@ -15,13 +15,30 @@ mod private_answers;
 
 const SECRET: &str = "not-for-child-6bfea8";
 
-/// `run` program for the environment printer: absolute on Unix, the MSYS
-/// absolute path on Windows.
-fn env_script(extra: &str) -> String {
-    format!(
-        "run {} with arguments []{extra}\n",
-        portable_shell::shell_binary("/usr/bin/env")
+fn write_env_manifest(dir: &Path) -> std::path::PathBuf {
+    let manifest_dir = dir.join("manifests");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::write(
+        manifest_dir.join("env.json"),
+        serde_json::json!({
+            "name": "fixture.env",
+            "binary": portable_shell::shell_binary("/usr/bin/env"),
+            "arguments": [],
+            "contract": {
+                "version": 1,
+                "capabilities": ["process.exec"],
+                "effects": []
+            }
+        })
+        .to_string(),
     )
+    .unwrap();
+    manifest_dir
+}
+
+/// `run` program for the manifest-backed environment printer.
+fn env_script(extra: &str) -> String {
+    format!("run fixture.env{extra}\n")
 }
 
 fn base(dir: &Path) -> Command {
@@ -49,10 +66,13 @@ fn finite_runs_filter_ambient_environment_and_records_but_default_inherits() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.program");
     let record = dir.path().join("run.record");
+    let manifest_dir = write_env_manifest(dir.path());
     fs::write(&file, env_script("")).unwrap();
     let output = base(dir.path())
         .arg("run")
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .arg("--record")
         .arg(&record)
         .env("EXECUTE_CHILD_ENV_ALLOW", "LANE_SAFE")
@@ -74,12 +94,20 @@ fn finite_runs_filter_ambient_environment_and_records_but_default_inherits() {
         }
     }
     check_record(&record);
-    let full = base(dir.path()).arg("run").arg(&file).output().unwrap();
+    let full = base(dir.path())
+        .arg("run")
+        .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
+        .output()
+        .unwrap();
     assert!(full.status.success());
     assert!(String::from_utf8_lossy(&full.stdout).contains(SECRET));
     let empty = base(dir.path())
         .arg("run")
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .env("EXECUTE_CHILD_ENV_ALLOW", "")
         .output()
         .unwrap();
@@ -91,10 +119,13 @@ fn finite_runs_filter_ambient_environment_and_records_but_default_inherits() {
 fn command_line_environment_flags_work_without_a_capability_policy() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.program");
+    let manifest_dir = write_env_manifest(dir.path());
     fs::write(&file, env_script("")).unwrap();
     let allowed = base(dir.path())
         .arg("run")
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .args(["--env-allow", "LANE_SAFE"])
         .output()
         .unwrap();
@@ -103,6 +134,8 @@ fn command_line_environment_flags_work_without_a_capability_policy() {
     let cleared = base(dir.path())
         .args(["--clear-env", "run"])
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .output()
         .unwrap();
     assert!(cleared.status.success());
@@ -112,11 +145,14 @@ fn command_line_environment_flags_work_without_a_capability_policy() {
 fn malformed_allowlists_and_unlisted_command_overrides_fail_closed() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.program");
+    let manifest_dir = write_env_manifest(dir.path());
     fs::write(&file, env_script("")).unwrap();
     for allow in ["LANE_SAFE,,PATH", "LD_PRELOAD", "BAD=NAME"] {
         let output = base(dir.path())
             .arg("run")
             .arg(&file)
+            .arg("--manifest-dir")
+            .arg(&manifest_dir)
             .env("EXECUTE_CHILD_ENV_ALLOW", allow)
             .output()
             .unwrap();
@@ -131,6 +167,8 @@ fn malformed_allowlists_and_unlisted_command_overrides_fail_closed() {
     let output = base(dir.path())
         .arg("run")
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .env("EXECUTE_CHILD_ENV_ALLOW", "LANE_SAFE")
         .output()
         .unwrap();
@@ -139,6 +177,8 @@ fn malformed_allowlists_and_unlisted_command_overrides_fail_closed() {
     let allowed = base(dir.path())
         .arg("run")
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .env("EXECUTE_CHILD_ENV_ALLOW", "LANE_PRIVATE")
         .output()
         .unwrap();
@@ -153,11 +193,14 @@ fn malformed_allowlists_and_unlisted_command_overrides_fail_closed() {
 fn run_parts_and_listener_handlers_apply_the_same_environment_limit() {
     let dir = tempfile::tempdir().unwrap();
     let parts = dir.path().join("parts");
+    let manifest_dir = write_env_manifest(dir.path());
     fs::create_dir(&parts).unwrap();
     fs::write(parts.join("run.program"), env_script("")).unwrap();
     let output = base(dir.path())
         .arg("run-parts")
         .arg(&parts)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .args(["--env-allow", "LANE_SAFE"])
         .output()
         .unwrap();
@@ -180,6 +223,8 @@ fn run_parts_and_listener_handlers_apply_the_same_environment_limit() {
     let mut child = base(dir.path())
         .arg("run")
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .arg("--max-runs")
         .arg("1")
         .env("EXECUTE_CHILD_ENV_ALLOW", "LANE_SAFE")
@@ -239,6 +284,7 @@ fn opted_in_daemon_uses_the_callers_environment_limit() {
         thread::sleep(Duration::from_millis(20));
     }
     let file = work.path().join("main.program");
+    let manifest_dir = write_env_manifest(work.path());
     fs::write(&file, env_script("")).unwrap();
     let output = base(work.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
@@ -246,6 +292,8 @@ fn opted_in_daemon_uses_the_callers_environment_limit() {
         .env("EXECUTE_DAEMON_TRACE", "1")
         .arg("run")
         .arg(&file)
+        .arg("--manifest-dir")
+        .arg(&manifest_dir)
         .arg("--daemon")
         .args(["--env-allow", "LANE_SAFE"])
         .output()

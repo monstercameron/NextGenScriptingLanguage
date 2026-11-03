@@ -124,7 +124,7 @@ mod links {
     fn policy(root: &Path) {
         let granted = root.join("inside").display().to_string();
         let body = format!(
-            r#"{{"version":1,"applets":{{"text.concat":{{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{{"read":["{granted}"],"write":["{granted}"]}}}}}}}}"#
+            r#"{{"version":1,"host":{{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{{"read":["{granted}"],"write":["{granted}"]}}}},"applets":{{"text.concat":{{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{{"read":["{granted}"],"write":["{granted}"]}}}}}}}}"#
         );
         fs::write(root.join("policy.json"), body).unwrap();
         private_answers::make_private(&root.join("policy.json"));
@@ -388,9 +388,12 @@ mod swap_after_use_folder {
         let grant_entry = format!(
             r#"{{"capabilities":["filesystem.read","filesystem.write","process.exec"],"environment":[],"filesystem":{{"read":["{grant}"],"write":["{grant}"]}},"network":false,"network_origins":[],"sandbox_required":false}}"#
         );
+        let host = format!(
+            r#"{{"capabilities":["filesystem.read","filesystem.write"],"filesystem":{{"read":["{grant}"],"write":["{grant}"]}}}}"#
+        );
         fs::write(
             root.path().join("policy.json"),
-            format!(r#"{{"version":1,"applets":{{"swap.link":{grant_entry},"echo.stdin":{grant_entry}}}}}"#),
+            format!(r#"{{"version":1,"host":{host},"applets":{{"swap.link":{grant_entry},"echo.stdin":{grant_entry}}}}}"#),
         )
         .unwrap();
         private_answers::make_private(&root.path().join("policy.json"));

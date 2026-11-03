@@ -208,6 +208,27 @@ fn read_auth_token(
                         ));
                     }
                 }
+                #[cfg(target_os = "macos")]
+                {
+                    // Mode bits cannot attest ACL grants, so a mode-0600
+                    // bearer file can still expose the token through a
+                    // permissive inherited ACL. Refuse the file when an
+                    // extended ACL is present, and fail closed when the ACL
+                    // cannot be inspected. Size and token-shape checks below
+                    // still apply to files that pass this gate.
+                    let has_acl = crate::security::has_macos_extended_acl(&file).map_err(|_| {
+                        RemoteError::new(
+                            RemoteErrorKind::CredentialInvalid,
+                            EffectCertainty::NotStarted,
+                        )
+                    })?;
+                    if has_acl {
+                        return Err(RemoteError::new(
+                            RemoteErrorKind::CredentialInvalid,
+                            EffectCertainty::NotStarted,
+                        ));
+                    }
+                }
                 #[cfg(windows)]
                 {
                     use std::os::windows::fs::MetadataExt;
@@ -2643,5 +2664,38 @@ mod fuzz_hook_tests {
         let oversize = vec![b'x'; DEFAULT_MAX_RESPONSE_BYTES + 1];
         let error = fuzz_parse_remote_response(&oversize).unwrap_err();
         assert_eq!(error.kind, RemoteErrorKind::ResponseTooLarge);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_acl_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn bearer_file_with_a_macos_extended_acl_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bearer");
+        std::fs::write(&path, "0123456789abcdef0123456789abcdef\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let auth = RemoteAuthSource::BearerFile { path: path.clone() };
+        let acl = std::process::Command::new("chmod")
+            .args(["+a", "everyone allow read"])
+            .arg(&path)
+            .status();
+        let Ok(status) = acl else {
+            return;
+        };
+        if !status.success() {
+            return;
+        }
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o077,
+            0,
+            "the test must exercise ACL access that mode bits do not reveal"
+        );
+        let error = read_auth_token(&auth, directory.path())
+            .expect_err("a bearer file with a macOS extended ACL must be refused");
+        assert_eq!(error.kind, RemoteErrorKind::CredentialInvalid);
     }
 }

@@ -151,8 +151,10 @@ impl AgentCredential {
     }
 
     /// Read one explicitly named token. The token file must be a regular,
-    /// private file owned by the current user on Unix. A single final LF or
-    /// CRLF is ignored; other whitespace is rejected.
+    /// private file owned by the current user on Unix; on macOS a file
+    /// carrying an extended ACL is refused even when its mode bits look
+    /// private. A single final LF or CRLF is ignored; other whitespace is
+    /// rejected.
     pub fn from_token_file(agent: impl Into<String>, path: &Path) -> Result<Self, AuthError> {
         let agent = agent.into();
         if !valid_agent_id(&agent) {
@@ -255,7 +257,8 @@ impl fmt::Debug for AgentAuthPolicy {
 impl AgentAuthPolicy {
     /// Load a bounded policy file. The file must be regular and non-symlink;
     /// Unix files must be owned by the current user and have no group/other
-    /// permissions. The policy stores token hashes only.
+    /// permissions; on macOS a file carrying an extended ACL is refused even
+    /// when its mode bits look private. The policy stores token hashes only.
     pub fn load(path: &Path) -> Result<Self, AuthError> {
         let mut file = open_private_file(path).map_err(|_| AuthError::PolicyUnavailable)?;
         let mut bytes = Vec::new();
@@ -550,6 +553,28 @@ fn open_private_file(path: &Path) -> io::Result<File> {
                 io::ErrorKind::PermissionDenied,
                 "file is not private",
             ));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Mode bits cannot attest ACL grants, so a mode-0600 token or policy
+        // file can still expose credentials through a permissive inherited
+        // ACL. Refuse the file when an extended ACL is present, and fail
+        // closed when the ACL cannot be inspected.
+        match crate::security::has_macos_extended_acl(&file) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "file has an extended ACL; remove the ACL or move the file",
+                ));
+            }
+            Err(error) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("cannot verify file privacy: {error}"),
+                ));
+            }
         }
     }
     #[cfg(windows)]
@@ -917,6 +942,51 @@ mod tests {
                 .unwrap()
                 .token_sha256(),
             credential.token_sha256()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_extended_acl_rejects_token_and_policy_files() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        fn attach_everyone_read_acl(path: &std::path::Path) -> bool {
+            Command::new("chmod")
+                .args(["+a", "everyone allow read"])
+                .arg(path)
+                .status()
+                .is_ok_and(|status| status.success())
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let token_path = temp.path().join("token");
+        std::fs::write(&token_path, b"0123456789abcdef0123456789abcdef\n").unwrap();
+        std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let policy_path = temp.path().join("policy.json");
+        let policy = format!(
+            "{{\"version\":1,\"agents\":{{\"writer\":{{\"token_sha256\":\"{}\",\"permissions\":[\"read\"]}}}}}}",
+            sha256_hex(b"0123456789abcdef0123456789abcdef")
+        );
+        std::fs::write(&policy_path, policy.as_bytes()).unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if !attach_everyone_read_acl(&token_path) || !attach_everyone_read_acl(&policy_path) {
+            return;
+        }
+        for path in [&token_path, &policy_path] {
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o077,
+                0,
+                "the test must exercise ACL access that mode bits do not reveal"
+            );
+        }
+        assert!(
+            AgentCredential::from_token_file("writer", &token_path).is_err(),
+            "a token file with a macOS extended ACL must not load"
+        );
+        assert!(
+            AgentAuthPolicy::load(&policy_path).is_err(),
+            "a policy file with a macOS extended ACL must not load"
         );
     }
 

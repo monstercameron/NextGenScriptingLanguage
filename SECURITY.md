@@ -91,6 +91,10 @@ Security-sensitive policy, key, answers, and live-token files on Windows must
 be owned by the current user and have an explicit, non-inherited DACL with no
 allow entries for other principals. SYSTEM and local Administrators are trusted
 exceptions. An unreadable or unverifiable ACL fails closed and names the file.
+On Unix those files must be owned by the current user with no group/other
+permission bits; on macOS a file carrying an extended ACL is refused even when
+its mode bits look private, and a file whose ACL cannot be inspected fails
+closed. Remove the ACL or move the file before retrying.
 
 On Unix the canonical target path is walked from the filesystem root with
 no-follow directory opens, and each opened ancestor anchors the next lookup.

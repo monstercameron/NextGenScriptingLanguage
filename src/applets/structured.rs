@@ -280,19 +280,20 @@ pub(super) fn map(
     input: &[u8],
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
-    let document = document(args, input, context)?;
+    let mut document = document(args, input, context)?;
     let array_pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let selection_pointer = parse_pointer(required_string(args, "select")?)?;
-    let array = lookup(&document, &array_pointer)?
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid("the selected JSON value must be an array"))?;
+    let array = match take_pointer(&mut document, &array_pointer)? {
+        Some(Value::Array(array)) => array,
+        _ => return Err(invalid("the selected JSON value must be an array")),
+    };
     let mut mapped = Vec::new();
     let mut output_bytes = 2usize;
-    for (index, item) in array.iter().enumerate() {
+    for (index, mut item) in array.into_iter().enumerate() {
         checkpoint_work(context, index)?;
-        let value = match lookup(item, &selection_pointer)? {
+        let value = match take_pointer(&mut item, &selection_pointer)? {
             Some(Value::Null) => args.get("default").cloned().unwrap_or(Value::Null),
-            Some(value) => value.clone(),
+            Some(value) => value,
             None => args.get("default").cloned().ok_or_else(|| {
                 absence(
                     "not_found",
@@ -313,11 +314,14 @@ pub(super) fn filter(
     input: &[u8],
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
-    let document = document(args, input, context)?;
+    let mut document = document(args, input, context)?;
     let array_pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
-    let array = lookup(&document, &array_pointer)?
+    if lookup(&document, &array_pointer)?
         .and_then(Value::as_array)
-        .ok_or_else(|| invalid("the selected JSON value must be an array"))?;
+        .is_none()
+    {
+        return Err(invalid("the selected JSON value must be an array"));
+    }
     let clauses = args
         .get("where")
         .and_then(Value::as_array)
@@ -333,6 +337,10 @@ pub(super) fn filter(
         check_size_and_depth(clause, context)?;
         predicates.push(parse_predicate(clause, index)?);
     }
+    let array = match take_pointer(&mut document, &array_pointer)? {
+        Some(Value::Array(array)) => array,
+        _ => unreachable!("array lookup succeeded above"),
+    };
     let mut selected = Vec::new();
     let mut output_bytes = 2usize;
     let mut work = 0usize;
@@ -343,14 +351,14 @@ pub(super) fn filter(
         for predicate in &predicates {
             checkpoint_work(context, work)?;
             work += 1;
-            if !predicate.matches(item, context, &mut work)? {
+            if !predicate.matches(&item, context, &mut work)? {
                 matches = false;
                 break;
             }
         }
         if matches {
-            output_bytes = add_output_item_size(output_bytes, item)?;
-            selected.push(item.clone());
+            output_bytes = add_output_item_size(output_bytes, &item)?;
+            selected.push(item);
         }
     }
     let result = Value::Array(selected);
@@ -972,6 +980,35 @@ fn lookup<'a>(root: &'a Value, pointer: &[String]) -> Result<Option<&'a Value>, 
     Ok(Some(current))
 }
 
+/// Removes the value identified by a JSON Pointer while retaining `lookup`'s
+/// distinction between malformed numeric array indexes and absent names.
+fn take_pointer(root: &mut Value, pointer: &[String]) -> Result<Option<Value>, AppletError> {
+    let mut current = root;
+    for segment in pointer {
+        current = match current {
+            Value::Object(fields) => match fields.get_mut(segment) {
+                Some(value) => value,
+                None => return Ok(None),
+            },
+            Value::Array(items) => match parse_array_index(segment) {
+                Err(error)
+                    if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => return Ok(None),
+                Ok(Some(index)) => match items.get_mut(index) {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
+                Ok(None) => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+    }
+    Ok(Some(std::mem::replace(current, Value::Null)))
+}
+
 fn parse_array_index(segment: &str) -> Result<Option<usize>, AppletError> {
     if segment == "-" {
         return Ok(None);
@@ -1302,6 +1339,95 @@ mod tests {
 
     fn nested_array(wraps: usize) -> Value {
         (0..wraps).fold(Value::Null, |value, _| Value::Array(vec![value]))
+    }
+
+    #[test]
+    fn map_moves_selected_values_and_preserves_fallback_errors() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let document = serde_json::json!([
+            {"nested": {"payload": ["large", {"value": 1}]}},
+            {"nested": {"payload": ["small"]}},
+            {"nested": {"payload": null}}
+        ]);
+        let args = Map::from_iter([
+            ("document".into(), document),
+            ("select".into(), Value::String("/nested/payload".into())),
+            ("default".into(), serde_json::json!({"fallback": true})),
+        ]);
+        assert_eq!(
+            map(&args, &[], &context).expect("selected values are moved to the result"),
+            serde_json::json!([[
+                "large",
+                {"value": 1}
+            ], ["small"], {"fallback": true}])
+        );
+
+        let args = Map::from_iter([
+            ("document".into(), serde_json::json!([{"present": 1}, {}])),
+            ("select".into(), Value::String("/present".into())),
+        ]);
+        assert_eq!(
+            map(&args, &[], &context)
+                .expect_err("an absent selection still fails")
+                .message,
+            "select pointer is absent from array item 1"
+        );
+    }
+
+    #[test]
+    fn filter_moves_matching_items_and_keeps_predicate_errors() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let args = Map::from_iter([
+            (
+                "document".into(),
+                serde_json::json!([
+                    {"keep": true, "nested": [1, {"x": "large"}]},
+                    {"keep": false, "nested": [2]},
+                    {"keep": true, "nested": [3]}
+                ]),
+            ),
+            (
+                "where".into(),
+                serde_json::json!([{"pointer": "/keep", "equals": true}]),
+            ),
+        ]);
+        assert_eq!(
+            filter(&args, &[], &context).expect("matching items are moved to the result"),
+            serde_json::json!([
+                {"keep": true, "nested": [1, {"x": "large"}]},
+                {"keep": true, "nested": [3]}
+            ])
+        );
+
+        let args = Map::from_iter([
+            ("document".into(), serde_json::json!([[1], [2]])),
+            (
+                "where".into(),
+                serde_json::json!([{"pointer": "/01", "exists": true}]),
+            ),
+        ]);
+        assert!(
+            filter(&args, &[], &context)
+                .expect_err("failed predicate evaluation remains an error")
+                .message
+                .contains("invalid JSON Pointer array index")
+        );
+    }
+
+    #[test]
+    fn map_output_limit_is_checked_after_moving_defaults() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let args = Map::from_iter([
+            ("document".into(), serde_json::json!([{}])),
+            ("select".into(), Value::String("/missing".into())),
+            ("default".into(), Value::String("x".repeat(MAX_JSON_BYTES))),
+        ]);
+        assert!(
+            map(&args, &[], &context)
+                .expect_err("oversized mapped output is rejected")
+                .message
+                .contains(&format!("{MAX_JSON_BYTES}-byte output limit"))
+        );
     }
 
     #[test]

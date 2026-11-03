@@ -1,11 +1,15 @@
 //! CLI coverage for hand-over, detached launch, interactive invocation,
 //! daemon selection, and attach control.
+#[cfg(feature = "live")]
 use serde_json::Value;
 use std::fs;
+#[cfg(feature = "live")]
 use std::io::{BufRead, BufReader};
+#[cfg(feature = "live")]
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+#[cfg(feature = "live")]
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,8 +31,10 @@ fn write_program(dir: &Path, name: &str, source: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "live")]
 struct KillOnDrop(std::process::Child);
 
+#[cfg(feature = "live")]
 impl Deref for KillOnDrop {
     type Target = std::process::Child;
 
@@ -37,12 +43,14 @@ impl Deref for KillOnDrop {
     }
 }
 
+#[cfg(feature = "live")]
 impl DerefMut for KillOnDrop {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
+#[cfg(feature = "live")]
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {

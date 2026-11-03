@@ -272,6 +272,7 @@ pub(super) fn preflight(
                 status_binding: call.status_binding.clone(),
                 result_binding: call.result_binding.clone(),
                 retry: None,
+                timeout_ms: None,
             })
         } else {
             Cow::Borrowed(call)
@@ -724,6 +725,7 @@ mod tests {
                     status_binding: call.status_binding.clone(),
                     result_binding: call.result_binding.clone(),
                     retry: None,
+                    timeout_ms: None,
                 })
             } else {
                 Cow::Borrowed(call)

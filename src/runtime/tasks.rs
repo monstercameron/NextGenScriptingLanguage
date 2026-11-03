@@ -307,6 +307,7 @@ pub(super) fn preflight_group(
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         let manifest = registry
             .resolve_call(&resolved)
@@ -925,6 +926,7 @@ pub(super) fn run_each(
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         let manifest = registry
             .resolve_call(&call)

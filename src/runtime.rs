@@ -330,6 +330,96 @@ mod kill_grace_tests {
     }
 }
 
+#[cfg(test)]
+mod per_command_timeout_retry_tests {
+    use super::*;
+
+    fn timeout_error(certainty: execution_result::EffectCertainty) -> anyhow::Error {
+        execution_result::ExecutionFailure::new(execution_result::ExecutionResult::runtime_failure(
+            execution_result::ExecutionKind::Timeout,
+            "command pipeline timed out; external effects may be incomplete",
+            certainty,
+        ))
+        .into()
+    }
+
+    fn plan(source: &str, error: &anyhow::Error) -> RetryPlan {
+        let program = crate::parser::parse(source).unwrap();
+        let registry = Registry::default();
+        let mut state = None;
+        plan_retry(&program, 0, error, &registry, &mut state).unwrap()
+    }
+
+    #[test]
+    fn uncertain_timeout_retries_only_with_the_opt_in() {
+        let error = timeout_error(execution_result::EffectCertainty::Uncertain);
+        let refused = plan(
+            "run \"x\" and timeout 1 seconds and retry up to 1 times\n",
+            &error,
+        );
+        assert!(
+            matches!(refused, RetryPlan::Refused(ref reason) if reason.contains("even if uncertain")),
+            "an uncertain timeout without the opt-in must be refused"
+        );
+        let again = plan(
+            "run \"x\" and timeout 1 seconds and retry up to 1 times even if uncertain\n",
+            &error,
+        );
+        assert!(
+            matches!(
+                again,
+                RetryPlan::Again {
+                    restart: 0,
+                    attempt: 2,
+                    ..
+                }
+            ),
+            "an opted-in timeout must run again"
+        );
+    }
+
+    #[test]
+    fn unstarted_timeout_needs_no_opt_in() {
+        let error = timeout_error(execution_result::EffectCertainty::NotStarted);
+        let again = plan(
+            "run \"x\" and timeout 1 seconds and retry up to 1 times\n",
+            &error,
+        );
+        assert!(
+            matches!(again, RetryPlan::Again { attempt: 2, .. }),
+            "a timeout before any effect must be retried"
+        );
+    }
+
+    #[test]
+    fn non_timeout_failures_keep_the_command_exit_rule() {
+        let cancelled = execution_result::ExecutionFailure::new(
+            execution_result::ExecutionResult::runtime_failure(
+                execution_result::ExecutionKind::Cancelled,
+                "workflow cancelled by signal",
+                execution_result::EffectCertainty::Uncertain,
+            ),
+        );
+        let error: anyhow::Error = cancelled.into();
+        let refused = plan(
+            "run \"x\" and timeout 1 seconds and retry up to 1 times even if uncertain\n",
+            &error,
+        );
+        assert!(
+            matches!(refused, RetryPlan::Refused(ref reason) if reason.contains("not a command exit")),
+            "only timeouts join the declared retry"
+        );
+        let undeclared = plan(
+            "run \"x\" and timeout 1 seconds\n",
+            &timeout_error(execution_result::EffectCertainty::Uncertain),
+        );
+        assert!(
+            matches!(undeclared, RetryPlan::NotDeclared),
+            "a timeout without a declared retry must propagate"
+        );
+    }
+}
+
 #[cfg(unix)]
 fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> libc::c_int {
     deadline.map_or(maximum_ms, |deadline| {
@@ -2293,6 +2383,39 @@ fn plan_retry(
         _ => 0,
     };
     let failures = earlier + 1;
+    // A per-command or global timeout is a typed `ExecutionFailure`, not a
+    // command exit. It is retryable when the step declares a retry (issue
+    // #310); the usual uncertain-effect gate still applies.
+    if let Some(timeout) = error.downcast_ref::<execution_result::ExecutionFailure>() {
+        if timeout.result.kind != execution_result::ExecutionKind::Timeout {
+            *state = None;
+            return Ok(RetryPlan::Refused(
+                "the failure is not a command exit".to_owned(),
+            ));
+        }
+        let start = command_start(program, index);
+        let end = resume::node_end(program, start);
+        let effects_safe = timeout.result.effect_certainty
+            == crate::contracts::EffectCertainty::NotStarted
+            || resume::retry_safe(program, start, end, registry)?;
+        if !effects_safe && !policy.even_if_uncertain {
+            *state = None;
+            return Ok(RetryPlan::Refused(
+                "its effects may have already happened; add `even if uncertain` to retry anyway"
+                    .to_owned(),
+            ));
+        }
+        if failures > policy.retries {
+            *state = None;
+            return Ok(RetryPlan::Exhausted { attempts: failures });
+        }
+        *state = Some((index, failures));
+        return Ok(RetryPlan::Again {
+            restart: start,
+            delay: retry_delay(policy, failures),
+            attempt: failures + 1,
+        });
+    }
     let Some(failure) = error.downcast_ref::<CommandFailed>() else {
         *state = None;
         return Ok(RetryPlan::Refused(
@@ -4793,6 +4916,7 @@ pub fn invoke_applet(
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     let module_session = Arc::new(crate::modules::ProgramModuleSession::preload_invocations(
         registry,
@@ -4832,6 +4956,7 @@ pub fn invoke_applet_with_module_session(
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     let manifest = registry.resolve_call(&call)?;
     let cwd = fs::canonicalize(&options.working_directory)?;
@@ -4925,6 +5050,7 @@ pub(crate) fn invoke_call_with_context(
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     let manifest = registry.resolve_call(&call)?;
     manifest.validate(&call)?;
@@ -5510,6 +5636,7 @@ mod argv_construction_tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         match arguments_for_group_call(&literal, manifest, &bindings).unwrap() {
             GroupArguments::Borrowed(arguments) => {
@@ -6633,6 +6760,7 @@ mod resolved_json_argument_tests {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         }
     }
 

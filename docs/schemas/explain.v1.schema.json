@@ -62,7 +62,7 @@
           "resolved_path", "argv", "effects",
           "capabilities", "writes", "network", "reads", "cwd_change",
           "modifies_next_invocation", "environment_sensitive", "environment_tainted", "environment_path_only",
-          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged", "retry",
+          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged", "retry", "timeout_ms",
           "binding", "program_stdout", "status_binding"
         ],
         "properties": {
@@ -122,7 +122,8 @@
               "even_if_uncertain": { "type": "boolean" },
               "idempotent": { "type": "boolean" }
             }
-          }
+          },
+          "timeout_ms": { "type": ["integer", "null"], "minimum": 1 }
         }
       }
     },

@@ -143,6 +143,7 @@ list        = "[" [ item { "," item } ] "]"
 item        = TEXT | INTEGER | BOOL | NAME
 suffixes    = [ "as" NAME ]
               [ "and" "discard" "stderr" ]        (direct quoted commands only)
+              [ "and" "timeout" INTEGER UNIT ]
               [ "and" "keep" "status" "as" NAME ]
               [ "and" "keep" "result" "as" NAME ]
               [ "and" "keep" "secret" ]           (requires `as NAME`)
@@ -158,12 +159,13 @@ run "test" with arguments ["-f", "input.txt"] and keep status as present
 
 Invocation suffixes have one canonical order, stated once by the `suffixes`
 production above: each family at most once, in the order listed. Redirection
-(`and stderr to`, `and stdin from`, `and environment`, ...) and `and retry`
-restrictions aside, a misordered suffix is a `parse.suffix_order` diagnostic
-with a machine-applicable fix that reorders the suffixes; the reorder preserves
-meaning. `and retry` cannot be combined with `and cache`, `and keep status`,
-or `and keep result`, so those combinations keep their existing errors and get
-no reorder fix.
+(`and stderr to`, `and stdin from`, `and environment`, ...) and the `and retry`
+/ `and timeout` restrictions aside, a misordered suffix is a
+`parse.suffix_order` diagnostic with a machine-applicable fix that reorders the
+suffixes; the reorder preserves meaning. `and retry` cannot be combined with
+`and cache`, `and keep status`, or `and keep result`, and `and timeout` cannot
+be combined with `and cache`, so those combinations keep their existing errors
+and get no reorder fix.
 
 `then` waits for the previous statement to succeed and passes its output as stdin.
 `pipe to` connects the previous stage's stdout to this command with an OS pipe.
@@ -338,7 +340,8 @@ whenever a line arrives as message
 ## Suffixes and scoped forms
 
 Accepted command suffix families include environment changes (`and environment
-{...}` and `and without environment [...]`), `and retry ...`, stderr/stdin/stdout
+{...}` and `and without environment [...]`), `and retry ...`,
+`and timeout ...`, stderr/stdin/stdout
 redirections, `then append to`, `interactively`, `hand over to`, and
 `launch detached`. Scoped statements include `with temporary file as NAME` and
 `with temporary directory as NAME`; lifecycle blocks include `on exit` and
@@ -350,15 +353,15 @@ redirections, `then append to`, `interactively`, `hand over to`, and
 Which modifiers may follow each statement. A `yes` cell is accepted by the parser;
 `no` cells are rejected or unsupported in that context.
 
-| Statement | `as NAME` | `and keep status as` | `and keep result as` | `and keep secret` | `and discard stderr` | `and cache` |
-| --- | --- | --- | --- | --- | --- | --- |
-| `run TEXT` (direct executable) | yes | yes | yes | yes, after `as NAME` | yes | no |
-| `run NAME` (manifest applet) | yes | yes | yes | yes, after `as NAME` | no | yes, when the manifest declares it |
-| `then` | yes | yes | yes | yes, after `as NAME` | no | no |
-| `pipe to` | yes, on the group's final stage (see note) | no | no | yes, after `as NAME` | no | no |
-| `run program NAME` (reusable) | yes | yes | no | no | no | no |
-| `take` | no | no | no | no | no | no |
-| `every`, `on schedule`, `listen to` | no | no | no | no | no | no |
+| Statement | `as NAME` | `and keep status as` | `and keep result as` | `and keep secret` | `and discard stderr` | `and cache` | `and timeout` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `run TEXT` (direct executable) | yes | yes | yes | yes, after `as NAME` | yes | no | yes |
+| `run NAME` (manifest applet) | yes | yes | yes | yes, after `as NAME` | no | yes, when the manifest declares it | yes, native pipelines only |
+| `then` | yes | yes | yes | yes, after `as NAME` | no | no | yes |
+| `pipe to` | yes, on the group's final stage (see note) | no | no | yes, after `as NAME` | no | no | yes, bounds the whole group |
+| `run program NAME` (reusable) | yes | yes | no | no | no | no | no |
+| `take` | no | no | no | no | no | no | no |
+| `every`, `on schedule`, `listen to` | no | no | no | no | no | no | no |
 
 `pipe to ... as NAME` binds the pipe group's final output, the terminal stage's
 stdout, to NAME. A group with a binding does not stream to the terminal, and a later

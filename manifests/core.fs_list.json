@@ -1,0 +1,131 @@
+{
+  "name": "fs.list",
+  "description": "Lists one directory as typed metadata records without following final symlinks, sorted by a named key so newest or largest entries surface without text parsing.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Directory to list; relative paths resolve from the program working directory."
+    },
+    "include_hidden": {
+      "type": "boolean",
+      "description": "Include names starting with a dot; hidden names are skipped by default."
+    },
+    "kinds": {
+      "type": "list",
+      "items": "string",
+      "description": "Keep only these entry kinds: file, directory, symlink, fifo, socket or other."
+    },
+    "sort": {
+      "type": "string",
+      "enum": [
+        "name",
+        "kind",
+        "size",
+        "mtime_ms"
+      ],
+      "description": "Record key for ascending order: name, kind, size or mtime_ms."
+    },
+    "descending": {
+      "type": "boolean",
+      "description": "Reverse the sort order so newest or largest entries come first."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.list"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "list",
+      "encoding": "json",
+      "items": {
+        "type": "json"
+      }
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "include_hidden": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "kinds": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        },
+        "sort": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "name",
+              "kind",
+              "size",
+              "mtime_ms"
+            ]
+          },
+          "delivery": "single"
+        },
+        "descending": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "fs list",
+    "list directory entries"
+  ],
+  "examples": [
+    {
+      "program": "run fs.list with path \".\" as entries",
+      "expected_output": []
+    }
+  ]
+}

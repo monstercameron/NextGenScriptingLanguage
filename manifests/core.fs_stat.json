@@ -1,0 +1,95 @@
+{
+  "name": "fs.stat",
+  "description": "Returns a typed metadata record for one path: existence, kind, size, millisecond timestamps, permission bits, owner ids, link target and device numbers, with nulls where the OS has no equivalent.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Path to inspect; relative paths resolve from the program working directory."
+    },
+    "follow_symlinks": {
+      "type": "boolean",
+      "description": "Report the link target's metadata when true; report the link itself when false. Defaults to true."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.stat"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "follow_symlinks": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "fs stat",
+    "file metadata stat"
+  ],
+  "examples": [
+    {
+      "program": "run fs.stat with path \"catalog-example-missing-494\" as info",
+      "expected_output": {
+        "path": "catalog-example-missing-494",
+        "name": "catalog-example-missing-494",
+        "exists": false,
+        "kind": null,
+        "size": null,
+        "mtime_ms": null,
+        "atime_ms": null,
+        "ctime_ms": null,
+        "mode": null,
+        "uid": null,
+        "gid": null,
+        "nlink": null,
+        "symlink_target": null,
+        "device": null,
+        "inode": null
+      }
+    }
+  ]
+}

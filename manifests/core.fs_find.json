@@ -1,0 +1,193 @@
+{
+  "name": "fs.find",
+  "description": "Walks a directory tree and returns typed metadata records for entries matching name globs, kinds, depth, size and time bounds, stopping at an entry budget so deep trees stay bounded and cancellable.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Tree root to walk; relative paths resolve from the program working directory."
+    },
+    "names": {
+      "type": "list",
+      "items": "string",
+      "description": "Keep entries whose file name matches any glob; * and ? stay within one name, and a leading dot opts hidden names in."
+    },
+    "kinds": {
+      "type": "list",
+      "items": "string",
+      "description": "Keep only these entry kinds: file, directory, symlink, fifo, socket or other."
+    },
+    "include_hidden": {
+      "type": "boolean",
+      "description": "Consider names starting with a dot; hidden names are skipped by default."
+    },
+    "min_depth": {
+      "type": "integer",
+      "description": "Smallest depth below the root to report, where the root itself is depth zero."
+    },
+    "max_depth": {
+      "type": "integer",
+      "description": "Deepest depth below the root to report or descend into; at most 256."
+    },
+    "newer_than": {
+      "type": "integer",
+      "description": "Keep entries modified strictly after this epoch millisecond timestamp."
+    },
+    "older_than": {
+      "type": "integer",
+      "description": "Keep entries modified strictly before this epoch millisecond timestamp."
+    },
+    "min_size": {
+      "type": "integer",
+      "description": "Keep entries with at least this many bytes."
+    },
+    "max_size": {
+      "type": "integer",
+      "description": "Keep entries with at most this many bytes."
+    },
+    "follow_symlinks": {
+      "type": "boolean",
+      "description": "Report link target metadata in records; traversal still never descends through symlinked directories. Defaults to false."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Stop after this many matches; reaching the result cap without a smaller limit fails instead of silently dropping matches."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.find"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "list",
+      "encoding": "json",
+      "items": {
+        "type": "json"
+      }
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "names": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        },
+        "kinds": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        },
+        "include_hidden": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "min_depth": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "max_depth": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "newer_than": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "older_than": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "min_size": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "max_size": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "follow_symlinks": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "limit": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "fs find",
+    "find files by name"
+  ],
+  "examples": [
+    {
+      "program": "run fs.find with path \".\" and names [\"catalog-example-no-match-494-*\"] as matches",
+      "expected_output": []
+    }
+  ]
+}

@@ -10,6 +10,7 @@ mod config;
 mod csv;
 mod ensure;
 mod env_file;
+mod file_meta;
 mod file_test;
 mod filesystem;
 mod glob;
@@ -319,6 +320,9 @@ pub fn execute_with_context(
         "text.split" => text::split(args, input, context),
         "fs.test" => file_test::test(args, cwd, context),
         "fs.glob" => glob::glob(args, cwd, context),
+        "fs.stat" => file_meta::stat(args, cwd, context),
+        "fs.list" => file_meta::list(args, cwd, context),
+        "fs.find" => file_meta::find(args, cwd, context),
         "number.add" | "number.subtract" | "number.multiply" | "number.divide"
         | "number.compare" | "number.int_divide" | "number.modulo" | "number.divmod"
         | "number.min" | "number.max" | "number.clamp" | "number.abs" | "number.sign"

@@ -1,6 +1,6 @@
 {
   "name": "fs.test",
-  "description": "Checks a path predicate such as existence, file type, permissions or emptiness and returns false when the path is absent.",
+  "description": "Checks a path predicate such as existence, file type, permissions, emptiness, special file kind, ownership or modification-time order and returns false when the path is absent.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -20,9 +20,19 @@
         "readable",
         "writable",
         "executable",
-        "empty"
+        "empty",
+        "socket",
+        "fifo",
+        "owned_by_me",
+        "nonempty",
+        "newer_than",
+        "older_than"
       ],
-      "description": "Predicate to check: exists, file, directory, symlink, readable, writable, executable or empty."
+      "description": "Predicate to check: exists, file, directory, symlink, readable, writable, executable, empty, socket, fifo, owned_by_me, nonempty, newer_than or older_than."
+    },
+    "other": {
+      "type": "path",
+      "description": "Second path that newer_than and older_than compare against; required for those kinds."
     }
   },
   "arguments": [
@@ -71,8 +81,20 @@
               "readable",
               "writable",
               "executable",
-              "empty"
+              "empty",
+              "socket",
+              "fifo",
+              "owned_by_me",
+              "nonempty",
+              "newer_than",
+              "older_than"
             ]
+          },
+          "delivery": "single"
+        },
+        "other": {
+          "schema": {
+            "type": "path"
           },
           "delivery": "single"
         }
@@ -93,6 +115,10 @@
   "examples": [
     {
       "program": "run fs.test with path \"catalog-example-missing-494\" and kind \"exists\" as found",
+      "expected_output": false
+    },
+    {
+      "program": "run fs.test with path \"catalog-example-missing-494\" and kind \"nonempty\" as filled",
       "expected_output": false
     }
   ]

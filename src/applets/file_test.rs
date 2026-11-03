@@ -6,6 +6,12 @@
 //! failures (for example permission denied while searching a parent directory)
 //! are reported as errors instead of being mistaken for absence.
 //!
+//! `socket` and `fifo` match Unix special files (always false on Windows),
+//! `owned_by_me` compares the file owner against the effective user ID (Unix
+//! only), `nonempty` negates `empty`, and `newer_than`/`older_than` compare
+//! modification times against a second `other` path like `[[ a -nt b ]]`;
+//! equal times and absent paths are both false.
+//!
 //! Unix `readable`, `writable` and `executable` call `access(2)` with the real
 //! user ID, as `test -r`, `-w` and `-x` do. Windows has no equivalent mode bits,
 //! so the approximation is: `readable` means the file opens for reading (or a
@@ -29,6 +35,12 @@ const KINDS: &[&str] = &[
     "writable",
     "executable",
     "empty",
+    "socket",
+    "fifo",
+    "owned_by_me",
+    "nonempty",
+    "newer_than",
+    "older_than",
 ];
 
 pub(super) fn test(
@@ -51,6 +63,17 @@ pub(super) fn test(
         return Err(invalid("args.path must be nonempty and contain no NUL"));
     }
     let path = resolve_path(text, cwd);
+    // The comparison target for `newer_than`/`older_than` (like `[[ a -nt b ]]`).
+    // Other kinds ignore it, mirroring how extra arguments are ignored elsewhere.
+    let other = if kind == "newer_than" || kind == "older_than" {
+        let text = required_string(args, "other")?;
+        if text.is_empty() || text.contains('\0') {
+            return Err(invalid("args.other must be nonempty and contain no NUL"));
+        }
+        Some(resolve_path(text, cwd))
+    } else {
+        None
+    };
     // Recheck between the stat and any follow-up probe so a budget that
     // expired during the first syscall surfaces before the second one starts.
     let answer = match kind {
@@ -67,6 +90,37 @@ pub(super) fn test(
             }
             Some(_) => false,
         },
+        "nonempty" => match lookup(&path, true)? {
+            None => false,
+            Some(metadata) if metadata.is_file() => metadata.len() > 0,
+            Some(metadata) if metadata.is_dir() => {
+                context.checkpoint()?;
+                !directory_is_empty(&path)?
+            }
+            Some(_) => false,
+        },
+        "socket" | "fifo" => match lookup(&path, true)? {
+            None => false,
+            Some(metadata) => {
+                context.checkpoint()?;
+                special_kind(&metadata.file_type(), kind)
+            }
+        },
+        "owned_by_me" => match lookup(&path, true)? {
+            None => false,
+            Some(metadata) => {
+                context.checkpoint()?;
+                owned_by_caller(&metadata)?
+            }
+        },
+        "newer_than" | "older_than" => {
+            // Both paths are resolved above; `other` is always present here.
+            let other = other.as_ref().ok_or_else(|| {
+                invalid("args.other is required when kind is newer_than or older_than")
+            })?;
+            context.checkpoint()?;
+            compare_mtime(kind, &path, other)?
+        }
         _ => match lookup(&path, true)? {
             None => false,
             Some(metadata) => {
@@ -109,6 +163,59 @@ fn directory_is_empty(path: &Path) -> Result<bool, AppletError> {
         Some(Ok(_)) => Ok(false),
         Some(Err(error)) => Err(io_error(error, format!("reading {}", path.display()))),
     }
+}
+
+fn special_kind(file_type: &fs::FileType, kind: &str) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if kind == "fifo" {
+            file_type.is_fifo()
+        } else {
+            file_type.is_socket()
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // The standard library reports no socket or FIFO file types here.
+        let _ = (file_type, kind);
+        false
+    }
+}
+
+#[cfg(unix)]
+fn owned_by_caller(metadata: &Metadata) -> Result<bool, AppletError> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: `geteuid` takes no arguments and only reads process state.
+    Ok(metadata.uid() == unsafe { libc::geteuid() })
+}
+
+#[cfg(not(unix))]
+fn owned_by_caller(_metadata: &Metadata) -> Result<bool, AppletError> {
+    Err(invalid(
+        "args.kind \"owned_by_me\" is supported only on Unix",
+    ))
+}
+
+/// Strict modification-time comparison like `[[ a -nt b ]]`: equal times and
+/// absent paths are both false rather than errors.
+fn compare_mtime(kind: &str, path: &Path, other: &Path) -> Result<bool, AppletError> {
+    let left = lookup(path, true)?;
+    let right = lookup(other, true)?;
+    let (Some(left), Some(right)) = (left, right) else {
+        return Ok(false);
+    };
+    let left = left
+        .modified()
+        .map_err(|error| io_error(error, format!("testing {}", path.display())))?;
+    let right = right
+        .modified()
+        .map_err(|error| io_error(error, format!("testing {}", other.display())))?;
+    Ok(if kind == "newer_than" {
+        left > right
+    } else {
+        left < right
+    })
 }
 
 #[cfg(unix)]
@@ -175,7 +282,20 @@ mod tests {
     use serde_json::json;
 
     fn check(kind: &str, path: &Path) -> Result<Value, AppletError> {
-        let args = json!({"kind": kind, "path": path.to_str().unwrap()});
+        let mut args = json!({"kind": kind, "path": path.to_str().unwrap()});
+        if kind == "newer_than" || kind == "older_than" {
+            args["other"] = json!(path.to_str().unwrap());
+        }
+        test(
+            args.as_object().unwrap(),
+            Path::new("/"),
+            &ExecutionContext::unrestricted(),
+        )
+    }
+
+    fn check_other(kind: &str, path: &Path, other: &Path) -> Result<Value, AppletError> {
+        let args =
+            json!({"kind": kind, "path": path.to_str().unwrap(), "other": other.to_str().unwrap()});
         test(
             args.as_object().unwrap(),
             Path::new("/"),
@@ -231,5 +351,114 @@ mod tests {
         assert_eq!(check("symlink", &link).unwrap(), json!(true));
         assert_eq!(check("exists", &link).unwrap(), json!(false));
         assert_eq!(check("file", &link).unwrap(), json!(false));
+    }
+
+    #[test]
+    fn nonempty_negates_empty_for_files_and_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("file.txt");
+        fs::write(&file, b"x").unwrap();
+        let empty = temp.path().join("empty.txt");
+        fs::write(&empty, b"").unwrap();
+        let directory = temp.path().join("dir");
+        fs::create_dir(&directory).unwrap();
+        assert_eq!(check("nonempty", &file).unwrap(), json!(true));
+        assert_eq!(check("nonempty", &empty).unwrap(), json!(false));
+        assert_eq!(check("nonempty", &directory).unwrap(), json!(false));
+        fs::write(directory.join("child"), b"").unwrap();
+        assert_eq!(check("nonempty", &directory).unwrap(), json!(true));
+        assert_eq!(
+            check("nonempty", &temp.path().join("missing")).unwrap(),
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn time_comparison_needs_both_paths_and_is_strict() {
+        let temp = tempfile::tempdir().unwrap();
+        let older = temp.path().join("older");
+        fs::write(&older, b"old").unwrap();
+        let newer = temp.path().join("newer");
+        fs::write(&newer, b"new").unwrap();
+        // Pinned mtimes keep the ordering exact without sleeping for clock
+        // granularity.
+        super::super::file_meta::set_test_mtime(&older, 1_700_000_000);
+        super::super::file_meta::set_test_mtime(&newer, 1_800_000_000);
+        assert_eq!(
+            check_other("newer_than", &newer, &older).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            check_other("older_than", &older, &newer).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            check_other("newer_than", &older, &newer).unwrap(),
+            json!(false)
+        );
+        assert_eq!(
+            check_other("older_than", &newer, &older).unwrap(),
+            json!(false)
+        );
+        assert_eq!(
+            check_other("newer_than", &older, &older).unwrap(),
+            json!(false)
+        );
+        assert_eq!(
+            check_other("older_than", &older, &older).unwrap(),
+            json!(false)
+        );
+        let missing = temp.path().join("missing");
+        assert_eq!(
+            check_other("newer_than", &older, &missing).unwrap(),
+            json!(false)
+        );
+        assert_eq!(
+            check_other("older_than", &missing, &older).unwrap(),
+            json!(false)
+        );
+        let args = json!({"kind": "newer_than", "path": older.to_str().unwrap()});
+        let error = test(
+            args.as_object().unwrap(),
+            Path::new("/"),
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("args.other"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_files_and_ownership_use_unix_identity() {
+        use std::os::unix::net::UnixListener;
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("file.txt");
+        fs::write(&file, b"x").unwrap();
+        assert_eq!(check("socket", &file).unwrap(), json!(false));
+        assert_eq!(check("fifo", &file).unwrap(), json!(false));
+        assert_eq!(check("owned_by_me", &file).unwrap(), json!(true));
+        let socket_path = temp.path().join("socket");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+        assert_eq!(check("socket", &socket_path).unwrap(), json!(true));
+        assert_eq!(check("fifo", &socket_path).unwrap(), json!(false));
+        let fifo_path = temp.path().join("fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(check("fifo", &fifo_path).unwrap(), json!(true));
+        assert_eq!(check("socket", &fifo_path).unwrap(), json!(false));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn special_files_are_false_and_ownership_is_unix_only_on_windows() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("file.txt");
+        fs::write(&file, b"x").unwrap();
+        assert_eq!(check("socket", &file).unwrap(), json!(false));
+        assert_eq!(check("fifo", &file).unwrap(), json!(false));
+        assert!(check("owned_by_me", &file).is_err());
     }
 }

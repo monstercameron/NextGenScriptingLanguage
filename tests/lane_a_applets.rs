@@ -14,7 +14,11 @@ fn args(value: Value) -> Map<String, Value> {
 }
 
 fn test_kind(path: &Path, kind: &str) -> Result<Value, AppletError> {
-    execute("fs.test", &args(json!({"path": path, "kind": kind})), &[])
+    let mut invocation = json!({"path": path, "kind": kind});
+    if kind == "newer_than" || kind == "older_than" {
+        invocation["other"] = json!(path);
+    }
+    execute("fs.test", &args(invocation), &[])
 }
 
 fn glob_in(
@@ -78,7 +82,15 @@ fn fs_test_answers_booleans_and_treats_absence_as_false() {
         "writable",
         "executable",
         "empty",
+        "socket",
+        "fifo",
+        "owned_by_me",
+        "nonempty",
+        "newer_than",
+        "older_than",
     ] {
+        // `owned_by_me` answers false for absent paths on every platform; an
+        // existing path exercises the Unix-only owner lookup instead.
         assert_eq!(test_kind(&missing, kind).unwrap(), json!(false), "{kind}");
     }
 }
@@ -122,6 +134,94 @@ fn fs_test_symlink_inspects_the_link_and_other_kinds_follow_it() {
     assert_eq!(test_kind(&dangling, "symlink").unwrap(), json!(true));
     assert_eq!(test_kind(&dangling, "exists").unwrap(), json!(false));
     assert_eq!(test_kind(&target, "symlink").unwrap(), json!(false));
+}
+
+#[test]
+fn fs_stat_returns_one_typed_record_per_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("plain.txt");
+    fs::write(&file, b"data").unwrap();
+    let info = execute("fs.stat", &args(json!({"path": file})), &[]).unwrap();
+    assert_eq!(info["exists"], json!(true));
+    assert_eq!(info["kind"], json!("file"));
+    assert_eq!(info["size"], json!(4));
+    assert_eq!(info["name"], json!("plain.txt"));
+    assert!(info["mtime_ms"].as_i64().is_some());
+    assert_eq!(info["symlink_target"], serde_json::Value::Null);
+    let missing = execute(
+        "fs.stat",
+        &args(json!({"path": temp.path().join("missing")})),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(missing["exists"], json!(false));
+    assert_eq!(missing["kind"], serde_json::Value::Null);
+    #[cfg(not(unix))]
+    for field in ["mode", "uid", "gid", "nlink", "device", "inode"] {
+        assert_eq!(info[field], serde_json::Value::Null, "{field}");
+    }
+}
+
+#[test]
+fn fs_list_and_fs_find_stay_typed_end_to_end() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("b.log"), b"bb").unwrap();
+    fs::write(temp.path().join("a.log"), b"a").unwrap();
+    let listed = execute("fs.list", &args(json!({"path": temp.path()})), &[]).unwrap();
+    let names: Vec<_> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, vec!["a.log", "b.log"]);
+    let found = execute_in_cwd(
+        "fs.find",
+        &args(json!({"path": ".", "names": ["*.log"]})),
+        &[],
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(found.as_array().unwrap().len(), 2);
+    assert!(found
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["kind"] == json!("file")));
+}
+
+#[test]
+fn fs_stat_plus_time_applets_detect_stale_locks_without_text_parsing() {
+    let temp = tempfile::tempdir().unwrap();
+    let lock = temp.path().join("menu-images.lock");
+    fs::write(&lock, b"1234").unwrap();
+    // The rewrite under test: `stat -c %Y` becomes one typed record.
+    let info = execute("fs.stat", &args(json!({"path": lock})), &[]).unwrap();
+    let mtime_s = info["mtime_ms"].as_i64().unwrap().div_euclid(1000);
+    // A fresh lock observed now is younger than the 120s stale threshold.
+    let now = execute("time.now", &args(json!({})), &[]).unwrap();
+    let fresh = execute(
+        "time.diff",
+        &args(json!({"left": now["epoch_s"], "right": mtime_s, "unit": "seconds"})),
+        &[],
+    )
+    .unwrap();
+    assert!(fresh.as_i64().unwrap() < 120);
+    // The same lock observed through an overridden clock 200s later is stale.
+    // `epoch_s` is the fake clock: no process-global override is involved.
+    let later = execute(
+        "time.now",
+        &args(json!({"epoch_s": now["epoch_s"].as_i64().unwrap() + 200})),
+        &[],
+    )
+    .unwrap();
+    let stale = execute(
+        "time.diff",
+        &args(json!({"left": later["epoch_s"], "right": mtime_s, "unit": "seconds"})),
+        &[],
+    )
+    .unwrap();
+    assert!(stale.as_i64().unwrap() > 120);
 }
 
 #[test]

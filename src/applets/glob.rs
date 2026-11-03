@@ -323,6 +323,64 @@ fn wildcard_matches(tokens: &[Token], name: &[char]) -> bool {
     token == tokens.len()
 }
 
+/// A compiled single-name pattern for `fs.find` and `fs.list` filtering.
+/// Unlike [`Segment::AnyDepth`], matching applies to one file name, so `**`
+/// and path separators are rejected at compile time. Hidden names (starting
+/// with `.`) match only when the caller passes `include_hidden` or the
+/// pattern itself starts with a literal dot, mirroring wildcard components.
+pub(super) struct NamePattern {
+    segment: Segment,
+}
+
+pub(super) fn compile_name_pattern(pattern: &str) -> Result<NamePattern, AppletError> {
+    if pattern.is_empty() {
+        return Err(invalid("name pattern cannot be empty"));
+    }
+    if pattern.len() > MAX_PATTERN_BYTES {
+        return Err(invalid(format!(
+            "name pattern exceeds the {MAX_PATTERN_BYTES}-byte limit"
+        )));
+    }
+    if pattern.contains('\0') {
+        return Err(invalid("name pattern must not contain NUL"));
+    }
+    if pattern.contains(is_separator) {
+        return Err(invalid(
+            "name pattern matches one file name and must not contain a separator",
+        ));
+    }
+    let segment = parse_segment(pattern)?;
+    if segment == Segment::AnyDepth {
+        return Err(invalid(
+            "name pattern matches one file name; ** needs a following component",
+        ));
+    }
+    Ok(NamePattern { segment })
+}
+
+impl NamePattern {
+    pub(super) fn matches(&self, name: &str, include_hidden: bool) -> bool {
+        if !include_hidden && !self.allows_hidden() && name.starts_with('.') {
+            return false;
+        }
+        match &self.segment {
+            Segment::Literal(expected) => expected == name,
+            Segment::Wildcard { tokens, .. } => {
+                wildcard_matches(tokens, &name.chars().collect::<Vec<_>>())
+            }
+            Segment::AnyDepth => false,
+        }
+    }
+
+    fn allows_hidden(&self) -> bool {
+        match &self.segment {
+            Segment::Literal(expected) => expected.starts_with('.'),
+            Segment::Wildcard { leading_dot, .. } => *leading_dot,
+            Segment::AnyDepth => false,
+        }
+    }
+}
+
 /// Look up a path without reading a directory. `Ok(None)` means absent.
 fn lookup_metadata(path: &Path, follow: bool) -> Result<Option<fs::Metadata>, AppletError> {
     let result = if follow {

@@ -347,13 +347,7 @@ pub(super) fn escaped_length_checked(
         if text.len() > 4096 {
             context.checkpoint()?;
         }
-        for byte in chunk {
-            length = length.saturating_add(match byte {
-                b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 1,
-                0x00..=0x1f => 5,
-                _ => 0,
-            });
-        }
+        length = length.saturating_add(escape_extra(chunk));
         if length > MAX_BYTES {
             return Err(invalid(format!(
                 "JSON value exceeds the {MAX_BYTES}-byte limit"
@@ -363,20 +357,184 @@ pub(super) fn escaped_length_checked(
     Ok(length)
 }
 
+/// Strings at or above this length use the AVX2/NEON escape counter where the
+/// CPU supports it; shorter strings stay on the scalar counter so dispatch
+/// never costs more than the few bytes it would scan.
+pub(super) const ESCAPE_VECTOR_THRESHOLD: usize = 64;
+
+/// Extra bytes serde_json's compact encoding adds for `bytes`: `"` and `\`
+/// and the short control escapes add one byte each, other control bytes add
+/// five each (`\u00XX`), and every other byte is copied as-is.
+fn escape_extra(bytes: &[u8]) -> usize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if bytes.len() >= ESCAPE_VECTOR_THRESHOLD && std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 was just detected at runtime. `escape_extra_avx2`
+            // only reads inside `bytes` with unaligned loads and counts the
+            // tail scalarly, so no byte is missed or double-counted.
+            return unsafe { escape_extra_avx2(bytes) };
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if bytes.len() >= ESCAPE_VECTOR_THRESHOLD {
+            // SAFETY: NEON is guaranteed on aarch64. `escape_extra_neon`
+            // only reads inside `bytes` with unaligned loads and counts the
+            // tail scalarly, so no byte is missed or double-counted.
+            return unsafe { escape_extra_neon(bytes) };
+        }
+    }
+    escape_extra_scalar(bytes)
+}
+
+fn escape_extra_scalar(bytes: &[u8]) -> usize {
+    let mut extra = 0usize;
+    for byte in bytes {
+        extra += match byte {
+            b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 1,
+            0x00..=0x1f => 5,
+            _ => 0,
+        };
+    }
+    extra
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn escape_extra_avx2(bytes: &[u8]) -> usize {
+    use std::arch::x86_64::*;
+    // SAFETY: the caller guarantees AVX2 is available (checked with runtime
+    // feature detection on x86_64). Every intrinsic below runs under that
+    // guarantee; every load reads exactly 32 bytes inside `bytes` via
+    // `_mm256_loadu_si256`, which needs no alignment, and the remainder is
+    // counted scalarly outside this block.
+    let mut blocks = bytes.chunks_exact(32);
+    let vector = unsafe {
+        let quote = _mm256_set1_epi8(b'"' as i8);
+        let backslash = _mm256_set1_epi8(b'\\' as i8);
+        // `max_epu8(v, 0x1f) == 0x1f` exactly for bytes below 0x20, since the
+        // maximum of an unsigned byte and 0x1f is 0x1f only in that case.
+        let ctrl_ceiling = _mm256_set1_epi8(0x1f);
+        let short = [
+            _mm256_set1_epi8(0x08),
+            _mm256_set1_epi8(0x09),
+            _mm256_set1_epi8(0x0a),
+            _mm256_set1_epi8(0x0c),
+            _mm256_set1_epi8(0x0d),
+        ];
+        let mut quote_bs = 0usize;
+        let mut ctrl = 0usize;
+        let mut short_ctrl = 0usize;
+        for block in &mut blocks {
+            // `chunks_exact(32)` yields slices of exactly 32 bytes, so this
+            // unaligned load stays in bounds.
+            let values = _mm256_loadu_si256(block.as_ptr() as *const __m256i);
+            let is_quote_bs = _mm256_or_si256(
+                _mm256_cmpeq_epi8(values, quote),
+                _mm256_cmpeq_epi8(values, backslash),
+            );
+            quote_bs += _mm256_movemask_epi8(is_quote_bs).count_ones() as usize;
+            let is_ctrl =
+                _mm256_cmpeq_epi8(_mm256_max_epu8(values, ctrl_ceiling), ctrl_ceiling);
+            ctrl += _mm256_movemask_epi8(is_ctrl).count_ones() as usize;
+            let mut is_short = _mm256_cmpeq_epi8(values, short[0]);
+            for target in &short[1..] {
+                is_short = _mm256_or_si256(is_short, _mm256_cmpeq_epi8(values, *target));
+            }
+            short_ctrl += _mm256_movemask_epi8(is_short).count_ones() as usize;
+        }
+        // Short escapes cost one extra byte each; the remaining control bytes
+        // cost five each. Every short control byte is also a control byte,
+        // hence the subtraction below.
+        quote_bs + short_ctrl + (ctrl - short_ctrl) * 5
+    };
+    vector + escape_extra_scalar(blocks.remainder())
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn escape_extra_neon(bytes: &[u8]) -> usize {
+    use std::arch::aarch64::*;
+    // SAFETY: NEON is part of the aarch64 baseline, so no runtime detection is
+    // needed. Every intrinsic below runs under that guarantee; every load
+    // reads exactly 16 bytes inside `bytes` via `vld1q_u8`, which needs no
+    // alignment, and the remainder is counted scalarly outside this block.
+    let mut blocks = bytes.chunks_exact(16);
+    let vector = unsafe {
+        let quote = vdupq_n_u8(b'"');
+        let backslash = vdupq_n_u8(b'\\');
+        let ctrl_limit = vdupq_n_u8(0x20);
+        let short = [
+            vdupq_n_u8(0x08),
+            vdupq_n_u8(0x09),
+            vdupq_n_u8(0x0a),
+            vdupq_n_u8(0x0c),
+            vdupq_n_u8(0x0d),
+        ];
+        let mut quote_bs = 0usize;
+        let mut ctrl = 0usize;
+        let mut short_ctrl = 0usize;
+        for block in &mut blocks {
+            // `chunks_exact(16)` yields slices of exactly 16 bytes, so this
+            // load stays in bounds.
+            let values = vld1q_u8(block.as_ptr());
+            let is_quote_bs = vorrq_u8(vceqq_u8(values, quote), vceqq_u8(values, backslash));
+            let is_ctrl = vcltq_u8(values, ctrl_limit);
+            let mut is_short = vceqq_u8(values, short[0]);
+            for target in &short[1..] {
+                is_short = vorrq_u8(is_short, vceqq_u8(values, *target));
+            }
+            // Each comparison mask holds 0xff per matching lane; shifting
+            // right by 7 turns it into 1 per lane so the sum is the count.
+            quote_bs += vaddvq_u8(vshrq_n_u8::<7>(is_quote_bs)) as usize;
+            ctrl += vaddvq_u8(vshrq_n_u8::<7>(is_ctrl)) as usize;
+            short_ctrl += vaddvq_u8(vshrq_n_u8::<7>(is_short)) as usize;
+        }
+        // Short escapes cost one extra byte each; the remaining control bytes
+        // cost five each. Every short control byte is also a control byte,
+        // hence the subtraction below.
+        quote_bs + short_ctrl + (ctrl - short_ctrl) * 5
+    };
+    vector + escape_extra_scalar(blocks.remainder())
+}
+
+/// The vector path selected for `bytes` on this CPU, or `None` where no SIMD
+/// path applies, so parity tests can exercise each detected ISA path directly.
+#[cfg(test)]
+#[cfg(target_arch = "x86_64")]
+pub(super) fn escape_extra_vector(bytes: &[u8]) -> Option<usize> {
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 was just detected at runtime; the callee only reads
+        // inside `bytes` with unaligned loads.
+        Some(unsafe { escape_extra_avx2(bytes) })
+    } else {
+        None
+    }
+}
+
+/// The vector path selected for `bytes` on this CPU. NEON is guaranteed on
+/// aarch64, so this always applies there.
+#[cfg(test)]
+#[cfg(target_arch = "aarch64")]
+pub(super) fn escape_extra_vector(bytes: &[u8]) -> Option<usize> {
+    // SAFETY: NEON is part of the aarch64 baseline; the callee only reads
+    // inside `bytes` with unaligned loads.
+    Some(unsafe { escape_extra_neon(bytes) })
+}
+
+/// No SIMD path applies on this target, so parity tests fall back to the
+/// scalar counter.
+#[cfg(test)]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+pub(super) fn escape_extra_vector(_bytes: &[u8]) -> Option<usize> {
+    None
+}
+
 /// The length of `text` as a quoted JSON string in serde_json's compact encoding:
 /// `"` and `\` and the short control escapes take two bytes, other control bytes take
 /// six (`\u00XX`), and every other byte, including non-ASCII UTF-8, is copied.
 #[cfg(test)]
 pub(super) fn escaped_length(text: &str) -> usize {
-    let escapes: usize = text
-        .bytes()
-        .map(|byte| match byte {
-            b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 1,
-            0x00..=0x1f => 5,
-            _ => 0,
-        })
-        .sum();
-    text.len() + escapes + 2
+    text.len() + escape_extra(text.as_bytes()) + 2
 }
 
 /// The length of a number as serde_json writes it (integers in decimal, floats in

@@ -1282,6 +1282,82 @@ mod tests {
         }
     }
 
+    /// The vector escape counter must agree with the scalar counter and with
+    /// serde_json's compact encoding for every byte class, UTF-8 text and the
+    /// lengths around the vector threshold and the block sizes.
+    #[test]
+    fn escaped_length_vector_path_matches_scalar_and_serde_json() {
+        use super::super::shared::{ESCAPE_VECTOR_THRESHOLD, escape_extra_vector};
+
+        fn scalar_extra(bytes: &[u8]) -> usize {
+            bytes
+                .iter()
+                .map(|byte| match byte {
+                    b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 1,
+                    0x00..=0x1f => 5,
+                    _ => 0,
+                })
+                .sum()
+        }
+
+        // Every byte class: all ASCII bytes plus multi-byte UTF-8, padded so
+        // the vector path engages.
+        let mut classes: Vec<u8> = (0x00u8..=0x7fu8).collect();
+        classes.extend_from_slice("é 日本\"\\\u{8}\t\n\u{c}\r\u{0}\u{1f}".as_bytes());
+        let mut long_classes = classes.clone();
+        while long_classes.len() < ESCAPE_VECTOR_THRESHOLD + 33 {
+            long_classes.extend_from_slice(&classes);
+        }
+        // Boundary lengths around the threshold and both block sizes.
+        let mut cases = vec![
+            String::from(""),
+            String::from("\"\\\u{8}\t\n\u{c}\r\u{0}\u{1f}é"),
+            "a".repeat(ESCAPE_VECTOR_THRESHOLD - 1),
+            "b".repeat(ESCAPE_VECTOR_THRESHOLD),
+            "c".repeat(ESCAPE_VECTOR_THRESHOLD + 1),
+            "d".repeat(31),
+            "e".repeat(32),
+            "f".repeat(33),
+            "g".repeat(63),
+            "h".repeat(64),
+            "i".repeat(65),
+        ];
+        cases.push(String::from_utf8(long_classes).unwrap());
+        // A deterministic long mix of quotes, backslashes, controls and UTF-8.
+        let mut mixed = String::new();
+        for index in 0..4096 {
+            mixed.push(match index % 16 {
+                0 => '"',
+                1 => '\\',
+                2 => '\u{8}',
+                3 => '\t',
+                4 => '\n',
+                5 => '\u{c}',
+                6 => '\r',
+                7 => '\u{0}',
+                8 => '\u{1f}',
+                9 => 'é',
+                10 => '日',
+                _ => 'x',
+            });
+        }
+        cases.push(mixed);
+
+        for text in cases {
+            let bytes = text.as_bytes();
+            let expected = text.len() + scalar_extra(bytes) + 2;
+            assert_eq!(escaped_length(&text), expected, "length {text:?}");
+            assert_eq!(
+                serde_json::to_string(&text).unwrap().len(),
+                expected,
+                "serde_json {text:?}"
+            );
+            if let Some(vector) = escape_extra_vector(bytes) {
+                assert_eq!(bytes.len() + vector + 2, expected, "vector {text:?}");
+            }
+        }
+    }
+
     #[test]
     fn stringify_reserves_the_checked_compact_length() {
         let context = ExecutionContext::new(&|| Ok(()));

@@ -3089,6 +3089,124 @@ pub fn run(program: &Program, registry: &Registry, options: &RunOptions) -> Resu
     run_with_drain_timeout(program, registry, options, DEFAULT_DRAIN_TIMEOUT)
 }
 
+/// An immutable validated execution plan for repeated runs of one program.
+///
+/// `prepare` runs grammar, structural and schema validation once and records a
+/// fingerprint of the registry definitions it was checked against. Every `run`
+/// re-checks that fingerprint and then re-runs input resolution,
+/// capability/path authorization, module preloads and checkpoint-integrity
+/// checks: capability policy, environment and checkpoint state are never
+/// cached, so a changed policy or registry cannot reuse a stale approval.
+#[derive(Debug, Clone)]
+pub struct ExecutionPlan {
+    program: Program,
+    registry_fingerprint: [u8; 32],
+}
+
+fn registry_schema_fingerprint(registry: &Registry) -> Result<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    for manifest in registry.manifests()? {
+        let bytes = serde_json::to_vec(manifest)?;
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    if let Some(scope) = registry.scope_identity() {
+        hasher.update(b"scope:");
+        hasher.update(scope.as_bytes());
+    }
+    if let Some(root) = registry.module_root() {
+        hasher.update(b"root:");
+        hasher.update(root.as_os_str().as_encoded_bytes());
+    }
+    Ok(hasher.finalize().into())
+}
+
+impl ExecutionPlan {
+    /// Validate `program` against `registry` once; later `run` calls reuse that
+    /// validation. Fails with the same diagnostic `run` would report.
+    pub fn prepare(program: &Program, registry: &Registry) -> Result<Self> {
+        validate(program, registry)?;
+        if program.trigger.is_some() {
+            bail!("triggered programs require run_service");
+        }
+        Ok(Self {
+            program: program.clone(),
+            registry_fingerprint: registry_schema_fingerprint(registry)?,
+        })
+    }
+
+    /// The validated program this plan runs.
+    pub fn program(&self) -> &Program {
+        &self.program
+    }
+
+    /// Refuse a registry whose definitions changed since `prepare`.
+    pub fn check(&self, registry: &Registry) -> Result<()> {
+        let current = registry_schema_fingerprint(registry)?;
+        if current != self.registry_fingerprint {
+            bail!("execution plan is stale: registry definitions changed since the plan was prepared; prepare a new plan");
+        }
+        Ok(())
+    }
+
+    /// Run the stored program with reused validation. Input resolution,
+    /// capability/path authorization, module preloads and checkpoint-integrity
+    /// checks all re-run on every execution.
+    pub fn run(&self, registry: &Registry, options: &RunOptions) -> Result<RunResult> {
+        self.run_with_drain_timeout(registry, options, DEFAULT_DRAIN_TIMEOUT)
+    }
+
+    /// `run` with an explicit interrupt drain budget. The budget applies only
+    /// to programs with an `on interrupt` body.
+    pub fn run_with_drain_timeout(
+        &self,
+        registry: &Registry,
+        options: &RunOptions,
+        drain_timeout: Duration,
+    ) -> Result<RunResult> {
+        #[cfg(target_os = "linux")]
+        let _sandbox_probe_run = crate::platform::sandbox::begin_probe_run();
+        validate_kill_grace(options.kill_grace)?;
+        let deadline = deadline_after(options.total_timeout, "total timeout")?;
+        let mut signals = if has_interrupt_handler(&self.program) {
+            Signals::register_with_drain(deadline, drain_timeout)?
+        } else {
+            Signals::register_with_deadline(deadline)?
+        };
+        signals.fs_timeout = options.fs_timeout;
+        signals.kill_grace = options.kill_grace;
+        check_execution_budget(&signals.cancelled, signals.deadline)?;
+        self.check(registry)?;
+        run_after_validation(&self.program, registry, options, &signals)
+    }
+}
+
+fn run_after_validation(
+    program: &Program,
+    registry: &Registry,
+    options: &RunOptions,
+    signals: &Signals,
+) -> Result<RunResult> {
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    if program.trigger.is_some() {
+        bail!("triggered programs require run_service");
+    }
+    let cwd = fs::canonicalize(&options.working_directory)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    let options = configured_inputs(program, registry, options)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    crate::capabilities::preflight_with_cache_directory(
+        program,
+        registry,
+        &cwd,
+        options.cache_directory.as_deref(),
+    )?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    preload_program_modules(program, registry, signals, &cwd)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    run_finite(program, registry, &options, signals, Input::Empty, None)
+}
+
 /// `run` with an explicit interrupt drain budget. The budget applies only to programs
 /// with an `on interrupt` body.
 pub fn run_with_drain_timeout(
@@ -3110,24 +3228,7 @@ pub fn run_with_drain_timeout(
     signals.kill_grace = options.kill_grace;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
-    check_execution_budget(&signals.cancelled, signals.deadline)?;
-    if program.trigger.is_some() {
-        bail!("triggered programs require run_service");
-    }
-    let cwd = fs::canonicalize(&options.working_directory)?;
-    check_execution_budget(&signals.cancelled, signals.deadline)?;
-    let options = configured_inputs(program, registry, options)?;
-    check_execution_budget(&signals.cancelled, signals.deadline)?;
-    crate::capabilities::preflight_with_cache_directory(
-        program,
-        registry,
-        &cwd,
-        options.cache_directory.as_deref(),
-    )?;
-    check_execution_budget(&signals.cancelled, signals.deadline)?;
-    preload_program_modules(program, registry, &signals, &cwd)?;
-    check_execution_budget(&signals.cancelled, signals.deadline)?;
-    run_finite(program, registry, &options, &signals, Input::Empty, None)
+    run_after_validation(program, registry, options, &signals)
 }
 
 pub(super) fn authorize_checkpoint_persistence(
@@ -6908,6 +7009,100 @@ mod output_limit_message_tests {
         assert!(output_limit_message(false, 1).starts_with("foreground command"));
         assert!(output_limit_message(false, 1).contains("streaming final `pipe to`"));
         assert!(!output_limit_message(false, 1).contains("then save to FILE"));
+    }
+}
+
+#[cfg(test)]
+mod execution_plan_tests {
+    use super::*;
+
+    fn plan_options(directory: &tempfile::TempDir) -> RunOptions {
+        RunOptions::new(directory.path().to_path_buf())
+    }
+
+    #[test]
+    fn validated_plan_matches_direct_run_across_repeated_runs() {
+        let directory = tempfile::tempdir().expect("temporary plan directory");
+        let registry = Registry::from_sources(&[] as &[String]).expect("empty registry");
+        let program = crate::parser::parse("use value \"ab\" as bound\nthen encode bound as json\n")
+            .expect("valid value program");
+        let options = plan_options(&directory);
+
+        let direct = run(&program, &registry, &options).expect("direct run");
+        let plan = ExecutionPlan::prepare(&program, &registry).expect("prepare plan");
+        assert_eq!(plan.program(), &program);
+        let first = plan.run(&registry, &options).expect("first planned run");
+        let second = plan.run(&registry, &options).expect("second planned run");
+        assert!(!direct.output.is_empty(), "fixture program must emit output");
+        assert_eq!(first.output, direct.output);
+        assert_eq!(second.output, direct.output);
+    }
+
+    #[test]
+    fn validated_plan_resolves_inputs_on_every_run() {
+        let directory = tempfile::tempdir().expect("temporary plan directory");
+        let registry = Registry::from_sources(&[] as &[String]).expect("empty registry");
+        let program = crate::parser::parse(
+            "accept greeting as text\nuse value greeting as bound\nthen encode bound as json\n",
+        )
+        .expect("valid input program");
+        let plan = ExecutionPlan::prepare(&program, &registry).expect("prepare plan");
+
+        let options_a = RunOptions {
+            inputs: BTreeMap::from([("greeting".to_owned(), Value::String("a".to_owned()))]),
+            ..plan_options(&directory)
+        };
+        let options_b = RunOptions {
+            inputs: BTreeMap::from([("greeting".to_owned(), Value::String("b".to_owned()))]),
+            ..plan_options(&directory)
+        };
+        let out_a = plan.run(&registry, &options_a).expect("planned run with a");
+        let out_b = plan.run(&registry, &options_b).expect("planned run with b");
+        assert_ne!(
+            out_a.output, out_b.output,
+            "inputs must resolve per execution, not from the prepared plan"
+        );
+        let direct_b = run(&program, &registry, &options_b).expect("direct run with b");
+        assert_eq!(out_b.output, direct_b.output);
+    }
+
+    #[test]
+    fn validated_plan_refuses_a_changed_registry() {
+        let directory = tempfile::tempdir().expect("temporary plan directory");
+        let registry = Registry::from_sources(&[] as &[String]).expect("empty registry");
+        let program = crate::parser::parse("use value \"ab\" as bound\nthen encode bound as json\n")
+            .expect("valid value program");
+        let plan = ExecutionPlan::prepare(&program, &registry).expect("prepare plan");
+        plan.check(&registry).expect("same registry still matches");
+
+        let changed = Registry::from_sources(&[include_str!("../manifests/core.text_concat.json")])
+            .expect("registry with one applet");
+        let error = match plan.run(&changed, &plan_options(&directory)) {
+            Ok(_) => panic!("a changed registry must not reuse the plan"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("stale"),
+            "stale plans must fail closed, got: {error:#}"
+        );
+    }
+
+    #[test]
+    fn validated_plan_prepare_reports_the_same_diagnostic_as_run() {
+        let directory = tempfile::tempdir().expect("temporary plan directory");
+        let registry = Registry::from_sources(&[] as &[String]).expect("empty registry");
+        let program =
+            crate::parser::parse("run missing.applet\n").expect("parseable unknown call");
+        let options = plan_options(&directory);
+        let run_error = match run(&program, &registry, &options) {
+            Ok(_) => panic!("unknown applets must fail the run"),
+            Err(error) => format!("{error:#}"),
+        };
+        let prepare_error = match ExecutionPlan::prepare(&program, &registry) {
+            Ok(_) => panic!("unknown applets must fail prepare"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert_eq!(prepare_error, run_error);
     }
 }
 

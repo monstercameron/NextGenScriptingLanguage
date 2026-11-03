@@ -98,11 +98,8 @@ pub fn execute_bundle() -> &'static str {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-                    std::fs::set_permissions(
-                        &destination,
-                        std::fs::Permissions::from_mode(0o755),
-                    )
-                    .expect("make the staged binary executable");
+                    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))
+                        .expect("make the staged binary executable");
                     assert_eq!(
                         std::fs::metadata(&destination).expect("stat").nlink(),
                         1,

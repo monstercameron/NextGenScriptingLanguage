@@ -115,7 +115,7 @@ fn raw_bytes_and_list_results_are_each_one_event() -> Result<()> {
         PortValue::Value(Value::List(vec![
             Value::String("one".into()),
             Value::String("two".into())
-        ]))
+        ].into()))
     );
     assert_eq!(list[0].sequence, 1);
     Ok(())

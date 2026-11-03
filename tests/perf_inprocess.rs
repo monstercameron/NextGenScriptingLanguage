@@ -139,7 +139,7 @@ fn end_to_end_json_and_text() {
         || {
             std::collections::BTreeMap::from([(
                 "text".into(),
-                flow::ast::Value::String(text.clone()),
+                flow::ast::Value::String(text.clone().into()),
             )])
         },
         &registry,
@@ -230,7 +230,7 @@ fn text_upper_cost_breakdown() {
     let mut text = line.repeat(1_000_000 / line.len() + 1);
     text.truncate(1_000_000);
     let args =
-        serde_json::Map::from_iter([("text".into(), serde_json::Value::String(text.clone()))]);
+        serde_json::Map::from_iter([("text".into(), serde_json::Value::String(text.clone().into()))]);
     let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     measure("allocate + copy input", || black_box(&text).clone());
@@ -265,7 +265,7 @@ fn text_upper_does_not_regress_standard_mapping() {
     let text = "the quick brown fox 0123456789\n".repeat(1_000_000 / 30 + 1);
     let text = &text[..1_000_000];
     let args =
-        serde_json::Map::from_iter([("text".into(), serde_json::Value::String(text.to_owned()))]);
+        serde_json::Map::from_iter([("text".into(), serde_json::Value::String(text.to_owned().into()))]);
     let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut standard = Vec::with_capacity(101);
     let mut applet = Vec::with_capacity(101);
@@ -301,7 +301,7 @@ fn lane_v2_result_binding_one_mib() {
     for _ in 0..7 {
         let bindings = std::collections::BTreeMap::from([(
             "text".into(),
-            flow::ast::Value::String(input.clone()),
+            flow::ast::Value::String(input.clone().into()),
         )]);
         let baseline = LIVE_BYTES.load(Ordering::Relaxed);
         PEAK_BYTES.store(baseline, Ordering::Relaxed);
@@ -329,7 +329,7 @@ fn lane_v2_result_binding_one_mib() {
         &encoded_program,
         &registry,
         &encoded_options,
-        std::collections::BTreeMap::from([("text".into(), flow::ast::Value::String(input))]),
+        std::collections::BTreeMap::from([("text".into(), flow::ast::Value::String(input.into()))]),
         Vec::new(),
         Arc::new(AtomicBool::new(false)),
     )

@@ -247,7 +247,7 @@ impl ParameterPredicate {
                 value: expected, ..
             } => Some(match value {
                 None => true,
-                Some(Value::String(actual)) => actual != expected,
+                Some(Value::String(actual)) => actual.as_ref() != expected.as_str(),
                 _ => false,
             }),
             Self::NumberRange {
@@ -690,7 +690,7 @@ impl ParameterSchema {
                 if self
                     .enum_values
                     .as_ref()
-                    .is_some_and(|choices| !choices.contains(text))
+                    .is_some_and(|choices| !choices.iter().any(|choice| choice.as_str() == text.as_ref()))
                 {
                     bail!(
                         "{path} must be one of {:?}",
@@ -715,7 +715,7 @@ impl ParameterSchema {
                         bail!("{path} is missing required field {name:?}");
                     }
                 }
-                for (name, value) in fields {
+                for (name, value) in fields.iter() {
                     if let Some(schema) = self.fields.get(name) {
                         schema.validate_value(
                             value,
@@ -2075,7 +2075,7 @@ impl Manifest {
                     schema = constraint.json_schema();
                 }
                 if let Some(description) = &spec.description {
-                    schema["description"] = serde_json::Value::String(description.clone());
+                    schema["description"] = serde_json::Value::String(description.clone().into());
                 }
                 if let Some(values) = &spec.enum_values {
                     schema["enum"] = serde_json::json!(values);
@@ -2431,9 +2431,12 @@ impl Manifest {
                 continue;
             }
             if let Value::List(items) = value {
-                for item in items {
+                for item in items.iter() {
                     if let Value::Reference(reference) = item {
-                        let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
+                        let kind = bindings
+                            .get::<str>(reference.as_ref())
+                            .copied()
+                            .unwrap_or(InputType::Text);
                         if !list_item_accepts_reference(spec.item_type, kind) {
                             bail!(
                                 "parameter {name:?} requires {} list items, but reference {reference:?} contains {kind}",
@@ -2654,9 +2657,13 @@ impl Manifest {
                 if starts_with_home(text) {
                     let expanded = crate::home::expand_home_path(text)
                         .with_context(|| format!("parameter {name:?}"))?;
-                    *text = expanded.into_os_string().into_string().map_err(|_| {
-                        anyhow!("parameter {name:?}: the home directory is not UTF-8")
-                    })?;
+                    *text = expanded
+                        .into_os_string()
+                        .into_string()
+                        .map_err(|_| {
+                            anyhow!("parameter {name:?}: the home directory is not UTF-8")
+                        })?
+                        .into();
                 }
             }
         }
@@ -3045,7 +3052,7 @@ fn validate_value(
             }
         }
         if let Some(values) = &spec.enum_values {
-            if !values.iter().any(|allowed| allowed == string) {
+            if !values.iter().any(|allowed| allowed.as_str() == string.as_ref()) {
                 bail!("parameter {name:?} must be one of {values:?}, got {string:?}");
             }
         }
@@ -3091,7 +3098,7 @@ fn validate_value(
                 .with_context(|| format!("validating JSON list parameter {name:?}"))?;
         }
         let mut contains_nul = false;
-        for item in items {
+        for item in items.iter() {
             let valid_item = if item_type == ParameterType::Json {
                 crate::structured::literal(item)
                     || allow_reference_items && contains_parameter_reference(item)
@@ -3541,7 +3548,7 @@ fn append_arguments(
                 bail!("parameter {spread:?} must be a list")
             };
             out.reserve(items.len());
-            for item in items {
+            for item in items.iter() {
                 out.push(value_to_string(item)?);
             }
         }
@@ -3591,7 +3598,7 @@ fn append_worker_arguments(
                 bail!("parameter {spread:?} must be a list")
             };
             arguments.reserve(items.len());
-            for item in items {
+            for item in items.iter() {
                 arguments.push(value_to_string(item)?);
             }
         }
@@ -3645,7 +3652,7 @@ fn append_arguments_borrowed<'a>(
                 bail!("parameter {spread:?} must be a list")
             };
             out.reserve(items.len());
-            for item in items {
+            for item in items.iter() {
                 out.push(value_to_cow(item)?);
             }
         }
@@ -3692,7 +3699,7 @@ fn value_to_cow(value: &Value) -> Result<Cow<'_, str>> {
 
 fn value_to_string(value: &Value) -> Result<String> {
     match value {
-        Value::String(s) => Ok(s.clone()),
+        Value::String(s) => Ok(s.to_string()),
         Value::Integer(n) => Ok(n.to_string()),
         Value::Number(n) if is_exact_integer_number(n) => Ok(n.to_string()),
         Value::Bool(b) => Ok(b.to_string()),
@@ -4897,7 +4904,7 @@ fn validate_port_value_with_references(
                     bail!("record is missing required field {name:?}");
                 }
             }
-            for (name, value) in fields {
+            for (name, value) in fields.iter() {
                 let Some(field_schema) = schema
                     .fields
                     .get(name)
@@ -4939,7 +4946,7 @@ fn validate_json_references(value: &Value, bindings: &BTreeMap<String, InputType
             }
         }
         Value::Record(fields) => {
-            for (name, value) in fields {
+            for (name, value) in fields.iter() {
                 validate_json_references(value, bindings)
                     .with_context(|| format!("validating JSON field {name:?}"))?;
             }
@@ -4965,7 +4972,7 @@ fn validate_literal_csv_table(value: &Value) -> Result<()> {
         let Value::String(header) = header else {
             bail!("CSV header {index} must be text");
         };
-        if !seen.insert(header.as_str()) {
+        if !seen.insert(header.as_ref()) {
             bail!("CSV header {header:?} is duplicated at column {index}");
         }
     }
@@ -5548,7 +5555,7 @@ mod tests {
         let deferred = Value::List(vec![Value::Record(BTreeMap::from([
             ("pointer".into(), Value::Reference("dynamic_pointer".into())),
             ("exists".into(), Value::Bool(true)),
-        ]))]);
+        ]).into())].into());
         assert!(manifest
             .validate(&schema_invocation("json.filter", "where", deferred))
             .is_ok());
@@ -5816,7 +5823,7 @@ mod tests {
                 Value::List(vec![Value::Record(BTreeMap::from([(
                     "nested".into(),
                     Value::Reference("raw".into()),
-                )]))]),
+                )]).into())].into()),
             )]),
             binding: None,
             cache: false,
@@ -5847,7 +5854,7 @@ mod tests {
             manifest
                 .build_arguments(&BTreeMap::from([(
                     "choice".to_owned(),
-                    Value::String("left".to_owned()),
+                    Value::String("left".to_owned().into()),
                 )]))
                 .unwrap(),
             ["left"]
@@ -5855,7 +5862,7 @@ mod tests {
         let error = manifest
             .build_arguments(&BTreeMap::from([(
                 "choice".to_owned(),
-                Value::String("middle".to_owned()),
+                Value::String("middle".to_owned().into()),
             )]))
             .unwrap_err()
             .to_string();
@@ -5958,12 +5965,12 @@ mod tests {
         )
         .unwrap();
         let dynamic_value = Value::Record(BTreeMap::from([
-            ("user key".into(), Value::List(vec![Value::Integer(1)])),
+            ("user key".into(), Value::List(vec![Value::Integer(1)].into())),
             (
                 "nested".into(),
-                Value::Record(BTreeMap::from([("ok".into(), Value::Bool(true))])),
+                Value::Record(BTreeMap::from([("ok".into(), Value::Bool(true))]).into()),
             ),
-        ]));
+        ]).into());
         assert!(dynamic
             .validate_argument_values(&BTreeMap::from([("value".into(), dynamic_value)]))
             .is_ok());
@@ -5987,13 +5994,13 @@ mod tests {
                         Value::Number(serde_json::Number::from_f64(1.5).unwrap()),
                     ),
                     ("boolean".into(), Value::Bool(true)),
-                ]))
+                ]).into())
             )]))
             .is_ok());
         assert!(scalars
             .validate_argument_values(&BTreeMap::from([(
                 "values".into(),
-                Value::Record(BTreeMap::from([("bad".into(), Value::Null)]))
+                Value::Record(BTreeMap::from([("bad".into(), Value::Null)]).into())
             )]))
             .is_err());
 
@@ -6001,7 +6008,9 @@ mod tests {
             r#"{"name":"criteria","binary":"echo","parameters":{"values":{"type":"record","required":true,"fields":{},"additional_properties":{"type":"string","nonempty":true},"min_properties":2,"max_properties":3}},"arguments":[{"json_parameter":"values"}]}"#,
         )
         .unwrap();
-        let values = |entries| BTreeMap::from([("values".into(), Value::Record(entries))]);
+        let values = |entries: BTreeMap<String, Value>| {
+            BTreeMap::from([("values".into(), Value::Record(entries.into()))])
+        };
         assert!(criteria
             .validate_argument_values(&values(BTreeMap::from([
                 ("first".into(), Value::String("description".into())),
@@ -6039,7 +6048,7 @@ mod tests {
             discard_stderr: false,
             parameters: BTreeMap::from([(
                 "values".into(),
-                Value::Record(BTreeMap::from([("question".into(), value)])),
+                Value::Record(BTreeMap::from([("question".into(), value)]).into()),
             )]),
             binding: None,
             cache: false,
@@ -6054,7 +6063,7 @@ mod tests {
             .is_err());
         assert!(manifest
             .validate_with_types(
-                &invocation(Value::List(vec![Value::Reference("raw".into())])),
+                &invocation(Value::List(vec![Value::Reference("raw".into())].into())),
                 &bytes,
             )
             .is_err());
@@ -6088,7 +6097,7 @@ mod tests {
         .to_string()])
         .unwrap();
         let manifest = registry.resolve("reader.path").unwrap();
-        let supplied = BTreeMap::from([("file".to_owned(), Value::String("~/a.txt".to_owned()))]);
+        let supplied = BTreeMap::from([("file".to_owned(), Value::String("~/a.txt".to_owned().into()))]);
         let borrowed = manifest.build_arguments_borrowed(&supplied).unwrap();
         let expected = crate::home::expand_home_path("~/a.txt")
             .unwrap()
@@ -6484,7 +6493,7 @@ mod tests {
                 ("message".into(), Value::Reference("message".into())),
                 (
                     "files".into(),
-                    Value::List(vec![Value::Reference("files".into())]),
+                    Value::List(vec![Value::Reference("files".into())].into()),
                 ),
             ]),
             binding: None,
@@ -6502,7 +6511,7 @@ mod tests {
                 Value::List(vec![
                     Value::String("file with spaces.txt".into()),
                     Value::String("--flag".into()),
-                ]),
+                ].into()),
             ),
         ]);
         assert_eq!(
@@ -6520,7 +6529,7 @@ mod tests {
         assert!(manifest
             .build_arguments(&BTreeMap::from([
                 ("message".into(), Value::String("ok".into())),
-                ("files".into(), Value::List(vec![]))
+                ("files".into(), Value::List(vec![].into()))
             ]))
             .is_err());
         assert!(manifest
@@ -6588,7 +6597,7 @@ mod tests {
             discard_stderr: false,
             parameters: BTreeMap::from([(
                 "paths".into(),
-                Value::List(vec![Value::Reference("path".into())]),
+                Value::List(vec![Value::Reference("path".into())].into()),
             )]),
             binding: None,
             cache: false,
@@ -6601,13 +6610,13 @@ mod tests {
         assert!(manifest
             .build_arguments(&BTreeMap::from([(
                 "paths".into(),
-                Value::List(vec![Value::Reference("path".into())]),
+                Value::List(vec![Value::Reference("path".into())].into()),
             )]))
             .is_err());
         assert!(manifest
             .build_arguments(&BTreeMap::from([(
                 "paths".into(),
-                Value::List(vec![Value::String("valid.txt".into())]),
+                Value::List(vec![Value::String("valid.txt".into())].into()),
             )]))
             .is_ok());
     }
@@ -6644,7 +6653,7 @@ mod tests {
         assert!(manifest
             .validate(&invocation(
                 "strings",
-                Value::List(vec![Value::Reference("result".into())]),
+                Value::List(vec![Value::Reference("result".into())].into()),
             ))
             .is_ok());
         for (name, value) in [
@@ -6653,7 +6662,7 @@ mod tests {
             ("strings", Value::Reference("result".into())),
             (
                 "numbers",
-                Value::List(vec![Value::Reference("result".into())]),
+                Value::List(vec![Value::Reference("result".into())].into()),
             ),
         ] {
             assert!(manifest.validate(&invocation(name, value)).is_err());
@@ -6706,7 +6715,7 @@ mod tests {
                             Value::String("-n".into()),
                             Value::String("0".into()),
                             Value::String("-F".into()),
-                        ]),
+                        ].into()),
                     ),
                     ("path".into(), Value::String("file".into())),
                 ]))
@@ -6749,7 +6758,7 @@ mod tests {
                 .build_arguments(&BTreeMap::from([
                     (
                         "flags".into(),
-                        Value::List(vec![Value::String("-a".into())]),
+                        Value::List(vec![Value::String("-a".into())].into()),
                     ),
                     ("path".into(), Value::String("-leading-name".into()),),
                 ]))
@@ -6762,7 +6771,7 @@ mod tests {
                 .unwrap()
                 .build_arguments(&BTreeMap::from([(
                     "flags".into(),
-                    Value::List(vec![Value::String("-l".into())]),
+                    Value::List(vec![Value::String("-l".into())].into()),
                 )]))
                 .unwrap(),
             ["-l"]
@@ -6817,7 +6826,7 @@ mod tests {
                     Value::List(vec![
                         Value::String("-second.txt".into()),
                         Value::String("third.txt".into())
-                    ])
+                    ].into())
                 ),
             ]))
             .unwrap(),
@@ -6854,7 +6863,7 @@ mod tests {
             .clone();
         for value in [
             Value::String("bad\0text".into()),
-            Value::List(vec![Value::String("bad\0item".into())]),
+            Value::List(vec![Value::String("bad\0item".into())].into()),
         ] {
             let parameter = if matches!(value, Value::List(_)) {
                 "items"
@@ -6890,19 +6899,19 @@ mod tests {
         let registry = Registry::load(&path).unwrap();
         let manifest = registry.resolve("check").unwrap();
         let values = BTreeMap::from([
-            ("text".into(), Value::String(String::new())),
+            ("text".into(), Value::String(String::new().into())),
             ("number".into(), Value::Integer(-7)),
             ("flag".into(), Value::Bool(false)),
             (
                 "items".into(),
                 Value::List(vec![
-                    Value::String(String::new()),
+                    Value::String(String::new().into()),
                     Value::String("雪".into()),
-                ]),
+                ].into()),
             ),
             (
                 "extra".into(),
-                Value::List(vec![Value::String("🌱".into())]),
+                Value::List(vec![Value::String("🌱".into())].into()),
             ),
         ]);
         let expected = ["π", "", "-7", "false", "", "雪", "extra", "🌱"];

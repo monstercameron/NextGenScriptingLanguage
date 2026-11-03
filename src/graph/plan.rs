@@ -1924,13 +1924,13 @@ fn resolve_known_references(value: &Value, values: &BTreeMap<String, Value>) -> 
             items
                 .iter()
                 .map(|item| resolve_known_references(item, values))
-                .collect(),
+                .collect::<Vec<Value>>().into(),
         ),
         Value::Record(fields) => Value::Record(
             fields
                 .iter()
                 .map(|(name, value)| (name.clone(), resolve_known_references(value, values)))
-                .collect(),
+                .collect::<BTreeMap<String, Value>>().into(),
         ),
         _ => value.clone(),
     }
@@ -1952,7 +1952,7 @@ fn validate_input_references(
                 "graph node {node:?} parameter {parameter:?} references undeclared graph input {name:?}"
             ),
             Value::List(items) => {
-                for item in items {
+                for item in items.iter() {
                     visit(item, parameter, input_types, node)?;
                 }
             }
@@ -1981,7 +1981,7 @@ fn placeholder_value(schema: &ValueSchema) -> Result<Value> {
                 .as_ref()
                 .and_then(|values| values.first())
                 .cloned()
-                .unwrap_or_else(|| "__graph_preflight__".into()),
+                .unwrap_or_else(|| "__graph_preflight__".into()).into(),
         ),
         OutputType::Path => Value::String("__graph_preflight__".into()),
         OutputType::Integer => Value::Integer(0),
@@ -1999,9 +1999,9 @@ fn placeholder_value(schema: &ValueSchema) -> Result<Value> {
                     .ok_or_else(|| anyhow!("required record field {name:?} is not declared"))?;
                 fields.insert(name.clone(), placeholder_value(field)?);
             }
-            Value::Record(fields)
+            Value::Record(fields.into())
         }
-        OutputType::List => Value::List(Vec::new()),
+        OutputType::List => Value::List(Vec::new().into()),
     })
 }
 

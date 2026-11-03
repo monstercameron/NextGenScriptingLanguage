@@ -161,7 +161,7 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                 needed.insert(name.clone());
             }
             Argument::List(values) => {
-                for value in values {
+                for value in values.iter() {
                     references(value, needed);
                 }
             }
@@ -583,7 +583,7 @@ impl App {
             if execution.bindings.contains_key(id) {
                 execution
                     .bindings
-                    .insert(id.into(), Argument::String(text.clone()));
+                    .insert(id.into(), Argument::String(text.clone().into()));
             }
         }
         if let Some(snapshot) = execution.widget_texts.get_mut(j).and_then(Option::as_mut) {
@@ -982,15 +982,15 @@ impl App {
                     let mut bindings = BTreeMap::new();
                     for port in &instance.required_inputs[handler] {
                         if let Some(value) = instance.inputs.get(port) {
-                            bindings.insert(port.clone(), Argument::String(value.clone()));
+                            bindings.insert(port.clone(), Argument::String(value.clone().into()));
                         }
                     }
-                    bindings.insert("error".into(), Argument::String(error.clone()));
+                    bindings.insert("error".into(), Argument::String(error.clone().into()));
                     for &j in &instance.input_widget_references[handler] {
                         let widget = &instance.component.widgets[j];
                         bindings.insert(
                             widget.id.clone(),
-                            Argument::String(instance.views[j].text.clone()),
+                            Argument::String(instance.views[j].text.clone().into()),
                         );
                     }
                     bindings

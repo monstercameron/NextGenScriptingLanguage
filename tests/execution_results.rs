@@ -74,7 +74,7 @@ fn native_fail_fast_result_keeps_actual_status_and_pipeline_stage() {
     );
     // The terminal pipe is captured even when it contains no bytes.
     assert_eq!(result.get("stdout_captured"), Some(&Value::Bool(true)));
-    assert_eq!(result.get("stdout"), Some(&Value::List(vec![])));
+    assert_eq!(result.get("stdout"), Some(&Value::List(vec![].into())));
     let Some(Value::List(stages)) = result.get("stages") else {
         panic!("expected stage records");
     };
@@ -145,7 +145,7 @@ fn native_output_limit_keeps_the_captured_prefix_without_a_synthetic_status() {
             Value::Integer(b'2' as i64),
             Value::Integer(b'3' as i64),
             Value::Integer(b'4' as i64),
-        ]))
+        ].into()))
     );
     assert_eq!(
         result.get("effect_certainty"),

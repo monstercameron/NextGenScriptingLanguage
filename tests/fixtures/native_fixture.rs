@@ -1030,11 +1030,11 @@ fn json_lines_worker(arguments: &[String]) {
             if request["json_output"].as_bool().unwrap_or(false) {
                 response["value"] = serde_json::Value::Null;
             } else {
-                response["output_base64"] = serde_json::Value::String(String::new());
+                response["output_base64"] = serde_json::Value::String(String::new().into());
             }
             response["stderr"] = serde_json::Value::String(
                 "fixture: frame version is missing or unsupported after v2 handshake".into(),
-            );
+            .into());
             serde_json::to_writer(&mut stdout, &response).expect("encoding v2 version error");
             stdout
                 .write_all(b"\n")
@@ -1133,10 +1133,10 @@ fn json_lines_worker(arguments: &[String]) {
                 response["output_base64"] = serde_json::Value::String(base64::Engine::encode(
                     &base64::engine::general_purpose::STANDARD,
                     &output,
-                ));
+                ).into());
             }
             if let Some(stderr) = stderr {
-                response["stderr"] = serde_json::Value::String(stderr.to_owned());
+                response["stderr"] = serde_json::Value::String(stderr.to_owned().into());
             }
             response
         } else {

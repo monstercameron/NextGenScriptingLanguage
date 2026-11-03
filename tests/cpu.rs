@@ -46,7 +46,7 @@ fn manifest_dir(dir: &Path) -> PathBuf {
         let mut ps: serde_json::Value =
             serde_json::from_slice(&fs::read(repo.join("ps.json")).unwrap()).unwrap();
         let script = dir.join("ps.py").to_string_lossy().into_owned();
-        ps["binary"] = serde_json::Value::String("python".to_owned());
+        ps["binary"] = serde_json::Value::String("python".to_owned().into());
         if let Some(arguments) = ps.get_mut("arguments").and_then(|a| a.as_array_mut()) {
             arguments.insert(0, serde_json::json!({"literal": script}));
         }

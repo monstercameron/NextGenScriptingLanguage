@@ -15,15 +15,15 @@ pub(crate) fn from_json(value: serde_json::Value) -> Value {
             Some(integer) => Value::Integer(integer),
             None => Value::Number(value),
         },
-        serde_json::Value::String(value) => Value::String(value),
+        serde_json::Value::String(value) => Value::String(value.into()),
         serde_json::Value::Array(values) => {
-            Value::List(values.into_iter().map(from_json).collect())
+            Value::List(values.into_iter().map(from_json).collect::<Vec<Value>>().into())
         }
         serde_json::Value::Object(values) => Value::Record(
             values
                 .into_iter()
                 .map(|(key, value)| (key, from_json(value)))
-                .collect(),
+                .collect::<BTreeMap<String, Value>>().into(),
         ),
     }
 }
@@ -51,14 +51,14 @@ impl Serialize for Plain<'_> {
             Value::Bool(value) => serializer.serialize_bool(*value),
             Value::List(values) => {
                 let mut seq = serializer.serialize_seq(Some(values.len()))?;
-                for value in values {
+                for value in values.iter() {
                     seq.serialize_element(&Plain(value))?;
                 }
                 seq.end()
             }
             Value::Record(values) => {
                 let mut map = serializer.serialize_map(Some(values.len()))?;
-                for (key, value) in values {
+                for (key, value) in values.iter() {
                     map.serialize_entry(key, &Plain(value))?;
                 }
                 map.end()
@@ -282,14 +282,14 @@ impl<'de> Deserialize<'de> for JsonDocumentValue {
             where
                 E: serde::de::Error,
             {
-                Ok(JsonDocumentValue(Value::String(value.to_owned())))
+                Ok(JsonDocumentValue(Value::String(value.to_owned().into())))
             }
 
             fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
             where
                 E: serde::de::Error,
             {
-                Ok(JsonDocumentValue(Value::String(value)))
+                Ok(JsonDocumentValue(Value::String(value.into())))
             }
 
             fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
@@ -300,7 +300,7 @@ impl<'de> Deserialize<'de> for JsonDocumentValue {
                 while let Some(value) = sequence.next_element::<JsonDocumentValue>()? {
                     values.push(value.0);
                 }
-                Ok(JsonDocumentValue(Value::List(values)))
+                Ok(JsonDocumentValue(Value::List(values.into())))
             }
 
             fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
@@ -321,7 +321,7 @@ impl<'de> Deserialize<'de> for JsonDocumentValue {
                         }
                     }
                 }
-                Ok(JsonDocumentValue(Value::Record(values)))
+                Ok(JsonDocumentValue(Value::Record(values.into())))
             }
         }
 

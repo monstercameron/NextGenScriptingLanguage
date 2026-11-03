@@ -908,7 +908,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let path = path.into_os_string().into_string().map_err(|_| {
                         anyhow!("line {}: temporary path is not valid UTF-8", step.line)
                     })?;
-                    bindings.insert(binding.clone(), Value::String(path));
+                    bindings.insert(binding.clone(), Value::String(path.into()));
                 }
                 StepKind::EndTempScope { back } => {
                     let header = index
@@ -1212,7 +1212,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             name.to_owned(),
                             Value::String(
                                 String::from_utf8(bytes.clone())
-                                    .context("named program results must be UTF-8 text")?,
+                                    .context("named program results must be UTF-8 text")?.into(),
                             ),
                         );
                         data = Input::Bytes(bytes);
@@ -1452,7 +1452,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         None
                     };
                     let bytes = match presentation_source {
-                        Some(Value::String(text)) => text.into_bytes(),
+                        Some(Value::String(text)) => text.as_bytes().to_vec(),
                         Some(_) => bail!(
                             "line {}: use value requires text; encode structured values first with `then encode ... as json`",
                             step.line
@@ -1623,7 +1623,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             name.clone(),
                             Value::String(
                                 String::from_utf8(bytes.clone())
-                                    .context("named results must be UTF-8 text")?,
+                                    .context("named results must be UTF-8 text")?.into(),
                             ),
                         );
                         if sensitive_bindings.contains(name) {
@@ -2079,7 +2079,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             None,
                         )
                     } else {
-                        (Value::List(Vec::new()), None)
+                        (Value::List(Vec::new().into()), None)
                     };
                     let bytes = crate::structured::encode(&value, options.max_output_bytes)
                         .with_context(|| format!("line {}: job inspection output", step.line))?;
@@ -2194,7 +2194,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         {
                             aggregate_records.remove(0)
                         } else {
-                            Value::List(aggregate_records)
+                            Value::List(aggregate_records.into())
                         };
                         crate::structured::encode(&value, options.max_output_bytes)
                             .with_context(|| format!("line {}: job result record", step.line))?;
@@ -2337,7 +2337,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         }
                         overlay
                             .set
-                            .insert(normalize_environment_variable(name), text);
+                            .insert(normalize_environment_variable(name), text.to_string());
                     }
                     if *workflow_scope {
                         merge_environment_overlay(&mut workflow_env, overlay);

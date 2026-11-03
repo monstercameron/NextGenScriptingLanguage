@@ -1847,7 +1847,7 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
     for index in 0..400 {
         let name = format!("bulk{index:03}");
         let mut value: Value = serde_json::from_slice(&cat).unwrap();
-        value["name"] = Value::String(name.clone());
+        value["name"] = Value::String(name.clone().into());
         value["phrases"] = serde_json::json!([format!("{name} copy")]);
         fs::write(
             user.join(format!("{name}.json")),

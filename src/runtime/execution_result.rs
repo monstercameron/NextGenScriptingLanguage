@@ -233,7 +233,7 @@ impl StageResult {
     pub fn to_value(&self) -> Value {
         let mut fields = BTreeMap::new();
         fields.insert("line".into(), Value::Integer(self.line as i64));
-        fields.insert("applet".into(), Value::String(self.applet.clone()));
+        fields.insert("applet".into(), Value::String(self.applet.clone().into()));
         fields.insert("state".into(), Value::String(self.state.as_str().into()));
         fields.insert("status".into(), optional_integer(self.status));
         fields.insert("signal".into(), optional_integer(self.signal));
@@ -254,10 +254,10 @@ impl StageResult {
             self.stderr
                 .as_deref()
                 .map(bytes_value)
-                .unwrap_or_else(|| Value::List(Vec::new())),
+                .unwrap_or_else(|| Value::List(Vec::new().into())),
         );
         fields.insert("stderr_captured".into(), Value::Bool(self.stderr.is_some()));
-        Value::Record(fields)
+        Value::Record(fields.into())
     }
 }
 
@@ -303,7 +303,7 @@ impl StageMetadata {
         let mut fields = BTreeMap::new();
         fields.insert("index".into(), Value::Integer(self.index as i64));
         fields.insert("line".into(), Value::Integer(self.line as i64));
-        fields.insert("applet".into(), Value::String(self.applet.clone()));
+        fields.insert("applet".into(), Value::String(self.applet.clone().into()));
         fields.insert("state".into(), Value::String(self.state.as_str().into()));
         fields.insert("status".into(), optional_integer(self.status));
         fields.insert("signal".into(), optional_integer(self.signal));
@@ -324,7 +324,7 @@ impl StageMetadata {
             "stderr_bytes".into(),
             Value::Integer(self.stderr_bytes as i64),
         );
-        Value::Record(fields)
+        Value::Record(fields.into())
     }
 }
 
@@ -489,7 +489,7 @@ impl ExecutionRecord {
         let mut fields = BTreeMap::new();
         fields.insert("line".into(), Value::Integer(self.line as i64));
         fields.insert("step_id".into(), optional_text(self.step_id.as_deref()));
-        fields.insert("applet".into(), Value::String(self.applet.clone()));
+        fields.insert("applet".into(), Value::String(self.applet.clone().into()));
         fields.insert("kind".into(), Value::String(self.kind.as_str().into()));
         fields.insert("outcome".into(), optional_text(self.outcome.as_deref()));
         fields.insert("status".into(), optional_integer(self.status));
@@ -510,13 +510,15 @@ impl ExecutionRecord {
         );
         fields.insert(
             "stages".into(),
-            Value::List(self.stages.iter().map(StageMetadata::to_value).collect()),
+            Value::List(
+                self.stages.iter().map(StageMetadata::to_value).collect::<Vec<Value>>().into(),
+            ),
         );
         fields.insert(
             "stages_dropped".into(),
             Value::Integer(self.stages_dropped as i64),
         );
-        Value::Record(fields)
+        Value::Record(fields.into())
     }
 }
 
@@ -585,7 +587,7 @@ impl ExecutionHistory {
                 self.executions
                     .iter()
                     .map(ExecutionRecord::to_value)
-                    .collect(),
+                    .collect::<Vec<Value>>().into(),
             ),
         );
         fields.insert(
@@ -596,7 +598,7 @@ impl ExecutionHistory {
             "dropped_stages".into(),
             Value::Integer(self.dropped_stages as i64),
         );
-        Value::Record(fields)
+        Value::Record(fields.into())
     }
 }
 
@@ -681,7 +683,7 @@ impl ExecutionResult {
             self.stdout
                 .as_deref()
                 .map(bytes_value)
-                .unwrap_or_else(|| Value::List(Vec::new())),
+                .unwrap_or_else(|| Value::List(Vec::new().into())),
         );
         fields.insert("stdout_captured".into(), Value::Bool(self.stdout.is_some()));
         fields.insert("value".into(), self.value.clone().unwrap_or(Value::Null));
@@ -691,19 +693,21 @@ impl ExecutionResult {
             self.stderr
                 .as_deref()
                 .map(bytes_value)
-                .unwrap_or_else(|| Value::List(Vec::new())),
+                .unwrap_or_else(|| Value::List(Vec::new().into())),
         );
         fields.insert("stderr_captured".into(), Value::Bool(self.stderr.is_some()));
         fields.insert(
             "stages".into(),
-            Value::List(self.stages.iter().map(StageResult::to_value).collect()),
+            Value::List(
+                self.stages.iter().map(StageResult::to_value).collect::<Vec<Value>>().into(),
+            ),
         );
         fields.insert("message".into(), optional_text(self.message.as_deref()));
         fields.insert(
             "effect_certainty".into(),
             Value::String(self.effect_certainty.as_str().into()),
         );
-        Value::Record(fields)
+        Value::Record(fields.into())
     }
 
     /// Build a source-visible execution record. Unlike the bounded run
@@ -711,16 +715,19 @@ impl ExecutionResult {
     /// terminal bytes and a decoded value when one was requested. Stage
     /// metadata remains bounded by `MAX_EXECUTION_STAGES`.
     pub fn to_source_value(&self, line: usize, applet: impl Into<String>) -> Value {
-        let Value::Record(mut fields) = ExecutionRecord::from_result(line, applet, self).to_value()
+        let Value::Record(fields) = ExecutionRecord::from_result(line, applet, self).to_value()
         else {
             unreachable!("execution metadata projection is a record")
         };
+        // The projection above is freshly built, so unwrapping the shared
+        // fields reuses its backing map instead of cloning it.
+        let mut fields = std::sync::Arc::unwrap_or_clone(fields);
         fields.insert(
             "stdout".into(),
             self.stdout
                 .as_deref()
                 .map(bytes_value)
-                .unwrap_or_else(|| Value::List(Vec::new())),
+                .unwrap_or_else(|| Value::List(Vec::new().into())),
         );
         fields.insert("value".into(), self.value.clone().unwrap_or(Value::Null));
         fields.insert("value_captured".into(), Value::Bool(self.value.is_some()));
@@ -729,10 +736,10 @@ impl ExecutionResult {
             self.stderr
                 .as_deref()
                 .map(bytes_value)
-                .unwrap_or_else(|| Value::List(Vec::new())),
+                .unwrap_or_else(|| Value::List(Vec::new().into())),
         );
         fields.insert("message".into(), optional_text(self.message.as_deref()));
-        Value::Record(fields)
+        Value::Record(fields.into())
     }
 }
 
@@ -1209,7 +1216,7 @@ fn optional_integer(value: Option<i32>) -> Value {
 
 fn optional_text(value: Option<&str>) -> Value {
     value
-        .map(|value| Value::String(value.to_owned()))
+        .map(|value| Value::String(value.to_owned().into()))
         .unwrap_or(Value::Null)
 }
 
@@ -1218,7 +1225,7 @@ fn bytes_value(bytes: &[u8]) -> Value {
         bytes
             .iter()
             .map(|byte| Value::Integer(i64::from(*byte)))
-            .collect(),
+            .collect::<Vec<Value>>().into(),
     )
 }
 
@@ -1231,7 +1238,7 @@ mod tests {
         let Value::Record(fields) = value else {
             panic!("expected a record");
         };
-        fields
+        std::sync::Arc::unwrap_or_clone(fields)
     }
 
     #[test]
@@ -1360,7 +1367,7 @@ mod tests {
         );
         assert_eq!(result.get("status"), Some(&Value::Integer(0)));
         assert_eq!(result.get("stdout_captured"), Some(&Value::Bool(true)));
-        assert_eq!(result.get("stdout"), Some(&Value::List(Vec::new())));
+        assert_eq!(result.get("stdout"), Some(&Value::List(Vec::new().into())));
         assert_eq!(
             result.get("effect_certainty"),
             Some(&Value::String("uncertain".into()))
@@ -1379,7 +1386,7 @@ mod tests {
                 },
                 None,
             )
-            .to_value()]))
+            .to_value()].into()))
         );
     }
 
@@ -1692,9 +1699,9 @@ mod tests {
         );
         assert_eq!(result.get("status"), Some(&Value::Integer(7)));
         assert_eq!(result.get("stdout_captured"), Some(&Value::Bool(true)));
-        assert_eq!(result.get("stdout"), Some(&Value::List(Vec::new())));
+        assert_eq!(result.get("stdout"), Some(&Value::List(Vec::new().into())));
         assert_eq!(result.get("stderr_captured"), Some(&Value::Bool(true)));
-        assert_eq!(result.get("stderr"), Some(&Value::List(Vec::new())));
+        assert_eq!(result.get("stderr"), Some(&Value::List(Vec::new().into())));
         assert_eq!(
             result.get("effect_certainty"),
             Some(&Value::String("uncertain".into()))

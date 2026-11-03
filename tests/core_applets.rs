@@ -258,7 +258,7 @@ fn arithmetic_contracts_refine_json_parameters_to_number() {
             .validate(&make_invocation(AstValue::Integer(1), decimal))
             .unwrap();
         for invalid in [
-            AstValue::String("2.5".to_owned()),
+            AstValue::String("2.5".to_owned().into()),
             AstValue::Bool(true),
             AstValue::Null,
         ] {
@@ -293,7 +293,7 @@ fn arithmetic_contracts_refine_json_parameters_to_number() {
     };
     formatter.validate(&valid).unwrap();
     for invalid in [
-        AstValue::String("12.5".to_owned()),
+        AstValue::String("12.5".to_owned().into()),
         AstValue::Bool(true),
         AstValue::Null,
     ] {

@@ -53,12 +53,12 @@ fn model_registry_with_grant(origins: &[&str], network: bool, capabilities: &[&s
 fn model_params(endpoint: Option<&str>, fixture: bool) -> BTreeMap<String, AstValue> {
     let mut params = BTreeMap::new();
     if let Some(endpoint) = endpoint {
-        params.insert("endpoint".to_owned(), AstValue::String(endpoint.to_owned()));
+        params.insert("endpoint".to_owned(), AstValue::String(endpoint.to_owned().into()));
     }
     if fixture {
         params.insert(
             "fixture".to_owned(),
-            AstValue::String("/tmp/fixture.json".to_owned()),
+            AstValue::String("/tmp/fixture.json".to_owned().into()),
         );
     }
     params
@@ -908,7 +908,7 @@ fn model_policy_preserves_exactly_the_listed_origin() {
             &referenced,
             &BTreeMap::from([(
                 "custom".to_owned(),
-                AstValue::String("http://127.0.0.1:11434/v1".to_owned())
+                AstValue::String("http://127.0.0.1:11434/v1".to_owned().into())
             )]),
             &sensitivities
         )

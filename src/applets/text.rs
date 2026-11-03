@@ -24,7 +24,7 @@ pub(super) fn trim_final_lf(args: &Map<String, Value>, input: &[u8]) -> Result<V
     let text = text_input(args, input)?;
     check_text_size(text.len())?;
     Ok(Value::String(
-        text.strip_suffix('\n').unwrap_or(text).to_owned(),
+        text.strip_suffix('\n').unwrap_or(text).to_owned().into(),
     ))
 }
 
@@ -114,7 +114,7 @@ fn push_list_item(items: &mut Vec<Value>, item: &str, operation: &str) -> Result
             "{operation} output exceeds the {MAX_LIST_ITEMS}-item limit"
         )));
     }
-    items.push(Value::String(item.to_owned()));
+    items.push(Value::String(item.to_owned().into()));
     Ok(())
 }
 
@@ -301,7 +301,7 @@ pub(super) fn shape(
                 "end" => text.trim_end_matches(trimmed),
                 _ => return Err(invalid("mode must be both, start, or end")),
             };
-            Ok(Value::String(value.to_owned()))
+            Ok(Value::String(value.to_owned().into()))
         }
         "text.length" => Ok(Value::from(units)),
         "text.starts_with" | "text.ends_with" => {
@@ -345,7 +345,7 @@ pub(super) fn shape(
             let ellipsis = optional_string(args, "ellipsis", "…")?;
             let chars = text.chars().collect::<Vec<_>>();
             if chars.len() <= width {
-                return Ok(Value::String(text.to_owned()));
+                return Ok(Value::String(text.to_owned().into()));
             }
             let ending = ellipsis.chars().count();
             if ending > width {
@@ -378,7 +378,7 @@ pub(super) fn shape(
                     .ok_or_else(|| invalid("substring length is out of range"))?;
                 return text
                     .get(start..end)
-                    .map(|slice| Value::String(slice.to_owned()))
+                    .map(|slice| Value::String(slice.to_owned().into()))
                     .ok_or_else(|| {
                         invalid("substring byte indexes must be UTF-8 character boundaries")
                     });
@@ -397,7 +397,7 @@ pub(super) fn shape(
                 .checked_add(length)
                 .filter(|end| *end <= chars.len())
                 .ok_or_else(|| invalid("substring length is out of range"))?;
-            Ok(Value::String(chars[start..end].iter().collect()))
+            Ok(Value::String(chars[start..end].iter().collect::<String>().into()))
         }
         "text.pad" => {
             let display_width = args
@@ -599,14 +599,14 @@ mod tests {
     #[test]
     fn case_conversion_matches_unicode_case_mapping() {
         for text in ["", "ascii TEXT 123", "Straße İΣ", "éclair ıß"] {
-            let args = Map::from_iter([("text".to_owned(), Value::String(text.to_owned()))]);
+            let args = Map::from_iter([("text".to_owned(), Value::String(text.to_owned().into()))]);
             assert_eq!(
                 upper(&args, &[]).unwrap(),
-                Value::String(text.to_uppercase())
+                Value::String(text.to_uppercase().into())
             );
             assert_eq!(
                 lower(&args, &[]).unwrap(),
-                Value::String(text.to_lowercase())
+                Value::String(text.to_lowercase().into())
             );
         }
     }

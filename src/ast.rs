@@ -4,11 +4,20 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
-    String(String),
+    /// Shared immutable text. Cloning a `Value` only bumps this reference
+    /// count; mutate through `Arc::unwrap_or_clone` plus an owned rebuild, or
+    /// replace the payload, never a shared buffer in place.
+    String(Arc<str>),
     Integer(i64),
     Bool(bool),
-    List(Vec<Value>),
-    Record(BTreeMap<String, Value>),
+    /// Shared immutable items. Cloning a `Value` only bumps this reference
+    /// count; mutate through `Arc::make_mut`, which clones the backing vector
+    /// when it is shared.
+    List(Arc<Vec<Value>>),
+    /// Shared immutable fields. Cloning a `Value` only bumps this reference
+    /// count; mutate through `Arc::make_mut`, which clones the backing map
+    /// when it is shared.
+    Record(Arc<BTreeMap<String, Value>>),
     Null,
     /// Unsigned or fractional JSON numbers; never implicitly coerced to an integer.
     Number(serde_json::Number),

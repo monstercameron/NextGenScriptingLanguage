@@ -222,7 +222,7 @@ fn typed_path_outputs_are_semantically_checked_and_feed_path_operations() {
     let mut run_options = options(directory.path());
     run_options.inputs.insert(
         "folder".into(),
-        Value::String(child.to_string_lossy().into_owned()),
+        Value::String(child.to_string_lossy().into_owned().into()),
     );
     let result = runtime::run(&parser::parse(&source).unwrap(), &catalog, &run_options).unwrap();
     assert_eq!(
@@ -401,7 +401,7 @@ fn helper_command_and_in_process_backends_have_identical_typed_stdout() {
             Value::List(vec![
                 Value::String("north".into()),
                 Value::String("star".into()),
-            ]),
+            ].into()),
         ),
         ("separator".into(), Value::String("/".into())),
     ]);

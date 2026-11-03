@@ -1474,14 +1474,14 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
             let Value::String(argument) = value else {
                 return None;
             };
-            if argument == "-c" {
+            if argument.as_ref() == "-c" {
                 return Some(index + 1);
             }
-            if argument == "--" || !argument.starts_with('-') {
+            if argument.as_ref() == "--" || !argument.starts_with('-') {
                 return None;
             }
-            if shell == "bash" && matches!(argument.as_str(), "-O" | "--rcfile" | "--init-file")
-                || matches!(shell, "sh" | "bash" | "dash" | "zsh" | "ksh") && argument == "-o"
+            if shell == "bash" && matches!(argument.as_ref(), "-O" | "--rcfile" | "--init-file")
+                || matches!(shell, "sh" | "bash" | "dash" | "zsh" | "ksh") && argument.as_ref() == "-o"
             {
                 if !matches!(arguments.get(index + 1), Some(Value::String(_))) {
                     return None;
@@ -1509,15 +1509,15 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
     fn env_command_index(arguments: &[Value]) -> Option<usize> {
         let mut index = 0;
         while let Some(Value::String(argument)) = arguments.get(index) {
-            if argument == "--" {
+            if argument.as_ref() == "--" {
                 index += 1;
                 break;
             }
             if argument.starts_with('-') {
-                if matches!(argument.as_str(), "-S" | "--split-string") {
+                if matches!(argument.as_ref(), "-S" | "--split-string") {
                     return None;
                 }
-                if matches!(argument.as_str(), "-u" | "--unset" | "-C" | "--chdir") {
+                if matches!(argument.as_ref(), "-u" | "--unset" | "-C" | "--chdir") {
                     index += 2;
                     continue;
                 }
@@ -1525,7 +1525,7 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
                     || argument.starts_with("--chdir=")
                     || argument.starts_with("--split-string=")
                     || matches!(
-                        argument.as_str(),
+                        argument.as_ref(),
                         "-i" | "--ignore-environment" | "-0" | "--null" | "--debug"
                     )
                 {
@@ -1562,7 +1562,7 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         }
         "busybox" => {
             let applet_index =
-                usize::from(matches!(arguments.first(), Some(Value::String(flag)) if flag == "--"));
+                usize::from(matches!(arguments.first(), Some(Value::String(flag)) if flag.as_ref() == "--"));
             (applet_index, arguments.get(applet_index + 1..)?)
         }
         _ => return None,
@@ -1598,10 +1598,10 @@ fn model_command_argument_index(executable: &str, arguments: &[Value]) -> Option
     fn inline_program_index(arguments: &[Value], flags: &[&str]) -> Option<usize> {
         let mut index = 0;
         while let Some(Value::String(argument)) = arguments.get(index) {
-            if flags.contains(&argument.as_str()) {
+            if flags.contains(&argument.as_ref()) {
                 return Some(index + 1);
             }
-            if argument == "--" || argument == "-" || !argument.starts_with('-') {
+            if argument.as_ref() == "--" || argument.as_ref() == "-" || !argument.starts_with('-') {
                 // The first non-option argument is a script file; the
                 // interpreter's own option region has ended.
                 return None;
@@ -1630,15 +1630,15 @@ fn model_command_argument_index(executable: &str, arguments: &[Value]) -> Option
                 // names the command `env` will exec.
                 return Some(index);
             };
-            if argument == "--" {
+            if argument.as_ref() == "--" {
                 return arguments.get(index + 1).map(|_| index + 1);
             }
             if argument.starts_with('-') {
-                if matches!(argument.as_str(), "-S" | "--split-string") {
+                if matches!(argument.as_ref(), "-S" | "--split-string") {
                     // The split string itself is the command line.
                     return Some(index + 1);
                 }
-                if matches!(argument.as_str(), "-u" | "--unset" | "-C" | "--chdir") {
+                if matches!(argument.as_ref(), "-u" | "--unset" | "-C" | "--chdir") {
                     index += 2;
                     continue;
                 }
@@ -1646,7 +1646,7 @@ fn model_command_argument_index(executable: &str, arguments: &[Value]) -> Option
                     || argument.starts_with("--chdir=")
                     || argument.starts_with("--split-string=")
                     || matches!(
-                        argument.as_str(),
+                        argument.as_ref(),
                         "-i" | "--ignore-environment" | "-0" | "--null" | "--debug"
                     )
                 {
@@ -1675,7 +1675,7 @@ fn model_command_argument_index(executable: &str, arguments: &[Value]) -> Option
         "env" => env_child_index(arguments),
         "busybox" => {
             let applet_index =
-                usize::from(matches!(arguments.first(), Some(Value::String(flag)) if flag == "--"));
+                usize::from(matches!(arguments.first(), Some(Value::String(flag)) if flag.as_ref() == "--"));
             arguments.get(applet_index).map(|_| applet_index)
         }
         "python" | "python3" => inline_program_index(arguments, &["-c"]),
@@ -2254,7 +2254,7 @@ fn collect_unused_names(
                     reads.insert(name.clone());
                 }
                 Value::List(values) => {
-                    for value in values {
+                    for value in values.iter() {
                         collect_value_reads(value, reads);
                     }
                 }
@@ -2556,7 +2556,7 @@ fn collect_step_reads(steps: &[Step], reads: &mut BTreeSet<String>) {
                 reads.insert(name.clone());
             }
             Value::List(items) => {
-                for item in items {
+                for item in items.iter() {
                     value(item, reads);
                 }
             }
@@ -3328,7 +3328,7 @@ fn collect_resolve_calls<'a>(
                     name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
                 }) {
                     Some(match value {
-                        Value::String(path) => Some(std::ffi::OsString::from(path)),
+                        Value::String(path) => Some(std::ffi::OsString::from(path.as_ref())),
                         _ => None,
                     })
                 } else if unset.iter().any(|name| {
@@ -3348,7 +3348,7 @@ fn collect_resolve_calls<'a>(
             }
             StepKind::UseFolder { path } => {
                 if let Value::String(folder) = path {
-                    let folder = std::path::Path::new(folder);
+                    let folder = std::path::Path::new(folder.as_ref());
                     if let Some(current) = cwd.as_ref() {
                         let folder = if folder.is_absolute() {
                             folder.to_path_buf()
@@ -3373,7 +3373,7 @@ fn collect_resolve_calls<'a>(
                     match call.parameters.get("path") {
                         Some(Value::String(folder)) => {
                             if let Some(current) = &cwd {
-                                let folder = std::path::Path::new(folder);
+                                let folder = std::path::Path::new(folder.as_ref());
                                 let folder = if folder.is_absolute() {
                                     folder.to_path_buf()
                                 } else {
@@ -5198,7 +5198,7 @@ fn collect_undefined_references(
             diagnostics.push(diagnostic);
         }
         Value::List(values) => {
-            for value in values {
+            for value in values.iter() {
                 collect_undefined_references(
                     source,
                     line,
@@ -5466,7 +5466,7 @@ fn validate_call(
         && manifest.name_for(call) == "wait.until")
         || manifest.execute_applet_operation() == Some("wait.until");
     if dispatches_wait_until
-        && matches!(call.parameters.get("probe"), Some(Value::String(probe)) if probe == "tcp_port_open")
+        && matches!(call.parameters.get("probe"), Some(Value::String(probe)) if probe.as_ref() == "tcp_port_open")
     {
         if let Some(Value::String(host)) = call.parameters.get("host") {
             if let Ok(ip) = host.parse::<IpAddr>() {
@@ -5554,7 +5554,7 @@ fn validate_static_json_container_selection(
     }
     let pointer = match call.parameters.get("pointer") {
         None => "",
-        Some(Value::String(pointer)) => pointer.as_str(),
+        Some(Value::String(pointer)) => pointer.as_ref(),
         // Dynamic pointers cannot select a statically known value.
         Some(_) => return,
     };
@@ -5653,14 +5653,14 @@ fn validate_json_pointer_literals(
     }
     if fields.contains(&"pointers") {
         if let Some(Value::List(pointers)) = call.parameters.get("pointers") {
-            for value in pointers {
+            for value in pointers.iter() {
                 collect_invalid_pointers("pointers", value, &mut invalid);
             }
         }
     }
     if where_pointer {
         if let Some(Value::List(predicates)) = call.parameters.get("where") {
-            for predicate in predicates {
+            for predicate in predicates.iter() {
                 if let Value::Record(fields) = predicate {
                     if let Some(value) = fields.get("pointer") {
                         collect_invalid_pointers("where", value, &mut invalid);
@@ -5691,7 +5691,7 @@ fn collect_invalid_pointers(
 ) {
     if let Value::String(pointer) = value {
         if let Err(reason) = crate::applets::validate_json_pointer(pointer) {
-            invalid.push((parameter.to_owned(), pointer.clone(), reason));
+            invalid.push((parameter.to_owned(), pointer.to_string(), reason));
         }
     }
 }
@@ -6322,7 +6322,7 @@ mod tests {
     fn static_json_pointer_selection_observes_runtime_segment_limit() {
         let mut document = Value::Null;
         for _ in 0..crate::contracts::JSON_POINTER_MAX_SEGMENTS {
-            document = Value::Record(BTreeMap::from([("a".to_owned(), document)]));
+            document = Value::Record(BTreeMap::from([("a".to_owned(), document)]).into());
         }
         let at_limit = "/a".repeat(crate::contracts::JSON_POINTER_MAX_SEGMENTS);
         assert!(matches!(
@@ -7122,13 +7122,13 @@ mod tests {
         let allowed = Value::Record(BTreeMap::from([
             ("known".into(), Value::String("value".into())),
             ("dynamic".into(), Value::Integer(7)),
-        ]));
+        ]).into());
         assert!(value_matches_schema(&allowed, &schema));
 
         let invalid_additional = Value::Record(BTreeMap::from([(
             "dynamic".into(),
             Value::String("wrong type".into()),
-        )]));
+        )]).into());
         assert!(!value_matches_schema(&invalid_additional, &schema));
 
         let closed = json!({
@@ -7151,7 +7151,7 @@ mod tests {
         let values = Value::Record(BTreeMap::from([(
             "json".into(),
             Value::Reference("dashboard".into()),
-        )]));
+        )]).into());
         let known_types = BTreeMap::from([("dashboard".into(), OutputType::Text)]);
         assert!(value_matches_schema_with_types(
             &values,
@@ -7174,8 +7174,8 @@ mod tests {
         });
         let text_items = Value::Record(BTreeMap::from([(
             "items".into(),
-            Value::List(vec![Value::Reference("text".into())]),
-        )]));
+            Value::List(vec![Value::Reference("text".into())].into()),
+        )]).into());
         assert!(value_matches_schema_with_types(
             &text_items,
             &nested_array,
@@ -7681,7 +7681,7 @@ mod tests {
     #[test]
     fn loop_item_inference_treats_nul_text_as_json_like_runtime() {
         let item = Value::String("text\0with-nul".into());
-        let items = Value::List(vec![item]);
+        let items = Value::List(vec![item].into());
         let types = BTreeMap::new();
         assert_eq!(
             known_for_each_item_type(&items, &types, &types),
@@ -7691,7 +7691,7 @@ mod tests {
 
     #[test]
     fn empty_list_item_inference_is_unknown_like_runtime() {
-        let empty = Value::List(Vec::new());
+        let empty = Value::List(Vec::new().into());
         let types = BTreeMap::new();
         assert_eq!(
             known_list_item_type(&empty, &types, &types),
@@ -7711,7 +7711,7 @@ mod tests {
 
     #[test]
     fn nul_list_item_type_matches_inline_bound_and_applet_list_sources() {
-        let nul_items = Value::List(vec![Value::String("text\0with-nul".into())]);
+        let nul_items = Value::List(vec![Value::String("text\0with-nul".into())].into());
         let mut known = BTreeMap::new();
         let mut list_items = BTreeMap::new();
 

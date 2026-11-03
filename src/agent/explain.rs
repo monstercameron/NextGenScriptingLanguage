@@ -669,7 +669,7 @@ impl Walker<'_> {
                     inferred_path_binding
                 {
                     self.path_literals
-                        .insert(binding.clone(), Value::String(value.clone()));
+                        .insert(binding.clone(), Value::String(value.clone().into()));
                     self.path_inferred_bindings.insert(binding.clone());
                     if contains_sensitive {
                         self.path_sensitive_bindings.insert(binding, safe_prefix);
@@ -836,7 +836,7 @@ impl Walker<'_> {
                         .is_some_and(|name| self.path_inferred_bindings.contains(name));
                     Some(match resolve_static(value, &self.path_literals) {
                         Some(Value::String(path)) => PathOverride::Set {
-                            path: std::ffi::OsString::from(path.as_str()),
+                            path: std::ffi::OsString::from(path.as_ref()),
                             inferred_printf,
                             lookup_path: referenced_name
                                 .and_then(|name| self.path_sensitive_bindings.get(name))
@@ -848,7 +848,7 @@ impl Walker<'_> {
                                     }) {
                                         None
                                     } else {
-                                        Some(std::ffi::OsString::from(path.as_str()))
+                                        Some(std::ffi::OsString::from(path.as_ref()))
                                     }
                                 }),
                             has_sensitive_tail: referenced_name.is_some_and(|name| {
@@ -957,7 +957,7 @@ impl Walker<'_> {
         // Lexical checks are advisory. A `..` component or an absolute path is
         // always flagged, whether or not it would normalise inside the folder.
         if is_absolute(text) || has_parent_component(text) {
-            row.path = Some(text.clone());
+            row.path = Some(text.to_string());
             row.escapes_cwd = true;
             return;
         }
@@ -990,7 +990,7 @@ impl Walker<'_> {
             self.cwd = Cwd::Unknown;
             return;
         };
-        row.path = Some(text.clone());
+        row.path = Some(text.to_string());
         let lexical_escape = is_absolute(text) || has_parent_component(text);
         row.escapes_cwd = lexical_escape;
         if self.cwd_poisoned || lexical_escape {
@@ -1400,12 +1400,12 @@ fn resolve_static(value: &Value, known: &BTreeMap<String, Value>) -> Option<Valu
             .iter()
             .map(|v| resolve_static(v, known))
             .collect::<Option<Vec<_>>>()
-            .map(Value::List),
+            .map(|items| Value::List(items.into())),
         Value::Record(fields) => fields
             .iter()
             .map(|(k, v)| resolve_static(v, known).map(|v| (k.clone(), v)))
             .collect::<Option<BTreeMap<_, _>>>()
-            .map(Value::Record),
+            .map(|fields| Value::Record(fields.into())),
         literal => Some(literal.clone()),
     }
 }
@@ -1553,7 +1553,7 @@ fn has_reference(value: &Value) -> bool {
 /// Record a literal path, or mark the destination as runtime-determined.
 fn set_path(row: &mut Row, path: &Value) {
     match path {
-        Value::String(text) => row.path = Some(text.clone()),
+        Value::String(text) => row.path = Some(text.to_string()),
         _ => row.path_is_runtime = true,
     }
 }

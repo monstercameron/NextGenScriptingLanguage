@@ -1289,7 +1289,7 @@ fn portable_counter_manifests(work: &Path, printf: &Path) -> PathBuf {
     // the runner's `PATH`.
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(manifests().join("printf.json")).unwrap()).unwrap();
-    manifest["binary"] = serde_json::Value::String(printf.to_string_lossy().replace('\\', "/"));
+    manifest["binary"] = serde_json::Value::String(printf.to_string_lossy().replace('\\', "/").into());
     fs::write(custom.join("printf.json"), manifest.to_string()).unwrap();
     let count = work.join("portable-count.txt");
     let (binary, arguments) = if cfg!(windows) {

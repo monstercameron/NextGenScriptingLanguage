@@ -87,7 +87,7 @@ fn single_header_table(header: String) -> Value {
     Value::Object(Map::from_iter([
         (
             "headers".to_owned(),
-            Value::Array(vec![Value::String(header)]),
+            Value::Array(vec![Value::String(header.into())]),
         ),
         ("rows".to_owned(), Value::Array(Vec::new())),
     ]))
@@ -238,7 +238,7 @@ fn parser_and_stringifier_enforce_exact_column_limit() {
     let headers = |count: usize| {
         Value::Array(
             (0..count)
-                .map(|index| Value::String(format!("column-{index}")))
+                .map(|index| Value::String(format!("column-{index}").into()))
                 .collect(),
         )
     };
@@ -276,7 +276,7 @@ fn parser_and_stringifier_enforce_exact_cell_limit() {
     drop(exact_csv);
     drop(too_many_csv);
 
-    let empty_row = Value::Array(vec![Value::String(String::new()); WIDTH]);
+    let empty_row = Value::Array(vec![Value::String(String::new().into()); WIDTH]);
     let rows = vec![empty_row.clone(); EXACT_ROWS];
     let table = Value::Object(Map::from_iter([
         ("headers".to_owned(), Value::Array(Vec::new())),
@@ -324,7 +324,7 @@ fn stringifier_enforces_exact_data_row_limit() {
 fn parser_distinguishes_csv_input_and_encoded_json_output_byte_limits() {
     {
         let at_input_limit = "x".repeat(MAX_CSV_BYTES);
-        let args = Map::from_iter([("text".to_owned(), Value::String(at_input_limit))]);
+        let args = Map::from_iter([("text".to_owned(), Value::String(at_input_limit.into()))]);
         let error = applets::execute("csv.parse", &args, b"").unwrap_err();
         assert!(error.message.contains("parsed CSV table"));
         assert!(error.message.contains("JSON limit"));
@@ -332,7 +332,7 @@ fn parser_distinguishes_csv_input_and_encoded_json_output_byte_limits() {
 
     {
         let over_input_limit = "x".repeat(MAX_CSV_BYTES + 1);
-        let args = Map::from_iter([("text".to_owned(), Value::String(over_input_limit))]);
+        let args = Map::from_iter([("text".to_owned(), Value::String(over_input_limit.into()))]);
         let error = applets::execute("csv.parse", &args, b"").unwrap_err();
         assert!(error
             .message
@@ -515,7 +515,7 @@ fn registered_contracts_declare_recursive_table_shapes_and_compose() {
 #[test]
 fn parser_observes_cooperative_cancellation_during_a_large_finite_input() {
     let text = "x".repeat(1024);
-    let args = Map::from_iter([("text".to_owned(), Value::String(text))]);
+    let args = Map::from_iter([("text".to_owned(), Value::String(text.into()))]);
     let checks = AtomicUsize::new(0);
     let checkpoint = || {
         if checks.fetch_add(1, Ordering::SeqCst) >= 3 {

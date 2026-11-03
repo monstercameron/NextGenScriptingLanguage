@@ -857,7 +857,7 @@ impl WorkerJsonValue {
             Self::Null => serde_json::Value::Null,
             Self::Boolean(value) => serde_json::Value::Bool(value),
             Self::Number(value) => serde_json::Value::Number(value),
-            Self::String(value) => serde_json::Value::String(value),
+            Self::String(value) => serde_json::Value::String(value.into()),
             Self::Array(values) => {
                 serde_json::Value::Array(values.into_iter().map(Self::into_json).collect())
             }

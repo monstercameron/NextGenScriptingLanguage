@@ -120,7 +120,7 @@ impl InputDeclaration {
         }
         // Checked for every value path (CLI, runtime and live edits), before any effect.
         if let (Some(choices), Value::String(text)) = (&self.choices, value) {
-            if !choices.contains(text) {
+            if !choices.iter().any(|choice| choice.as_str() == text.as_ref()) {
                 if crate::ast::is_sensitive(self) {
                     bail!(
                         "line {}: input {:?} must be one of {}; the supplied value is not shown",
@@ -179,7 +179,13 @@ impl InputDeclaration {
                 let items: Vec<String> = serde_json::from_str(text).with_context(|| {
                     format!("input {:?} requires a JSON list of text", self.name)
                 })?;
-                Value::List(items.into_iter().map(Value::String).collect())
+                Value::List(
+                    items
+                        .into_iter()
+                        .map(|text| Value::String(text.into()))
+                        .collect::<Vec<Value>>()
+                        .into(),
+                )
             }
             InputType::IntegerList
             | InputType::UnsignedIntegerList
@@ -203,7 +209,7 @@ impl InputDeclaration {
     pub(crate) fn parse_json(&self, value: &serde_json::Value) -> Result<Value> {
         let result = match (self.kind, value) {
             (InputType::Json, value) => crate::structured::from_json(value.clone()),
-            (InputType::Text, serde_json::Value::String(s)) => Value::String(s.clone()),
+            (InputType::Text, serde_json::Value::String(s)) => Value::String(s.clone().into()),
             (InputType::Integer, serde_json::Value::Number(n)) if n.as_i64().is_some() => {
                 Value::Integer(n.as_i64().unwrap())
             }
@@ -223,7 +229,7 @@ impl InputDeclaration {
                     items
                         .iter()
                         .map(|v| Value::String(v.as_str().unwrap().into()))
-                        .collect(),
+                        .collect::<Vec<Value>>().into(),
                 )
             }
             (InputType::IntegerList, serde_json::Value::Array(items))
@@ -233,7 +239,7 @@ impl InputDeclaration {
                     items
                         .iter()
                         .map(|item| Value::Integer(item.as_i64().unwrap()))
-                        .collect(),
+                        .collect::<Vec<Value>>().into(),
                 )
             }
             (InputType::UnsignedIntegerList, serde_json::Value::Array(items))
@@ -249,7 +255,7 @@ impl InputDeclaration {
                                     .clone(),
                             )
                         })
-                        .collect(),
+                        .collect::<Vec<Value>>().into(),
                 )
             }
             (InputType::UsizeList, serde_json::Value::Array(items))
@@ -264,7 +270,7 @@ impl InputDeclaration {
                         .map(|item| {
                             Value::Number(item.as_number().expect("validated usize array").clone())
                         })
-                        .collect(),
+                        .collect::<Vec<Value>>().into(),
                 )
             }
             (InputType::JsonList, serde_json::Value::Array(items)) => Value::List(
@@ -272,7 +278,7 @@ impl InputDeclaration {
                     .iter()
                     .cloned()
                     .map(crate::structured::from_json)
-                    .collect(),
+                    .collect::<Vec<Value>>().into(),
             ),
             _ => bail!(
                 "line {}: input {:?} expects {}",
@@ -443,7 +449,7 @@ pub fn resolve(
                 }
             } else {
                 matches!(input.source, Some(InputSource::Arguments))
-                    .then(|| Value::List(Vec::new()))
+                    .then(|| Value::List(Vec::new().into()))
             };
             let value = supplied
                 .get(&input.name)
@@ -533,8 +539,8 @@ pub fn parse_cli_arguments(
             Some(InputSource::Arguments) => Some(Value::List(
                 arguments
                     .iter()
-                    .map(|value| Value::String(value.clone()))
-                    .collect(),
+                    .map(|value| Value::String(value.clone().into()))
+                    .collect::<Vec<Value>>().into(),
             )),
             _ => None,
         };
@@ -900,7 +906,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 parsed,
-                Value::List(vec![Value::Number(serde_json::Number::from(value))])
+                Value::List(vec![Value::Number(serde_json::Number::from(value))].into())
             );
         }
     }

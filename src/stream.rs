@@ -260,7 +260,7 @@ mod tests {
             call.parameters.get("flags"),
             Some(&crate::ast::Value::List(vec![crate::ast::Value::String(
                 "-f".into()
-            ),]))
+            ),].into()))
         );
         let StepKind::Invoke { call, connection } = &stream.pipeline.steps[1].kind else {
             panic!("stream transform was not parsed as an invocation");

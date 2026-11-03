@@ -449,7 +449,7 @@ fn workflow_path_at(
                 }) {
                     Some(
                         resolve_environment_value(value, bindings).and_then(|value| match value {
-                            Value::String(path) => Some(OsString::from(path)),
+                            Value::String(path) => Some(OsString::from(path.as_ref())),
                             _ => None,
                         }),
                     )
@@ -1002,7 +1002,7 @@ pub(super) fn restored_workflow_environment(
             };
             update
                 .set
-                .insert(normalize_environment_name(name), value.clone());
+                .insert(normalize_environment_name(name), value.to_string());
         }
         super::step_loop::merge_environment_overlay(&mut environment, update);
     }

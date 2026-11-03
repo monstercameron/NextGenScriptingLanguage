@@ -46,7 +46,7 @@ fn manifest_dir(dir: &Path) -> PathBuf {
         )
         .unwrap();
         let script = dir.join("gh.py").to_string_lossy().into_owned();
-        gh["binary"] = serde_json::Value::String("python".to_owned());
+        gh["binary"] = serde_json::Value::String("python".to_owned().into());
         if let Some(arguments) = gh.get_mut("arguments").and_then(|a| a.as_array_mut()) {
             arguments.insert(0, serde_json::json!({"literal": script}));
         }

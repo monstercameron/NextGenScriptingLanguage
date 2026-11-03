@@ -31,7 +31,7 @@ fn opt_manifest_list_type_errors_keep_precedence_over_nul_errors() {
     let manifest = opt_manifest_from_json(
         r#"{"name":"check","binary":"tool","parameters":{"items":{"type":"list","items":"string","required":true}},"arguments":[{"spread":"items"}]}"#,
     );
-    let invalid = Value::List(vec![Value::String("\0".into()), Value::Integer(1)]);
+    let invalid = Value::List(vec![Value::String("\0".into()), Value::Integer(1)].into());
     let invocation = Invocation {
         operation: "check".into(),
         direct: false,
@@ -60,7 +60,7 @@ fn opt_manifest_list_type_errors_keep_precedence_over_nul_errors() {
         manifest
             .build_arguments(&BTreeMap::from([(
                 "items".into(),
-                Value::List(vec![Value::String("\0".into())]),
+                Value::List(vec![Value::String("\0".into())].into()),
             )]))
             .unwrap_err()
             .to_string(),
@@ -79,11 +79,11 @@ fn opt_manifest_json_lists_require_json_arguments_not_spread() {
             Value::List(vec![Value::Record(BTreeMap::from([(
                 "name".into(),
                 Value::String("Ada".into()),
-            )]))]),
+            )]).into())].into()),
         ),
         (
             "flags".into(),
-            Value::List(vec![Value::String("--quiet".into())]),
+            Value::List(vec![Value::String("--quiet".into())].into()),
         ),
     ]);
     assert_eq!(
@@ -212,8 +212,8 @@ fn opt_manifest_large_spread_with_optional_nested_spread_preserves_argv_order() 
             "items".into(),
             Value::List(
                 (0..256)
-                    .map(|index| Value::String(format!("item-{index}")))
-                    .collect(),
+                    .map(|index| Value::String(format!("item-{index}").into()))
+                    .collect::<Vec<Value>>().into(),
             ),
         ),
         (
@@ -221,7 +221,7 @@ fn opt_manifest_large_spread_with_optional_nested_spread_preserves_argv_order() 
             Value::List(vec![
                 Value::String("tail-a".into()),
                 Value::String("tail-b".into()),
-            ]),
+            ].into()),
         ),
     ]);
     let mut expected = vec!["begin".to_owned(), "batch".to_owned()];

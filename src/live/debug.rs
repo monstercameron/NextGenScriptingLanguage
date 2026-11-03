@@ -241,7 +241,7 @@ mod tests {
             1,
             &BTreeMap::from([(
                 "token".to_owned(),
-                Value::String("CANARY-LIVE-TOKEN".to_owned()),
+                Value::String("CANARY-LIVE-TOKEN".to_owned().into()),
             )]),
         )
         .unwrap();

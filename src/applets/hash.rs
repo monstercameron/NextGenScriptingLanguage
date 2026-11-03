@@ -22,15 +22,15 @@ pub(super) fn run(
         None => input,
     };
     match operation {
-        "hash.sha256" => Ok(Value::String(hex(&digest_sha256(bytes, context)?))),
-        "hash.sha512" => Ok(Value::String(hex(&digest_sha512(bytes, context)?))),
-        "encode.hex" => Ok(Value::String(hex_chunked(bytes, context)?)),
+        "hash.sha256" => Ok(Value::String(hex(&digest_sha256(bytes, context)?).into())),
+        "hash.sha512" => Ok(Value::String(hex(&digest_sha512(bytes, context)?).into())),
+        "encode.hex" => Ok(Value::String(hex_chunked(bytes, context)?.into())),
         "decode.hex" => Ok(Value::String(
             String::from_utf8(decode_hex_with_context(
                 required_string(args, "text")?,
                 context,
             )?)
-            .map_err(|_| invalid("hex input is not UTF-8"))?,
+            .map_err(|_| invalid("hex input is not UTF-8"))?.into(),
         )),
         "encode.base64" => {
             let mut encoded = base64(bytes, context)?;
@@ -60,17 +60,17 @@ pub(super) fn run(
             }
             Ok(Value::String(
                 String::from_utf8(decode_base64(&normalized, context)?)
-                    .map_err(|_| invalid("base64 input is not UTF-8"))?,
+                    .map_err(|_| invalid("base64 input is not UTF-8"))?.into(),
             ))
         }
         "encode.url" | "encode.form" => {
-            Ok(Value::String(url_encode(operation, args, bytes, context)?))
+            Ok(Value::String(url_encode(operation, args, bytes, context)?.into()))
         }
         "decode.url" => Ok(Value::String(url_decode(
             required_string(args, "text")?,
             optional_bool(args, "form", false)?,
             context,
-        )?)),
+        )?.into())),
         _ => Err(invalid("unsupported hash or encoding operation")),
     }
 }

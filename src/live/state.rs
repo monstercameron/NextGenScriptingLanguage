@@ -197,17 +197,19 @@ impl Plan {
 
 pub(crate) fn argument(value: &Json) -> Value {
     match value {
-        Json::String(text) => Value::String(text.clone()),
+        Json::String(text) => Value::String(text.clone().into()),
         Json::Bool(boolean) => Value::Bool(*boolean),
         Json::Number(number) if number.as_i64().is_some() => {
             Value::Integer(number.as_i64().unwrap())
         }
-        Json::Array(values) => Value::List(values.iter().map(argument).collect()),
+        Json::Array(values) => {
+            Value::List(values.iter().map(argument).collect::<Vec<Value>>().into())
+        }
         Json::Object(values) => Value::Record(
             values
                 .iter()
                 .map(|(key, value)| (key.clone(), argument(value)))
-                .collect(),
+                .collect::<BTreeMap<String, Value>>().into(),
         ),
         Json::Null => Value::Null,
         Json::Number(number) => Value::Number(number.clone()),
@@ -218,10 +220,12 @@ pub(crate) fn plain(value: Value) -> Json {
         Value::String(text) => json!(text),
         Value::Integer(n) => json!(n),
         Value::Bool(b) => json!(b),
-        Value::List(values) => Json::Array(values.into_iter().map(plain).collect()),
+        Value::List(values) => {
+            Json::Array(Arc::unwrap_or_clone(values).into_iter().map(plain).collect())
+        }
         Value::Reference(name) => json!(name),
         Value::Record(values) => Json::Object(
-            values
+            Arc::unwrap_or_clone(values)
                 .into_iter()
                 .map(|(key, value)| (key, plain(value)))
                 .collect(),

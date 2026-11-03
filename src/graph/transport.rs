@@ -1736,14 +1736,14 @@ mod payload_size_tests {
             Value::Null,
             Value::Number(serde_json::Number::from_f64(1.25).unwrap()),
             Value::Reference("node.port".into()),
-            Value::List(vec![Value::Integer(1), Value::String("line\nfeed".into())]),
+            Value::List(vec![Value::Integer(1), Value::String("line\nfeed".into())].into()),
             Value::Record(BTreeMap::from([
                 ("escaped\"key".into(), Value::String("\\\t".into())),
                 (
                     "nested".into(),
-                    Value::List(vec![Value::Bool(false), Value::Null]),
+                    Value::List(vec![Value::Bool(false), Value::Null].into()),
                 ),
-            ])),
+            ]).into()),
         ]
     }
 
@@ -2946,7 +2946,7 @@ fn apply_input(
 fn encode_stdin_value(value: Value, encoding: OutputEncoding) -> Result<Vec<u8>> {
     match encoding {
         OutputEncoding::Raw => match value {
-            Value::String(text) => Ok(text.into_bytes()),
+            Value::String(text) => Ok(text.as_bytes().to_vec()),
             _ => bail!("raw stdin encoding accepts only text or bytes"),
         },
         OutputEncoding::Json => Ok(serde_json::to_vec(&value_to_json(value)?)?),
@@ -2955,18 +2955,18 @@ fn encode_stdin_value(value: Value, encoding: OutputEncoding) -> Result<Vec<u8>>
 
 fn value_to_json(value: Value) -> Result<serde_json::Value> {
     Ok(match value {
-        Value::String(value) => value.into(),
+        Value::String(value) => serde_json::Value::String(value.to_string()),
         Value::Integer(value) => value.into(),
         Value::Bool(value) => value.into(),
         Value::Number(value) => value.into(),
         Value::List(values) => serde_json::Value::Array(
-            values
+            Arc::unwrap_or_clone(values)
                 .into_iter()
                 .map(value_to_json)
                 .collect::<Result<_>>()?,
         ),
         Value::Record(fields) => serde_json::Value::Object(
-            fields
+            Arc::unwrap_or_clone(fields)
                 .into_iter()
                 .map(|(name, value)| Ok((name, value_to_json(value)?)))
                 .collect::<Result<_>>()?,

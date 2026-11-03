@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct LocatedParseError {
@@ -1623,7 +1624,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
                 let Value::String(name) = value else {
                     bail!("environment name must be a quoted literal");
                 };
-                InputSource::Environment(name)
+                InputSource::Environment(name.to_string())
             }
             Some(Token::Word("environment")) => {
                 cursor += 1;
@@ -1631,7 +1632,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
                 let Value::String(name) = value else {
                     bail!("environment name must be a quoted literal");
                 };
-                InputSource::Environment(name)
+                InputSource::Environment(name.to_string())
             }
             Some(Token::Word("argument")) => {
                 cursor += 1;
@@ -1748,7 +1749,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         );
     }
     if let (Some(choices), Some(Value::String(value))) = (&choices, &default) {
-        if !choices.contains(value) {
+        if !choices.iter().any(|choice| choice == &**value) {
             bail!(
                 "input {name:?} default {value:?} is not one of the allowed values {}",
                 quoted_list(choices)
@@ -1780,17 +1781,17 @@ fn parse_choices(tokens: &[Token<'_>], cursor: &mut usize) -> Result<Vec<String>
         bail!("`one of` allows at most 256 choices");
     }
     let mut choices: Vec<String> = Vec::with_capacity(items.len());
-    for item in items {
+    for item in Arc::unwrap_or_clone(items) {
         let Value::String(text) = item else {
             bail!("`one of` choices must be quoted text");
         };
         if text.is_empty() || text.contains('\0') {
             bail!("`one of` choices must be nonempty and contain no NUL bytes");
         }
-        if choices.contains(&text) {
+        if choices.iter().any(|choice| choice.as_str() == text.as_ref()) {
             bail!("`one of` lists the choice {text:?} more than once");
         }
-        choices.push(text);
+        choices.push(text.to_string());
     }
     Ok(choices)
 }
@@ -2257,7 +2258,7 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
     let (pointer, dynamic) = match tokens.get(cursor + 1) {
         Some(Token::String(pointer)) => {
             crate::structured::validate_pointer(pointer)?;
-            (Value::String(pointer.clone().into_owned()), false)
+            (Value::String(pointer.clone().into_owned().into()), false)
         }
         Some(Token::Word(pointer)) if is_identifier(pointer) => {
             (Value::Reference((*pointer).to_owned()), true)
@@ -2287,7 +2288,7 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
             unreachable!("literal pointer is text")
         };
         Ok(StepKind::TakeJson {
-            pointer,
+            pointer: pointer.to_string(),
             source,
             kind,
             binding,
@@ -2322,6 +2323,7 @@ fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
         let Value::Record(fields) = parse_value(slice, &mut cursor)? else {
             bail!("`use environment` takes a record of names and values");
         };
+        let fields = Arc::unwrap_or_clone(fields);
         ensure_end(slice, cursor)?;
         ensure_end(tokens, close + 1)?;
         let mut set = BTreeMap::new();
@@ -2359,14 +2361,14 @@ fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
         ensure_end(slice, cursor)?;
         ensure_end(tokens, close + 1)?;
         let mut unset = Vec::with_capacity(items.len());
-        for item in items {
+        for item in Arc::unwrap_or_clone(items) {
             let Value::String(name) = item else {
                 bail!("`use without environment` names must be quoted literals");
             };
             if !valid_environment_name(&name) {
                 bail!("invalid environment name {name:?}");
             }
-            unset.push(name);
+            unset.push(name.to_string());
         }
         return Ok(StepKind::Environment {
             set: BTreeMap::new(),
@@ -2570,6 +2572,7 @@ fn environment_suffix(
         let Value::Record(fields) = parse_value(slice, &mut cursor)? else {
             bail!("`and environment` takes a record of names and values");
         };
+        let fields = Arc::unwrap_or_clone(fields);
         ensure_end(slice, cursor)?;
         let mut set = BTreeMap::new();
         for (name, value) in fields {
@@ -2601,14 +2604,14 @@ fn environment_suffix(
         };
         ensure_end(slice, cursor)?;
         let mut names = Vec::with_capacity(items.len());
-        for item in items {
+        for item in Arc::unwrap_or_clone(items) {
             let Value::String(name) = item else {
                 bail!("`and without environment` names must be quoted literals");
             };
             if !valid_environment_name(&name) {
                 bail!("invalid environment name {name:?}");
             }
-            names.push(name);
+            names.push(name.to_string());
         }
         return Ok(Some((EnvironmentSuffix::Unset(names), close - index + 1)));
     }
@@ -2673,7 +2676,7 @@ fn parse_process_handoff(tokens: &[Token<'_>]) -> Result<Option<Vec<StepKind>>> 
             if path.is_empty() || path.contains('\0') {
                 bail!("launch detached output path must be nonempty and cannot contain a NUL byte");
             }
-            output = Some(Value::String(path.clone().into_owned()));
+            output = Some(Value::String(path.clone().into_owned().into()));
             rest = &rest[..rest.len() - 4];
         }
     }
@@ -3619,7 +3622,7 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
     match token {
         Token::String(value) => {
             *cursor += 1;
-            Ok(Value::String(value.clone().into_owned()))
+            Ok(Value::String(value.clone().into_owned().into()))
         }
         Token::Word(word) if *word == "true" || *word == "false" => {
             *cursor += 1;
@@ -3656,7 +3659,7 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
             let mut values = Vec::new();
             if matches!(tokens.get(*cursor), Some(Token::RightBracket)) {
                 *cursor += 1;
-                return Ok(Value::List(values));
+                return Ok(Value::List(values.into()));
             }
             loop {
                 values.push(parse_value_depth(tokens, cursor, depth + 1)?);
@@ -3674,7 +3677,7 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
                     _ => bail!("expected `,` or `]` in list"),
                 }
             }
-            Ok(Value::List(values))
+            Ok(Value::List(values.into()))
         }
         Token::LeftBrace => {
             if depth >= MAX_VALUE_NESTING {
@@ -3684,7 +3687,7 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
             let mut fields = BTreeMap::new();
             if matches!(tokens.get(*cursor), Some(Token::RightBrace)) {
                 *cursor += 1;
-                return Ok(Value::Record(fields));
+                return Ok(Value::Record(fields.into()));
             }
             loop {
                 let Some(Token::String(key)) = tokens.get(*cursor) else {
@@ -3714,7 +3717,7 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
                     _ => bail!("expected `,` or `}}` in JSON object"),
                 }
             }
-            Ok(Value::Record(fields))
+            Ok(Value::Record(fields.into()))
         }
         Token::RightBracket => bail!("unexpected `]` while reading value"),
         Token::RightBrace => bail!("unexpected `}}` while reading value"),
@@ -4210,7 +4213,7 @@ mod tests {
             if call.operation == "printf"
                 && call.parameters.get("values") == Some(&Value::List(vec![
                     Value::Integer(1), Value::Bool(true), Value::Reference("name".into()), Value::String("two words".into())
-                ]))));
+                ].into()))));
         assert!(matches!(
             &program.steps[1].kind,
             StepKind::Invoke {
@@ -4534,7 +4537,7 @@ mod tests {
                 "for each item in []\n  run pwd",
                 LoopKind::ForEach {
                     binding: "item".into(),
-                    values: Value::List(vec![]),
+                    values: Value::List(vec![].into()),
                 },
             ),
         ] {

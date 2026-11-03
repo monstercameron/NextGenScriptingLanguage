@@ -158,10 +158,15 @@ fn report_release_allocation_counts() {
     let cron_source = "*/5 0-23/2 * * 0,7";
     let ls = registry.resolve("ls").unwrap();
     let mut parameters = BTreeMap::new();
-    parameters.insert("path".to_owned(), Value::String(".".to_owned()));
+    parameters.insert("path".to_owned(), Value::String(".".to_owned().into()));
     parameters.insert(
         "flags".to_owned(),
-        Value::List((0..256).map(|_| Value::String("-a".to_owned())).collect()),
+        Value::List(
+            (0..256)
+                .map(|_| Value::String("-a".to_owned().into()))
+                .collect::<Vec<Value>>()
+                .into(),
+        ),
     );
     let invocation = Invocation {
         operation: "ls".to_owned(),
@@ -183,8 +188,8 @@ fn report_release_allocation_counts() {
             "payload".into(),
             Value::Record(BTreeMap::from([
                 ("n".into(), Value::Integer(42)),
-                ("padding".into(), Value::String("x".repeat(4 * 1024 * 1024))),
-            ])),
+                ("padding".into(), Value::String("x".repeat(4 * 1024 * 1024).into())),
+            ]).into()),
         )]),
         max_output_bytes: 32,
         command_timeout: Some(std::time::Duration::from_secs(5)),

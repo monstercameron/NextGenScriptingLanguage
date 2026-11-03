@@ -223,7 +223,7 @@ fn typed_nested_references_and_deferred_json_lists_validate_before_effects() {
                     Value::Reference("retry".into()),
                 )])),
             ),
-        ]))
+        ]).into())
     );
 
     let bad_record_type = nested_source.replace("accept retry as integer", "accept retry as text");
@@ -269,7 +269,7 @@ fn typed_nested_references_and_deferred_json_lists_validate_before_effects() {
     for (invalid, expected) in [
         (Value::String("not a list".into()), "expects list"),
         (
-            Value::List(vec![Value::Integer(1), Value::String("wrong item".into())]),
+            Value::List(vec![Value::Integer(1), Value::String("wrong item".into())].into()),
             "not integer",
         ),
     ] {
@@ -295,7 +295,7 @@ fn typed_nested_references_and_deferred_json_lists_validate_before_effects() {
             directory.path(),
             BTreeMap::from([(
                 "values".into(),
-                Value::List(vec![Value::Integer(3), Value::Integer(8)]),
+                Value::List(vec![Value::Integer(3), Value::Integer(8)].into()),
             )]),
         ),
         Arc::new(AtomicBool::new(false)),

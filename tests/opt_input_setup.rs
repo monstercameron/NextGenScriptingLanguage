@@ -34,8 +34,8 @@ fn supplied_json_input_setup() {
                 "payload".into(),
                 Value::Record(BTreeMap::from([
                     ("n".into(), Value::Integer(42)),
-                    ("padding".into(), Value::String("x".repeat(bytes))),
-                ])),
+                    ("padding".into(), Value::String("x".repeat(bytes).into())),
+                ]).into()),
             )])
         };
         let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&inputs).unwrap()));

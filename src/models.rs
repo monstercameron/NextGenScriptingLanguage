@@ -839,11 +839,11 @@ fn jev_question(
             let map = match criteria {
                 Some(criteria) => criteria
                     .iter()
-                    .map(|(label, text)| (label.clone(), Value::String(text.clone())))
+                    .map(|(label, text)| (label.clone(), Value::String(text.clone().into())))
                     .collect::<Map<_, _>>(),
                 None => labels
                     .iter()
-                    .map(|label| (label.clone(), Value::String(label.clone())))
+                    .map(|label| (label.clone(), Value::String(label.clone().into())))
                     .collect::<Map<_, _>>(),
             };
             question.insert("criteria".into(), Value::Object(map));
@@ -1751,7 +1751,7 @@ fn jev_answer_fields(
             let expected_legend = levels
                 .iter()
                 .enumerate()
-                .map(|(index, label)| (index.to_string(), Value::String(label.clone())))
+                .map(|(index, label)| (index.to_string(), Value::String(label.clone().into())))
                 .collect::<Map<_, _>>();
             if answer.get("legend").and_then(Value::as_object) != Some(&expected_legend) {
                 bail!("provider score legend differs from requested rubric");

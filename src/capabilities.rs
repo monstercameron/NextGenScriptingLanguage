@@ -2128,7 +2128,7 @@ impl StrictPolicyValue {
             Self::Null => serde_json::Value::Null,
             Self::Bool(value) => serde_json::Value::Bool(value),
             Self::Number(value) => serde_json::Value::Number(value),
-            Self::String(value) => serde_json::Value::String(value),
+            Self::String(value) => serde_json::Value::String(value.into()),
             Self::Array(values) => {
                 serde_json::Value::Array(values.into_iter().map(Self::into_json).collect())
             }
@@ -2561,8 +2561,8 @@ fn preflight_invocations_with_policy<'a>(
             };
             // A relative target after a working-directory change is authorized when the
             // step runs, joined onto the directory it actually names (`enter_directory`).
-            if !cwd_mode.is_dynamic() || Path::new(path).is_absolute() {
-                authorize_host_path(registry, Path::new(path), HostAccess::Read, cwd)?;
+            if !cwd_mode.is_dynamic() || Path::new(path.as_ref()).is_absolute() {
+                authorize_host_path(registry, Path::new(path.as_ref()), HostAccess::Read, cwd)?;
             }
             continue;
         }
@@ -3878,9 +3878,9 @@ pub fn authorize_model_endpoint_params(
         return Ok(None);
     };
     let text = match value {
-        Value::String(text) => text.as_str(),
+        Value::String(text) => text.as_ref(),
         Value::Reference(binding) => match bindings.get(binding) {
-            Some(Value::String(text)) => text.as_str(),
+            Some(Value::String(text)) => text.as_ref(),
             Some(_) => bail!("model parameter \"endpoint\" must be text"),
             // Unbound here; argument resolution rejects it before spawn.
             None => return Ok(None),
@@ -4167,9 +4167,9 @@ pub fn authorize_model_file_params(
             continue;
         };
         let text = match value {
-            Value::String(text) => text.as_str(),
+            Value::String(text) => text.as_ref(),
             Value::Reference(binding) => match bindings.get(binding) {
-                Some(Value::String(text)) => text.as_str(),
+                Some(Value::String(text)) => text.as_ref(),
                 Some(_) => bail!("model parameter {name:?} must be text"),
                 // Unbound here; argument resolution rejects it before spawn.
                 None => continue,

@@ -20,7 +20,7 @@ fn check_value(value: &Value, names: &BTreeSet<String>) -> Result<()> {
     match value {
         Value::Reference(name) if !names.contains(name) => bail!("undefined result {name:?}"),
         Value::List(values) => {
-            for value in values {
+            for value in values.iter() {
                 check_value(value, names)?;
             }
         }
@@ -137,7 +137,7 @@ fn static_condition(condition: &crate::ast::Condition) -> Option<bool> {
             Value::String(haystack),
             Value::String(needle),
             crate::ast::ConditionOperator::Contains,
-        ) => haystack.contains(needle.as_str()),
+        ) => haystack.contains(needle.as_ref()),
         (left, right, crate::ast::ConditionOperator::Equals)
             if is_scalar(left)
                 && is_scalar(right)
@@ -223,7 +223,7 @@ fn known_folder(value: &crate::ast::Value, cwd: &Path, cwd_known: bool) -> Optio
     let crate::ast::Value::String(path) = value else {
         return None;
     };
-    let path = Path::new(path);
+    let path = Path::new(path.as_ref());
     if !path.is_absolute() && !cwd_known {
         return None;
     }
@@ -350,7 +350,9 @@ pub(crate) fn preflight_executables(
                     name.as_str() == "PATH" || (cfg!(windows) && name.eq_ignore_ascii_case("PATH"))
                 }) {
                     Some(match value {
-                        crate::ast::Value::String(path) => Some(std::ffi::OsString::from(path)),
+                        crate::ast::Value::String(path) => {
+                            Some(std::ffi::OsString::from(path.as_ref()))
+                        }
                         _ => None,
                     })
                 } else if unset.iter().any(|name| {
@@ -673,7 +675,7 @@ fn describe_value(value: &Value) -> String {
                 .iter()
                 .map(|(name, value)| format!(
                     "{}: {}",
-                    describe_value(&Value::String(name.clone())),
+                    describe_value(&Value::String(name.clone().into())),
                     describe_value(value)
                 ))
                 .collect::<Vec<_>>()
@@ -3576,6 +3578,12 @@ fn resolve<B>(value: &Value, bindings: &BTreeMap<String, B>) -> Result<Value>
 where
     B: std::borrow::Borrow<Value>,
 {
+    // Values without references are already resolved. Cloning one only bumps
+    // the shared payload reference counts instead of copying the payloads, so
+    // resolving a large reference-free list or record stays O(1).
+    if !contains_reference(value) {
+        return Ok(value.clone());
+    }
     Ok(match value {
         Value::Reference(name) => bindings
             .get(name)
@@ -3585,13 +3593,13 @@ where
             values
                 .iter()
                 .map(|v| resolve(v, bindings))
-                .collect::<Result<_>>()?,
+                .collect::<Result<Vec<_>>>()?.into(),
         ),
         Value::Record(values) => Value::Record(
             values
                 .iter()
                 .map(|(name, value)| Ok((name.clone(), resolve(value, bindings)?)))
-                .collect::<Result<_>>()?,
+                .collect::<Result<BTreeMap<_, _>>>()?.into(),
         ),
         value => value.clone(),
     })
@@ -3654,7 +3662,7 @@ fn binding_value_type(
         Value::Bool(_) => InputType::Boolean,
         Value::List(items) => {
             let mut text = true;
-            for item in items {
+            for item in items.iter() {
                 text &= binding_value_type(item, types)? == InputType::Text;
             }
             if text {
@@ -3739,9 +3747,9 @@ fn arguments_for_call(
 }
 fn path_value(value: &Value, bindings: &BTreeMap<String, Value>, cwd: &Path) -> Result<PathBuf> {
     let path = match value {
-        Value::String(path) => path.as_str(),
+        Value::String(path) => path.as_ref(),
         Value::Reference(name) => match bindings.get(name) {
-            Some(Value::String(path)) => path.as_str(),
+            Some(Value::String(path)) => path.as_ref(),
             Some(_) => bail!("path result must contain text"),
             None => return Err(anyhow!("undefined result {name:?}")),
         },
@@ -3798,7 +3806,7 @@ mod binding_type_tests {
         );
         assert_eq!(
             binding_value_type(
-                &Value::List(vec![Value::String("nul\0text".into())]),
+                &Value::List(vec![Value::String("nul\0text".into())].into()),
                 &types,
             )
             .unwrap(),
@@ -3806,14 +3814,14 @@ mod binding_type_tests {
         );
         assert_eq!(
             binding_value_type(
-                &Value::List(vec![Value::String("plain text".into())]),
+                &Value::List(vec![Value::String("plain text".into())].into()),
                 &types,
             )
             .unwrap(),
             InputType::TextList
         );
         assert_eq!(
-            binding_value_type(&Value::List(Vec::new()), &types).unwrap(),
+            binding_value_type(&Value::List(Vec::new().into()), &types).unwrap(),
             InputType::TextList
         );
     }

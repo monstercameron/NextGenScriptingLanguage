@@ -1249,7 +1249,7 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
                     bail!("record is missing required field {name:?}");
                 }
             }
-            for (name, value) in values {
+            for (name, value) in values.iter() {
                 let Some(field_schema) = schema
                     .fields
                     .get(name)
@@ -1797,7 +1797,7 @@ impl OutputSchema {
             }
         }
         validate_enum_value(self.enum_values.as_deref(), &value)?;
-        Ok(AppletOutput::Value(Value::String(value)))
+        Ok(AppletOutput::Value(Value::String(value.into())))
     }
 
     pub fn json_schema(&self) -> serde_json::Value {
@@ -2395,7 +2395,7 @@ impl StrictJsonValue {
             Self::Null => serde_json::Value::Null,
             Self::Boolean(value) => serde_json::Value::Bool(value),
             Self::Number(value) => serde_json::Value::Number(value),
-            Self::String(value) => serde_json::Value::String(value),
+            Self::String(value) => serde_json::Value::String(value.into()),
             Self::Array(values) => {
                 serde_json::Value::Array(values.into_iter().map(Self::into_json).collect())
             }
@@ -2985,7 +2985,7 @@ impl AppletContract {
         };
         let envelope = BTreeMap::from([
             ("value".to_owned(), value),
-            ("outcome".to_owned(), Value::String(outcome.name)),
+            ("outcome".to_owned(), Value::String(outcome.name.into())),
             (
                 "kind".to_owned(),
                 Value::String(outcome.kind.as_str().into()),
@@ -2996,7 +2996,7 @@ impl AppletContract {
             ),
             ("status".to_owned(), Value::Integer(i64::from(status))),
         ]);
-        Ok(AppletOutput::Value(Value::Record(envelope)))
+        Ok(AppletOutput::Value(Value::Record(envelope.into())))
     }
 
     pub fn capabilities(&self) -> &[String] {

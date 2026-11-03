@@ -37,7 +37,7 @@ fn desktop_clicked_contract_accepts_empty_record_and_rejects_unknown_fields() {
         Registry::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"))
             .unwrap();
     let manifest = registry.resolve("desktop.fixture_sync").unwrap();
-    let empty = BTreeMap::from([("click".to_owned(), Value::Record(BTreeMap::new()))]);
+    let empty = BTreeMap::from([("click".to_owned(), Value::Record(BTreeMap::new().into()))]);
     manifest.build_arguments(&empty).unwrap();
 
     let extra = BTreeMap::from([(
@@ -45,7 +45,7 @@ fn desktop_clicked_contract_accepts_empty_record_and_rejects_unknown_fields() {
         Value::Record(BTreeMap::from([(
             "unexpected".to_owned(),
             Value::Bool(true),
-        )])),
+        )]).into()),
     )]);
     assert!(manifest.build_arguments(&extra).is_err());
 }

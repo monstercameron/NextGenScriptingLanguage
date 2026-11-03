@@ -2357,7 +2357,7 @@ impl StrictJsonValue {
             Self::Null => Value::Null,
             Self::Boolean(value) => Value::Bool(value),
             Self::Number(value) => Value::Number(value),
-            Self::String(value) => Value::String(value),
+            Self::String(value) => Value::String(value.into()),
             Self::Array(values) => Value::Array(values.into_iter().map(Self::into_json).collect()),
             Self::Object(values) => Value::Object(
                 values
@@ -2582,7 +2582,7 @@ fn remote_value_matches_input(value: &RemoteValue, port: &crate::contracts::Appl
                 OutputType::Text | OutputType::Path => {
                     std::str::from_utf8(&bytes).ok().is_some_and(|text| {
                         port.schema
-                            .validate_value(&ast::Value::String(text.to_owned()))
+                            .validate_value(&ast::Value::String(text.to_owned().into()))
                             .is_ok()
                     })
                 }
@@ -2639,13 +2639,16 @@ fn json_to_ast(value: &Value) -> ast::Value {
             .as_i64()
             .map(ast::Value::Integer)
             .unwrap_or_else(|| ast::Value::Number(value.clone())),
-        Value::String(value) => ast::Value::String(value.clone()),
-        Value::Array(values) => ast::Value::List(values.iter().map(json_to_ast).collect()),
+        Value::String(value) => ast::Value::String(value.clone().into()),
+        Value::Array(values) => {
+            ast::Value::List(values.iter().map(json_to_ast).collect::<Vec<ast::Value>>().into())
+        }
         Value::Object(values) => ast::Value::Record(
             values
                 .iter()
                 .map(|(name, value)| (name.clone(), json_to_ast(value)))
-                .collect(),
+                .collect::<BTreeMap<String, ast::Value>>()
+                .into(),
         ),
     }
 }

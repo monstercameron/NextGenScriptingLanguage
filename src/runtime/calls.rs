@@ -119,7 +119,7 @@ pub(super) fn validate_arguments(
             let Value::List(items) = value else {
                 bail!("program input {:?} expects {}", input.name, input.kind);
             };
-            for item in items {
+            for item in items.iter() {
                 match item {
                     Value::String(text)
                         if input.kind == InputType::TextList && !text.contains('\0') => {}
@@ -235,13 +235,14 @@ pub(super) fn preflight(
         match value {
             Value::Reference(name) => values.get(name).cloned().unwrap_or_else(|| value.clone()),
             Value::List(items) => {
-                Value::List(items.iter().map(|item| known(item, values)).collect())
+                Value::List(items.iter().map(|item| known(item, values)).collect::<Vec<Value>>().into())
             }
             Value::Record(items) => Value::Record(
                 items
                     .iter()
                     .map(|(name, item)| (name.clone(), known(item, values)))
-                    .collect(),
+                    .collect::<BTreeMap<String, Value>>()
+                    .into(),
             ),
             value => value.clone(),
         }
@@ -635,11 +636,11 @@ mod tests {
                     "payload".into(),
                     Value::Record(BTreeMap::from([
                         ("n".into(), Value::Integer(42)),
-                        ("padding".into(), Value::String("x".repeat(size))),
-                    ])),
+                        ("padding".into(), Value::String("x".repeat(size).into())),
+                    ]).into()),
                 )])
             } else {
-                BTreeMap::from([("record".into(), Value::String("x".repeat(size)))])
+                BTreeMap::from([("record".into(), Value::String("x".repeat(size).into()))])
             };
             let before = supplied.clone();
             preflight(&program, &registry, &supplied, None)?;
@@ -687,13 +688,14 @@ mod tests {
                     values.get(name).cloned().unwrap_or_else(|| value.clone())
                 }
                 Value::List(items) => {
-                    Value::List(items.iter().map(|item| known(item, values)).collect())
+                    Value::List(items.iter().map(|item| known(item, values)).collect::<Vec<Value>>().into())
                 }
                 Value::Record(items) => Value::Record(
                     items
                         .iter()
                         .map(|(name, item)| (name.clone(), known(item, values)))
-                        .collect(),
+                        .collect::<BTreeMap<String, Value>>()
+                        .into(),
                 ),
                 value => value.clone(),
             }
@@ -882,11 +884,11 @@ mod tests {
             Value::List(vec![
                 Value::String("first".into()),
                 Value::String("second".into()),
-            ]),
+            ].into()),
             Value::Record(BTreeMap::from([
                 ("n".into(), Value::Integer(42)),
-                ("padding".into(), Value::String("x".repeat(512))),
-            ])),
+                ("padding".into(), Value::String("x".repeat(512).into())),
+            ]).into()),
             Value::Null,
             Value::Reference("unknown".into()),
         ];

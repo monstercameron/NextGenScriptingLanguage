@@ -298,7 +298,10 @@ impl LoopStack {
                     };
                     Iterations::ForEach {
                         binding: binding.clone(),
-                        items: items.into_iter(),
+                        // The resolved list is uniquely owned here, so this
+                        // unwraps without copying; each per-iteration clone
+                        // below only bumps shared payload reference counts.
+                        items: std::sync::Arc::unwrap_or_clone(items).into_iter(),
                         taken: 0,
                         current: None,
                     }
@@ -489,7 +492,7 @@ mod tests {
     #[test]
     fn empty_literal_list_uses_uninhabited_item_type() {
         assert_eq!(
-            element_type(&Value::List(Vec::new()), &BTreeMap::new()).unwrap(),
+            element_type(&Value::List(Vec::new().into()), &BTreeMap::new()).unwrap(),
             InputType::Never
         );
         assert_eq!(
@@ -555,7 +558,7 @@ mod tests {
         .is_err());
         assert!(preflight(
             &kind,
-            &BTreeMap::from([("flag".into(), Value::List(vec![]))]),
+            &BTreeMap::from([("flag".into(), Value::List(vec![].into()))]),
             None,
         )
         .is_err());
@@ -573,7 +576,7 @@ mod tests {
         let mut bindings = BTreeMap::from([
             (
                 "items".into(),
-                Value::List(vec![Value::String("a".into()), Value::String("b".into())]),
+                Value::List(vec![Value::String("a".into()), Value::String("b".into())].into()),
             ),
             ("outer".into(), Value::Integer(1)),
         ]);
@@ -584,7 +587,7 @@ mod tests {
         let mut stack = LoopStack::default();
         assert!(stack.header(3, &kind, &mut bindings)?);
         assert_eq!(bindings["item"], Value::String("a".into()));
-        bindings.insert("items".into(), Value::List(vec![]));
+        bindings.insert("items".into(), Value::List(vec![].into()));
         bindings.insert("outer".into(), Value::Integer(2));
         bindings.insert("local".into(), Value::Bool(true));
         stack.end_iteration(3, &mut bindings)?;
@@ -667,6 +670,59 @@ mod tests {
             &mut bindings
         )?);
         assert_eq!(before, bindings);
+        Ok(())
+    }
+
+    #[test]
+    fn foreach_binding_shares_large_item_payloads() -> Result<()> {
+        // Large immutable payloads must be shared, not deep-copied, when the
+        // header resolves the list and each iteration binds its own item.
+        let big = Value::String("x".repeat(4096).into());
+        let Value::String(big_payload) = &big else {
+            unreachable!("test builds a text payload");
+        };
+        let nested = Value::Record(
+            BTreeMap::from([
+                ("name".into(), big.clone()),
+                (
+                    "tags".into(),
+                    Value::List(vec![big.clone(), Value::Integer(7)].into()),
+                ),
+            ])
+            .into(),
+        );
+        let items = Value::List(vec![nested.clone(), big.clone()].into());
+        let mut bindings = BTreeMap::from([("items".into(), items)]);
+        let kind = LoopKind::ForEach {
+            binding: "item".into(),
+            values: Value::Reference("items".into()),
+        };
+        let mut stack = LoopStack::default();
+        assert!(stack.header(3, &kind, &mut bindings)?);
+        let Value::Record(fields) = &bindings["item"] else {
+            panic!("first iteration binds the record");
+        };
+        assert_eq!(&bindings["item"], &nested);
+        let Value::String(name) = &fields["name"] else {
+            panic!("record keeps its text field");
+        };
+        assert!(std::sync::Arc::ptr_eq(name, big_payload));
+        let Value::List(tags) = &fields["tags"] else {
+            panic!("record keeps its list field");
+        };
+        let Value::String(tag) = &tags[0] else {
+            panic!("nested list keeps its text item");
+        };
+        assert!(std::sync::Arc::ptr_eq(tag, big_payload));
+        stack.end_iteration(3, &mut bindings)?;
+        assert!(stack.header(3, &kind, &mut bindings)?);
+        assert_eq!(&bindings["item"], &big);
+        let Value::String(second) = &bindings["item"] else {
+            panic!("second iteration binds the text item");
+        };
+        assert!(std::sync::Arc::ptr_eq(second, big_payload));
+        stack.end_iteration(3, &mut bindings)?;
+        assert!(!stack.header(3, &kind, &mut bindings)?);
         Ok(())
     }
 }

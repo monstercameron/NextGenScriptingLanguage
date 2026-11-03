@@ -68,7 +68,7 @@ impl GraphExecutor for HeadlessTuiFixture {
                         source_node: event.port.node,
                         generation: event.generation,
                         revision: event.revision,
-                        text: text.clone(),
+                        text: text.to_string(),
                     })
                     .map_err(|_| anyhow!("acceptance test stopped reading renderer updates"))?;
             }
@@ -1158,7 +1158,7 @@ fn remote_typed_events_flow_through_imported_module_result_projection_and_cancel
         assert!(matches!(
             &event.payload,
             PortValue::Value(Value::Record(fields))
-                if fields.get("text") == Some(&Value::String(format!("remote-{expected}")))
+                if fields.get("text") == Some(&Value::String(format!("remote-{expected}").into()))
         ));
     }
     assert!(observed

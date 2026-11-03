@@ -246,8 +246,8 @@ fn envelope_limit_failure_preserves_durable_journal() {
 #[test]
 fn binding_serialization_reuses_and_erases_scratch() {
     let (_temp, _options, mut journal) = journal();
-    let value = Value::String("x".repeat(128 * 1024));
-    let next_value = Value::String("y".repeat(128 * 1024));
+    let value = Value::String("x".repeat(128 * 1024).into());
+    let next_value = Value::String("y".repeat(128 * 1024).into());
     let mut buffer = Vec::new();
     // Changed bindings exercise the serialization used by successive commits.
     let first =

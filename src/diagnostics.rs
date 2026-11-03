@@ -7827,6 +7827,30 @@ mod tests {
     }
 
     #[test]
+    fn json_set_record_binding_can_be_encoded_as_json() {
+        let index = crate::bundled_manifests::index().unwrap();
+        let manifest = index
+            .body(
+                index
+                    .entries()
+                    .iter()
+                    .position(|entry| entry.name() == "json.set")
+                    .unwrap(),
+            )
+            .unwrap();
+        let registry = Registry::from_sources(&[manifest.to_owned()]).unwrap();
+        let source = concat!(
+            "accept name as text\n",
+            "accept total as integer\n",
+            "run json.set with document {} and pointer \"\" and value ",
+            "{\"name\": name, \"count\": total} as summary\n",
+            "then encode summary as json\n",
+        );
+        let diagnostics = analyze_source(source, &registry);
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+
+    #[test]
     fn known_applet_result_type_is_checked_at_reference_use() {
         let producer = json!({
             "name": "fixture.add",

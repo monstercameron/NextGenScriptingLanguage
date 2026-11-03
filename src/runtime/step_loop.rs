@@ -3353,10 +3353,26 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     RetryPlan::Refused(reason) => {
                         Err(error.context(format!("line {}: retry refused: {reason}", step.line)))
                     }
-                    RetryPlan::Exhausted { attempts } => Err(error.context(format!(
-                        "line {}: retry exhausted after {attempts} attempts",
-                        step.line
-                    ))),
+                    RetryPlan::Exhausted { attempts } => {
+                        // The final failed attempt belongs in the history
+                        // exactly like the ones a retry followed (#733).
+                        if let Some(failure) = error.downcast_ref::<CommandFailed>() {
+                            if let Some(outcome) = &failure.outcome {
+                                execution_history.push_outcome(
+                                    failure.line,
+                                    failure.operation.as_str(),
+                                    outcome,
+                                    None,
+                                    failure.stderr.as_deref(),
+                                    &failure.stages,
+                                );
+                            }
+                        }
+                        Err(error.context(format!(
+                            "line {}: retry exhausted after {attempts} attempts",
+                            step.line
+                        )))
+                    }
                     RetryPlan::Again {
                         restart,
                         delay,

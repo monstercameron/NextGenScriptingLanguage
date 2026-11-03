@@ -143,6 +143,46 @@ fn exhausted_retries_fail_after_every_attempt() {
 }
 
 #[test]
+fn exhausted_retry_history_includes_the_final_failed_attempt() {
+    // #733: when a caught retry is exhausted, `RunResult.executions` must
+    // contain every failed attempt, including the last one.
+    let root = tempfile::tempdir().unwrap();
+    let counter = root.path().join("count.txt");
+    let attempt = direct(
+        &counter,
+        10,
+        75,
+        "and retry up to 2 times even if uncertain",
+    );
+    let source = format!("try\n  {attempt}catch failure\n  then encode failure as json\n");
+    let program = flow::parser::parse(&source).unwrap();
+    let options = flow::runtime::RunOptions::new(root.path().to_path_buf());
+    let result = flow::runtime::run(&program, &flow::manifest::Registry::default(), &options)
+        .expect("the catch must turn the exhausted retry into a completed run");
+    assert_eq!(count(&counter), "3", "one attempt plus two retries ran");
+
+    // The catch binding carries the final failure.
+    let caught: Value = serde_json::from_slice(&result.output).unwrap();
+    assert_eq!(caught["status"], 75, "{caught}");
+
+    // The history keeps all three failures, the final one exactly once,
+    // with its status and stage details.
+    assert_eq!(
+        result.executions.len(),
+        3,
+        "every failed attempt must be in the execution history: {:?}",
+        result.executions
+    );
+    for execution in &result.executions {
+        assert_eq!(execution.status, Some(75), "{execution:?}");
+    }
+    let final_attempt = result.executions.last().unwrap();
+    assert_eq!(final_attempt.status, Some(75));
+    assert_eq!(final_attempt.stages.len(), 1, "{final_attempt:?}");
+    assert_eq!(final_attempt.stages[0].status, Some(75), "{final_attempt:?}");
+}
+
+#[test]
 fn an_uncertain_direct_command_is_not_retried_without_the_opt_in() {
     let root = tempfile::tempdir().unwrap();
     let counter = root.path().join("count.txt");

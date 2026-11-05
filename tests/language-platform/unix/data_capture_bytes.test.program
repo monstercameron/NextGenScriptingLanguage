@@ -1,0 +1,4 @@
+run printf with message "captured bytes"
+then capture bytes as payload
+use bytes payload
+then save to "copy.txt"

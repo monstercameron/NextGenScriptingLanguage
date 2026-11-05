@@ -1,0 +1,10 @@
+parallel at most 1 as joined
+  run hash.sha256 with text "one" as first
+  run hash.sha256 with text "two" as second
+take text at "/mode" from joined as join_mode
+take text at "/tasks/1/state" from joined as second_state
+race at most 1 as raced
+  run hash.sha256 with text "one" as first_race
+  run hash.sha256 with text "two" as second_race
+take text at "/mode" from raced as race_mode
+then "printf" with arguments ["%s|%s|%s", join_mode, second_state, race_mode]

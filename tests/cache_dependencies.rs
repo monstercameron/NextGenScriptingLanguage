@@ -1,7 +1,7 @@
 use serde_json::json;
-use std::{fs, process::Command};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::{fs, process::Command};
 
 #[path = "common/portable_shell.rs"]
 mod portable_shell;
@@ -30,10 +30,7 @@ fn dependency_mutated_during_cached_call_is_not_stored_or_replayed() {
             serde_json::json!([{"literal": helper.to_str().unwrap()}]),
         )
     } else {
-        (
-            helper.to_string_lossy().into_owned(),
-            serde_json::json!([]),
-        )
+        (helper.to_string_lossy().into_owned(), serde_json::json!([]))
     };
     fs::write(
         manifests.join("mutator.json"),

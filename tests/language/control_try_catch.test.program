@@ -1,0 +1,5 @@
+try
+  run json.parse with text "{bad"
+catch problem
+  use value "caught"
+  then encode "caught" as json

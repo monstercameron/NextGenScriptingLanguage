@@ -1,0 +1,2 @@
+accept items as list of text with default ["fallback"]
+then encode items as json

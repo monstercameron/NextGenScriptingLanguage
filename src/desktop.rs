@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
-#[cfg(feature = "tui")]
+#[cfg(any(feature = "tui", unix))]
 use std::io::Write;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};

@@ -1,0 +1,2 @@
+run json.set with document {"a": 1} and pointer "/b" and value 2 as doc
+then encode doc as json

@@ -1406,12 +1406,10 @@ mod tests {
                 serde_json::json!([{"pointer": "/01", "exists": true}]),
             ),
         ]);
-        assert!(
-            filter(&args, &[], &context)
-                .expect_err("failed predicate evaluation remains an error")
-                .message
-                .contains("invalid JSON Pointer array index")
-        );
+        assert!(filter(&args, &[], &context)
+            .expect_err("failed predicate evaluation remains an error")
+            .message
+            .contains("invalid JSON Pointer array index"));
     }
 
     #[test]
@@ -1422,12 +1420,10 @@ mod tests {
             ("select".into(), Value::String("/missing".into())),
             ("default".into(), Value::String("x".repeat(MAX_JSON_BYTES))),
         ]);
-        assert!(
-            map(&args, &[], &context)
-                .expect_err("oversized mapped output is rejected")
-                .message
-                .contains(&format!("{MAX_JSON_BYTES}-byte output limit"))
-        );
+        assert!(map(&args, &[], &context)
+            .expect_err("oversized mapped output is rejected")
+            .message
+            .contains(&format!("{MAX_JSON_BYTES}-byte output limit")));
     }
 
     #[test]

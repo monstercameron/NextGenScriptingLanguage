@@ -494,6 +494,18 @@ fn quote_bootstrap_arg(arg: &str) -> String {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str).unwrap_or("") {
+        // Print the name this process was launched as (argv[0], file name only), so
+        // a symlinked multicall applet can prove which alias it was started through.
+        "invoked-as" => {
+            let invoked = std::env::args_os()
+                .next()
+                .map(std::path::PathBuf::from)
+                .and_then(|path| path.file_name().map(ToOwned::to_owned))
+                .unwrap_or_default();
+            std::io::stdout()
+                .write_all(format!("{}\n", invoked.to_string_lossy()).as_bytes())
+                .unwrap();
+        }
         "argv" => serde_json::to_writer(std::io::stdout(), &args[1..]).unwrap(),
         "json-lines" => json_lines_worker(&args[1..]),
         "write" => {

@@ -1,0 +1,2 @@
+accept count as integer with default 1
+then encode count as json

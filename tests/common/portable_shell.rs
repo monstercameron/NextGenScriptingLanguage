@@ -9,6 +9,7 @@
 //! step in `.github/workflows/ci.yml`); other machines get a panic that
 //! names the missing tool instead of a late spawn failure.
 
+#[cfg(windows)]
 use std::path::PathBuf;
 
 /// Portable spelling of `current` (a bare name like `"printf"` or an

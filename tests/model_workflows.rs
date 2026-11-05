@@ -55,6 +55,9 @@ fn assert_sha256(value: &Value, field: &str) {
     );
 }
 
+#[path = "common/staged_helpers.rs"]
+mod staged_helpers;
+
 #[test]
 fn all_one_hundred_model_workflows_pass_with_local_fixtures() {
     let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -64,7 +67,7 @@ fn all_one_hundred_model_workflows_pass_with_local_fixtures() {
     let output = wait_for_command(
         Command::new("python3")
             .arg(runner)
-            .args(["--binary", env!("CARGO_BIN_EXE_execute")])
+            .args(["--binary", staged_helpers::execute_bundle()])
             .args([
                 "--manifest-dir",
                 project.join("manifests").to_str().unwrap(),
@@ -125,7 +128,7 @@ fn model_catalog_validation_regressions_pass() {
 
 fn run_example(name: &str, directory: &std::path::Path, inputs: &[String]) -> Output {
     let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    let mut command = Command::new(staged_helpers::execute_bundle());
     command
         .arg(project.join("examples/models").join(name))
         .arg("--manifest-dir")

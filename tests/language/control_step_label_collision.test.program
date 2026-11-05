@@ -1,0 +1,2 @@
+same: run hash.sha256 with text "first"
+same: run hash.sha256 with text "second"

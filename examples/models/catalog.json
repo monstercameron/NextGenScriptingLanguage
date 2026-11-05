@@ -1749,7 +1749,6 @@
             "generator_model": "gpt-6-luna",
             "env_file": ".env",
             "evidence_id": "METHOD-33A",
-            "required_text": "48",
             "live": "false"
           },
           "expected_stdout": "{\"action\":\"A methods reviewer verifies extracted values against the original section.\",\"confidence_percent\":92,\"evidence_excerpt\":\"{\\\"case_note\\\":\\\"supported source detail\\\",\\\"checked_fact\\\":\\\"48\\\",\\\"evidence_id\\\":\\\"METHOD-33A\\\",\\\"methods_text\\\":\\\"We evaluated 48 examples with Atlas 2.1. Random seed was 17; scripts in archive R-33.\\\",\\\"section_id\\\":\\\"METHOD-33\\\"}\\n\",\"evidence_id\":\"METHOD-33A\",\"instrument\":\"Atlas 2.1\",\"missing_fields\":[],\"sample_size\":48,\"section_id\":\"METHOD-33\",\"seed\":17,\"status\":\"draft-for-human-review\",\"workflow\":\"methods-reproducibility-extraction\"}\n",
@@ -1767,7 +1766,6 @@
             "generator_model": "gpt-6-luna",
             "env_file": ".env",
             "evidence_id": "METHOD-33B",
-            "required_text": "not stated",
             "live": "false"
           },
           "expected_stdout": "{\"action\":\"A reviewer checks original records and decides the next step.\",\"classification\":\"draft\",\"confidence_percent\":61,\"evidence_excerpt\":\"{\\\"case_note\\\":\\\"weak or incomplete source detail\\\",\\\"checked_fact\\\":\\\"not stated\\\",\\\"evidence_id\\\":\\\"METHOD-33B\\\",\\\"methods_text\\\":\\\"We evaluated 48 examples with Atlas 2.1. Random seed was 17; scripts in archive R-33.\\\",\\\"section_id\\\":\\\"METHOD-33\\\"}\\n\",\"proposed_analysis\":null,\"reason\":\"Confidence is below 80 percent; no generation was requested.\",\"status\":\"needs-human-review\",\"workflow\":\"methods-reproducibility-extraction\"}\n",
@@ -1785,7 +1783,6 @@
             "generator_model": "gpt-6-luna",
             "env_file": ".env",
             "evidence_id": "METHOD-33C",
-            "required_text": "12 sites",
             "live": "false"
           },
           "expected_stdout": "{\"action\":\"A reviewer determines whether any draft is appropriate.\",\"classification\":\"human-review\",\"confidence_percent\":96,\"evidence_excerpt\":\"{\\\"case_note\\\":\\\"explicit owner-review condition\\\",\\\"checked_fact\\\":\\\"12 sites\\\",\\\"evidence_id\\\":\\\"METHOD-33C\\\",\\\"methods_text\\\":\\\"We evaluated 48 examples with Atlas 2.1. Random seed was 17; scripts in archive R-33.\\\",\\\"section_id\\\":\\\"METHOD-33\\\"}\\n\",\"proposed_analysis\":null,\"reason\":\"Classifier selected human-review; no generation was requested.\",\"status\":\"needs-human-review\",\"workflow\":\"methods-reproducibility-extraction\"}\n",
@@ -1803,7 +1800,6 @@
             "generator_model": "gpt-6-luna",
             "env_file": ".env",
             "evidence_id": "METHOD-33N",
-            "required_text": "not reported",
             "live": "false"
           },
           "expected_stdout": "{\"action\":\"A methods reviewer verifies extracted values against the original section.\",\"confidence_percent\":92,\"evidence_excerpt\":\"{\\\"case_note\\\":\\\"explicit missing reproducibility fields\\\",\\\"checked_fact\\\":\\\"not reported\\\",\\\"evidence_id\\\":\\\"METHOD-33N\\\",\\\"methods_text\\\":\\\"We used Atlas 2.1. Sample size and seed were not reported.\\\",\\\"section_id\\\":\\\"METHOD-33N\\\"}\\n\",\"evidence_id\":\"METHOD-33N\",\"instrument\":\"Atlas 2.1\",\"missing_fields\":[\"sample_size\",\"seed\"],\"sample_size\":null,\"section_id\":\"METHOD-33N\",\"seed\":null,\"status\":\"draft-for-human-review\",\"workflow\":\"methods-reproducibility-extraction\"}\n",

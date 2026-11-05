@@ -1,0 +1,7 @@
+accept items as list of text with default ["red", "green"]
+if items contains "green"
+  use value "found"
+  then encode "found" as json
+otherwise
+  use value "missing"
+  then encode "missing" as json

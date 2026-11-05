@@ -1,0 +1,6 @@
+if run json.parse with text "{bad" fails
+  use value "invalid"
+  then encode "invalid" as json
+otherwise
+  use value "valid"
+  then encode "valid" as json

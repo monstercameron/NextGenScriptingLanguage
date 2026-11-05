@@ -1,0 +1,4 @@
+accept first as text with default "one" described as "First value"
+accept second as text described as "Second value" with default "two"
+use value second
+then encode second as json

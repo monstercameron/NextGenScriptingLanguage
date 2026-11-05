@@ -1,0 +1,8 @@
+try
+  run json.parse with text "{\"ok\": 1}"
+catch problem
+  use value "caught"
+  then encode "caught" as json
+finally
+  use value "cleaned"
+  then encode "cleaned" as json

@@ -539,7 +539,8 @@ fn diff_table(old: &[&str], new: &[&str], old_offset: usize, new_offset: usize, 
         if i < old.len() && j < new.len() && old[i] == new[j] {
             i += 1;
             j += 1;
-        } else if j < new.len() && (i == old.len() || table[cell(i, j + 1)] >= table[cell(i + 1, j)])
+        } else if j < new.len()
+            && (i == old.len() || table[cell(i, j + 1)] >= table[cell(i + 1, j)])
         {
             out.push_str(&format!("+{:>5} | {}\n", new_offset + j + 1, new[j]));
             j += 1;
@@ -1724,7 +1725,10 @@ mod tests {
 
     #[test]
     fn the_diff_output_for_small_programs_is_unchanged() {
-        assert_eq!(line_diff("a\nb\nc\n", "a\nx\nc\n"), "+    2 | x\n-    2 | b\n");
+        assert_eq!(
+            line_diff("a\nb\nc\n", "a\nx\nc\n"),
+            "+    2 | x\n-    2 | b\n"
+        );
         assert_eq!(line_diff("a\nc\n", "a\nb\nc\n"), "+    2 | b\n");
         assert_eq!(line_diff("a\nb\nc\n", "a\nc\n"), "-    2 | b\n");
         assert_eq!(line_diff("a\nb\n", "a\nb\n"), "");
@@ -1738,7 +1742,9 @@ mod tests {
         // Regression for #755: the suffix table for this pair would hold
         // about 100M cells. Trimming the common lines leaves a one-line
         // middle, so the diff is exactly the edited line.
-        let lines: Vec<String> = (0..10_000).map(|index| format!("step {index:05}")).collect();
+        let lines: Vec<String> = (0..10_000)
+            .map(|index| format!("step {index:05}"))
+            .collect();
         let before = format!("{}\n", lines.join("\n"));
         let mut edited = lines.clone();
         edited[5_000] = "step replaced".to_owned();
@@ -1787,7 +1793,9 @@ mod tests {
             state ^= state << 17;
             state
         };
-        let alphabet = ["alpha", "beta", "gamma", "delta", "", "end", "run x", "alpha"];
+        let alphabet = [
+            "alpha", "beta", "gamma", "delta", "", "end", "run x", "alpha",
+        ];
         let old_lines: Vec<&str> = (0..1200)
             .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
             .collect();

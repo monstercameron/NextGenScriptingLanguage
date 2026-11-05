@@ -506,7 +506,7 @@ fn describe_status(status: ExitStatus) -> String {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn sanitize_probe_stderr(stderr: &[u8]) -> String {
     if stderr.is_empty() {
         return String::new();
@@ -637,15 +637,26 @@ fn probe_bwrap(bwrap: &Path, grant: &AppletGrant, binary: &Path, cwd: &Path) -> 
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(test)]
     TEST_BWRAP_PROBE_CHILDREN.with(|count| count.set(count.get() + 1));
-    let child = command
+    let mut child = command
         .spawn()
         .context("probing applet-specific bubblewrap mounts")?;
+    // bubblewrap writes its refusal to stderr, so keep that text for the error.
+    // It is read only after the child exits, and capped, so it cannot block.
+    let stderr = child.stderr.take();
     let status = wait_bounded(child, "applet-specific bubblewrap")?;
     if !status.success() {
-        bail!("bubblewrap could not establish the applet-specific sandbox");
+        let mut bytes = Vec::new();
+        if let Some(stderr) = stderr {
+            let mut capped = std::io::Read::take(stderr, 2048);
+            let _ = std::io::Read::read_to_end(&mut capped, &mut bytes);
+        }
+        bail!(
+            "bubblewrap could not establish the applet-specific sandbox{}",
+            sanitize_probe_stderr(&bytes)
+        );
     }
     Ok(())
 }
@@ -1109,8 +1120,13 @@ fn ensure_parent_directories(
     created: &mut BTreeSet<PathBuf>,
     covered_roots: &[PathBuf],
 ) {
+    // Create only the parents. `ancestors()` yields `path` itself first, and a
+    // `--dir` at the bind target would turn a file bind such as
+    // /etc/ld.so.cache into a bind onto a directory. bwrap creates the mount
+    // point itself.
     let mut ancestors = path
         .ancestors()
+        .skip(1)
         .filter(|ancestor| *ancestor != Path::new("/"))
         .collect::<Vec<_>>();
     ancestors.reverse();

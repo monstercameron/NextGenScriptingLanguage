@@ -1,0 +1,2 @@
+run encode.base64 with text "hi" as encoded
+then encode encoded as json

@@ -1,0 +1,3 @@
+run json.parse with text "{\"a\": [1, 2]}" as parsed
+take integer at "/a/1" from parsed as second
+then encode second as json

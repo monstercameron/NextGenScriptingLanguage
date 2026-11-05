@@ -1,0 +1,5 @@
+for each item in ["skip", "keep"]
+  if item is "skip"
+    continue
+  use value item
+  then encode item as json

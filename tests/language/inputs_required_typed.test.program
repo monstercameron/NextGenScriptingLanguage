@@ -1,0 +1,5 @@
+accept count as integer
+accept enabled as boolean
+accept items as list of text
+accept data as json
+then encode [count, enabled, items, data] as json

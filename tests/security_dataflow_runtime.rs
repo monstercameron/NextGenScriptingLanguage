@@ -1,4 +1,4 @@
-#![cfg(feature = "remote")]
+#![cfg(all(feature = "remote", feature = "graph"))]
 //! Cross-platform: remote applets run over TCP loopback and the worker fixture is
 //! a Python script launched through the interpreter. Unix-only notes mark the two
 //! spots that still depend on Unix execution: the secret producer is a shell script
@@ -314,14 +314,18 @@ fn secret_producer(path: &Path) -> String {
     // output is produced by a Python script launched through the interpreter
     // (manifest `arguments` carry the script; the call itself takes none).
     #[cfg(unix)]
-    let (binary, script_argument) = {
+    let (binary, script_argument): (PathBuf, Option<String>) = {
         executable(path, "#!/bin/sh\nprintf 'TOP-SECRET-MARKER'\n");
         (path.to_path_buf(), None)
     };
     #[cfg(not(unix))]
     let (binary, script_argument) = {
         let script = path.with_extension("py");
-        fs::write(&script, "import sys;sys.stdout.write('TOP-SECRET-MARKER')\n").unwrap();
+        fs::write(
+            &script,
+            "import sys;sys.stdout.write('TOP-SECRET-MARKER')\n",
+        )
+        .unwrap();
         (
             PathBuf::from("python"),
             Some(script.to_string_lossy().into_owned()),
@@ -557,7 +561,7 @@ fn secret_listener_event_label_survives_into_service_handler_authorization() {
     // through the interpreter; the denial under test depends on the secret
     // event-port label, not on the exact event bytes.
     #[cfg(unix)]
-    let (listener_binary, listener_script_argument) = {
+    let (listener_binary, listener_script_argument): (PathBuf, Option<String>) = {
         let listener_script = directory.path().join("secret-listener");
         executable(
             &listener_script,
@@ -825,7 +829,7 @@ fn checkpointed_graph_rejects_secret_before_custom_store_or_local_applet_runs() 
     // script launched through the interpreter; the test asserts the marker
     // and the checkpoint outcome, never the script bytes.
     #[cfg(unix)]
-    let (binary, applet_script_argument) = {
+    let (binary, applet_script_argument): (PathBuf, Option<String>) = {
         let binary = directory.path().join("local-applet");
         executable(
             &binary,

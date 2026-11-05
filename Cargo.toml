@@ -124,6 +124,12 @@ opt-level = "z"
 [profile.release.package.miniz_oxide]
 opt-level = "z"
 
+# The daemon hashes its own executable on the first status request, and a dev or test
+# build of a 200 MB binary takes seconds to hash unoptimized. Optimize only the hashing
+# crate so the first reply stays well inside the daemon's startup and request budgets.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.dist]
 inherits = "release"
 
@@ -160,6 +166,10 @@ undocumented_unsafe_blocks = "deny"
 [[bin]]
 name = "native-fixture"
 path = "tests/fixtures/native_fixture.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "adversarial"
 required-features = ["test-fixtures"]
 
 [[test]]

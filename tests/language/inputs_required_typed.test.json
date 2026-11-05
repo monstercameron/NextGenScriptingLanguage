@@ -1,0 +1,1 @@
+{"inputs": {"count": "9", "enabled": "true", "items": "[\"a\",\"b c\"]", "data": "{\"ok\":true}"}, "expect": {"status": 0, "stdout": "[9,true,[\"a\",\"b c\"],{\"ok\":true}]"}}

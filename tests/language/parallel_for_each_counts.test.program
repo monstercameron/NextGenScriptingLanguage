@@ -1,0 +1,4 @@
+parallel for each item in ["a", "b"] at most 2 as digests
+  run hash.sha256 with text item
+take integer at "/succeeded" from digests as succeeded
+then encode succeeded as json

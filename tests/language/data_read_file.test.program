@@ -1,0 +1,5 @@
+use value "from file"
+then save to "input.txt"
+read "input.txt" as contents
+use value contents
+then encode contents as json

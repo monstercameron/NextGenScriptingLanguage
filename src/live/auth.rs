@@ -422,7 +422,7 @@ fn pointer_intersects(path: &[String], protected: &[&str]) -> bool {
             || protected.len() <= path.len()
                 && protected
                     .iter()
-                    .map(|part| *part)
+                    .copied()
                     .zip(path.iter().map(String::as_str))
                     .all(|(a, b)| a == b))
 }

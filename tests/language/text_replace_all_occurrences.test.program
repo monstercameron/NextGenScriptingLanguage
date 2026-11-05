@@ -1,0 +1,2 @@
+run text.replace with text "a-b-a" and old "a" and new "xy" as out
+then encode out as json

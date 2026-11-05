@@ -1,0 +1,5 @@
+use value """
+first line
+second line
+"""
+then encode "ok" as json

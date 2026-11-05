@@ -1,0 +1,1 @@
+{"inputs": {"verbose": "true"}, "expect": {"status": 0, "stdout": "true"}}

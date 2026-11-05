@@ -1,0 +1,3 @@
+repeat-block: for each item in ["one", "two"]
+  use value item
+  then encode item as json

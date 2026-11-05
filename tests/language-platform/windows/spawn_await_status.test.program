@@ -1,0 +1,4 @@
+spawn as job
+  run "cmd" with arguments ["/c", "exit 3"]
+await job and keep status as code
+then encode code as json

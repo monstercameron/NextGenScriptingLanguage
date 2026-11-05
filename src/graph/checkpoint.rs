@@ -350,6 +350,24 @@ fn checkpoint_identity_at(
         .collect())
 }
 
+fn remove_source_lines(value: &mut serde_json::Value) {
+    let Some(fields) = value.as_object_mut() else {
+        return;
+    };
+    for name in ["nodes", "edges"] {
+        if let Some(items) = fields
+            .get_mut(name)
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for item in items {
+                if let Some(fields) = item.as_object_mut() {
+                    fields.remove("line");
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,23 +466,5 @@ mod tests {
             first_identity,
             checkpoint_identity_at(&plan, &first, &key_path, true).unwrap()
         );
-    }
-}
-
-fn remove_source_lines(value: &mut serde_json::Value) {
-    let Some(fields) = value.as_object_mut() else {
-        return;
-    };
-    for name in ["nodes", "edges"] {
-        if let Some(items) = fields
-            .get_mut(name)
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            for item in items {
-                if let Some(fields) = item.as_object_mut() {
-                    fields.remove("line");
-                }
-            }
-        }
     }
 }

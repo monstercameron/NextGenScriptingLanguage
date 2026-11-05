@@ -65,7 +65,7 @@ pub(crate) struct GraphJournal {
     directory_handle: File,
     authorize: PersistenceAuthorizer,
     state: Mutex<GraphState>,
-    _lock: File,
+    _lock: super::DirectoryLock,
 }
 
 /// Open the graph journal in `directory`. `identity` names the graph, its inputs and

@@ -185,11 +185,22 @@ fn rewritten_cache_bytes_fail_closed_without_native_launch_or_later_save() {
     fixture.rejects(None, "integrity verification failed");
 }
 
+// The integrity tag is published last as the commit point of a write, so a payload
+// without its tag is an interrupted publication. The CLI reports a miss: it never
+// returns the unverified payload, recomputes, and republishes the tag.
 #[test]
-fn missing_cache_tag_fails_closed_without_native_launch_or_later_save() {
+fn missing_cache_tag_is_a_miss_that_recomputes_and_republishes() {
     let fixture = Fixture::new();
-    fs::remove_file(fixture.entry.with_extension("hmac")).unwrap();
-    fixture.rejects(None, "no integrity tag");
+    let tag = fixture.entry.with_extension("hmac");
+    fs::remove_file(&tag).unwrap();
+    let output = fixture.run(None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"OWNED INPUT\n");
+    assert!(tag.is_file(), "recomputed entry must republish its tag");
 }
 
 // Unix-only: plants a symlink cache entry, which Windows cannot create without

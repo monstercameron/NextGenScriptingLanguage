@@ -28,6 +28,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Restrict the manifests directory to trusted writers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Same runner-ACL restriction as the Native Windows job: the checkout grants
+          # BUILTIN\Users and Authenticated Users write rights, which the gate refuses.
+          $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $manifests = Join-Path $env:GITHUB_WORKSPACE "manifests"
+          & "$env:WINDIR\System32\icacls.exe" $manifests /inheritance:r `
+            /grant:r "*$($userSid):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+          if ($LASTEXITCODE -ne 0) { throw "Could not restrict the manifests directory" }
+          # Reset the contents to inherit the restricted directory. Applying /grant:r
+          # recursively would leave the files with no access entries at all.
+          & "$env:WINDIR\System32\icacls.exe" "$manifests\*" /reset /T /C
+          if ($LASTEXITCODE -ne 0) { throw "Could not reset the manifests contents" }
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
@@ -446,6 +461,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Restrict the manifests directory to trusted writers
+        shell: pwsh
+        run: |
+          # The runner checkout grants BUILTIN\Users and Authenticated Users write
+          # rights, which the trusted-input gate refuses. Keep only the runner user,
+          # SYSTEM and Administrators with write access.
+          $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $manifests = Join-Path $env:GITHUB_WORKSPACE "manifests"
+          & "$env:WINDIR\System32\icacls.exe" $manifests /inheritance:r `
+            /grant:r "*$($userSid):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+          if ($LASTEXITCODE -ne 0) { throw "Could not restrict the manifests directory" }
+          # Reset the contents to inherit the restricted directory. Applying /grant:r
+          # recursively would leave the files with no access entries at all.
+          & "$env:WINDIR\System32\icacls.exe" "$manifests\*" /reset /T /C
+          if ($LASTEXITCODE -ne 0) { throw "Could not reset the manifests contents" }
       - name: Prepare trusted Windows test and build roots
         shell: pwsh
         run: |
@@ -477,6 +507,11 @@ jobs:
           & "$env:WINDIR\System32\icacls.exe" $driveRoot /inheritance:r `
             /grant:r "*$($userSid):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
           if ($LASTEXITCODE -ne 0) { throw "Could not secure the trusted Windows CI volume" }
+          # /inheritance:r keeps explicit ACEs the format wrote. Those grant Users and
+          # Authenticated Users write rights that every child temp directory inherits,
+          # so the trusted-input gate refuses the test temp roots. Remove them.
+          & "$env:WINDIR\System32\icacls.exe" $driveRoot /remove:g "*S-1-5-32-545" "*S-1-5-11" "*S-1-1-0"
+          if ($LASTEXITCODE -ne 0) { throw "Could not remove foreign write rights from the trusted Windows CI volume" }
           $target = Join-Path $driveRoot "target"
           $temp = Join-Path $driveRoot "temp"
           New-Item -ItemType Directory -Path $target, $temp | Out-Null

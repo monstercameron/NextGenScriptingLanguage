@@ -69,7 +69,7 @@
     "package": "vsce package --baseContentUrl https://github.com/monstercameron/NextGenScriptingLanguage/blob/main/editors/vscode/"
   },
   "devDependencies": {
-    "@vscode/vsce": "4.0.0",
+    "@vscode/vsce": "4.1.0",
     "vscode-textmate": "9.3.2",
     "vscode-oniguruma": "2.0.1"
   },

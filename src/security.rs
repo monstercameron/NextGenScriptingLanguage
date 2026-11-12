@@ -3222,8 +3222,8 @@ mod tests {
         use windows_sys::Win32::Security::CreateWellKnownSid;
         let mut sid = vec![0u32; 17]; // SECURITY_MAX_SID_SIZE is 68 bytes.
         let mut size = (sid.len() * 4) as u32;
-        // SAFETY: sid has room for SECURITY_MAX_SID_SIZE bytes; no domain SID is needed.
         assert!(
+            // SAFETY: sid has room for SECURITY_MAX_SID_SIZE bytes; no domain SID is needed.
             unsafe {
                 CreateWellKnownSid(
                     kind,
@@ -3254,8 +3254,8 @@ mod tests {
         ace[4..8].copy_from_slice(&mask.to_le_bytes());
         // SAFETY: ace has 8 + sid_len bytes, so the SID fits at offset 8.
         assert!(unsafe { CopySid(sid_len as u32, ace.as_mut_ptr().add(8).cast(), sid) } != 0);
-        // SAFETY: acl is an initialized ACL with room; ace holds one complete ACE.
         assert!(
+            // SAFETY: acl is an initialized ACL with room; ace holds one complete ACE.
             unsafe {
                 AddAce(
                     acl,
@@ -3281,8 +3281,8 @@ mod tests {
         issue_926_set_dacl(&file, |acl| {
             let mut everyone = issue_926_well_known_sid(WinWorldSid);
             // Read grant first so the test process can open the handle (READ_CONTROL).
-            // SAFETY: acl is an initialized ACL with room; everyone is a valid SID.
             assert!(
+                // SAFETY: acl is an initialized ACL with room; everyone is a valid SID.
                 unsafe {
                     AddAccessAllowedAce(
                         acl,

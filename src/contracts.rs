@@ -931,9 +931,9 @@ fn schema_cardinality_assignable(source: &ValueSchema, target: &ValueSchema) -> 
         && target.kind == OutputType::List
         && target.min_items.is_some_and(|minimum| {
             minimum > 0
-                && !source
+                && source
                     .min_items
-                    .is_some_and(|source_min| source_min >= minimum)
+                    .is_none_or(|source_min| source_min < minimum)
         })
     {
         return false;
@@ -2267,9 +2267,9 @@ fn validate_json_value(
                     json_kind(value)
                 )
             })?;
-            if !number
+            if number
                 .as_u64()
-                .is_some_and(|value| value <= usize::MAX as u64)
+                .is_none_or(|value| value > usize::MAX as u64)
             {
                 bail!(
                     "expected JSON nonnegative platform-sized integer, got {}",

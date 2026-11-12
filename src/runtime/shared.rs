@@ -2570,11 +2570,7 @@ fn validate_range(
                             Value::String(pointer) => Some(pointer),
                             _ => None,
                         })
-                        .and_then(|pointer| {
-                            resolve(source, &flow.known_values)
-                                .ok()
-                                .map(|source| (pointer, source))
-                        })
+                        .zip(resolve(source, &flow.known_values).ok())
                         .map(|(pointer, source)| {
                             crate::structured::take(&pointer, &source, *kind, step.line).cloned()
                         })

@@ -1108,31 +1108,6 @@ fn join_error_result(error: anyhow::Error) -> execution_result::ExecutionResult 
     )
 }
 
-#[cfg(test)]
-mod join_error_tests {
-    use super::*;
-
-    #[test]
-    fn deadline_join_error_maps_to_timeout_with_uncertain_effects() {
-        let result = join_error_result(TaskDeadlineExceeded.into());
-        assert_eq!(result.kind, execution_result::ExecutionKind::Timeout);
-        assert_eq!(
-            result.effect_certainty,
-            execution_result::EffectCertainty::Uncertain
-        );
-    }
-
-    #[test]
-    fn unexpected_worker_failure_stays_unknown_error() {
-        let result = join_error_result(anyhow!("task worker panicked: boom"));
-        assert_eq!(result.kind, execution_result::ExecutionKind::UnknownError);
-        assert_eq!(
-            result.effect_certainty,
-            execution_result::EffectCertainty::Uncertain
-        );
-    }
-}
-
 fn not_started_failure(message: String, kind: execution_result::ExecutionKind) -> anyhow::Error {
     let result = execution_result::ExecutionResult::runtime_failure(
         kind,
@@ -1499,5 +1474,30 @@ mod tests {
         supervisor.cancel_scope(0)?;
         supervisor.finish_scope(0)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod join_error_tests {
+    use super::*;
+
+    #[test]
+    fn deadline_join_error_maps_to_timeout_with_uncertain_effects() {
+        let result = join_error_result(TaskDeadlineExceeded.into());
+        assert_eq!(result.kind, execution_result::ExecutionKind::Timeout);
+        assert_eq!(
+            result.effect_certainty,
+            execution_result::EffectCertainty::Uncertain
+        );
+    }
+
+    #[test]
+    fn unexpected_worker_failure_stays_unknown_error() {
+        let result = join_error_result(anyhow!("task worker panicked: boom"));
+        assert_eq!(result.kind, execution_result::ExecutionKind::UnknownError);
+        assert_eq!(
+            result.effect_certainty,
+            execution_result::EffectCertainty::Uncertain
+        );
     }
 }

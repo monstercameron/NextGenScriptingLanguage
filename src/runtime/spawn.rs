@@ -674,7 +674,7 @@ fn poll_maximum_wait_ms(
     if unnotified_cancellation
         || cancel_wakes_empty
         || (eof && !observer_present)
-        || (eof && observer_present && cfg!(target_os = "macos") && unreaped_children)
+        || (eof && cfg!(target_os = "macos") && unreaped_children)
     {
         100
     } else {
@@ -1283,7 +1283,7 @@ pub(super) fn execute_group_with_sink(
         let timeout_ms = deadline_poll_timeout(signals.deadline, maximum_wait_ms);
         // A child stopped for the terminal wakes nothing, so bound the wait while one is unreaped.
         let timeout_ms = if children.0.iter().any(|child| !child.reaped)
-            && (timeout_ms < 0 || timeout_ms > TERMINAL_STOP_POLL_MS)
+            && !(0..=TERMINAL_STOP_POLL_MS).contains(&timeout_ms)
         {
             TERMINAL_STOP_POLL_MS
         } else {

@@ -403,12 +403,12 @@ fn escape_extra_scalar(bytes: &[u8]) -> usize {
 #[target_feature(enable = "avx2")]
 unsafe fn escape_extra_avx2(bytes: &[u8]) -> usize {
     use std::arch::x86_64::*;
+    let mut blocks = bytes.chunks_exact(32);
     // SAFETY: the caller guarantees AVX2 is available (checked with runtime
     // feature detection on x86_64). Every intrinsic below runs under that
     // guarantee; every load reads exactly 32 bytes inside `bytes` via
     // `_mm256_loadu_si256`, which needs no alignment, and the remainder is
     // counted scalarly outside this block.
-    let mut blocks = bytes.chunks_exact(32);
     let vector = unsafe {
         let quote = _mm256_set1_epi8(b'"' as i8);
         let backslash = _mm256_set1_epi8(b'\\' as i8);
@@ -453,11 +453,11 @@ unsafe fn escape_extra_avx2(bytes: &[u8]) -> usize {
 #[cfg(target_arch = "aarch64")]
 unsafe fn escape_extra_neon(bytes: &[u8]) -> usize {
     use std::arch::aarch64::*;
+    let mut blocks = bytes.chunks_exact(16);
     // SAFETY: NEON is part of the aarch64 baseline, so no runtime detection is
     // needed. Every intrinsic below runs under that guarantee; every load
     // reads exactly 16 bytes inside `bytes` via `vld1q_u8`, which needs no
     // alignment, and the remainder is counted scalarly outside this block.
-    let mut blocks = bytes.chunks_exact(16);
     let vector = unsafe {
         let quote = vdupq_n_u8(b'"');
         let backslash = vdupq_n_u8(b'\\');

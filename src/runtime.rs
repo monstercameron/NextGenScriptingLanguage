@@ -3432,10 +3432,10 @@ pub(super) fn defer_unknown_checkpoint_denial(
     has_loop: bool,
 ) -> bool {
     use crate::contracts::Sensitivity;
-    if !(has_loop
-        && !sensitivities.contains(&Sensitivity::Secret)
-        && sensitivities.contains(&Sensitivity::Unknown)
-        && !crate::security::declared_secret_applets(registry).is_empty())
+    if !has_loop
+        || sensitivities.contains(&Sensitivity::Secret)
+        || !sensitivities.contains(&Sensitivity::Unknown)
+        || crate::security::declared_secret_applets(registry).is_empty()
     {
         return false;
     }

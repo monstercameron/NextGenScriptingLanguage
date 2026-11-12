@@ -1738,8 +1738,6 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn finally_failure_keeps_earlier_command_failure_in_message_with_its_own_status() {
-        use anyhow::Context;
-
         let command_failure = |status: i32, diagnostic: &str| super::super::CommandFailed {
             line: 3,
             operation: "sh".into(),
@@ -1772,8 +1770,6 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn finally_failure_context_keeps_non_command_error_message_unchanged() {
-        use anyhow::Context;
-
         let prior = anyhow!("prior runtime failure");
         let finalizer =
             anyhow!("cleanup runtime failure").context(FinallyUnwindContext::new(&prior));

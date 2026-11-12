@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/gate.v1.schema.json",
+  "title": "Execute effects approval verdict, protocol execute.gate/1",
+  "description": "The advisory verdict from `execute explain FILE --json --allow CATEGORY...`. Each violation names a plan row whose effect category was not approved by `--allow` (reason not_approved) or is not declared by the program's policy header (reason not_declared). `allowed` is true only when there are no violations. The verdict is advisory and does not stop a later run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "program", "prompts", "allowed_categories", "declared_categories", "retries", "allowed", "violations"],
+  "properties": {
+    "protocol": { "const": "execute.gate/1" },
+    "program": { "type": "string" },
+    "prompts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["prompt"]
+      }
+    },
+    "allowed_categories": {
+      "type": "array",
+      "items": {
+        "enum": ["writes", "network", "reads", "process", "cwd", "environment", "privileged", "system", "undeclared"]
+      }
+    },
+    "declared_categories": {
+      "type": ["array", "null"],
+      "items": {
+        "enum": ["writes", "network", "reads", "process", "cwd", "environment", "privileged", "system", "undeclared"]
+      }
+    },
+    "retries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["line", "kind", "attempts", "even_if_uncertain"],
+        "properties": {
+          "line": { "type": "integer", "minimum": 1 },
+          "kind": { "type": "string" },
+          "attempts": { "type": "integer", "minimum": 1 },
+          "even_if_uncertain": { "type": ["boolean", "null"] }
+        }
+      }
+    },
+    "allowed": { "type": "boolean" },
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["line", "kind", "category", "reason", "applet", "binary"],
+        "properties": {
+          "line": { "type": "integer", "minimum": 1 },
+          "kind": { "type": "string" },
+          "category": {
+            "enum": ["writes", "network", "reads", "process", "cwd", "environment", "privileged", "system", "undeclared"]
+          },
+          "reason": { "enum": ["not_approved", "not_declared"] },
+          "applet": { "type": ["string", "null"] },
+          "binary": { "type": ["string", "null"] },
+          "attempts": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

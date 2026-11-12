@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/inspect.v1.schema.json",
+  "title": "Execute input description, protocol execute.inspect/1",
+  "description": "The input description that `execute inspect` builds for a program: each declared input with its type, source, default, and, when supplied, its value. A supplied sensitive input (an environment value or a secret prompt answer) is never printed; its entry carries value_withheld instead. `inputs_complete` is false when some required input has no value; `missing_inputs` names those inputs. This object covers the fields built by the input describer. The CLI also adds `kind`, `stdin_mode` and, for programs with definitions, `programs`; those fields are not described here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "validation", "language_version", "inputs", "inputs_complete", "missing_inputs"],
+  "properties": {
+    "protocol": { "const": "execute.inspect/1" },
+    "validation": { "const": "static" },
+    "language_version": { "type": "integer", "minimum": 1 },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "type", "line", "required"],
+        "properties": {
+          "name": { "type": "string" },
+          "type": {
+            "enum": [
+              "text",
+              "integer",
+              "unsigned integer",
+              "usize",
+              "boolean",
+              "list of text",
+              "list of integer",
+              "list of unsigned integer",
+              "list of usize",
+              "list of json",
+              "json",
+              "uninhabited empty-list item",
+              "bytes"
+            ]
+          },
+          "line": { "type": "integer", "minimum": 1 },
+          "required": { "type": "boolean" },
+          "default": {
+            "description": "The declared default, as a plain JSON value."
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "name"],
+                "properties": {
+                  "kind": { "const": "environment" },
+                  "name": { "type": "string" },
+                  "public": { "const": true }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "position"],
+                "properties": {
+                  "kind": { "const": "argument" },
+                  "position": { "type": "integer", "minimum": 1 }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "arguments" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "program_directory" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "program_path" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "question", "secret"],
+                "properties": {
+                  "kind": { "const": "prompt" },
+                  "question": { "type": "string" },
+                  "secret": { "type": "boolean" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "name", "alias"],
+                "properties": {
+                  "kind": { "const": "flag" },
+                  "name": { "type": "string" },
+                  "alias": { "type": ["string", "null"] }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "name", "alias"],
+                "properties": {
+                  "kind": { "const": "option" },
+                  "name": { "type": "string" },
+                  "alias": { "type": ["string", "null"] }
+                }
+              }
+            ]
+          },
+          "description": { "type": "string" },
+          "choices": { "type": "array", "items": { "type": "string" } },
+          "value": {
+            "description": "The supplied or defaulted value, as a plain JSON value. Present only when the input has a value and is not sensitive."
+          },
+          "value_withheld": { "const": true }
+        }
+      }
+    },
+    "inputs_complete": { "type": "boolean" },
+    "missing_inputs": { "type": "array", "items": { "type": "string" } }
+  }
+}

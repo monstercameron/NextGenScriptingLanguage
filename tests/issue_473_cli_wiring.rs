@@ -1,7 +1,6 @@
 // Command-line wiring for `check --fix` (#473), `grammar --format gbnf` (#363) and the
 // `shim` line of the help text (#400). Each test runs the built binary in a temporary
-// directory. The manifest directory is that temporary directory, so no repository
-// manifest is loaded.
+// directory.
 
 use std::fs;
 use std::path::Path;
@@ -33,10 +32,7 @@ fn check_fix_rewrites_an_undefined_name_and_exits_zero() {
     let directory = tempfile::tempdir().unwrap();
     let program = directory.path().join("a1.program");
     fs::write(&program, UNDEFINED).unwrap();
-    let output = execute(
-        directory.path(),
-        &["check", "a1.program", "--fix", "--manifest-dir", "."],
-    );
+    let output = execute(directory.path(), &["check", "a1.program", "--fix"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{}", describe(&output));
     assert_eq!(fs::read_to_string(&program).unwrap(), FIXED);
@@ -52,10 +48,7 @@ fn check_fix_leaves_a_program_without_fixes_byte_for_byte() {
     let directory = tempfile::tempdir().unwrap();
     let program = directory.path().join("clean.program");
     fs::write(&program, FIXED).unwrap();
-    let output = execute(
-        directory.path(),
-        &["check", "clean.program", "--fix", "--manifest-dir", "."],
-    );
+    let output = execute(directory.path(), &["check", "clean.program", "--fix"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{}", describe(&output));
     assert_eq!(fs::read_to_string(&program).unwrap(), FIXED);

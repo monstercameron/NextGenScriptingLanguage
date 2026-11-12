@@ -170,11 +170,10 @@ impl Plan {
                 // A loop body runs in this scope. Its writes are either outer
                 // names, which reset must restore, or iteration-local names,
                 // which reset removes when unseeded. Walk the body like other steps.
-                StepKind::Loop { kind, .. } => {
-                    if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
-                        names.push(binding.clone());
-                    }
-                }
+                StepKind::Loop {
+                    kind: crate::ast::LoopKind::ForEach { binding, .. },
+                    ..
+                } => names.push(binding.clone()),
                 StepKind::Read { binding, .. } | StepKind::ReadStdin { binding } => {
                     names.extend(binding.iter().cloned())
                 }
@@ -743,9 +742,10 @@ pub(crate) fn withheld_marker() -> Json {
     json!({ "withheld": "secret" })
 }
 
-/// Whether a value is the withheld marker, not an answer.
+/// Whether a value is exactly the withheld marker. Any other value, including a JSON
+/// object that merely has a `withheld` field, is an ordinary answer.
 pub(crate) fn is_withheld_marker(value: &Json) -> bool {
-    value.get("withheld").is_some()
+    *value == withheld_marker()
 }
 
 /// A copy of `bindings` with each present secret answer replaced by the marker.
@@ -904,6 +904,56 @@ mod secret_binding_tests {
         let mut candidate = BTreeMap::from([("token".to_owned(), json!("new-answer"))]);
         restore_secret_bindings(&mut candidate, &bindings(), &["token".to_owned()]);
         assert_eq!(candidate["token"], json!("new-answer"));
+    }
+
+    #[test]
+    fn only_the_exact_sentinel_is_the_marker() {
+        assert!(is_withheld_marker(&withheld_marker()));
+        assert!(!is_withheld_marker(&json!({"withheld": "old"})));
+        assert!(!is_withheld_marker(
+            &json!({"withheld": "secret", "enabled": true})
+        ));
+        assert!(!is_withheld_marker(&json!("secret")));
+    }
+
+    #[test]
+    fn secret_json_with_a_withheld_field_replaces_an_existing_answer() {
+        let stored = BTreeMap::from([("config".to_owned(), json!({"withheld": "old"}))]);
+        let new_value = json!({"withheld": "new", "enabled": true});
+        let mut candidate = BTreeMap::from([("config".to_owned(), new_value.clone())]);
+        restore_secret_bindings(&mut candidate, &stored, &["config".to_owned()]);
+        assert_eq!(
+            candidate["config"], new_value,
+            "the requested change is kept"
+        );
+    }
+
+    #[test]
+    fn secret_json_with_a_withheld_field_is_accepted_when_nothing_is_stored() {
+        let new_value = json!({"withheld": "new", "enabled": true});
+        let mut candidate = BTreeMap::from([("config".to_owned(), new_value.clone())]);
+        restore_secret_bindings(&mut candidate, &BTreeMap::new(), &["config".to_owned()]);
+        assert_eq!(candidate["config"], new_value);
+    }
+
+    #[test]
+    fn the_genuine_marker_keeps_a_stored_json_answer() {
+        let stored = BTreeMap::from([("config".to_owned(), json!({"withheld": "old", "n": 1}))]);
+        let mut candidate = BTreeMap::from([("config".to_owned(), withheld_marker())]);
+        restore_secret_bindings(&mut candidate, &stored, &["config".to_owned()]);
+        assert_eq!(candidate["config"], json!({"withheld": "old", "n": 1}));
+    }
+
+    #[test]
+    fn masking_a_stored_json_answer_exposes_no_value() {
+        let stored = BTreeMap::from([(
+            "config".to_owned(),
+            json!({"withheld": "old", "key": "hunter3"}),
+        )]);
+        let masked = withhold_secret_bindings(&stored, &["config".to_owned()]);
+        assert_eq!(masked["config"], withheld_marker());
+        let text = serde_json::to_string(&masked).unwrap();
+        assert!(!text.contains("hunter3") && !text.contains("old"));
     }
 }
 

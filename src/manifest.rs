@@ -1195,11 +1195,17 @@ impl Registry {
         // Each entry records whether it is a plain file. Directory symlinks
         // are resolved through canonicalization and verified at their target;
         // embedded file symlinks are refused below, before anything is read.
+        let mut canonical_dir = None;
         let paths = if path.is_dir() {
             let canonical = fs::canonicalize(path)
                 .with_context(|| format!("canonicalizing manifest root {}", path.display()))?;
             crate::security::verify_trusted_input_dir(&canonical, "manifest directory")
                 .with_context(|| format!("trusting manifest directory {}", path.display()))?;
+            // The one canonical value that passed the gate is the directory
+            // that is listed, the parent every entry is joined to, and the
+            // module root. Canonicalizing a second time could name a different
+            // directory if the alias was swapped in between.
+            canonical_dir = Some(canonical.clone());
             // List the verified canonical directory so the entries match the
             // directory that passed the gate, not a swapped alias.
             let mut entries = fs::read_dir(&canonical)
@@ -1226,26 +1232,20 @@ impl Registry {
             bail!("no JSON manifests found in {}", path.display());
         }
 
-        let canonical_dir = if path.is_dir() {
-            Some(
-                fs::canonicalize(path)
-                    .with_context(|| format!("canonicalizing manifest root {}", path.display()))?,
-            )
-        } else {
-            None
-        };
         let module_root = Some(match &canonical_dir {
+            // Already verified above as the manifest directory.
             Some(root) => root.clone(),
-            None => paths[0]
-                .0
-                .parent()
-                .ok_or_else(|| anyhow!("manifest path has no parent directory"))?
-                .to_path_buf(),
+            None => {
+                let root = paths[0]
+                    .0
+                    .parent()
+                    .ok_or_else(|| anyhow!("manifest path has no parent directory"))?
+                    .to_path_buf();
+                crate::security::verify_trusted_input_dir(&root, "module root")
+                    .with_context(|| format!("trusting module root {}", root.display()))?;
+                root
+            }
         });
-        if let Some(root) = &module_root {
-            crate::security::verify_trusted_input_dir(root, "module root")
-                .with_context(|| format!("trusting module root {}", root.display()))?;
-        }
         let mut data = RegistryData {
             module_root,
             ..RegistryData::default()
@@ -1277,8 +1277,16 @@ impl Registry {
                 (Some(root), Some(name), true) => root.join(name),
                 _ => path.clone(),
             };
-            crate::security::verify_trusted_input_file(&origin, "manifest")
-                .with_context(|| format!("trusting manifest {}", path.display()))?;
+            match (&canonical_dir, plain) {
+                // A plain entry of the verified directory: its ancestors are
+                // the directory and the directory's ancestors, which the gate
+                // above already walked. Only the file itself is new.
+                (Some(root), true) => {
+                    crate::security::verify_trusted_file_in_verified_dir(root, &origin, "manifest")
+                }
+                _ => crate::security::verify_trusted_input_file(&origin, "manifest"),
+            }
+            .with_context(|| format!("trusting manifest {}", path.display()))?;
             let raw = read_trusted_manifest_file(&origin, "manifest")
                 .with_context(|| format!("reading manifest {}", path.display()))?;
             fingerprint.push((

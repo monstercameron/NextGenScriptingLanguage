@@ -1773,6 +1773,39 @@ pub(crate) fn verify_trusted_input_file(path: &Path, label: &str) -> Result<std:
     Ok(metadata)
 }
 
+/// The leaf half of [`verify_trusted_input_file`] for a file that sits directly
+/// inside a directory the caller has just passed through
+/// [`verify_trusted_input_dir`]. The ancestors of such a file are that directory
+/// and the directory's own ancestors. The directory passed the leaf gate, which
+/// is at least as strict as the ancestor gate on every platform (no sticky-bit
+/// exception on Unix, the strict write mask on Windows), and its ancestors were
+/// walked by the same call, so walking them again for every file in the
+/// directory repeats work without checking anything new. A directory load of
+/// several hundred manifests otherwise pays that walk once per file.
+///
+/// `path` must be `verified_dir.join(file_name)` with `verified_dir` canonical
+/// and verified in the same operation; anything else must use
+/// [`verify_trusted_input_file`]. The time between the directory check and this
+/// check is part of the check-then-use race described on
+/// [`verify_trusted_input_dir`], which the descriptor re-check on open narrows.
+pub(crate) fn verify_trusted_file_in_verified_dir(
+    verified_dir: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<std::fs::Metadata> {
+    if path.parent() != Some(verified_dir) {
+        return Err(anyhow!(
+            "{label} {} is not directly inside the verified directory {}",
+            path.display(),
+            verified_dir.display()
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| anyhow!("reading {label} {}: {error}", path.display()))?;
+    verify_trusted_metadata(path, &metadata, TrustedInputKind::File, label)?;
+    Ok(metadata)
+}
+
 /// Enforce the trusted-input gate on already-stat metadata. Callers that
 /// fetched their own `symlink_metadata` (to keep a distinct missing-file
 /// diagnostic) use this instead of stat-ing twice.
@@ -3236,6 +3269,79 @@ pub(crate) fn verify_bundled_helper(path: &Path, expected_sha256: Option<&str>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #81, #568: a file directly inside a directory that has just passed the
+    /// directory gate needs its own metadata checked, not its ancestors again.
+    #[test]
+    fn file_in_verified_dir_accepts_a_plain_file_and_refuses_other_parents() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        verify_trusted_input_dir(&root, "test directory").expect("temporary directory is trusted");
+        let file = root.join("one.json");
+        std::fs::write(&file, b"{}").unwrap();
+        verify_trusted_file_in_verified_dir(&root, &file, "manifest")
+            .expect("plain file inside the verified directory");
+        // The shortcut and the full gate agree on a trusted file.
+        verify_trusted_input_file(&file, "manifest").expect("full gate agrees");
+
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let deeper = nested.join("two.json");
+        std::fs::write(&deeper, b"{}").unwrap();
+        let error = verify_trusted_file_in_verified_dir(&root, &deeper, "manifest")
+            .expect_err("a file one level down is not covered by the directory check");
+        assert!(
+            format!("{error:#}").contains("not directly inside the verified directory"),
+            "{error:#}"
+        );
+
+        let error = verify_trusted_file_in_verified_dir(&root, &nested, "manifest")
+            .expect_err("a directory is not a manifest file");
+        assert!(
+            format!("{error:#}").contains("is not a regular file"),
+            "{error:#}"
+        );
+
+        let missing = root.join("absent.json");
+        assert!(verify_trusted_file_in_verified_dir(&root, &missing, "manifest").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_in_verified_dir_keeps_every_leaf_refusal() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        verify_trusted_input_dir(&root, "test directory").expect("temporary directory is trusted");
+
+        let writable = root.join("writable.json");
+        std::fs::write(&writable, b"{}").unwrap();
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let error = verify_trusted_file_in_verified_dir(&root, &writable, "manifest")
+            .expect_err("a world-writable manifest is refused");
+        assert!(
+            format!("{error:#}").contains("group/world-writable"),
+            "{error:#}"
+        );
+
+        let target = root.join("target.json");
+        std::fs::write(&target, b"{}").unwrap();
+        let link = root.join("link.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let error = verify_trusted_file_in_verified_dir(&root, &link, "manifest")
+            .expect_err("a symbolic link is refused");
+        assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+
+        let hard = root.join("hard.json");
+        std::fs::hard_link(&target, &hard).unwrap();
+        let error = verify_trusted_file_in_verified_dir(&root, &hard, "manifest")
+            .expect_err("an extra hardlink is refused");
+        assert!(
+            format!("{error:#}").contains("extra hardlinks"),
+            "{error:#}"
+        );
+    }
     use crate::manifest::Registry;
 
     /// Replaces the DACL of `path` with a protected ACL built by `add_aces`.

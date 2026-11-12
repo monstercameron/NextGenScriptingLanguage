@@ -449,11 +449,30 @@ pub(super) fn shape(
                     }
                     padding.extend(std::iter::repeat_n(' ', remainder));
                 }
-                let value = match side {
-                    "left" => format!("{padding}{text}"),
-                    "right" => format!("{text}{padding}"),
-                    _ => return Err(invalid("side must be left or right")),
+                let join = |padding: &str| -> Result<String, AppletError> {
+                    match side {
+                        "left" => Ok(format!("{padding}{text}")),
+                        "right" => Ok(format!("{text}{padding}")),
+                        _ => Err(invalid("side must be left or right")),
+                    }
                 };
+                // A joiner or combining mark at the seam can merge the fill with
+                // the text, so the joined width may fall short of the estimate.
+                // Keep adding fill while each addition makes progress.
+                let mut value = join(&padding)?;
+                let mut joined_width = UnicodeWidthStr::width(value.as_str());
+                while joined_width < width {
+                    padding.push_str(fill);
+                    check_text_size(text.len() + padding.len())?;
+                    value = join(&padding)?;
+                    let next_width = UnicodeWidthStr::width(value.as_str());
+                    if next_width <= joined_width {
+                        return Err(invalid(
+                            "args.fill cannot reach the requested display width when joined to text; use a fill whose characters add display width",
+                        ));
+                    }
+                    joined_width = next_width;
+                }
                 return text_output(value);
             }
             let fill_chars = fill.chars().collect::<Vec<_>>();
@@ -714,5 +733,63 @@ mod tests {
             );
         }
         assert_eq!("ß".to_uppercase(), "SS");
+    }
+
+    #[test]
+    fn display_width_pad_never_returns_short_output_across_joiners() {
+        let context = ExecutionContext::unrestricted();
+        let pad = |text: &str, side: &str, fill: &str| {
+            let args = Map::from_iter([
+                ("text".to_owned(), Value::String(text.to_owned())),
+                ("width".to_owned(), Value::from(4)),
+                ("side".to_owned(), Value::String(side.to_owned())),
+                ("fill".to_owned(), Value::String(fill.to_owned())),
+                ("display_width".to_owned(), Value::Bool(true)),
+            ]);
+            shape("text.pad", &args, &[], &context)
+        };
+        // Each case must either reach width 4 or be rejected with an error.
+        for side in ["right", "left"] {
+            for text in ["\u{1F469}", "e", "e\u{301}"] {
+                for fill in [
+                    "\u{200D}\u{1F4BB}",
+                    "a\u{200D}\u{1F4BB}",
+                    "\u{301}a",
+                    "e\u{301}",
+                ] {
+                    match pad(text, side, fill) {
+                        Err(_) => {}
+                        Ok(Value::String(value)) => assert!(
+                            UnicodeWidthStr::width(value.as_str()) >= 4,
+                            "side={side:?}, text={text:?}, fill={fill:?}, value={value:?}"
+                        ),
+                        Ok(other) => panic!("unexpected value {other:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn display_width_pad_keeps_normal_fill_behavior() {
+        let context = ExecutionContext::unrestricted();
+        let pad = |text: &str, width: u64, side: &str, fill: &str| {
+            let args = Map::from_iter([
+                ("text".to_owned(), Value::String(text.to_owned())),
+                ("width".to_owned(), Value::from(width)),
+                ("side".to_owned(), Value::String(side.to_owned())),
+                ("fill".to_owned(), Value::String(fill.to_owned())),
+                ("display_width".to_owned(), Value::Bool(true)),
+            ]);
+            shape("text.pad", &args, &[], &context).unwrap()
+        };
+        let text = |value: &str| Value::String(value.to_owned());
+        assert_eq!(pad("ab", 6, "right", "xy"), text("abxyxy"));
+        assert_eq!(pad("a", 4, "right", "\u{4E2D}"), text("a\u{4E2D} "));
+        assert_eq!(pad("a", 4, "left", "\u{4E2D}"), text("\u{4E2D} a"));
+        assert_eq!(
+            pad("\u{1F469}", 4, "right", "\u{1F4BB}"),
+            text("\u{1F469}\u{1F4BB}")
+        );
     }
 }

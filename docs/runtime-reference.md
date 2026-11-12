@@ -585,10 +585,10 @@ bundled applets.
 
 **Bundled manifest index.** The shipped manifests are also embedded in the binary as
 one deflate stream per manifest with a generated index (names, phrases, sizes and
-offsets). The default directory must contain exactly the bundled JSON file set;
-extra, missing or non-regular entries are refused. A manifest's on-disk content is
-checked against the bundled SHA-256 digest before it is first used; `check` verifies
-all bundled entries. Use `--manifest-dir` or `--manifest-catalog` to load edited or
+offsets). The default directory must contain exactly the bundled `.json` file set;
+extra, missing or non-regular `.json` entries are refused, and other files are
+ignored. A manifest's on-disk byte size and SHA-256 digest are checked against the
+index before it is first used; `check` verifies all bundled entries. Use `--manifest-dir` or `--manifest-catalog` to load edited or
 custom manifests explicitly. Daemon cache validation hashes explicit sources on each
 request, so restored modification times do not hide edits. A test fails when
 the checked-in index no longer matches `manifests/`. The catalog includes `cd`, `pwd`, `ls`, `cat`, `printf`, `tr`,

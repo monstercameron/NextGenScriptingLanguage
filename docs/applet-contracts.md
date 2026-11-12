@@ -27,15 +27,26 @@ execute applets list --manifest-catalog ./my-applets.catalog
 `--manifest-catalog` explicitly selects one packed catalog file; the selectors
 are mutually exclusive. No catalog is merged or selected automatically.
 
-The default manifest directory is the `manifests` folder beside the installed
-binary, or the system location when there is none. Its bundled applets are
-served from an index compiled into the binary, so a run does not read or
-re-validate each file. The index is used only when the directory holds exactly
-the indexed files, matched by file name and byte size. Any other set falls back
-to the full load, so a changed or broken file reports the same error as before.
-The check does not read file contents, so an edit that keeps a file's byte size
-is not detected. Editing a system-wide directory needs root in any case. An
-explicit `--manifest-dir` or `--manifest-catalog` always gets full validation.
+Without an explicit selector, the default manifest directory is the first of
+these that exists: `manifests` beside the executable's `bin` directory, then
+`share/execute/manifests` there (the native package layout), then the
+development source `manifests` folder in debug builds. Its applets are served
+from the bundled index compiled into the binary, which records each manifest's
+name, phrases, byte size and SHA-256 digest. The directory must contain exactly
+the bundled `.json` file names. An extra, missing or non-regular `.json` entry
+is refused with an error that names `--manifest-dir`, and other files in the
+directory are ignored. A manifest's on-disk size and content digest are checked
+when that applet is first used, so an edit that keeps the byte size is detected.
+A changed manifest fails closed with this error:
+
+    manifest awk.json in <directory> differs from the bundled copy; pass --manifest-dir <directory> to load edited manifests as files
+
+The registry never switches to the file's content after handing out manifests.
+`check` verifies every bundled entry at load time and reports the same
+diagnostic. To run an intentionally edited manifest, pass its directory with
+`--manifest-dir` (or a packed file with `--manifest-catalog`). An explicit
+directory or catalog always gets full validation and is not compared with the
+index. Editing a system-wide directory needs root in any case.
 
 `list` without a mode returns protocol `execute.applets/1` with applets sorted by
 canonical name. `--names` prints only one canonical name per line. `--signatures`

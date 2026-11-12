@@ -181,6 +181,10 @@ name = "issue_738_caught_task_group_outcome"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "issue_505_act_on"
+required-features = ["model"]
+
+[[test]]
 name = "checkpoint_resolve_elements"
 required-features = ["test-fixtures", "agent-advisory"]
 

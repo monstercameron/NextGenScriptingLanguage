@@ -247,6 +247,11 @@ fn validate_record(record: &ResolutionRecord, max_output_bytes: usize) -> Result
     if record.actor.len() > MAX_ID_BYTES {
         bail!("checkpoint resolution actor is too long");
     }
+    // Every decision, committed or retry, must name who made it. A committed
+    // node is completed from this record, so an anonymous one is refused.
+    if record.actor.trim().is_empty() {
+        bail!("checkpoint resolution does not record who decided");
+    }
     if let Some(fingerprint) = &record.fingerprint {
         if fingerprint.is_empty() || fingerprint.len() > 128 {
             bail!("checkpoint resolution fingerprint is invalid");
@@ -685,6 +690,22 @@ mod tests {
         // gates every uncovered uncertain element by name.
         let good = record("node:1", Some(0), ResolutionDecision::Retry);
         assert!(validate_record(&good, 1024).is_ok());
+    }
+
+    /// A decision with no recorded decider is refused for both outcomes: a
+    /// committed node is completed from its record, so the record must say
+    /// who decided it (#536).
+    #[test]
+    fn resolution_without_recorded_decider_is_refused() {
+        let mut anonymous = record("node:1", None, ResolutionDecision::Committed);
+        anonymous.actor = "  ".to_owned();
+        let error = validate_record(&anonymous, 1024).unwrap_err();
+        assert!(error.to_string().contains("who decided"), "got {error:#}");
+        let mut anonymous = record("node:1", Some(0), ResolutionDecision::Retry);
+        anonymous.actor = String::new();
+        assert!(validate_record(&anonymous, 1024).is_err());
+        let named = record("node:1", None, ResolutionDecision::Committed);
+        assert!(validate_record(&named, 1024).is_ok());
     }
 
     #[test]

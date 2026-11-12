@@ -5,7 +5,7 @@
 
 use crate::ast::{InputSource, ListenSource, Trigger};
 use anyhow::{anyhow, bail, Context, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -169,6 +169,17 @@ fn render_for_workflow_with_launchd_home_and_catalog(
         },
         ServiceFormat::Systemd | ServiceFormat::Launchd => Vec::new(),
     };
+    // Computed before the policy path is moved into argv below.
+    let hardening = match request.format {
+        ServiceFormat::Systemd | ServiceFormat::SystemdTimer => {
+            let policy = capability_policy
+                .as_deref()
+                .map(read_policy_for_review)
+                .transpose()?;
+            derived_hardening(policy.as_ref(), &working_directory)?
+        }
+        ServiceFormat::Launchd => String::new(),
+    };
     let mut argv = vec![utf8_path(&executable, "execute binary")?, "run".into()];
     if request.format == ServiceFormat::SystemdTimer {
         argv.push("--once".into());
@@ -233,13 +244,14 @@ fn render_for_workflow_with_launchd_home_and_catalog(
     validate_arguments(&argv)?;
 
     match request.format {
-        ServiceFormat::Systemd => render_systemd(&label, &working_directory, &argv),
+        ServiceFormat::Systemd => render_systemd(&label, &working_directory, &argv, &hardening),
         ServiceFormat::SystemdTimer => render_systemd_timer(
             &label,
             &working_directory,
             &argv,
             &calendar,
             request.persistent,
+            &hardening,
         ),
         ServiceFormat::Launchd => render_launchd(&label, &working_directory, &argv, launchd_home),
     }
@@ -433,7 +445,75 @@ fn validate_label(label: &str) -> Result<()> {
     Ok(())
 }
 
-fn render_systemd(label: &str, working_directory: &Path, argv: &[String]) -> Result<String> {
+/// Parse a capability policy to derive review text from it. This does not check
+/// the owner-only privacy rule that `CapabilityPolicy::load` applies: the
+/// generator grants nothing and installs nothing, and the service that runs
+/// this policy still loads it with that check.
+fn read_policy_for_review(path: &Path) -> Result<crate::capabilities::CapabilityPolicy> {
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("reading capability policy {}", path.display()))?;
+    crate::capabilities::CapabilityPolicy::from_json(&source)
+        .with_context(|| format!("loading capability policy {}", path.display()))
+}
+
+/// Sandbox directives that the capability policy itself states, each preceded
+/// by a comment naming the policy fact that justifies it.
+///
+/// `deny_privileged` gives `NoNewPrivileges=yes`; no applet network grant gives
+/// `PrivateNetwork=yes`; the filesystem write grants give `ProtectSystem=strict`
+/// and one `ReadWritePaths=` per grant. Without a policy nothing is derived, and
+/// a relative write grant is reported rather than derived, because it resolves
+/// against a working directory that the workflow may change.
+fn derived_hardening(
+    policy: Option<&crate::capabilities::CapabilityPolicy>,
+    working_directory: &Path,
+) -> Result<String> {
+    let Some(policy) = policy else {
+        return Ok(String::new());
+    };
+    let mut lines = String::new();
+    if policy.deny_privileged {
+        lines.push_str("# derived: capability policy sets deny_privileged\n");
+        lines.push_str("NoNewPrivileges=yes\n");
+    }
+    if !policy.applets.values().any(|grant| grant.network) {
+        lines.push_str("# derived: no applet grants network access\n");
+        lines.push_str("PrivateNetwork=yes\n");
+    }
+    let mut writes: Vec<&Path> = policy
+        .applets
+        .values()
+        .flat_map(|grant| grant.filesystem.write.iter().map(PathBuf::as_path))
+        .collect();
+    if let Some(host) = &policy.host {
+        writes.extend(host.filesystem.write.iter().map(PathBuf::as_path));
+    }
+    if writes.iter().all(|path| path.is_absolute()) {
+        lines.push_str("# derived: writes are limited to the filesystem write grants\n");
+        lines.push_str("ProtectSystem=strict\n");
+        let mut roots = BTreeSet::new();
+        for path in writes {
+            let resolved = crate::capabilities::canonicalize_for_grant(path, working_directory)?;
+            roots.insert(utf8_path(&resolved, "filesystem write grant")?);
+        }
+        for root in roots {
+            lines.push_str("# derived: filesystem write grant\n");
+            lines.push_str(&format!("ReadWritePaths={}\n", unit_value(&root)?));
+        }
+    } else {
+        lines.push_str(
+            "# not derived: a filesystem write grant is relative to the working directory\n",
+        );
+    }
+    Ok(lines)
+}
+
+fn render_systemd(
+    label: &str,
+    working_directory: &Path,
+    argv: &[String],
+    hardening: &str,
+) -> Result<String> {
     let description = unit_value(&format!("Execute workflow {label}"))?;
     let working_directory = unit_value(&utf8_path(working_directory, "working directory")?)?;
     let command = argv
@@ -455,6 +535,7 @@ RestartSec=5s\n\
 KillMode=control-group\n\
 StandardOutput=journal\n\
 StandardError=journal\n\
+{hardening}\
 \n\
 [Install]\n\
 WantedBy=default.target\n"
@@ -590,6 +671,7 @@ fn render_systemd_timer(
     argv: &[String],
     calendar: &[CalendarSpec],
     persistent: bool,
+    hardening: &str,
 ) -> Result<String> {
     let description = unit_value(&format!("Execute workflow {label}"))?;
     let working_directory = unit_value(&utf8_path(working_directory, "working directory")?)?;
@@ -626,7 +708,8 @@ Type=oneshot\n\
 WorkingDirectory={working_directory}\n\
 ExecStart={command}\n\
 StandardOutput=journal\n\
-StandardError=journal\n"
+StandardError=journal\n\
+{hardening}"
     ))
 }
 
@@ -735,6 +818,196 @@ mod tests {
     #[test]
     fn launchd_xml_escapes_property_text() {
         assert_eq!(xml_text("a&<b>"), "a&amp;&lt;b&gt;");
+    }
+
+    /// Derive the hardening lines for a policy given as JSON, against `work`.
+    fn hardening_for(policy: &serde_json::Value, work: &Path) -> String {
+        let policy = crate::capabilities::CapabilityPolicy::from_json(&policy.to_string()).unwrap();
+        derived_hardening(Some(&policy), work).unwrap()
+    }
+
+    /// Render a whole unit for a policy file on disk. `policy` receives the
+    /// temporary write root.
+    fn systemd_unit_under_policy(policy: impl FnOnce(&str) -> serde_json::Value) -> String {
+        let directory = tempdir().unwrap();
+        let workflow = directory.path().join("writer.program");
+        fs::write(
+            &workflow,
+            "every 5 minutes\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let working_directory = directory.path().join("work");
+        fs::create_dir(&working_directory).unwrap();
+        let data = directory.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let policy_path = directory.path().join("policy.json");
+        fs::write(
+            &policy_path,
+            policy(&data.display().to_string()).to_string(),
+        )
+        .unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let inputs = BTreeMap::new();
+        let arguments: Vec<String> = Vec::new();
+        render_for_workflow(&WorkflowServiceRequest {
+            format: ServiceFormat::Systemd,
+            workflow_path: &workflow,
+            executable: &executable,
+            working_directory: &working_directory,
+            manifest_directory: None,
+            execution_mode: None,
+            capability_policy: Some(&policy_path),
+            data_flow_policy: None,
+            child_environment_allowlist: None,
+            answers_file: None,
+            label: Some("com.example.writer"),
+            inputs: &inputs,
+            program_arguments: &arguments,
+            persistent: false,
+        })
+        .unwrap_or_else(|error| panic!("render failed: {error:#}"))
+    }
+
+    #[test]
+    fn derived_hardening_states_each_fact_the_policy_grants() {
+        let directory = tempdir().unwrap();
+        let data = directory.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let work = directory.path().join("work");
+        fs::create_dir(&work).unwrap();
+        let rendered = hardening_for(
+            &serde_json::json!({
+                "version": 1,
+                "deny_privileged": true,
+                "applets": {
+                    "writer": {
+                        "capabilities": ["filesystem.write"],
+                        "filesystem": { "write": [data.display().to_string()] }
+                    }
+                }
+            }),
+            &work,
+        );
+        assert!(rendered.contains("NoNewPrivileges=yes\n"));
+        assert!(rendered.contains("PrivateNetwork=yes\n"));
+        assert!(rendered.contains("ProtectSystem=strict\n"));
+        assert!(rendered
+            .lines()
+            .any(|line| line.starts_with("ReadWritePaths=") && line.ends_with("data\"")));
+        // Each directive is preceded by the comment that names its justification.
+        assert!(rendered.contains("# derived: capability policy sets deny_privileged\n"));
+    }
+
+    #[test]
+    fn derived_hardening_skips_facts_the_policy_does_not_state() {
+        let directory = tempdir().unwrap();
+        let work = directory.path().join("work");
+        fs::create_dir(&work).unwrap();
+        // A network grant and no deny_privileged: neither NoNewPrivileges nor
+        // PrivateNetwork is stated. No write grant states ProtectSystem=strict.
+        let networked = hardening_for(
+            &serde_json::json!({
+                "version": 1,
+                "applets": {
+                    "fetcher": {
+                        "capabilities": ["network.connect"],
+                        "network": true
+                    }
+                }
+            }),
+            &work,
+        );
+        assert!(!networked.contains("NoNewPrivileges"));
+        assert!(!networked.contains("PrivateNetwork"));
+        assert!(networked.contains("ProtectSystem=strict\n"));
+
+        // A relative write grant resolves against a directory the workflow may
+        // change, so no filesystem directive is derived.
+        let relative = hardening_for(
+            &serde_json::json!({
+                "version": 1,
+                "applets": {
+                    "writer": {
+                        "capabilities": ["filesystem.write"],
+                        "filesystem": { "write": ["data"] }
+                    }
+                }
+            }),
+            &work,
+        );
+        assert!(!relative.contains("ReadWritePaths"));
+        assert!(!relative.contains("ProtectSystem"));
+        assert!(relative.contains("# not derived: a filesystem write grant is relative"));
+    }
+
+    #[test]
+    fn derived_hardening_is_absent_without_a_policy() {
+        let directory = tempdir().unwrap();
+        let workflow = directory.path().join("writer.program");
+        fs::write(
+            &workflow,
+            "every 5 minutes\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let working_directory = directory.path().join("work");
+        fs::create_dir(&working_directory).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let inputs = BTreeMap::new();
+        let arguments: Vec<String> = Vec::new();
+        let unpolicied = render_for_workflow(&WorkflowServiceRequest {
+            format: ServiceFormat::Systemd,
+            workflow_path: &workflow,
+            executable: &executable,
+            working_directory: &working_directory,
+            manifest_directory: None,
+            execution_mode: None,
+            capability_policy: None,
+            data_flow_policy: None,
+            child_environment_allowlist: None,
+            answers_file: None,
+            label: Some("com.example.writer"),
+            inputs: &inputs,
+            program_arguments: &arguments,
+            persistent: false,
+        })
+        .unwrap();
+        for directive in [
+            "NoNewPrivileges",
+            "ProtectSystem",
+            "PrivateNetwork",
+            "ReadWritePaths",
+        ] {
+            assert!(
+                !unpolicied.contains(directive),
+                "{directive} without a policy"
+            );
+        }
+    }
+
+    #[test]
+    fn rendered_unit_places_policy_directives_in_service_section() {
+        let rendered = systemd_unit_under_policy(|data| {
+            serde_json::json!({
+                "version": 1,
+                "deny_privileged": true,
+                "applets": {
+                    "writer": {
+                        "capabilities": ["filesystem.write"],
+                        "filesystem": { "write": [data] }
+                    }
+                }
+            })
+        });
+        assert!(rendered.contains("NoNewPrivileges=yes\n"));
+        assert!(rendered.contains("ProtectSystem=strict\n"));
+        assert!(rendered
+            .lines()
+            .any(|line| line.starts_with("ReadWritePaths=") && line.ends_with("data\"")));
+        // The directives sit inside [Service], before [Install], and the
+        // command line keeps its existing escaping.
+        let install = rendered.find("\n[Install]").unwrap();
+        assert!(rendered.find("NoNewPrivileges=yes").unwrap() < install);
+        assert!(rendered.contains("ExecStart=\""));
     }
 
     #[cfg(unix)]

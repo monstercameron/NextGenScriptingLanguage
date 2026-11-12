@@ -791,13 +791,22 @@ pub fn write_diagnostic(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    let deadline = Instant::now() + DIAGNOSTIC_MAX_WAIT;
-    let _ = write_with_deadline(
-        libc::STDERR_FILENO,
-        bytes,
-        &AtomicBool::new(false),
-        Some(deadline),
-    );
+    // Each chunk gets its own bound instead of one bound for the whole message. A reader that
+    // keeps draining the pipe, however slowly, receives every byte; a pipe that stops draining
+    // for `DIAGNOSTIC_MAX_WAIT` still cannot hold up shutdown.
+    for chunk in bytes.chunks(DIAGNOSTIC_CHUNK_BYTES) {
+        let deadline = Instant::now() + DIAGNOSTIC_MAX_WAIT;
+        if write_with_deadline(
+            libc::STDERR_FILENO,
+            chunk,
+            &AtomicBool::new(false),
+            Some(deadline),
+        )
+        .is_err()
+        {
+            return;
+        }
+    }
 }
 
 /// Write a true end-of-stream stderr diagnostic: sink-atomic filter+flush when
@@ -824,6 +833,10 @@ pub fn write_exit_diagnostic(bytes: &[u8]) {
 
 /// Maximum time a final diagnostic waits for stderr.
 const DIAGNOSTIC_MAX_WAIT: Duration = Duration::from_secs(2);
+
+/// Each final diagnostic chunk is at most one pipe-atomic write, so a slow reader only has to
+/// make progress per chunk.
+const DIAGNOSTIC_CHUNK_BYTES: usize = 4096;
 
 /// The size of stdin when it is a regular file, which can be read without polling, or
 /// `None` for a pipe, terminal or socket, or when fstat fails.

@@ -10,6 +10,9 @@
 //!    `usr/lib/modules` and `lib/modules`.
 //! 3. Processes that run a binary or library replaced on disk: `proc/<pid>/exe` and
 //!    `proc/<pid>/maps` entries whose path ends in ` (deleted)`.
+//! 4. Service restart flags: `flags/restart-<service>-required` under the named-state
+//!    directory passed to [`assess_with_state`]. Only the state directory is read for these;
+//!    [`assess`] alone never reads service flags.
 //!
 //! A missing file or directory is an absent reason, never an error.
 
@@ -32,6 +35,12 @@ const DELETED_PER_PROCESS: usize = 8;
 /// Replaced-binary reasons reported in total at most.
 const DELETED_TOTAL: usize = 256;
 const DELETED_SUFFIX: &str = " (deleted)";
+/// Named-state directory holding flags; mirrors `named_state`'s private `FLAG_DIR`.
+const FLAG_DIR: &str = "flags";
+const SERVICE_PREFIX: &str = "restart-";
+const SERVICE_SUFFIX: &str = "-required";
+/// Service restart reasons reported at most.
+const SERVICE_MAX: usize = 256;
 
 /// One reason that a restart or reboot may be needed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +66,8 @@ pub enum Reason {
         command: Option<String>,
         path: String,
     },
+    /// A state flag `restart-<service>-required` asks for that service to be restarted.
+    ServiceFlag { service: String, flag: String },
 }
 
 impl Reason {
@@ -67,13 +78,16 @@ impl Reason {
             Reason::Kernel {
                 reboot_required, ..
             } => *reboot_required,
-            Reason::ReplacedBinary { .. } => false,
+            Reason::ReplacedBinary { .. } | Reason::ServiceFlag { .. } => false,
         }
     }
 
-    /// True when this reason calls for restarting the affected process.
+    /// True when this reason calls for restarting a process or service.
     pub fn needs_restart(&self) -> bool {
-        matches!(self, Reason::ReplacedBinary { .. })
+        matches!(
+            self,
+            Reason::ReplacedBinary { .. } | Reason::ServiceFlag { .. }
+        )
     }
 }
 
@@ -116,14 +130,23 @@ impl LinkSource for FsLinks {
 
 /// Assesses the restart and reboot state of the system rooted at `root`.
 pub fn assess(root: &Path) -> Assessment {
-    assess_with(root, &FsLinks)
+    assess_with_state(root, None)
 }
 
-fn assess_with(root: &Path, links: &dyn LinkSource) -> Assessment {
+/// Assesses the system rooted at `root` and also the service restart flags in `state_dir`
+/// (the named-state directory). `None` reads no service flags.
+pub fn assess_with_state(root: &Path, state_dir: Option<&Path>) -> Assessment {
+    assess_with(root, state_dir, &FsLinks)
+}
+
+fn assess_with(root: &Path, state_dir: Option<&Path>, links: &dyn LinkSource) -> Assessment {
     let mut reasons = Vec::new();
     reasons.extend(marker_reason(root));
     reasons.extend(kernel_reason(root));
-    let (binaries, truncated) = replaced_binaries(root, links);
+    let (services, services_truncated) = service_flags(state_dir);
+    reasons.extend(services);
+    let (binaries, binaries_truncated) = replaced_binaries(root, links);
+    let truncated = services_truncated || binaries_truncated;
     reasons.extend(binaries);
     let reboot_required = reasons.iter().any(Reason::needs_reboot);
     let restart_required = reasons.iter().any(Reason::needs_restart);
@@ -215,6 +238,50 @@ fn kernel_reason(root: &Path) -> Option<Reason> {
         installed: installed.into_iter().collect(),
         reboot_required: !running_present,
     })
+}
+
+/// One `ServiceFlag` per `flags/restart-<service>-required` regular file under `state_dir`,
+/// in name order and bounded by `SERVICE_MAX`. A missing directory yields none.
+fn service_flags(state_dir: Option<&Path>) -> (Vec<Reason>, bool) {
+    let Some(state_dir) = state_dir else {
+        return (Vec::new(), false);
+    };
+    let Ok(entries) = fs::read_dir(state_dir.join(FLAG_DIR)) else {
+        return (Vec::new(), false);
+    };
+    let mut services = BTreeSet::new();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(service) = file_name.to_str().and_then(service_of) else {
+            continue;
+        };
+        if entry.path().is_file() {
+            services.insert(service.to_string());
+        }
+    }
+    let truncated = services.len() > SERVICE_MAX;
+    let reasons = services
+        .into_iter()
+        .take(SERVICE_MAX)
+        .map(|service| Reason::ServiceFlag {
+            flag: format!("{SERVICE_PREFIX}{service}{SERVICE_SUFFIX}"),
+            service,
+        })
+        .collect();
+    (reasons, truncated)
+}
+
+/// The service named by a flag file name, or `None` when the name is not one. Only ASCII
+/// letters, digits, `-`, `_` and `.` are accepted, so the name is safe to show and to pass on.
+fn service_of(flag: &str) -> Option<&str> {
+    let service = flag
+        .strip_prefix(SERVICE_PREFIX)?
+        .strip_suffix(SERVICE_SUFFIX)?;
+    let valid = !service.is_empty()
+        && service
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    valid.then_some(service)
 }
 
 /// Scans every numeric `proc/<pid>` for replaced executables and libraries. Entries that
@@ -362,7 +429,7 @@ mod tests {
     }
 
     fn run(root: &Path, links: &HashMap<PathBuf, PathBuf>) -> Assessment {
-        assess_with(root, &Table(links.clone()))
+        assess_with(root, None, &Table(links.clone()))
     }
 
     #[test]
@@ -704,6 +771,59 @@ mod tests {
 
         let value = serde_json::to_value(Outcome::Reboot).unwrap();
         assert_eq!(value, serde_json::json!("reboot"));
+    }
+
+    #[test]
+    fn service_flag_alone_calls_for_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        write(state.path(), "flags/restart-pipewire-required", "");
+        write(state.path(), "flags/restart-hyprland-required", "");
+        // Names that are not service flags, and a value rather than a flag, are ignored.
+        write(state.path(), "flags/restart--required", "");
+        write(state.path(), "flags/restart-required", "");
+        write(state.path(), "flags/restart-a b-required", "");
+        write(state.path(), "flags/other-flag", "");
+        write(state.path(), "values/restart-cups-required", "");
+        let a = assess_with(root.path(), Some(state.path()), &Table(HashMap::new()));
+        assert_eq!(
+            a.reasons,
+            vec![
+                Reason::ServiceFlag {
+                    service: "hyprland".to_string(),
+                    flag: "restart-hyprland-required".to_string(),
+                },
+                Reason::ServiceFlag {
+                    service: "pipewire".to_string(),
+                    flag: "restart-pipewire-required".to_string(),
+                },
+            ]
+        );
+        assert!(a.restart_required);
+        assert!(!a.reboot_required);
+        assert_eq!(a.outcome, Outcome::Restart);
+        assert!(!a.truncated);
+        let value = serde_json::to_value(&a).unwrap();
+        assert_eq!(
+            value["reasons"][0]["kind"],
+            serde_json::json!("service_flag")
+        );
+    }
+
+    #[test]
+    fn service_flags_need_a_state_directory_and_yield_to_reboot() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        write(state.path(), "flags/restart-hyprland-required", "");
+        // Without a state directory no service flag is read, so the system is clean.
+        assert_eq!(assess_with_state(root.path(), None), Assessment::default());
+        // A reboot flag outranks a service restart flag, and both are reported.
+        write(root.path(), MARKER, "");
+        let a = assess_with_state(root.path(), Some(state.path()));
+        assert_eq!(a.outcome, Outcome::Reboot);
+        assert_eq!(a.reasons.len(), 2);
+        assert!(matches!(a.reasons[0], Reason::RebootFlag { .. }));
+        assert!(matches!(a.reasons[1], Reason::ServiceFlag { .. }));
     }
 
     #[test]

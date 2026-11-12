@@ -1257,6 +1257,46 @@ impl Drop for SignalGuard {
         }
     }
 }
+/// Pause after a transient accept failure before the next accept attempt. The
+/// pending-connection sweep still runs on every tick during the pause.
+#[cfg(unix)]
+const ACCEPT_RETRY_BACKOFF: Duration = Duration::from_millis(10);
+/// Last second an accept error was logged, so a flood of failures logs at most
+/// once per second.
+static ACCEPT_ERROR_LOGGED_SECS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// True for accept errors that do not mean the listener is gone: an interrupted
+/// call, a peer that reset before accept completed, or descriptor exhaustion
+/// (EMFILE/ENFILE). The serve loops back off and keep serving on these (#928).
+fn accept_error_is_transient(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    if matches!(
+        error.kind(),
+        ErrorKind::Interrupted | ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset
+    ) {
+        return true;
+    }
+    matches!(
+        error.raw_os_error(),
+        Some(code) if code == libc::EMFILE || code == libc::ENFILE
+    )
+}
+
+/// Log a transient accept failure at most once per second.
+fn log_accept_retry(error: &std::io::Error) {
+    use std::sync::atomic::Ordering as AtomicOrdering;
+    let now = crate::live::auth::now_unix_secs();
+    let last = ACCEPT_ERROR_LOGGED_SECS.load(AtomicOrdering::Relaxed);
+    if now > last
+        && ACCEPT_ERROR_LOGGED_SECS
+            .compare_exchange(last, now, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
+            .is_ok()
+    {
+        eprintln!("execute live: accept failed ({error}); retrying");
+    }
+}
+
 fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) -> Result<Json> {
     if mode == Mode::Run {
         // A finite `run --control` run hardens exactly like `run`: mask
@@ -1352,6 +1392,8 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                 }
             }
             #[cfg(unix)]
+            let mut accept_retry_pause = false;
+            #[cfg(unix)]
             {
                 // `listener` is bound earlier in `serve` and borrowed by this loop, so its fd is
                 // open for the wait. The 20 ms timeout is a non-negative c_int.
@@ -1385,7 +1427,16 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                         let (stream, _) = match listener.accept() {
                             Ok(stream) => stream,
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(e) => return Err(e.into()),
+                            Err(e) if accept_error_is_transient(&e) => {
+                                // Retry on a later tick after a short pause (#928).
+                                log_accept_retry(&e);
+                                accept_retry_pause = true;
+                                break;
+                            }
+                            Err(e) => {
+                                return Err(anyhow::Error::from(e)
+                                    .context("live listener stopped accepting connections"))
+                            }
                         };
                         accepted += 1;
                         // Owner check and non-blocking mode before any buffering: a
@@ -1412,7 +1463,15 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                 let (stream, _) = match listener.accept() {
                     Ok(stream) => stream,
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                    Err(e) => return Err(e.into()),
+                    // The loop head already pauses for 10 ms, which is the retry backoff (#928).
+                    Err(e) if accept_error_is_transient(&e) => {
+                        log_accept_retry(&e);
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(anyhow::Error::from(e)
+                            .context("live listener stopped accepting connections"))
+                    }
                 };
                 // Past the hard cap the connection is closed without a `busy`
                 // frame. This is a deliberate Windows best-effort limit, not
@@ -1608,6 +1667,11 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                 // to the newcomer.
                 while pending.len() > PENDING_MAX {
                     pending.pop_front();
+                }
+                // A transient accept failure this tick: pause before the next
+                // accept attempt. The sweep above already ran for this tick (#928).
+                if accept_retry_pause {
+                    thread::sleep(ACCEPT_RETRY_BACKOFF);
                 }
             }
             let mut i = 0;
@@ -1933,6 +1997,42 @@ fn handle_request(
     }
     let request: Request = serde_json::from_value(value)?;
     state::request(shared, request)
+}
+
+#[cfg(test)]
+mod accept_retry_tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn transient_accept_errors_keep_the_server_running() {
+        assert!(accept_error_is_transient(&Error::from(
+            ErrorKind::Interrupted
+        )));
+        assert!(accept_error_is_transient(&Error::from(
+            ErrorKind::ConnectionAborted
+        )));
+        assert!(accept_error_is_transient(&Error::from(
+            ErrorKind::ConnectionReset
+        )));
+        assert!(accept_error_is_transient(&Error::from_raw_os_error(
+            libc::EMFILE
+        )));
+        assert!(accept_error_is_transient(&Error::from_raw_os_error(
+            libc::ENFILE
+        )));
+    }
+
+    #[test]
+    fn listener_failures_still_end_the_server() {
+        assert!(!accept_error_is_transient(&Error::from(
+            ErrorKind::InvalidInput
+        )));
+        assert!(!accept_error_is_transient(&Error::from(
+            ErrorKind::PermissionDenied
+        )));
+        assert!(!accept_error_is_transient(&Error::from(ErrorKind::Other)));
+    }
 }
 
 #[cfg(test)]

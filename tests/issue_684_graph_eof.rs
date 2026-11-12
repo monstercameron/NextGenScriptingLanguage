@@ -55,8 +55,11 @@ fn node(id: &str, inputs: &[&str], outputs: &[&str]) -> GraphNode {
     }
 }
 
+/// What a scripted node does with its input and output.
+type Behaviour = dyn Fn(&GraphNode, &mut NodeIo) -> Result<()> + Send + Sync;
+
 /// An in-process executor whose behaviour is supplied by the test.
-struct Scripted(Box<dyn Fn(&GraphNode, &mut NodeIo) -> Result<()> + Send + Sync>);
+struct Scripted(Box<Behaviour>);
 
 impl Scripted {
     fn new(

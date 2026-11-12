@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use std::os::windows::io::AsRawHandle;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::{Duration, Instant};
 
@@ -49,6 +49,54 @@ fn handle(fd: i32) -> Result<HANDLE> {
     }
     Ok(handle)
 }
+/// A unit of work run once on an I/O worker thread.
+type IoJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// One long-lived thread that runs [`IoJob`]s in order. A worker is checked out
+/// by exactly one [`cooperative`] call at a time, so `CancelSynchronousIo` on its
+/// thread can only ever hit the job that call is waiting on.
+struct IoWorker {
+    jobs: std::sync::mpsc::Sender<IoJob>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+/// Idle workers. A sequential run of writes reuses one thread instead of
+/// starting one per write; concurrent writers each take their own worker.
+static IDLE_IO_WORKERS: Mutex<Vec<IoWorker>> = Mutex::new(Vec::new());
+
+/// Upper bound on parked idle workers. Extra workers exit when dropped.
+const MAX_IDLE_IO_WORKERS: usize = 64;
+
+#[cfg(test)]
+static IO_WORKERS_SPAWNED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn take_io_worker() -> IoWorker {
+    let idle = IDLE_IO_WORKERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .pop();
+    idle.unwrap_or_else(|| {
+        #[cfg(test)]
+        IO_WORKERS_SPAWNED.fetch_add(1, Ordering::SeqCst);
+        let (jobs, receiver) = std::sync::mpsc::channel::<IoJob>();
+        let thread = std::thread::spawn(move || {
+            while let Ok(job) = receiver.recv() {
+                job();
+            }
+        });
+        IoWorker { jobs, thread }
+    })
+}
+
+fn return_io_worker(worker: IoWorker) {
+    let mut idle = IDLE_IO_WORKERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if idle.len() < MAX_IDLE_IO_WORKERS {
+        idle.push(worker);
+    }
+}
+
 fn cooperative<T: Send + 'static>(
     cancelled: &AtomicBool,
     deadline: Option<Instant>,
@@ -60,32 +108,40 @@ fn cooperative<T: Send + 'static>(
     }
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    let worker = std::thread::spawn(move || {
-        let result = operation(worker_stop);
-        let _ = sender.send(());
-        result
-    });
-    loop {
+    // A panicking operation drops this sender without sending, which the loop
+    // below reports as a panicked worker.
+    let (result_sender, result_receiver) = std::sync::mpsc::sync_channel::<Result<T>>(1);
+    let worker = take_io_worker();
+    worker
+        .jobs
+        .send(Box::new(move || {
+            let _ = result_sender.send(operation(worker_stop));
+        }))
+        .map_err(|_| anyhow::anyhow!("standard I/O worker unavailable"))?;
+    let outcome = loop {
         if cancelled.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d) {
             stop.store(true, Ordering::Relaxed);
-            // SAFETY: worker is a JoinHandle that is only joined after this loop, so the thread
-            // handle it holds stays open here. CancelSynchronousIo affects only synchronous I/O
-            // issued by that thread. If the thread already finished, the call fails harmlessly.
+            // SAFETY: worker.thread is the JoinHandle of the worker this call checked out, so its
+            // thread stays open here, and no other call receives this worker until it is
+            // returned below. CancelSynchronousIo affects only synchronous I/O issued by that
+            // thread. If the job already finished, the call fails harmlessly.
             // Repeated cancellation closes the narrow race between the owned
             // worker's stop check and its next synchronous kernel operation.
             unsafe {
-                CancelSynchronousIo(worker.as_raw_handle());
+                CancelSynchronousIo(worker.thread.as_raw_handle());
             }
         }
-        match receiver.recv_timeout(Duration::from_millis(5)) {
-            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        match result_receiver.recv_timeout(Duration::from_millis(5)) {
+            Ok(result) => break Some(result),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break None,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
-    }
-    let result = worker
-        .join()
-        .map_err(|_| anyhow::anyhow!("standard I/O worker panicked"))?;
+    };
+    let Some(result) = outcome else {
+        // The worker panicked. Dropping it here (not returning it) lets its thread end.
+        bail!("standard I/O worker panicked");
+    };
+    return_io_worker(worker);
     check_deadline(deadline)?;
     if cancelled.load(Ordering::Relaxed) {
         bail!("workflow cancelled by signal");
@@ -144,6 +200,17 @@ pub fn write_with_deadline(
     } else {
         bytes.to_vec()
     };
+    write_bytes(target, data, cancelled, deadline)
+}
+
+/// Writes already-filtered `data` to the handle `target` through [`cooperative`],
+/// honouring `cancelled` and `deadline` exactly as [`write_with_deadline`] does.
+fn write_bytes(
+    target: usize,
+    data: Vec<u8>,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<()> {
     if data.is_empty() {
         check_deadline(deadline)?;
         if cancelled.load(Ordering::Relaxed) {
@@ -388,6 +455,23 @@ pub(super) fn capture_stdin(
 #[cfg(test)]
 mod tests {
     use super::console_wide;
+    use std::io::Read;
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
+    use std::time::{Duration, Instant};
+
+    /// Serializes the tests that drive the shared I/O worker pool, so the spawn
+    /// count below is exact and no test cancels another test's worker.
+    static POOL_TESTS: Mutex<()> = Mutex::new(());
+
+    fn pool_lock() -> std::sync::MutexGuard<'static, ()> {
+        POOL_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn displayed(data: &[u8]) -> String {
         String::from_utf16_lossy(&console_wide(data))
@@ -428,5 +512,96 @@ mod tests {
         let ready = super::console_relay_ready(&mut pending, &[0xAC, 0x41]);
         assert!(pending.is_empty());
         assert_eq!(displayed(&ready), "€A");
+    }
+
+    #[test]
+    fn sequential_writes_reuse_one_io_worker_thread() {
+        let _guard = pool_lock();
+        let cancelled = AtomicBool::new(false);
+        let before = super::IO_WORKERS_SPAWNED.load(Ordering::SeqCst);
+        for _ in 0..1_000 {
+            super::cooperative(&cancelled, None, |_stop| Ok(())).unwrap();
+        }
+        // One thread serves all 1,000 writes. The bound is loose only to tolerate
+        // other test binaries in this process, not per-write thread creation.
+        let spawned = super::IO_WORKERS_SPAWNED.load(Ordering::SeqCst) - before;
+        assert!(spawned < 10, "spawned {spawned} threads for 1,000 writes");
+    }
+
+    #[test]
+    fn panicking_io_job_reports_a_panicked_worker() {
+        let _guard = pool_lock();
+        let cancelled = AtomicBool::new(false);
+        let error =
+            super::cooperative::<()>(&cancelled, None, |_stop| panic!("job failed")).unwrap_err();
+        assert_eq!(format!("{error:#}"), "standard I/O worker panicked");
+        // The panicked worker is dropped, not parked; the next call still succeeds.
+        super::cooperative(&cancelled, None, |_stop| Ok(7)).unwrap();
+    }
+
+    #[test]
+    fn deadline_stops_a_write_blocked_on_a_full_pipe() {
+        let _guard = pool_lock();
+        let (reader, writer) = std::io::pipe().unwrap();
+        let started = Instant::now();
+        let deadline = Instant::now() + Duration::from_millis(200);
+        let error = super::write_bytes(
+            writer.as_raw_handle() as usize,
+            vec![7; 8 << 20],
+            &AtomicBool::new(false),
+            Some(deadline),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("execution deadline exceeded"),
+            "{error:#}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(20));
+        drop(reader);
+    }
+
+    #[test]
+    fn cancel_flag_stops_a_write_blocked_on_a_full_pipe() {
+        let _guard = pool_lock();
+        let (reader, writer) = std::io::pipe().unwrap();
+        let cancelled = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                cancelled.store(true, Ordering::Relaxed);
+            });
+            let error = super::write_bytes(
+                writer.as_raw_handle() as usize,
+                vec![7; 8 << 20],
+                &cancelled,
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(format!("{error:#}"), "workflow cancelled by signal");
+        });
+        drop(reader);
+    }
+
+    #[test]
+    fn every_byte_reaches_the_reader_across_write_chunks() {
+        let _guard = pool_lock();
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        // Larger than the 32 KiB chunk that write_all issues per WriteFile call.
+        let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let expected = payload.clone();
+        let reading = std::thread::spawn(move || {
+            let mut received = Vec::new();
+            reader.read_to_end(&mut received).map(|_| received)
+        });
+        super::write_bytes(
+            writer.as_raw_handle() as usize,
+            payload,
+            &AtomicBool::new(false),
+            None,
+        )
+        .unwrap();
+        drop(writer);
+        let received = reading.join().unwrap().unwrap();
+        assert!(received == expected, "reader got {} bytes", received.len());
     }
 }

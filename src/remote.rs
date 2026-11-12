@@ -567,6 +567,21 @@ impl RemoteRequest {
         }
     }
 
+    /// Attach a caller-supplied idempotency key. The key must be stable for one
+    /// node attempt across resumes and must never contain secret input values.
+    /// The invoke path still refuses it unless the descriptor declares the operation.
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Result<Self, RemoteError> {
+        let key = key.into();
+        if !valid_idempotency_key(&key) {
+            return Err(RemoteError::new(
+                RemoteErrorKind::InvalidRequest,
+                EffectCertainty::NotStarted,
+            ));
+        }
+        self.idempotency_key = Some(key);
+        Ok(self)
+    }
+
     /// Encode stdin according to its canonical port framing. Raw bytes remain
     /// base64 on the wire; typed JSON is parsed and validated before encoding.
     pub fn set_input_bytes(

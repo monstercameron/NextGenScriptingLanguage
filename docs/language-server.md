@@ -96,6 +96,9 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `parse.lexical` | parse | a line has an unterminated or invalid quoted or bracketed token |
 | `parse.syntax` | parse | a statement does not match the grammar |
 | `parse.suffix_order` | parse | invocation suffixes are out of canonical order |
+| `check.literal_not_in_set` | type | a value bound from a closed set of outputs is compared with a literal outside that set |
+| `parse.foreign.pipe` | parse | a shell pipe `\|` between commands, which Execute spells as `pipe to` lines |
+| `parse.foreign.discard_stderr` | parse | a shell stderr redirect to `/dev/null`, which Execute spells as `and discard stderr` |
 | `parse.indentation` | parse | a line is indented with tabs, or its indentation does not nest |
 | `parse.control` | parse | a control construct is unsupported or nested beyond the supported depth |
 | `source.invisible_format` | validate | source contains a Unicode format control that can change how it is displayed |

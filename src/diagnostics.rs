@@ -152,6 +152,22 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
+        code: "parse.foreign.pipe",
+        family: "parse",
+        meaning: "a shell pipe `|` between commands, which Execute spells as `pipe to` lines",
+        example: "run \"ls\" | \"wc\"",
+        typical_fix: "Write each stage after the first on its own line as `pipe to \"NAME\"` at the same indentation as the `run` line.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
+        code: "parse.foreign.discard_stderr",
+        family: "parse",
+        meaning: "a shell stderr redirect to /dev/null, which Execute spells as `and discard stderr`",
+        example: "run \"ls\" 2>/dev/null",
+        typical_fix: "Replace the redirect with `and discard stderr` after the command's other arguments.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
         code: "parse.suffix_order",
         family: "parse",
         meaning: "invocation suffixes are out of canonical order",
@@ -622,15 +638,27 @@ fn analyze_source_impl(
             let mut diagnostic =
                 classified_parse_error(source, &message, line_number, &line_starts);
             if message.contains("stray token") {
-                if let Some(repair) = suffix_order_repair(
+                let repair = foreign_construct_repair(
                     source,
                     content,
                     tokens,
                     token_ranges,
                     content_source_offset,
-                    line_number,
+                    statement.indent,
                     &line_starts,
-                ) {
+                )
+                .or_else(|| {
+                    suffix_order_repair(
+                        source,
+                        content,
+                        tokens,
+                        token_ranges,
+                        content_source_offset,
+                        line_number,
+                        &line_starts,
+                    )
+                });
+                if let Some(repair) = repair {
                     diagnostic = repair;
                 }
             }
@@ -656,7 +684,11 @@ fn analyze_source_impl(
             let content_start = content_source_offset
                 .unwrap_or_else(|| line_starts.start(line_number) + statement.indent);
             if let Some(first) = content.split_whitespace().next() {
-                if let Some(keyword) = suggest::keyword_for(first) {
+                // A first word that is already a known applet or statement head is
+                // not a misspelling of another keyword, so it gets no keyword fix.
+                let known_head = suggest::STATEMENT_KEYWORDS.contains(&first)
+                    || registry.applet_names().contains(&first);
+                if let Some(keyword) = suggest::keyword_for(first).filter(|_| !known_head) {
                     let span = line_starts.span_at(
                         source,
                         content_start,
@@ -3541,6 +3573,128 @@ fn syntax_code(message: &str) -> &'static str {
     } else {
         "parse.syntax"
     }
+}
+
+/// A shell habit with a local Execute form, found on a line that fails with a stray
+/// token.
+#[derive(Clone, Copy)]
+enum ForeignForm {
+    Pipe,
+    DiscardStderr,
+}
+
+/// Recognise a shell pipe `|` or a `2>/dev/null` redirect on a line that already
+/// fails to parse. The diagnostic is always returned, and its fix is attached only
+/// when the rewritten line or lines parse, so an offered fix always checks.
+fn foreign_construct_repair(
+    source: &str,
+    content: &str,
+    tokens: &[parser::Token<'_>],
+    token_ranges: &[std::ops::Range<usize>],
+    content_source_offset: Option<usize>,
+    indent: usize,
+    line_starts: &LineStarts,
+) -> Option<Diagnostic> {
+    let offset = content_source_offset?;
+    let (index, form) = tokens
+        .iter()
+        .enumerate()
+        .find_map(|(index, token)| match token {
+            parser::Token::Word(text) if *text == "|" => Some((index, ForeignForm::Pipe)),
+            parser::Token::Word(text) if *text == "2>/dev/null" => {
+                Some((index, ForeignForm::DiscardStderr))
+            }
+            _ => None,
+        })?;
+    let span_of = |range: &std::ops::Range<usize>| {
+        line_starts.span_at(
+            source,
+            offset + range.start,
+            offset + range.end,
+            SpanPrecision::Token,
+        )
+    };
+    let (code, message, fix_message) = match form {
+        ForeignForm::Pipe => (
+            "parse.foreign.pipe",
+            "`|` is not Execute syntax; write the next stage on its own line as `pipe to \"NAME\"` at the same indentation as the `run` line",
+            "write each `|` stage as a `pipe to` line",
+        ),
+        ForeignForm::DiscardStderr => (
+            "parse.foreign.discard_stderr",
+            "`2>/dev/null` is not Execute syntax; use `and discard stderr` after the command",
+            "replace `2>/dev/null` with `and discard stderr`",
+        ),
+    };
+    let mut diagnostic = Diagnostic::error(code, message, span_of(token_ranges.get(index)?));
+    if let Some(edits) = foreign_rewrite(content, tokens, token_ranges, form, indent) {
+        diagnostic.fixes.push(SuggestedFix {
+            message: fix_message.into(),
+            edits: edits
+                .iter()
+                .map(|(range, replacement)| TextEdit {
+                    span: span_of(range),
+                    replacement: replacement.clone(),
+                })
+                .collect(),
+        });
+    }
+    Some(diagnostic)
+}
+
+/// The byte edits, in line-relative offsets, that rewrite every occurrence of a
+/// foreign form. `None` when the rewritten text does not parse line by line.
+fn foreign_rewrite(
+    content: &str,
+    tokens: &[parser::Token<'_>],
+    token_ranges: &[std::ops::Range<usize>],
+    form: ForeignForm,
+    indent: usize,
+) -> Option<Vec<(std::ops::Range<usize>, String)>> {
+    let mut edits = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let parser::Token::Word(text) = token else {
+            continue;
+        };
+        let range = token_ranges.get(index)?;
+        match (form, *text) {
+            (ForeignForm::Pipe, "|") => {
+                // The next stage moves to its own line, so the edit also takes the
+                // whitespace that separated it from the previous word.
+                let previous = token_ranges.get(index.checked_sub(1)?)?;
+                edits.push((
+                    previous.end..range.end,
+                    format!("\n{}pipe to", " ".repeat(indent)),
+                ));
+            }
+            (ForeignForm::DiscardStderr, "2>/dev/null") => {
+                edits.push((range.clone(), "and discard stderr".to_owned()));
+            }
+            _ => {}
+        }
+    }
+    if edits.is_empty() {
+        return None;
+    }
+    let mut rewritten = String::with_capacity(content.len() + 32 * edits.len());
+    let mut cursor = 0;
+    for (range, replacement) in &edits {
+        rewritten.push_str(content.get(cursor..range.start)?);
+        rewritten.push_str(replacement);
+        cursor = range.end;
+    }
+    rewritten.push_str(content.get(cursor..)?);
+    // A pipe stage only follows a `run` stage, so other heads are not repaired.
+    let head_ok = match form {
+        ForeignForm::Pipe => content.split_whitespace().next() == Some("run"),
+        ForeignForm::DiscardStderr => true,
+    };
+    let checks = head_ok
+        && rewritten.split('\n').all(|line| {
+            parser::tokenize_with_ranges(line)
+                .is_ok_and(|(tokens, _)| parser::validate_statement(&tokens).is_ok())
+        });
+    checks.then_some(edits)
 }
 
 /// When a stray-token failure is only an invocation suffix-order error, build a

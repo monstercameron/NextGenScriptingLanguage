@@ -2432,7 +2432,14 @@ pub mod elevated {
                 let declared = matching[0]["parameters"]
                     .as_object()
                     .expect("the manifest declares parameters");
-                let mut declared_names: Vec<&str> = declared.keys().map(String::as_str).collect();
+                // Read-only modes are not offered through the elevated helper: it refuses
+                // them as unknown parameters, so the table deliberately leaves them out.
+                const NOT_ELEVATED: &[(&str, &str)] = &[("fs.ensure_line", "preview")];
+                let mut declared_names: Vec<&str> = declared
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|name| !NOT_ELEVATED.contains(&(spec.name, *name)))
+                    .collect();
                 declared_names.sort_unstable();
                 let mut table_names: Vec<&str> =
                     spec.params.iter().map(|(name, _)| *name).collect();

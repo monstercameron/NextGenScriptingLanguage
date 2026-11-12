@@ -767,6 +767,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             "`checkpoint` requires the agent-advisory feature; rebuild with --features agent-advisory"
         );
     }
+    if arguments.first().is_some_and(|a| a == "shim") {
+        return cli::shim::cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
     }

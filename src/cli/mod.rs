@@ -2,6 +2,7 @@
 
 mod args;
 mod parse;
+pub(crate) mod shim;
 
 pub(crate) use args::Args;
 #[cfg(any(feature = "tooling", feature = "live"))]

@@ -1788,6 +1788,35 @@ pub struct HookRunSpec {
 /// status to `omarchy-hook`, which prints a failure and runs the remaining hooks.
 /// Pure: writes nothing.
 pub fn render_theme_set_hook(spec: &HookRunSpec) -> Result<UnitFile> {
+    render_hook_shim(
+        spec,
+        "# Runs one reviewed program on the Omarchy theme-set event. exec passes the\n\
+# exit status back to omarchy-hook, which prints a failure and continues.\n",
+    )
+}
+
+/// Render the shim for a NetworkManager dispatcher script. NetworkManager runs
+/// every executable in `dispatcher.d` on each network event. The interface and
+/// action arguments are not passed on: the program runs with its own inputs.
+/// Pure: writes nothing.
+pub fn render_network_dispatcher(spec: &HookRunSpec) -> Result<UnitFile> {
+    render_hook_shim(
+        spec,
+        "# Runs one reviewed program on each NetworkManager dispatcher event. The\n\
+# interface and action arguments are not passed to the program. exec passes its\n\
+# exit status back to NetworkManager.\n",
+    )
+}
+
+/// The NetworkManager dispatcher directory under the NetworkManager config root,
+/// normally `/etc/NetworkManager`.
+pub fn networkmanager_dispatcher_directory(networkmanager_config: &Path) -> PathBuf {
+    networkmanager_config.join("dispatcher.d")
+}
+
+/// Shared shim renderer: validates every value, then emits the shebang, the
+/// marker, the caller's comment lines and one `exec` line.
+fn render_hook_shim(spec: &HookRunSpec, comment: &str) -> Result<UnitFile> {
     check_hook_file_name(&spec.name)?;
     if !spec.executable.starts_with('/') {
         bail!("execute binary path must be absolute");
@@ -1809,9 +1838,7 @@ pub fn render_theme_set_hook(spec: &HookRunSpec) -> Result<UnitFile> {
     Ok(UnitFile {
         file_name: spec.name.clone(),
         contents: format!(
-            "{HOOK_SHEBANG}\n{GENERATED_MARKER}\n\
-# Runs one reviewed program on the Omarchy theme-set event. exec passes the\n\
-# exit status back to omarchy-hook, which prints a failure and continues.\n\
+            "{HOOK_SHEBANG}\n{GENERATED_MARKER}\n{comment}\
 exec {executable} run {program} --confirm {fingerprint}\n"
         ),
     })

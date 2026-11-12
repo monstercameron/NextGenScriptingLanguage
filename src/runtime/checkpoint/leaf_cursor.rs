@@ -386,6 +386,34 @@ impl LeafContinuation {
     }
 }
 
+/// Stable idempotency key for one checkpointed node attempt. It is a
+/// domain-separated SHA-256 over the run identity, the whole-program
+/// fingerprint and the serialized leaf identity (source site, step, end step
+/// and dynamic occurrence path). A resume of the same node in the same run
+/// yields the same key; a different node, program or run yields a different
+/// key. The key is not yet delivered to any command or applet.
+pub(crate) fn node_attempt_idempotency_key(
+    run_id: &str,
+    source: &SourceVersion,
+    leaf: &LeafIdentity,
+) -> Result<String> {
+    if run_id.is_empty() {
+        bail!("idempotency key requires a non-empty run identity");
+    }
+    let leaf_bytes = serde_json::to_vec(leaf)?;
+    let mut hash = Sha256::new();
+    hash.update(b"execute-node-attempt-idempotency-key-v1\0");
+    for part in [
+        run_id.as_bytes(),
+        source.semantic_sha256.as_bytes(),
+        leaf_bytes.as_slice(),
+    ] {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part);
+    }
+    Ok(hex(&hash.finalize()))
+}
+
 fn validate_frame(frame: &ExecutionFrame, step_count: usize) -> Result<()> {
     match frame {
         ExecutionFrame::Loop(frame) => {
@@ -674,5 +702,75 @@ mod tests {
         // representation exceeds the durable journal limit.
         cursor.pipeline_bytes = vec![255; 5 * 1024 * 1024];
         assert!(cursor.validate().is_err());
+    }
+
+    fn occurrence_leaf(step: usize, seed: &str, end_step: usize, ordinal: u64) -> LeafIdentity {
+        LeafIdentity {
+            site: site(step, seed),
+            end_step,
+            dynamic_path: vec![DynamicFrameIdentity {
+                kind: DynamicFrameKind::Loop,
+                site: site(1, "repeat two times"),
+                ordinal,
+            }],
+        }
+    }
+
+    #[test]
+    fn node_attempt_key_survives_resume_and_separates_nodes_runs_and_programs() {
+        let mut cursor = cursor();
+        let leaf = occurrence_leaf(2, "invoke send-mail", 3, 0);
+        cursor
+            .begin_leaf(leaf.clone(), EffectContract::Unknown)
+            .unwrap();
+        let first = node_attempt_idempotency_key("run-a", &cursor.source, &leaf).unwrap();
+        assert_eq!(first.len(), 64);
+
+        // Persist the in-flight cursor, reload it as a resume would, and derive
+        // the key again from the reloaded identities.
+        let encoded = serde_json::to_vec(&cursor).unwrap();
+        let resumed: LeafContinuation = serde_json::from_slice(&encoded).unwrap();
+        let in_flight = &resumed.in_flight.as_ref().unwrap().leaf;
+        let resumed_key =
+            node_attempt_idempotency_key("run-a", &resumed.source, in_flight).unwrap();
+        assert_eq!(first, resumed_key);
+
+        // A fresh run of the same program gets a new key.
+        assert_ne!(
+            first,
+            node_attempt_idempotency_key("run-b", &cursor.source, &leaf).unwrap()
+        );
+        // A different program with the same node gets a new key.
+        let mut other_program = cursor.source.clone();
+        other_program.semantic_sha256 = digest(b"edited whole source version");
+        assert_ne!(
+            first,
+            node_attempt_idempotency_key("run-a", &other_program, &leaf).unwrap()
+        );
+        // The same command text at another step is a different node.
+        let other_step = occurrence_leaf(4, "invoke send-mail", 5, 0);
+        assert_ne!(
+            first,
+            node_attempt_idempotency_key("run-a", &cursor.source, &other_step).unwrap()
+        );
+        // The next loop iteration is a different attempt of the same site.
+        let next_iteration = occurrence_leaf(2, "invoke send-mail", 3, 1);
+        assert_ne!(
+            first,
+            node_attempt_idempotency_key("run-a", &cursor.source, &next_iteration).unwrap()
+        );
+        // A different node at the same step is a different node.
+        let other_node = occurrence_leaf(2, "invoke archive-mail", 3, 0);
+        assert_ne!(
+            first,
+            node_attempt_idempotency_key("run-a", &cursor.source, &other_node).unwrap()
+        );
+    }
+
+    #[test]
+    fn node_attempt_key_rejects_an_empty_run_identity() {
+        let cursor = cursor();
+        let leaf = occurrence_leaf(2, "invoke send-mail", 3, 0);
+        assert!(node_attempt_idempotency_key("", &cursor.source, &leaf).is_err());
     }
 }

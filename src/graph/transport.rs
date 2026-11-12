@@ -221,6 +221,9 @@ struct BoundedQueue {
     /// several queues can block on one signal.
     observer: OnceLock<Arc<ScopeSignal>>,
     dropped: AtomicUsize,
+    /// Events discarded at this terminal because their generation or revision
+    /// is no longer current (#561).
+    stale: AtomicUsize,
     /// Condition-variable returns from waits on `changed`, for structural tests.
     #[cfg(test)]
     wakeups: AtomicUsize,
@@ -239,6 +242,7 @@ impl BoundedQueue {
             changed: Condvar::new(),
             observer: OnceLock::new(),
             dropped: AtomicUsize::new(0),
+            stale: AtomicUsize::new(0),
             #[cfg(test)]
             wakeups: AtomicUsize::new(0),
         })
@@ -1150,6 +1154,8 @@ pub struct GraphRunResult {
     pub revision: u64,
     pub outputs: Vec<EventEnvelope>,
     pub dropped_messages: usize,
+    /// Terminal events discarded because their generation or revision was stale (#561).
+    pub stale_messages: usize,
     pub launched_processes: usize,
 }
 
@@ -1740,6 +1746,8 @@ impl GraphSession {
                         }
                         collected_bytes = collected_bytes.saturating_add(event_bytes);
                         outputs.push(event);
+                    } else {
+                        queue.stale.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             }
@@ -1789,6 +1797,8 @@ impl GraphSession {
                     }
                     collected_bytes = collected_bytes.saturating_add(event_bytes);
                     outputs.push(event);
+                } else {
+                    queue.stale.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
@@ -1796,6 +1806,11 @@ impl GraphSession {
             .all_queues
             .iter()
             .map(|queue| queue.dropped.load(Ordering::Relaxed))
+            .sum();
+        let stale_messages = self
+            .terminals
+            .iter()
+            .map(|(_, queue)| queue.stale.load(Ordering::Relaxed))
             .sum();
         if let Some(error) = first_error {
             let _ = self.scope.cancel_and_join();
@@ -1820,6 +1835,7 @@ impl GraphSession {
             revision: self.context.revision,
             outputs,
             dropped_messages,
+            stale_messages,
             launched_processes: self.context.metrics.launched_processes(),
         })
     }
@@ -1934,6 +1950,7 @@ fn next_terminal_event(
         if event.generation == generation && event.revision == revision {
             return Ok(Some(event));
         }
+        terminals[index].1.stale.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -4979,6 +4996,26 @@ mod terminal_order_tests {
         assert_eq!(event.port.port, "b");
         assert_eq!(event.sequence, 2);
         assert!(next_terminal_event(&terminals, 1, 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn stale_terminal_events_are_counted_and_skipped() {
+        let scope = TaskScope::new(1, None).unwrap();
+        let token = scope.cancellation_token();
+        let terminal = BoundedQueue::new(4, BufferPolicy::Lossless);
+        let terminals = vec![(PortRef::new("graph", "a"), Arc::clone(&terminal))];
+        terminal
+            .send(terminal_event("a", 0, 1), None, &token)
+            .unwrap();
+        terminal
+            .send(terminal_event("a", 1, 2), None, &token)
+            .unwrap();
+
+        let event = next_terminal_event(&terminals, 1, 1).unwrap().unwrap();
+        assert_eq!(event.sequence, 2);
+        assert_eq!(terminal.stale.load(Ordering::Relaxed), 1);
+        assert!(next_terminal_event(&terminals, 1, 1).unwrap().is_none());
+        assert_eq!(terminal.stale.load(Ordering::Relaxed), 1);
     }
 }
 

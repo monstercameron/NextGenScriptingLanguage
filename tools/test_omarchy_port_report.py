@@ -22,7 +22,8 @@ class LexerFeatureTests(unittest.TestCase):
         source = "cat <<EOF\nline one $(not_run)\nEOF\necho done\n"
         result = report.analyze_source(source)
         self.assertIn("heredoc", {f["feature"] for f in result["features"]})
-        self.assertEqual(result["verdict"], "blocked")
+        # Heredocs map to raw blocks with use value, so they are partial, not blocked.
+        self.assertEqual(result["verdict"], "partial")
         # `cat` is an external command; `echo` is a builtin and is not listed.
         self.assertIn("cat", result["external_commands"])
         self.assertNotIn("echo", result["external_commands"])
@@ -77,7 +78,7 @@ class LexerFeatureTests(unittest.TestCase):
     def test_verdict_levels(self):
         self.assertEqual(report.analyze_source("echo hi\n")["verdict"], "portable")
         self.assertEqual(report.analyze_source("x=$((1 + 2))\n")["verdict"], "partial")
-        self.assertEqual(report.analyze_source("cat <<EOF\nx\nEOF\n")["verdict"], "blocked")
+        self.assertEqual(report.analyze_source("cat <<EOF\nx\nEOF\n")["verdict"], "partial")
 
 
 class FileAnalysisTests(unittest.TestCase):

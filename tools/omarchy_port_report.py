@@ -39,7 +39,7 @@ DEFAULT_MANIFESTS = os.path.join(ROOT, "manifests")
 # Feature -> (category, what Execute offers instead). "unsupported" blocks a direct
 # port, "partial" needs an applet or a rewrite, "supported" maps onto language forms.
 FEATURES = {
-    "heredoc": ("unsupported", "no here-document syntax; use a file or a program input"),
+    "heredoc": ("partial", "a quoted body maps to a triple-quoted raw block with use value, then the command; an expanding body needs its values as bindings"),
     "process_substitution": ("unsupported", "no process substitution; use separate programs"),
     "trap": ("partial", "on exit and on interrupt cover EXIT and INT cleanup; other signals have no equivalent"),
     "eval": ("unsupported", "no string evaluation; write the command as a program"),

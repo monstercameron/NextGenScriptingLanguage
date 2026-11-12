@@ -152,6 +152,26 @@ mod tests {
     }
 
     #[test]
+    fn allow_none_refuses_a_file_write_before_it_runs() {
+        let source =
+            "# execute-policy: allow none\nuse value \"x\"\nthen save to \"written.txt\"\n";
+        let program = crate::parser::parse(source).unwrap();
+        let error = enforce_header(
+            source,
+            &program,
+            &crate::manifest::Registry::default(),
+            "test.program",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("execute-policy header denies effects"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn missing_policy_header_keeps_the_legacy_path() {
         let source = "run \"echo\" with arguments [\"x\"]\n";
         let program = crate::parser::parse(source).unwrap();

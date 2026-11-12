@@ -1507,7 +1507,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_rejects_incompatible_suffixes_and_timeout_is_not_a_statement_suffix() {
+    fn retry_rejects_incompatible_suffixes_and_timeout_is_a_statement_suffix() {
         let mut exercised = [0; 4];
         for binding in ["", " as value"] {
             for discard in ["", " and discard stderr"] {
@@ -1554,10 +1554,11 @@ mod tests {
                 "{edited}"
             );
         }
-        assert!(parser::validate_statement(
-            &parser::tokenize("run \"printf\" and timeout 1 second").unwrap()
+        // `and timeout N UNIT` is a statement suffix since the per-command timeout (#310).
+        parser::validate_statement(
+            &parser::tokenize("run \"printf\" and timeout 1 second").unwrap(),
         )
-        .is_err());
+        .unwrap();
     }
 
     #[test]

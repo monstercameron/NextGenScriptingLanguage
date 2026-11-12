@@ -736,8 +736,12 @@ completed node is refused, and the error names the node and both lines; use a
 fresh checkpoint. Upstream file contents are frozen at a checkpointed
 `read`; resume uses that snapshot even if the original file changes. Environment
 changes apply only to commands that still run. Use a new checkpoint directory to
-start over or change the completed prefix. A completed finite resume returns its
-stored final output without running commands again.
+start over or change the completed prefix. A completed finite resume runs no
+commands and writes no stdout, even when its final value was explicitly emitted:
+the stored final value is restored as pipeline input but is not printed again, as
+described for streamed output above. An interrupted resume withholds the restored
+final value in the same way, and prints output only when a step it executes
+afterwards produces an unbound final value.
 
 On Unix, the runtime reuses executable content digests within a completed
 prefix validation pass. Each reuse still checks the selected path's device,

@@ -2790,6 +2790,683 @@ fn version_requirement_matches(requirement: &str, candidate: &str) -> Result<boo
     Ok(upper.is_none_or(|upper| candidate < upper))
 }
 
+// Applet package index, offline core (#331). Nothing here fetches from the
+// network, and every write lands inside a directory the caller passed in.
+
+/// Index document format. Parsing is strict, as for `program.modules.json`:
+/// unknown fields are refused.
+pub const APPLET_INDEX_FORMAT: u32 = 1;
+/// The package manifest every applet package lists at its root. It is the
+/// program module package manifest that `load_program_module_package` parses,
+/// so the capability review reuses that loader's export validation.
+pub const APPLET_PACKAGE_MANIFEST_FILE: &str = "program.modules.json";
+const MAX_APPLET_INDEX_BYTES: usize = 64 * 1024 * 1024;
+const MAX_APPLET_INDEX_PACKAGES: usize = 100_000;
+const MAX_APPLET_PACKAGE_FILES: usize = 10_000;
+const MAX_APPLET_PACKAGE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_APPLET_SOURCE_BYTES: usize = 4096;
+const MAX_APPLET_DESCRIPTION_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppletIndex {
+    pub format_version: u32,
+    pub packages: Vec<AppletIndexPackage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppletIndexPackage {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Where the package is published. Recorded as data only: nothing in this
+    /// module fetches it, and the install lock keeps it as provenance.
+    pub source: String,
+    pub files: Vec<AppletIndexFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppletIndexFile {
+    /// Portable path inside the package directory: relative, `/`-separated.
+    pub path: String,
+    /// SHA-256 of the file bytes, as 64 hexadecimal characters.
+    pub sha256: String,
+    pub size: u64,
+}
+
+/// One installed file as the install lock records it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppletLockedFile {
+    pub sha256: String,
+    pub size: u64,
+}
+
+/// The install lock written next to an installed package. It keeps the
+/// program module lock fields (`lock_version`, `root`, and `packages`, whose
+/// entries come from `lock_snapshot`) and adds `source`, the index URL as
+/// data, and `files`, the digest of every installed file, which `remove` uses
+/// to detect local edits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppletInstallLock {
+    pub lock_version: u32,
+    pub root: String,
+    pub source: String,
+    pub packages: BTreeMap<String, LockedProgramModule>,
+    pub files: BTreeMap<String, AppletLockedFile>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppletInstallOutcome {
+    Installed,
+    /// The package directory already held exactly the verified bytes.
+    Unchanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppletInstall {
+    pub outcome: AppletInstallOutcome,
+    pub directory: PathBuf,
+    pub lock_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppletRemoval {
+    pub removed_files: Vec<String>,
+    /// False when the package directory still holds files the lock did not list.
+    pub directory_removed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppletEffectReview {
+    pub effect: String,
+    /// The category `contracts::effect_category` assigns, shown for approval.
+    pub category: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppletExportReview {
+    pub name: String,
+    pub entry: String,
+    pub capabilities: Vec<String>,
+    pub effects: Vec<AppletEffectReview>,
+}
+
+/// The capability review shown before an install. `refusals` must be empty
+/// for an install to proceed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppletReview {
+    pub package: String,
+    pub version: String,
+    pub exports: Vec<AppletExportReview>,
+    pub refusals: Vec<String>,
+}
+
+/// Parse and validate an index document. Duplicate package names (compared
+/// case-insensitively, since they become directory names) are refused.
+pub fn parse_applet_index(bytes: &[u8]) -> Result<AppletIndex> {
+    if bytes.len() > MAX_APPLET_INDEX_BYTES {
+        bail!("applet index exceeds {MAX_APPLET_INDEX_BYTES} bytes");
+    }
+    let index: AppletIndex = serde_json::from_slice(bytes).context("decoding applet index")?;
+    if index.format_version != APPLET_INDEX_FORMAT {
+        bail!(
+            "unsupported applet index format {}; supported format is {APPLET_INDEX_FORMAT}",
+            index.format_version
+        );
+    }
+    if index.packages.len() > MAX_APPLET_INDEX_PACKAGES {
+        bail!("applet index lists more than {MAX_APPLET_INDEX_PACKAGES} packages");
+    }
+    let mut names = BTreeSet::new();
+    for package in &index.packages {
+        validate_applet_package(package)?;
+        if !names.insert(package.name.to_ascii_lowercase()) {
+            bail!(
+                "applet index lists package {:?} more than once",
+                package.name
+            );
+        }
+    }
+    Ok(index)
+}
+
+/// Read and parse an index file through the trusted-input gate.
+pub fn read_applet_index(path: &Path) -> Result<AppletIndex> {
+    let bytes = read_limited(path, MAX_APPLET_INDEX_BYTES, "applet index")?;
+    parse_applet_index(&bytes)
+}
+
+/// Packages whose name or description contains `query` (case-insensitive),
+/// sorted by name. An empty query matches every package.
+pub fn search_applet_index<'a>(index: &'a AppletIndex, query: &str) -> Vec<&'a AppletIndexPackage> {
+    let needle = query.to_lowercase();
+    let mut matches = index
+        .packages
+        .iter()
+        .filter(|package| {
+            package.name.to_lowercase().contains(&needle)
+                || package
+                    .description
+                    .as_deref()
+                    .is_some_and(|description| description.to_lowercase().contains(&needle))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| left.name.cmp(&right.name));
+    matches
+}
+
+fn validate_applet_package(package: &AppletIndexPackage) -> Result<()> {
+    let name = &package.name;
+    if !valid_package_name(name) {
+        bail!("invalid applet package name {name:?}");
+    }
+    parse_semver(&package.version)
+        .with_context(|| format!("applet package {name:?} has version {:?}", package.version))?;
+    if package.source.is_empty()
+        || package.source.len() > MAX_APPLET_SOURCE_BYTES
+        || package.source.chars().any(char::is_control)
+    {
+        bail!(
+            "applet package {name:?} source must be a nonempty string of at most {MAX_APPLET_SOURCE_BYTES} bytes without control characters"
+        );
+    }
+    if package
+        .description
+        .as_ref()
+        .is_some_and(|description| description.len() > MAX_APPLET_DESCRIPTION_BYTES)
+    {
+        bail!("applet package {name:?} description exceeds {MAX_APPLET_DESCRIPTION_BYTES} bytes");
+    }
+    if package.files.is_empty() || package.files.len() > MAX_APPLET_PACKAGE_FILES {
+        bail!("applet package {name:?} must list between 1 and {MAX_APPLET_PACKAGE_FILES} files");
+    }
+    let mut paths = BTreeSet::new();
+    let mut directories = BTreeSet::new();
+    let mut total: u64 = 0;
+    for file in &package.files {
+        if !valid_applet_file_path(&file.path) {
+            bail!(
+                "applet package {name:?} lists an unsafe path {:?}: listed paths must be relative, use `/`, and contain no `..`, `.`, empty segments, backslashes, drive prefixes or control characters",
+                file.path
+            );
+        }
+        if !paths.insert(file.path.to_ascii_lowercase()) {
+            bail!(
+                "applet package {name:?} lists {:?} more than once",
+                file.path
+            );
+        }
+        directories.extend(
+            applet_ancestors(&file.path)
+                .into_iter()
+                .map(|directory| directory.to_ascii_lowercase()),
+        );
+        validate_sha256(&file.sha256, "applet file sha256")?;
+        total = total
+            .checked_add(file.size)
+            .ok_or_else(|| anyhow!("applet package {name:?} size overflows"))?;
+    }
+    if paths.iter().any(|path| directories.contains(path)) {
+        bail!(
+            "applet package {name:?} lists a path that is also a directory of another listed path"
+        );
+    }
+    if total > MAX_APPLET_PACKAGE_BYTES {
+        bail!("applet package {name:?} lists {total} bytes, more than {MAX_APPLET_PACKAGE_BYTES}");
+    }
+    Ok(())
+}
+
+/// Checked before any filesystem access: relative, `/`-separated, and made only
+/// of ordinary segments. Backslashes and colons are refused on every platform
+/// so a listed path means the same thing everywhere.
+fn valid_applet_file_path(path: &str) -> bool {
+    !path.starts_with('/')
+        && !path.contains(['\\', ':', '\0'])
+        && !path.chars().any(char::is_control)
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+        && Path::new(path)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn applet_ancestors(path: &str) -> Vec<String> {
+    let segments = path.split('/').collect::<Vec<_>>();
+    (1..segments.len())
+        .map(|count| segments[..count].join("/"))
+        .collect()
+}
+
+fn join_portable(base: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(base.to_path_buf(), |path, segment| path.join(segment))
+}
+
+fn applet_read_limit(size: u64) -> usize {
+    usize::try_from(size).unwrap_or(usize::MAX)
+}
+
+/// Check that `dir` holds exactly the listed files, with the listed sizes and
+/// SHA-256 digests. Links, unlisted files and unlisted directories are refused.
+/// A mismatch names the file and both digests.
+pub fn verify_applet_package_dir(package: &AppletIndexPackage, dir: &Path) -> Result<()> {
+    validate_applet_package(package)?;
+    let dir = canonical_directory(dir, "applet package directory")?;
+    let listed = package
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let mut found_files = BTreeSet::new();
+    let mut found_directories = BTreeSet::new();
+    walk_applet_package(&dir, "", &mut found_files, &mut found_directories)?;
+    for path in &found_files {
+        if !listed.contains_key(path.as_str()) {
+            bail!(
+                "applet package {:?} contains unlisted file {path:?}",
+                package.name
+            );
+        }
+    }
+    for path in listed.keys() {
+        if !found_files.contains(*path) {
+            bail!(
+                "applet package {:?} is missing listed file {path:?}",
+                package.name
+            );
+        }
+    }
+    let ancestors = listed
+        .keys()
+        .flat_map(|path| applet_ancestors(path))
+        .collect::<BTreeSet<_>>();
+    for directory in &found_directories {
+        if !ancestors.contains(directory) {
+            bail!(
+                "applet package {:?} contains unlisted directory {directory:?}",
+                package.name
+            );
+        }
+    }
+    for (path, file) in &listed {
+        let full = join_portable(&dir, path);
+        let metadata = fs::symlink_metadata(&full)
+            .with_context(|| format!("reading applet package file {path:?}"))?;
+        if metadata.len() != file.size {
+            bail!(
+                "applet package file {path:?} is {} bytes, but the index lists {}",
+                metadata.len(),
+                file.size
+            );
+        }
+        let bytes = read_limited(&full, applet_read_limit(file.size), "applet package file")?;
+        let actual = sha256_hex(&bytes);
+        if !actual.eq_ignore_ascii_case(&file.sha256) {
+            bail!(
+                "applet package file {path:?} SHA-256 mismatch: the index lists {}, found {actual}",
+                file.sha256
+            );
+        }
+    }
+    Ok(())
+}
+
+fn walk_applet_package(
+    dir: &Path,
+    prefix: &str,
+    files: &mut BTreeSet<String>,
+    directories: &mut BTreeSet<String>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir)
+        .with_context(|| format!("reading applet package directory {}", dir.display()))?
+    {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name
+            .to_str()
+            .ok_or_else(|| anyhow!("applet package entry in {} is not UTF-8", dir.display()))?;
+        let relative = if prefix.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let metadata = fs::symlink_metadata(entry.path())
+            .with_context(|| format!("reading applet package entry {relative:?}"))?;
+        if metadata.file_type().is_symlink() {
+            bail!("applet package entry {relative:?} is a symbolic link; links are refused");
+        }
+        #[cfg(windows)]
+        if crate::platform::windows::is_reparse(&metadata) {
+            bail!("applet package entry {relative:?} is a reparse point; links are refused");
+        }
+        if metadata.is_dir() {
+            directories.insert(relative.clone());
+            walk_applet_package(&entry.path(), &relative, files, directories)?;
+        } else if metadata.is_file() {
+            files.insert(relative);
+        } else {
+            bail!("applet package entry {relative:?} is not a regular file or directory");
+        }
+        if files.len() + directories.len() > 2 * MAX_APPLET_PACKAGE_FILES {
+            bail!("applet package directory holds more entries than the index can list");
+        }
+    }
+    Ok(())
+}
+
+/// Capability review of a verified package directory. The package manifest is
+/// loaded through `load_program_module_package`, which already refuses an
+/// export whose effects are not among its capabilities
+/// (`validate_export_declaration`). A refusal is reported in `refusals`; the
+/// review itself only fails when the directory does not verify.
+pub fn review_applet_package(package: &AppletIndexPackage, dir: &Path) -> Result<AppletReview> {
+    verify_applet_package_dir(package, dir)?;
+    let dir = canonical_directory(dir, "applet package directory")?;
+    let mut review = AppletReview {
+        package: package.name.clone(),
+        version: package.version.clone(),
+        exports: Vec::new(),
+        refusals: Vec::new(),
+    };
+    match load_program_module_package(&dir.join(APPLET_PACKAGE_MANIFEST_FILE), &dir, None) {
+        Err(error) => review.refusals.push(format!("{error:#}")),
+        Ok(loaded) => {
+            if loaded.manifest.name != package.name || loaded.manifest.version != package.version {
+                review.refusals.push(format!(
+                    "package manifest declares {} {}, but the index lists {} {}",
+                    loaded.manifest.name, loaded.manifest.version, package.name, package.version
+                ));
+            }
+            for (name, export) in &loaded.manifest.exports {
+                review.exports.push(AppletExportReview {
+                    name: name.clone(),
+                    entry: export.entry.clone(),
+                    capabilities: export.capabilities.clone(),
+                    effects: export
+                        .effects
+                        .iter()
+                        .map(|effect| AppletEffectReview {
+                            effect: effect.clone(),
+                            category: crate::contracts::effect_category(effect),
+                        })
+                        .collect(),
+                });
+            }
+        }
+    }
+    Ok(review)
+}
+
+/// Verify, re-review and install a package into `user_dir/<name>`, with its
+/// lock at `user_dir/<name>.lock`. `shown` must equal the review computed now,
+/// so the approval covers exactly what was displayed. Staging happens in
+/// siblings of the target and is renamed into place. An existing package
+/// directory is accepted only when it verifies byte-for-byte against the index.
+pub fn install_applet_package(
+    package: &AppletIndexPackage,
+    source_dir: &Path,
+    user_dir: &Path,
+    shown: &AppletReview,
+) -> Result<AppletInstall> {
+    validate_applet_package(package)?;
+    let review = review_applet_package(package, source_dir)?;
+    if !review.refusals.is_empty() {
+        bail!(
+            "applet package {:?} is refused: {}",
+            package.name,
+            review.refusals.join("; ")
+        );
+    }
+    if review != *shown {
+        bail!(
+            "the capabilities of applet package {:?} differ from the review that was shown; review it again before installing",
+            package.name
+        );
+    }
+    let source_dir = canonical_directory(source_dir, "applet package directory")?;
+    let user_dir = canonical_directory(user_dir, "user applet directory")?;
+    let directory = user_dir.join(&package.name);
+    let lock_path = user_dir.join(format!("{}.lock", package.name));
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                bail!(
+                    "{} is a symbolic link; refusing to install through it",
+                    directory.display()
+                );
+            }
+            verify_applet_package_dir(package, &directory).with_context(|| {
+                format!(
+                    "{} already exists and is not byte-identical to the package being installed",
+                    directory.display()
+                )
+            })?;
+            if !lock_path.is_file() {
+                bail!(
+                    "{} exists without its install lock {}; refusing to adopt it",
+                    directory.display(),
+                    lock_path.display()
+                );
+            }
+            return Ok(AppletInstall {
+                outcome: AppletInstallOutcome::Unchanged,
+                directory,
+                lock_path,
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", directory.display()));
+        }
+    }
+    if fs::symlink_metadata(&lock_path).is_ok() {
+        bail!(
+            "{} exists without a package directory; refusing to overwrite it",
+            lock_path.display()
+        );
+    }
+    let stamp = applet_staging_stamp();
+    let staging = user_dir.join(format!(".{}.staging-{stamp}", package.name));
+    let staging_lock = user_dir.join(format!(".{}.lock.staging-{stamp}", package.name));
+    if let Err(error) = stage_applet_package(package, &source_dir, &staging, &staging_lock) {
+        remove_applet_staging(&staging, &staging_lock);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&staging, &directory) {
+        remove_applet_staging(&staging, &staging_lock);
+        return Err(error).with_context(|| format!("installing {}", directory.display()));
+    }
+    if let Err(error) = fs::rename(&staging_lock, &lock_path) {
+        let _ = fs::remove_dir_all(&directory);
+        remove_applet_staging(&staging, &staging_lock);
+        return Err(error).with_context(|| format!("writing {}", lock_path.display()));
+    }
+    Ok(AppletInstall {
+        outcome: AppletInstallOutcome::Installed,
+        directory,
+        lock_path,
+    })
+}
+
+fn stage_applet_package(
+    package: &AppletIndexPackage,
+    source_dir: &Path,
+    staging: &Path,
+    staging_lock: &Path,
+) -> Result<()> {
+    fs::create_dir(staging)
+        .with_context(|| format!("creating staging directory {}", staging.display()))?;
+    for file in &package.files {
+        let bytes = read_limited(
+            &join_portable(source_dir, &file.path),
+            applet_read_limit(file.size),
+            "applet package file",
+        )?;
+        if u64::try_from(bytes.len()).ok() != Some(file.size)
+            || !sha256_hex(&bytes).eq_ignore_ascii_case(&file.sha256)
+        {
+            bail!(
+                "applet package file {:?} changed after verification",
+                file.path
+            );
+        }
+        let target = join_portable(staging, &file.path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        write_new_applet_file(&target, &bytes)?;
+    }
+    let loaded =
+        load_program_module_package(&staging.join(APPLET_PACKAGE_MANIFEST_FILE), staging, None)?;
+    let snapshot = loaded.lock_snapshot(staging)?;
+    let lock = AppletInstallLock {
+        lock_version: PROGRAM_MODULE_LOCK_FORMAT,
+        root: package.name.clone(),
+        source: package.source.clone(),
+        packages: snapshot.packages,
+        files: package
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.path.clone(),
+                    AppletLockedFile {
+                        sha256: file.sha256.to_ascii_lowercase(),
+                        size: file.size,
+                    },
+                )
+            })
+            .collect(),
+    };
+    let mut text = serde_json::to_string_pretty(&lock)?;
+    text.push('\n');
+    write_new_applet_file(staging_lock, text.as_bytes())
+}
+
+fn write_new_applet_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+fn remove_applet_staging(staging: &Path, staging_lock: &Path) {
+    let _ = fs::remove_dir_all(staging);
+    let _ = fs::remove_file(staging_lock);
+}
+
+fn applet_staging_stamp() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    format!("{}-{nanos}", std::process::id())
+}
+
+/// Remove an installed applet package. Every file the lock lists must still
+/// hold its installed digest; otherwise nothing is deleted. Only listed files
+/// are deleted. Unlisted files a user added stay, and the directory stays with
+/// them.
+pub fn remove_applet_package(name: &str, user_dir: &Path) -> Result<AppletRemoval> {
+    if !valid_package_name(name) {
+        bail!("invalid applet package name {name:?}");
+    }
+    let user_dir = canonical_directory(user_dir, "user applet directory")?;
+    let lock_path = user_dir.join(format!("{name}.lock"));
+    let (lock, _) = read_json_file::<AppletInstallLock>(
+        &lock_path,
+        MAX_MODULE_MANIFEST_BYTES,
+        "applet install lock",
+    )?;
+    if lock.lock_version != PROGRAM_MODULE_LOCK_FORMAT
+        || lock.root != name
+        || !lock.packages.contains_key(name)
+    {
+        bail!(
+            "applet install lock {} does not describe package {name:?}",
+            lock_path.display()
+        );
+    }
+    if let Some(path) = lock.files.keys().find(|path| !valid_applet_file_path(path)) {
+        bail!("applet install lock lists an unsafe path {path:?}");
+    }
+    let directory = user_dir.join(name);
+    let directory_metadata = fs::symlink_metadata(&directory)
+        .with_context(|| format!("reading {}", directory.display()))?;
+    if !directory_metadata.is_dir() || directory_metadata.file_type().is_symlink() {
+        bail!("{} is not a plain package directory", directory.display());
+    }
+    let mut changed = Vec::new();
+    for (path, locked) in &lock.files {
+        let full = join_portable(&directory, path);
+        let found = match fs::symlink_metadata(&full) {
+            Ok(metadata) if metadata.is_file() => Some(read_limited(
+                &full,
+                applet_read_limit(MAX_APPLET_PACKAGE_BYTES),
+                "installed applet file",
+            )?),
+            _ => None,
+        };
+        match found {
+            Some(bytes)
+                if u64::try_from(bytes.len()).ok() == Some(locked.size)
+                    && sha256_hex(&bytes).eq_ignore_ascii_case(&locked.sha256) => {}
+            Some(bytes) => changed.push(format!(
+                "{path:?}: installed as {} ({} bytes), now {} ({} bytes)",
+                locked.sha256,
+                locked.size,
+                sha256_hex(&bytes),
+                bytes.len()
+            )),
+            None => changed.push(format!("{path:?}: missing or not a regular file")),
+        }
+    }
+    if !changed.is_empty() {
+        bail!(
+            "refusing to remove applet package {name:?}: installed files changed since install, and removing them would discard those edits; nothing was deleted: {}",
+            changed.join("; ")
+        );
+    }
+    for path in lock.files.keys() {
+        fs::remove_file(join_portable(&directory, path))
+            .with_context(|| format!("removing applet file {path:?}"))?;
+    }
+    let mut parents = lock
+        .files
+        .keys()
+        .flat_map(|path| applet_ancestors(path))
+        .collect::<Vec<_>>();
+    parents.sort_by(|left, right| {
+        right
+            .matches('/')
+            .count()
+            .cmp(&left.matches('/').count())
+            .then_with(|| right.cmp(left))
+    });
+    parents.dedup();
+    for parent in &parents {
+        let _ = fs::remove_dir(join_portable(&directory, parent));
+    }
+    let _ = fs::remove_dir(&directory);
+    let directory_removed = fs::symlink_metadata(&directory).is_err();
+    fs::remove_file(&lock_path).with_context(|| format!("removing {}", lock_path.display()))?;
+    Ok(AppletRemoval {
+        removed_files: lock.files.keys().cloned().collect(),
+        directory_removed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

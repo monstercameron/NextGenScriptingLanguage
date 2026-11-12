@@ -246,8 +246,14 @@ fn lookup_typed<'a>(
                 Some(value) => value,
                 None => return Ok(None),
             },
+            // Mirrors `lookup`: a name on an array is absent; a malformed number is an error.
             TypedValue::List(items) => match parse_array_index(segment) {
-                Err(error) => return Err(error),
+                Err(error)
+                    if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) =>
+                {
+                    return Err(error)
+                }
+                Err(_) => return Ok(None),
                 Ok(Some(index)) => match items.get(index) {
                     Some(value) => value,
                     None => return Ok(None),
@@ -1275,6 +1281,48 @@ mod tests {
             ))
             .to_string()
         );
+    }
+
+    #[test]
+    fn typed_get_treats_nonnumeric_array_segments_as_absent_like_json_get() {
+        let source = br#"{"x":[1,2]}"#;
+        let typed = crate::structured::parse(source).expect("typed JSON parses");
+        let json: Value = serde_json::from_slice(source).expect("JSON parses");
+        let context = ExecutionContext::new(&|| Ok(()));
+        let fallback = Value::String("fallback".to_owned());
+
+        for pointer in ["/x/name", "/x/-", "/x/", "/x/01", "/x/1", "/x/5"] {
+            for default in [None, Some(fallback.clone())] {
+                let mut args =
+                    Map::from_iter([("pointer".to_owned(), Value::String(pointer.to_owned()))]);
+                if let Some(default) = &default {
+                    args.insert("default".to_owned(), default.clone());
+                }
+                let mut json_args = args.clone();
+                json_args.insert("document".to_owned(), json.clone());
+
+                let typed_result = get_typed(&args, &typed, &context).map_err(|e| e.to_string());
+                let json_result = get(&json_args, &[], &context).map_err(|e| e.to_string());
+                assert_eq!(
+                    typed_result, json_result,
+                    "typed and JSON lookups differ for pointer {pointer:?} with default {default:?}"
+                );
+            }
+        }
+
+        let with_fallback = Map::from_iter([
+            ("pointer".to_owned(), Value::String("/x/name".to_owned())),
+            ("default".to_owned(), fallback.clone()),
+        ]);
+        assert_eq!(
+            get_typed(&with_fallback, &typed, &context).expect("fallback is returned"),
+            fallback
+        );
+        let without_fallback =
+            Map::from_iter([("pointer".to_owned(), Value::String("/x/name".to_owned()))]);
+        assert!(get_typed(&without_fallback, &typed, &context).is_err());
+        let malformed = Map::from_iter([("pointer".to_owned(), Value::String("/x/01".to_owned()))]);
+        assert!(get_typed(&malformed, &typed, &context).is_err());
     }
 
     /// The walked length must equal serde_json's compact encoding for every value kind,

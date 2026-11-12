@@ -9,10 +9,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from package import explain_executables, resolve_depends, system_runner
 from release import ROOT, version as release_version
 
 PACKAGES = ["execute-bin", "execute"]
 BINARY_ARCHES = {"x86_64": "linux-x64", "aarch64": "linux-arm64"}
+PACKAGE_NAME = re.compile(r"[A-Za-z0-9@._+-]+")
 
 
 def sha256(path):
@@ -34,6 +36,48 @@ def pin(text, value):
 
 def pin_checksum(text, array, digest):
     return substitute(text, r"^" + array + r"=\(.*\)$", array + "=('" + digest + "')")
+
+
+def depends_line(packages):
+    """The PKGBUILD depends array naming each package. Names must be plain package names,
+    so nothing from a program's output can break out of the quoting."""
+    for package in packages:
+        if not PACKAGE_NAME.fullmatch(package):
+            raise ValueError("not a package name: " + repr(package))
+    return "depends=(" + " ".join("'" + package + "'" for package in packages) + ")"
+
+
+def pin_depends(text, packages):
+    """Set the depends array of a PKGBUILD template to the given packages."""
+    return substitute(text, r"^depends=\(.*\)$", depends_line(packages))
+
+
+def program_depends(programs, distro, execute=("execute",), runner=system_runner):
+    """Packages that own every executable the programs invoke, from `explain --json`.
+    An executable that no package owns, or that is ambiguous, fails here, so a package
+    never ships with a silent dependency gap."""
+    if distro != "arch":
+        raise ValueError("PKGBUILD depends are only generated for arch, not " + distro)
+    names = set()
+    for program in programs:
+        names.update(explain_executables(list(execute), program))
+    depends, unresolved = resolve_depends(sorted(names), distro, runner)
+    if unresolved:
+        raise ValueError(
+            "cannot resolve dependencies: "
+            + "; ".join(name + " (" + reason + ")" for name, reason in unresolved)
+        )
+    return depends
+
+
+def render_program(out, template, programs, distro="arch", execute=("execute",), runner=system_runner):
+    """Write out/PKGBUILD from a template whose depends array is derived from the programs.
+    Nothing is written when any executable cannot be resolved."""
+    depends = program_depends(programs, distro, execute=execute, runner=runner)
+    text = pin_depends(Path(template).read_text(), depends)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "PKGBUILD").write_text(text)
+    return depends
 
 
 def git_tags(repo=ROOT):
@@ -88,6 +132,11 @@ def main():
     render_parser.add_argument("--linux-x64", type=Path)
     render_parser.add_argument("--linux-arm64", type=Path)
     render_parser.add_argument("--source", type=Path)
+    program_parser = sub.add_parser("program")
+    program_parser.add_argument("--out", required=True, type=Path)
+    program_parser.add_argument("--template", required=True, type=Path)
+    program_parser.add_argument("--execute", default="execute")
+    program_parser.add_argument("programs", nargs="+", type=Path)
     args = parser.parse_args()
     if args.command == "render":
         render(
@@ -98,6 +147,11 @@ def main():
             source=args.source,
         )
         print("Rendered " + ", ".join(PACKAGES) + " in " + str(args.out))
+    elif args.command == "program":
+        depends = render_program(
+            args.out, args.template, args.programs, execute=[args.execute]
+        )
+        print("Rendered " + str(args.out / "PKGBUILD") + " depends " + " ".join(depends))
 
 
 if __name__ == "__main__":

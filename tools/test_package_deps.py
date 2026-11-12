@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from aur import depends_line, pin_depends, render_program  # noqa: E402
 from package import (  # noqa: E402
     candidate_paths,
     executables_from_explain,
@@ -141,6 +142,71 @@ class DebianDependsTests(unittest.TestCase):
         )
         self.assertEqual(depends, ["libnotify-bin"])
         self.assertEqual(unresolved, [])
+
+
+ARCH_PROGRAM_OUTPUT = {
+    **PACMAN_OUTPUT,
+    ("pacman", "-F", "usr/bin/grep"): "extra/grep 3.11-1\n    usr/bin/grep\n",
+    ("pacman", "-F", "usr/sbin/grep"): "",
+}
+
+PKGBUILD_TEMPLATE = "pkgname=omarchy-execute-ports\n_tag=0.1\ndepends=()\n"
+
+
+def fake_execute(directory, names):
+    """A stand-in `execute` that answers `explain --json` with the given executables."""
+    script = Path(directory) / "fake_execute.py"
+    script.write_text(
+        "import json\nprint(json.dumps({'summary': {'executables': %r}}))\n" % (names,),
+        encoding="utf-8",
+    )
+    return [sys.executable, str(script)]
+
+
+class AurDependsTests(unittest.TestCase):
+    def test_depends_line_quotes_plain_package_names(self):
+        self.assertEqual(depends_line(["bash", "grep"]), "depends=('bash' 'grep')")
+
+    def test_depends_line_rejects_names_that_could_break_quoting(self):
+        for name in ["bad'name", "a b", "$(reboot)", ""]:
+            with self.assertRaises(ValueError, msg=name):
+                depends_line([name])
+
+    def test_template_without_a_depends_array_is_refused(self):
+        with self.assertRaises(ValueError):
+            pin_depends("pkgname=x\n", ["bash"])
+
+    def test_generated_pkgbuild_depends_lists_the_resolved_packages(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            template = base / "PKGBUILD.in"
+            template.write_text(PKGBUILD_TEMPLATE, encoding="utf-8")
+            program = base / "toggle.program"
+            program.write_text("", encoding="utf-8")
+            execute = fake_execute(base, ["sh", "grep"])
+            out = base / "out"
+            depends = render_program(
+                out, template, [program], execute=execute, runner=fake_runner(ARCH_PROGRAM_OUTPUT)
+            )
+            text = (out / "PKGBUILD").read_text(encoding="utf-8")
+        self.assertEqual(depends, ["bash", "grep"])
+        self.assertIn("depends=('bash' 'grep')\n", text)
+        self.assertNotIn("depends=()", text)
+
+    def test_unresolved_executable_fails_and_writes_no_pkgbuild(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            template = base / "PKGBUILD.in"
+            template.write_text(PKGBUILD_TEMPLATE, encoding="utf-8")
+            program = base / "toggle.program"
+            program.write_text("", encoding="utf-8")
+            execute = fake_execute(base, ["sh", "omarchy-shell"])
+            out = base / "out"
+            with self.assertRaisesRegex(ValueError, "omarchy-shell"):
+                render_program(
+                    out, template, [program], execute=execute, runner=fake_runner(ARCH_PROGRAM_OUTPUT)
+                )
+            self.assertFalse((out / "PKGBUILD").exists())
 
 
 class SystemRunnerTests(unittest.TestCase):

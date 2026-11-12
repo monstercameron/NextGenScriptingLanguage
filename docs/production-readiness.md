@@ -77,7 +77,12 @@ feature locations. Every inventory entry remains `unverified`.
 The inventory is a source scanner, not a Bash parser. Its lexical hits can
 include strings and comments; they are leads for porting, not readiness scores.
 `tools/omarchy_port_report.py` is a parser-based report of the Execute features each
-command needs. Installers, migrations, sourced shell configuration and QML are
+command needs. Its external-command ranking counts, for each command, the scripts
+and the call lines that run it; shell functions, `case` labels and non-shell scripts
+are excluded. `python tools/omarchy_port_report.py --checkout <omarchy checkout>
+--top-markdown <path>` writes the top 50 as a Markdown table. That table is not yet
+published here: it must be generated from the upstream checkout at commit c668141,
+and the repository-only fixtures would misstate demand. Installers, migrations, sourced shell configuration and QML are
 outside that command count and require separate inventories. The ten initial
 ports cover small command interfaces with fake backends. Twenty further scripts
 are ported under `examples/omarchy-ports/<script>/` with the Bash original, the

@@ -38,6 +38,7 @@ DEFAULT_INVENTORY = os.path.join(ROOT, "docs", "omarchy-inventory.json")
 DEFAULT_FIXTURES = os.path.join(ROOT, "tests", "fixtures", "omarchy-v4.0.4", "bin")
 DEFAULT_MANIFESTS = os.path.join(ROOT, "manifests")
 TOP_HELPERS = 12  # helpers shown in the summary table; the JSON report ranks them all
+TOP_COMMANDS = 50  # external commands in the Markdown table published in the readiness page
 
 # Feature -> (category, what Execute offers instead). "unsupported" blocks a direct
 # port, "partial" needs an applet or a rewrite, "supported" maps onto language forms.
@@ -552,6 +553,11 @@ def analyze_source(source: str) -> dict:
     external = sorted({c["name"] for c in commands
                        if c["name"] not in SHELL_BUILTIN_FEATURES and c["name"] not in NON_EXTERNAL
                        and c["name"] not in functions})
+    external_set = set(external)
+    call_lines: dict[str, set[int]] = {}
+    for c in commands:
+        if c["name"] in external_set:
+            call_lines.setdefault(c["name"], set()).add(c["line"])
     categories = {"unsupported": 0, "partial": 0, "supported": 0}
     for item in features:
         categories[FEATURES[item["feature"]][0]] += 1
@@ -568,6 +574,7 @@ def analyze_source(source: str) -> dict:
         "feature_names": sorted({item["feature"] for item in features}),
         "functions": sorted(functions),
         "external_commands": external,
+        "external_call_lines": {name: len(lines) for name, lines in call_lines.items()},
     }
 
 
@@ -646,8 +653,10 @@ def analyze_file(path: str, expected_sha: str | None, manifests: set[str]) -> di
             "feature_names": [],
             "external_commands": [],
         })
+    call_lines = result.pop("external_call_lines", {})
     result["external_commands"] = [
-        {"name": name, "manifest": name in manifests} for name in result.get("external_commands", [])
+        {"name": name, "manifest": name in manifests, "call_lines": call_lines.get(name, 0)}
+        for name in result.get("external_commands", [])
     ]
     return result
 
@@ -688,15 +697,23 @@ def build_report(args: argparse.Namespace) -> dict:
     verdicts = {"portable": 0, "partial": 0, "blocked": 0}
     feature_scripts: dict[str, int] = {}
     command_scripts: dict[str, int] = {}
+    command_lines: dict[str, int] = {}
     for item in scripts.values():
         verdicts[item["verdict"]] = verdicts.get(item["verdict"], 0) + 1
         for feature in item.get("feature_names", []):
             feature_scripts[feature] = feature_scripts.get(feature, 0) + 1
         for command in item.get("external_commands", []):
-            command_scripts[command["name"]] = command_scripts.get(command["name"], 0) + 1
+            name = command["name"]
+            command_scripts[name] = command_scripts.get(name, 0) + 1
+            command_lines[name] = command_lines.get(name, 0) + command.get("call_lines", 0)
     # Ranked by how many scripts call each external command: the applet demand order.
     command_ranking = [
-        {"name": name, "scripts": count, "manifest": name in manifests}
+        {
+            "name": name,
+            "scripts": count,
+            "call_lines": command_lines[name],
+            "manifest": name in manifests,
+        }
         for name, count in sorted(command_scripts.items(), key=lambda item: (-item[1], item[0]))
     ]
 
@@ -772,6 +789,19 @@ def summary_table(report: dict) -> str:
     return "\n".join(lines)
 
 
+def top_commands_markdown(report: dict, limit: int = TOP_COMMANDS) -> str:
+    """The first `limit` external commands of the applet-demand ranking as a Markdown table."""
+    lines = [
+        "| Rank | Command | Scripts | Call lines | Manifest |",
+        "| ---: | --- | ---: | ---: | --- |",
+    ]
+    for rank, item in enumerate(report["external_command_ranking"][:limit], 1):
+        name = item["name"].replace("|", "\\|")
+        manifest = "yes" if item["manifest"] else "no"
+        lines.append(f"| {rank} | `{name}` | {item['scripts']} | {item['call_lines']} | {manifest} |")
+    return "\n".join(lines)
+
+
 def feature_table() -> dict:
     """The FEATURES table as JSON-ready data: feature name -> category and Execute form."""
     return {
@@ -788,6 +818,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifests", default=DEFAULT_MANIFESTS)
     parser.add_argument("--json", default=None, help="write the full JSON report to this path")
     parser.add_argument(
+        "--top-markdown",
+        default=None,
+        help=f"write the top {TOP_COMMANDS} external commands as a Markdown table to this path",
+    )
+    parser.add_argument(
         "--features-json",
         default=None,
         help="write only the FEATURES table to this path and exit (used by the migration guide check)",
@@ -803,6 +838,9 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.json, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(report, handle, indent=2, sort_keys=True)
             handle.write("\n")
+    if args.top_markdown:
+        with open(args.top_markdown, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(top_commands_markdown(report) + "\n")
     print(summary_table(report))
     return 0
 

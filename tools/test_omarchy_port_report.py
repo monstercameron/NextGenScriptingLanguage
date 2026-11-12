@@ -153,6 +153,54 @@ class ExternalCommandTests(unittest.TestCase):
             self.assertEqual(data["verdicts"]["out_of_scope"], 1)
 
 
+class TopCommandTableTests(unittest.TestCase):
+    def test_call_lines_count_distinct_source_lines_per_external_command(self):
+        result = report.analyze_source("cat a\ncat b\ncat c\nusage() { cat d; }\nusage\n")
+        self.assertEqual(result["external_commands"], ["cat"])
+        self.assertEqual(result["external_call_lines"], {"cat": 4})
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "script")
+            with open(path, "wb") as handle:
+                handle.write(b"#!/bin/bash\ncat a\ncat b\ncat c\nusage() { cat d; }\nusage\n")
+            analyzed = report.analyze_file(path, None, set())
+            self.assertEqual(analyzed["external_commands"], [{"name": "cat", "manifest": False, "call_lines": 4}])
+
+    def test_top_fifty_table_has_no_function_case_label_or_python_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = os.path.join(directory, "bin")
+            os.mkdir(bin_dir)
+            commands = [f"tool{index:02d}" for index in range(60)]
+            body = "usage() { ls; }\nfail() { false; }\ncase \"$1\" in\n  start|on) usage ;;\n  --clear) fail ;;\n  *) usage ;;\nesac\n"
+            body += "".join(f"{name} x\n" for name in commands)
+            with open(os.path.join(bin_dir, "tool"), "wb") as handle:
+                handle.write(("#!/bin/bash\n" + body).encode("utf-8"))
+            with open(os.path.join(bin_dir, "helper"), "wb") as handle:
+                handle.write(b"#!/usr/bin/python3\ndef main():\n    import json\n    except ValueError:\n        raise\n")
+            manifests = os.path.join(directory, "manifests")
+            os.mkdir(manifests)
+            out = os.path.join(directory, "report.json")
+            markdown = os.path.join(directory, "top.md")
+            code = report.main([
+                "--fixtures", bin_dir, "--manifests", manifests,
+                "--json", out, "--top-markdown", markdown,
+            ])
+            self.assertEqual(code, 0)
+            with open(markdown, encoding="utf-8") as handle:
+                rows = [line for line in handle.read().splitlines() if line.startswith("| ")]
+            body_rows = rows[2:]  # header and separator
+            self.assertEqual(len(body_rows), 50)
+            # `ls` sorts before `tool00` when every command has one script.
+            self.assertEqual(body_rows[0], "| 1 | `ls` | 1 | 1 | no |")
+            self.assertEqual(body_rows[1], "| 2 | `tool00` | 1 | 1 | no |")
+            table = "\n".join(body_rows)
+            for token in ("usage", "fail", "start", "on", "--clear", "def", "import", "except", "raise", "json.dumps"):
+                self.assertNotIn(f"`{token}`", table)
+            with open(out, encoding="utf-8") as handle:
+                data = json.load(handle)
+            names = {entry["name"] for entry in data["external_command_ranking"]}
+            self.assertEqual(names, set(commands) | {"ls"})
+
+
 class InternalHelperRankingTests(unittest.TestCase):
     def run_report(self, scripts: dict[str, str], inventory_paths: list[str]) -> dict:
         with tempfile.TemporaryDirectory() as directory:

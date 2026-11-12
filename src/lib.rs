@@ -41,12 +41,12 @@ pub mod inputs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lua_config;
 pub mod manifest;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod migrate_scan;
 pub(crate) mod model_schema;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "model")]
 pub mod models;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod migrate_scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod modules;
 #[cfg(not(target_arch = "wasm32"))]

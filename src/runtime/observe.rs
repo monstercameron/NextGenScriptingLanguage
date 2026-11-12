@@ -6,6 +6,7 @@
 //! writes. Observers are process-global so worker threads share one view, and
 //! nothing is observed unless one is installed with [`install`].
 
+use super::execution_result::{StageResult, StageState};
 use super::*;
 use crate::agent::what_if_key::{hmac_sha256, load_existing, load_or_create, KEY_BYTES};
 use crate::contracts::Outcome;
@@ -76,10 +77,101 @@ fn hex_text(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The recorded state of one pipeline stage, enough to rebuild its result on replay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedStage {
+    pub line: usize,
+    pub applet: String,
+    pub state: StageState,
+    pub status: Option<i32>,
+    pub signal: Option<i32>,
+    pub broken_pipe: bool,
+}
+
+impl RecordedStage {
+    pub(crate) fn from_stage(stage: &StageResult) -> Self {
+        Self {
+            line: stage.line,
+            applet: stage.applet.clone(),
+            state: stage.state,
+            status: stage.status,
+            signal: stage.signal,
+            broken_pipe: stage.broken_pipe,
+        }
+    }
+}
+
+fn stage_state_name(state: StageState) -> &'static str {
+    match state {
+        StageState::Exited => "exited",
+        StageState::Signaled => "signaled",
+        StageState::SpawnFailed => "spawn_failed",
+        StageState::NotStarted => "not_started",
+        StageState::Unknown => "unknown",
+    }
+}
+
+/// An unrecognized state name reads as `Unknown`, which replays as an unknown stage.
+fn stage_state_from_name(name: &str) -> StageState {
+    match name {
+        "exited" => StageState::Exited,
+        "signaled" => StageState::Signaled,
+        "spawn_failed" => StageState::SpawnFailed,
+        "not_started" => StageState::NotStarted,
+        _ => StageState::Unknown,
+    }
+}
+
+/// The stored form of a group's stages, in pipeline order.
+pub fn stages_to_json(stages: &[RecordedStage]) -> serde_json::Value {
+    serde_json::Value::Array(
+        stages
+            .iter()
+            .map(|stage| {
+                serde_json::json!({
+                    "line": stage.line,
+                    "applet": stage.applet,
+                    "state": stage_state_name(stage.state),
+                    "status": stage.status,
+                    "signal": stage.signal,
+                    "broken_pipe": stage.broken_pipe,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// The stages of a stored group, or `None` when the record predates stage metadata
+/// (the key is absent or null).
+pub fn stages_from_json(value: &serde_json::Value) -> Option<Vec<RecordedStage>> {
+    Some(
+        value
+            .as_array()?
+            .iter()
+            .map(|item| RecordedStage {
+                line: item["line"].as_u64().unwrap_or(0) as usize,
+                applet: item["applet"].as_str().unwrap_or_default().to_owned(),
+                state: stage_state_from_name(item["state"].as_str().unwrap_or_default()),
+                status: item["status"].as_i64().map(|code| code as i32),
+                signal: item["signal"].as_i64().map(|signal| signal as i32),
+                broken_pipe: item["broken_pipe"].as_bool().unwrap_or(false),
+            })
+            .collect(),
+    )
+}
+
 /// Captured result of one applet group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepResult {
     pub status: Option<i32>,
+    /// The signal that ended the failing stage, when a Unix process was killed by a
+    /// signal and so has no exit code. `None` on other platforms and for exits.
+    pub signal: Option<i32>,
+    /// Per-stage results in pipeline order. `None` when the record predates stage
+    /// metadata, so the stage statuses were never kept.
+    pub stages: Option<Vec<RecordedStage>>,
+    /// Index of the failing stage within the group, when the group failed.
+    pub failed_stage: Option<usize>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     /// The declared outcome of a single-call group, when the status is known.
@@ -296,6 +388,15 @@ pub(super) fn execute_call_group(group: GroupRequest<'_>) -> Result<GroupOutput>
             if let Some(failure) = error.downcast_ref::<super::CommandFailed>() {
                 let result = StepResult {
                     status: failure.status.code(),
+                    signal: execution_result::exit_signal(failure.status),
+                    stages: Some(
+                        failure
+                            .stages
+                            .iter()
+                            .map(RecordedStage::from_stage)
+                            .collect(),
+                    ),
+                    failed_stage: failing_stage(failure),
                     stdout: failure.stdout.clone().unwrap_or_default(),
                     stderr: failure
                         .stderr
@@ -318,6 +419,15 @@ pub(super) fn execute_call_group(group: GroupRequest<'_>) -> Result<GroupOutput>
     };
     let result = StepResult {
         status: output.status,
+        signal: None,
+        stages: Some(
+            output
+                .stages
+                .iter()
+                .map(RecordedStage::from_stage)
+                .collect(),
+        ),
+        failed_stage: None,
         stdout: output.bytes.clone(),
         stderr: output.diagnostic.clone(),
         outcome,
@@ -329,6 +439,20 @@ pub(super) fn execute_call_group(group: GroupRequest<'_>) -> Result<GroupOutput>
     Ok(output)
 }
 
+/// The stage a failure came from. Stages are in pipeline order, and the failing stage
+/// is the first one with the failure's applet, line, exit code and signal.
+fn failing_stage(failure: &super::CommandFailed) -> Option<usize> {
+    let status = failure.status.code();
+    let signal = execution_result::exit_signal(failure.status);
+    let named =
+        |stage: &StageResult| stage.line == failure.line && stage.applet == failure.operation;
+    failure
+        .stages
+        .iter()
+        .position(|stage| named(stage) && stage.status == status && stage.signal == signal)
+        .or_else(|| failure.stages.iter().position(named))
+}
+
 /// Whether any applet in the group declares secret environment.
 fn secret_environment(registry: &Registry, calls: &[(&Invocation, &Manifest, usize)]) -> bool {
     calls.iter().any(|(call, manifest, _)| {
@@ -336,47 +460,98 @@ fn secret_environment(registry: &Registry, calls: &[(&Invocation, &Manifest, usi
     })
 }
 
+/// Why a recorded result cannot be replayed exactly, or `None` when it can. A step
+/// with neither an exit code nor a signal has no failure to reproduce. A record that
+/// predates stage metadata cannot say which signal or code ended the step, so it is
+/// refused with that reason rather than replayed as something else.
+pub(crate) fn unreplayable_reason(recorded: &StepResult) -> Option<String> {
+    if recorded.status.is_some() || recorded.signal.is_some() {
+        return None;
+    }
+    Some(match recorded.stages {
+        None => "the recorded step predates the signal and stage metadata this build keeps, so its failure cannot be replayed exactly; re-record the program with this build".into(),
+        Some(_) => "recorded step has no exit status and cannot be replayed".into(),
+    })
+}
+
 /// Build the group output for a recorded result. A recorded failure is returned as
 /// the same typed error the live run produced, so the program's control flow
-/// matches. Stage statuses for earlier stages of a pipeline are not recorded, so
-/// they are reported as success.
+/// matches. Records with stage metadata replay every stage's status and signal.
+/// Older records only kept the failing stage, so their earlier stages are reported as
+/// success, with a warning.
 fn replayed_output(
     calls: &[(&Invocation, &Manifest, usize)],
     recorded: StepResult,
 ) -> Result<GroupOutput> {
-    let Some(status) = recorded.status else {
-        bail!("recorded step has no exit status and cannot be replayed");
-    };
+    if let Some(reason) = unreplayable_reason(&recorded) {
+        bail!("{reason}");
+    }
     let last = calls.len().saturating_sub(1);
-    let stages: Vec<execution_result::StageResult> = calls
-        .iter()
-        .enumerate()
-        .map(|(index, (call, manifest, line))| {
-            let stage_status = if index == last { status } else { 0 };
-            let outcome = recorded
-                .outcome
-                .clone()
-                .filter(|_| index == last)
-                .unwrap_or_else(|| manifest.outcome_for(stage_status));
-            let stderr = (index == last).then(|| recorded.stderr.clone());
-            execution_result::StageResult::exited(
-                *line,
-                manifest.name_for(call),
-                stage_status,
-                outcome,
-                stderr,
-            )
-        })
-        .collect();
+    let failing = recorded.failed_stage.unwrap_or(last);
+    let stages: Vec<StageResult> = match &recorded.stages {
+        Some(recorded_stages) => {
+            if recorded_stages.len() != calls.len() {
+                bail!(
+                    "recorded stages do not match the group: {} recorded for {} calls",
+                    recorded_stages.len(),
+                    calls.len()
+                );
+            }
+            // The captured stderr belongs to the stage that failed, or to the last
+            // stage of a group that succeeded.
+            let focus = if recorded.failed { failing } else { last };
+            calls
+                .iter()
+                .zip(recorded_stages)
+                .enumerate()
+                .map(|(index, ((call, manifest, line), stage))| {
+                    let stderr = (index == focus).then(|| recorded.stderr.clone());
+                    replayed_stage(*line, manifest.name_for(call), manifest, stage, stderr)
+                })
+                .collect()
+        }
+        None => {
+            let Some(status) = recorded.status else {
+                bail!("recorded step has no exit status and cannot be replayed");
+            };
+            if recorded.failed && calls.len() > 1 {
+                eprintln!(
+                    "warning: the record predates per-stage failure metadata; the earlier stages of this pipeline are replayed as success"
+                );
+            }
+            calls
+                .iter()
+                .enumerate()
+                .map(|(index, (call, manifest, line))| {
+                    let stage_status = if index == last { status } else { 0 };
+                    let outcome = recorded
+                        .outcome
+                        .clone()
+                        .filter(|_| index == last)
+                        .unwrap_or_else(|| manifest.outcome_for(stage_status));
+                    let stderr = (index == last).then(|| recorded.stderr.clone());
+                    StageResult::exited(
+                        *line,
+                        manifest.name_for(call),
+                        stage_status,
+                        outcome,
+                        stderr,
+                    )
+                })
+                .collect()
+        }
+    };
     if recorded.failed {
-        let (line, operation) = calls
-            .last()
-            .map(|(call, manifest, line)| (*line, manifest.name_for(call).to_owned()))
-            .unwrap_or((0, String::new()));
+        let Some((call, manifest, line)) = calls.get(failing) else {
+            bail!(
+                "recorded failed stage {failing} is outside the group's {} calls",
+                calls.len()
+            );
+        };
         return Err(CommandFailed {
-            line,
-            operation,
-            status: exit_status(status),
+            line: *line,
+            operation: manifest.name_for(call).to_owned(),
+            status: exit_status_for(&recorded)?,
             outcome: recorded.outcome.clone(),
             diagnostic: String::from_utf8_lossy(&recorded.stderr).into_owned(),
             stderr: Some(recorded.stderr),
@@ -385,6 +560,9 @@ fn replayed_output(
         }
         .into());
     }
+    let Some(status) = recorded.status else {
+        bail!("recorded step has no exit status and cannot be replayed");
+    };
     Ok(GroupOutput {
         bytes: recorded.stdout,
         typed_json: None,
@@ -393,6 +571,49 @@ fn replayed_output(
         stdout_captured: true,
         stages,
     })
+}
+
+/// One replayed stage, rebuilt the way the live run built it: an exit takes its
+/// outcome from the manifest, and a signal is a resource exhaustion when the signal
+/// is a resource limit.
+fn replayed_stage(
+    line: usize,
+    applet: &str,
+    manifest: &Manifest,
+    stage: &RecordedStage,
+    stderr: Option<Vec<u8>>,
+) -> StageResult {
+    let result = match stage.state {
+        StageState::Exited => match stage.status {
+            Some(code) => {
+                StageResult::exited(line, applet, code, manifest.outcome_for(code), stderr)
+            }
+            None => StageResult::unknown(line, applet),
+        },
+        StageState::Signaled => {
+            let exhausted = stage
+                .signal
+                .is_some_and(|signal| execution_result::resource_limit_signal(signal).is_some());
+            if exhausted {
+                StageResult::resource_exhausted(line, applet, stage.signal, stderr)
+            } else {
+                StageResult::signaled(line, applet, stage.signal, stderr)
+            }
+        }
+        StageState::SpawnFailed => StageResult::spawn_failed(line, applet),
+        StageState::NotStarted => StageResult::not_started(line, applet),
+        StageState::Unknown => StageResult::unknown(line, applet),
+    };
+    result.with_broken_pipe(stage.broken_pipe)
+}
+
+/// The exit status of a replayed failure: its exit code, or the signal that ended it.
+fn exit_status_for(recorded: &StepResult) -> Result<std::process::ExitStatus> {
+    match (recorded.status, recorded.signal) {
+        (Some(code), _) => Ok(exit_status(code)),
+        (None, Some(signal)) => signal_status(signal),
+        (None, None) => bail!("recorded step has no exit status and cannot be replayed"),
+    }
 }
 
 /// A process exit status with the given code, for a replayed failure.
@@ -406,6 +627,25 @@ fn exit_status(code: i32) -> std::process::ExitStatus {
     {
         use std::os::windows::process::ExitStatusExt;
         std::process::ExitStatus::from_raw(code as u32)
+    }
+}
+
+/// A process exit status for a process ended by `signal`, for a replayed failure.
+fn signal_status(signal: i32) -> Result<std::process::ExitStatus> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if (1..=64).contains(&signal) {
+            // A wait status with no core dump holds the signal number in its low bits.
+            return Ok(std::process::ExitStatus::from_raw(signal));
+        }
+        bail!("recorded signal {signal} is not one this build can replay");
+    }
+    #[cfg(not(unix))]
+    {
+        bail!(
+            "the recorded step was ended by signal {signal}, which this platform cannot reproduce"
+        );
     }
 }
 
@@ -441,5 +681,97 @@ mod tests {
         let key = [7u8; KEY_BYTES];
         assert_eq!(input_digest(&key, &Input::Stdin), None);
         assert!(input_digest(&key, &Input::Empty).is_some());
+    }
+
+    fn stage(state: StageState, status: Option<i32>, signal: Option<i32>) -> RecordedStage {
+        RecordedStage {
+            line: 3,
+            applet: "sh".into(),
+            state,
+            status,
+            signal,
+            broken_pipe: false,
+        }
+    }
+
+    fn step(
+        status: Option<i32>,
+        signal: Option<i32>,
+        stages: Option<Vec<RecordedStage>>,
+    ) -> StepResult {
+        StepResult {
+            status,
+            signal,
+            stages,
+            failed_stage: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            outcome: None,
+            failed: true,
+            sensitivity: crate::security::SensitivitySet::empty(),
+            secret_environment: false,
+        }
+    }
+
+    #[test]
+    fn stage_metadata_round_trips_through_its_stored_form() {
+        let stages = vec![
+            stage(StageState::Exited, Some(7), None),
+            RecordedStage {
+                broken_pipe: true,
+                ..stage(StageState::Signaled, None, Some(15))
+            },
+        ];
+        assert_eq!(stages_from_json(&stages_to_json(&stages)), Some(stages));
+    }
+
+    #[test]
+    fn a_missing_stage_key_reads_as_not_recorded() {
+        assert_eq!(stages_from_json(&serde_json::Value::Null), None);
+    }
+
+    #[test]
+    fn an_unrecorded_signal_failure_is_refused_with_a_diagnostic() {
+        // An old record: no exit code and no stage metadata, so the signal is unknown.
+        let old = step(None, None, None);
+        let reason = unreplayable_reason(&old).expect("an old record cannot replay exactly");
+        assert!(reason.contains("predates"), "{reason}");
+        // A new record with stages but neither an exit code nor a signal has nothing to reproduce.
+        let empty = step(None, None, Some(Vec::new()));
+        let reason = unreplayable_reason(&empty).expect("nothing to reproduce");
+        assert!(reason.contains("no exit status"), "{reason}");
+        // A new record that kept the signal can be replayed.
+        assert_eq!(
+            unreplayable_reason(&step(None, Some(15), Some(Vec::new()))),
+            None
+        );
+        assert_eq!(unreplayable_reason(&step(Some(7), None, None)), None);
+    }
+
+    fn sh_outcome(status: i32) -> Outcome {
+        Outcome {
+            status,
+            name: "sh".into(),
+            kind: crate::contracts::OutcomeKind::Success,
+            effect_certainty: crate::contracts::EffectCertainty::NotStarted,
+        }
+    }
+
+    #[test]
+    fn the_failing_stage_is_found_among_stages_with_the_same_applet() {
+        let failure = crate::runtime::CommandFailed {
+            line: 3,
+            operation: "sh".into(),
+            status: exit_status(7),
+            outcome: None,
+            diagnostic: String::new(),
+            stderr: None,
+            stdout: None,
+            stages: vec![
+                StageResult::exited(3, "sh", 0, sh_outcome(0), None),
+                StageResult::exited(3, "sh", 7, sh_outcome(7), None),
+            ],
+        };
+        assert_eq!(failing_stage(&failure), Some(1));
     }
 }

@@ -52,7 +52,10 @@
 //! redaction, not detection, so an undeclared secret is recorded as it was.
 
 use crate::manifest::Registry;
-use crate::runtime::observe::{InputKeyPolicy, Observer, StepRequest, StepResult};
+use crate::runtime::observe::{
+    stages_from_json, stages_to_json, InputKeyPolicy, Observer, RecordedStage, StepRequest,
+    StepResult,
+};
 use crate::security::{self, PersistenceKind, SecretRedactor, SensitivitySet};
 pub use crate::security::{register_sensitive_inputs, register_sensitive_program};
 use anyhow::{anyhow, bail, Context, Result};
@@ -1669,6 +1672,9 @@ impl Observer for Recorder {
             "argv": argv,
             "input_digest": request.input_digest,
             "status": result.status,
+            "signal": result.signal,
+            "stages": result.stages.as_deref().map(stages_to_json),
+            "failed_stage": result.failed_stage,
             "outcome": outcome,
             "failed": result.failed,
             "wall_us": wall.as_micros() as u64,
@@ -1731,6 +1737,15 @@ pub struct StoredStep {
     /// written before input digests, and for groups whose input was not in memory.
     pub input_digest: Option<String>,
     pub status: Option<i32>,
+    /// The signal that ended the failing stage. `None` for exits, and for records
+    /// written before signals were kept, which read as not recorded.
+    pub signal: Option<i32>,
+    /// Per-stage results in pipeline order. `None` for records written before stage
+    /// metadata, which read as not recorded.
+    pub stages: Option<Vec<RecordedStage>>,
+    /// Index of the failing stage within the group. `None` when nothing failed or the
+    /// record does not say.
+    pub failed_stage: Option<usize>,
     pub outcome: Option<Json>,
     /// The group ended as a typed failure, which stops the program unless caught.
     pub failed: bool,
@@ -2007,25 +2022,7 @@ impl StoredRecord {
             // retained step: a size-compliant trace can otherwise put a
             // densely packed JSON tree where the writer only ever emits a
             // small scalar descriptor, amplifying allocation on open.
-            let stdout = bounded_blob_descriptor(&value["stdout"], "stdout", number + 1)?;
-            let stderr = bounded_blob_descriptor(&value["stderr"], "stderr", number + 1)?;
-            steps.push(StoredStep {
-                index: value["index"].as_u64().unwrap_or(0) as usize,
-                line: value["line"].as_u64().unwrap_or(0) as usize,
-                applets: strings(&value["applets"]),
-                binaries: strings(&value["binaries"]),
-                argv: value["argv"]
-                    .as_array()
-                    .map(|items| items.iter().map(strings).collect())
-                    .unwrap_or_default(),
-                input_digest: value["input_digest"].as_str().map(str::to_owned),
-                status: value["status"].as_i64().map(|code| code as i32),
-                outcome: (!value["outcome"].is_null()).then(|| value["outcome"].clone()),
-                wall_us: value["wall_us"].as_u64().unwrap_or(0),
-                stdout,
-                stderr,
-                failed: value["failed"].as_bool().unwrap_or(false),
-            });
+            steps.push(stored_step(&value, number + 1)?);
         }
         // `run.steps` is kept exactly as written: the recorder only writes a
         // step count when a run finishes, so an unfinished document with a
@@ -2217,6 +2214,34 @@ impl StoredRecord {
 /// present field must be the scalar the writer emits, and a declared
 /// `bytes` size past [`MAX_BLOB_BYTES`] is refused, so the retained value
 /// is always a small bounded object rather than an arbitrary JSON tree.
+/// One recorded applet group from its trace line (`line_number` is 1-based, for
+/// errors). The signal, failed-stage and stage keys were added later: a line that
+/// lacks them reads as not recorded, which replay reports rather than guessing.
+fn stored_step(value: &Json, line_number: usize) -> Result<StoredStep> {
+    let stdout = bounded_blob_descriptor(&value["stdout"], "stdout", line_number)?;
+    let stderr = bounded_blob_descriptor(&value["stderr"], "stderr", line_number)?;
+    Ok(StoredStep {
+        index: value["index"].as_u64().unwrap_or(0) as usize,
+        line: value["line"].as_u64().unwrap_or(0) as usize,
+        applets: strings(&value["applets"]),
+        binaries: strings(&value["binaries"]),
+        argv: value["argv"]
+            .as_array()
+            .map(|items| items.iter().map(strings).collect())
+            .unwrap_or_default(),
+        input_digest: value["input_digest"].as_str().map(str::to_owned),
+        status: value["status"].as_i64().map(|code| code as i32),
+        signal: value["signal"].as_i64().map(|signal| signal as i32),
+        stages: stages_from_json(&value["stages"]),
+        failed_stage: value["failed_stage"].as_u64().map(|index| index as usize),
+        outcome: (!value["outcome"].is_null()).then(|| value["outcome"].clone()),
+        wall_us: value["wall_us"].as_u64().unwrap_or(0),
+        stdout,
+        stderr,
+        failed: value["failed"].as_bool().unwrap_or(false),
+    })
+}
+
 fn bounded_blob_descriptor(value: &Json, field: &str, line_number: usize) -> Result<Json> {
     if value.is_null() {
         return Ok(Json::Null);
@@ -3422,6 +3447,48 @@ mod bounded_record_tests {
             assert!(format!("{error:#}").contains("stdout"), "{error:#}");
             assert!(format!("{error:#}").contains(expected), "{error:#}");
         }
+    }
+
+    #[test]
+    fn old_and_new_step_lines_both_load_with_their_failure_metadata() {
+        let blob = r#"{"bytes":0,"blob":null,"truncated":false}"#;
+        // A line from before signal and stage metadata: the keys are absent.
+        let old = format!(
+            r#"{{"event":"step","index":0,"line":1,"applets":["sh"],"binaries":["sh"],"argv":[["sh"]],"status":null,"outcome":null,"failed":true,"wall_us":1,"stdout":{blob},"stderr":{blob}}}"#
+        );
+        let new = format!(
+            r#"{{"event":"step","index":1,"line":1,"applets":["sh","sh"],"binaries":["sh","sh"],"argv":[["sh"],["sh"]],"status":null,"signal":15,"failed_stage":0,"stages":[{{"line":1,"applet":"sh","state":"signaled","status":null,"signal":15,"broken_pipe":false}},{{"line":1,"applet":"sh","state":"not_started","status":null,"signal":null,"broken_pipe":false}}],"outcome":null,"failed":true,"wall_us":1,"stdout":{blob},"stderr":{blob}}}"#
+        );
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            br#"{"protocol":"execute.record/1","finished":true,"steps":2}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join(super::TRACE_FILE),
+            format!("{old}\n{new}\n"),
+        )
+        .unwrap();
+        let record = StoredRecord::open(directory.path()).unwrap();
+        let [old_step, new_step] = record.steps.as_slice() else {
+            panic!("both lines should load as steps");
+        };
+        // The old line loads as not recorded: no signal, no stages, no failed stage.
+        assert!(old_step.failed);
+        assert_eq!((old_step.status, old_step.signal), (None, None));
+        assert_eq!(old_step.failed_stage, None);
+        assert!(old_step.stages.is_none());
+        // The new line keeps the signal, the failed stage and every stage.
+        assert_eq!(new_step.signal, Some(15));
+        assert_eq!(new_step.failed_stage, Some(0));
+        let stages = new_step.stages.as_ref().expect("stages were recorded");
+        assert_eq!(stages.len(), 2);
+        assert_eq!(
+            (stages[0].applet.as_str(), stages[0].signal),
+            ("sh", Some(15))
+        );
+        assert_eq!(stages[1].status, None);
     }
 
     #[test]

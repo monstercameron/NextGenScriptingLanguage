@@ -188,16 +188,7 @@ impl Observer for Replayer {
             .blob(&recorded.stderr)
             .map_err(|error| anyhow!("record incomplete at step {index}: {error:#}"))?;
         state.cursor += 1;
-        Ok(Some(StepResult {
-            status: recorded.status,
-            stdout,
-            stderr,
-            outcome: stored_outcome(recorded),
-            failed: recorded.failed,
-            // Replay runs no group and persists nothing, so there are no live labels.
-            sensitivity: security::SensitivitySet::empty(),
-            secret_environment: false,
-        }))
+        Ok(Some(recorded_step_result(recorded, stdout, stderr)))
     }
 
     fn finished(
@@ -223,6 +214,24 @@ fn stored_outcome(step: &StoredStep) -> Option<crate::contracts::Outcome> {
         kind: serde_json::from_value(outcome["kind"].clone()).ok()?,
         effect_certainty: serde_json::from_value(outcome["certainty"].clone()).ok()?,
     })
+}
+
+/// The runtime result for a recorded step. Records written before the signal and
+/// stage metadata have none of it, which reads as not recorded.
+fn recorded_step_result(recorded: &StoredStep, stdout: Vec<u8>, stderr: Vec<u8>) -> StepResult {
+    StepResult {
+        status: recorded.status,
+        signal: recorded.signal,
+        stages: recorded.stages.clone(),
+        failed_stage: recorded.failed_stage,
+        stdout,
+        stderr,
+        outcome: stored_outcome(recorded),
+        failed: recorded.failed,
+        // Replay runs no group and persists nothing, so there are no live labels.
+        sensitivity: security::SensitivitySet::empty(),
+        secret_environment: false,
+    }
 }
 
 fn same_group(recorded: &StoredStep, request: &StepRequest, actual_argv: &[Vec<String>]) -> bool {
@@ -522,16 +531,7 @@ impl Observer for PrefixReplayer {
             .blob(&recorded.stderr)
             .map_err(|error| anyhow!("record incomplete at step {index}: {error:#}"))?;
         state.cursor += 1;
-        Ok(Some(StepResult {
-            status: recorded.status,
-            stdout,
-            stderr,
-            outcome: stored_outcome(recorded),
-            failed: recorded.failed,
-            // Replay runs no group and persists nothing, so there are no live labels.
-            sensitivity: security::SensitivitySet::empty(),
-            secret_environment: false,
-        }))
+        Ok(Some(recorded_step_result(recorded, stdout, stderr)))
     }
 
     fn finished(
@@ -720,12 +720,60 @@ mod tests {
             argv: vec![vec!["cat".into()]],
             input_digest: input_digest.map(str::to_owned),
             status: Some(0),
+            signal: None,
+            stages: None,
+            failed_stage: None,
             outcome: None,
             failed: false,
             wall_us: 0,
             stdout: Json::Null,
             stderr: Json::Null,
         }
+    }
+
+    #[test]
+    fn a_recorded_old_failure_is_reported_as_unrecorded_not_replayed() {
+        // A record from before signal and stage metadata: a failed step with no exit
+        // code cannot say what killed it, so replay refuses it with the reason.
+        let old = StoredStep {
+            status: None,
+            failed: true,
+            ..stored_step(None)
+        };
+        let result = recorded_step_result(&old, Vec::new(), Vec::new());
+        assert_eq!(result.stages, None);
+        let reason = crate::runtime::observe::unreplayable_reason(&result)
+            .expect("an unrecorded signal failure must be refused");
+        assert!(reason.contains("predates"), "{reason}");
+    }
+
+    #[test]
+    fn a_recorded_signal_and_stages_reach_the_runtime_result() {
+        let stages = vec![crate::runtime::observe::RecordedStage {
+            line: 1,
+            applet: "sh".into(),
+            state: crate::runtime::execution_result::StageState::Signaled,
+            status: None,
+            signal: Some(15),
+            broken_pipe: false,
+        }];
+        let recorded = StoredStep {
+            status: None,
+            signal: Some(15),
+            stages: Some(stages.clone()),
+            failed_stage: Some(0),
+            failed: true,
+            ..stored_step(None)
+        };
+        let result = recorded_step_result(&recorded, Vec::new(), Vec::new());
+        assert_eq!(result.signal, Some(15));
+        assert_eq!(result.failed_stage, Some(0));
+        assert_eq!(result.stages, Some(stages));
+        assert_eq!(
+            crate::runtime::observe::unreplayable_reason(&result),
+            None,
+            "a recorded signal is replayable"
+        );
     }
 
     fn request_with_digest(input_digest: Option<&str>) -> StepRequest {

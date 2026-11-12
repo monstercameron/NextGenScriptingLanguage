@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "workflow": "001-log-errors",
+  "authored": "Hand-written log excerpts for the held-out arm. Not taken from fixtures/001; the runner must never load this file.",
+  "labels": ["error", "warn", "noise"],
+  "items": [
+    {"id": "h01", "input": "ERROR: unable to parse config at line 14", "expected": "error"},
+    {"id": "h02", "input": "WARN: retrying upload after timeout (attempt 2 of 5)", "expected": "warn"},
+    {"id": "h03", "input": "INFO: heartbeat ok, 3 workers idle", "expected": "noise"},
+    {"id": "h04", "input": "The cache index could not be opened; a rebuild is required.", "expected": "error"},
+    {"id": "h05", "input": "Disk /var is at 98 percent, writes may start failing soon", "expected": "warn"},
+    {"id": "h06", "input": "DEBUG: resolved 14 packages from lockfile", "expected": "noise"},
+    {"id": "h07", "input": "Process exited with code 137 after the kernel killed it for memory pressure", "expected": "error"},
+    {"id": "h08", "input": "panic: index out of range [7] with length 3", "expected": "error"},
+    {"id": "h09", "input": "Certificate for mirror.example.invalid expires in 9 days", "expected": "warn"},
+    {"id": "h10", "input": "Health check passed, next run in 60s", "expected": "noise"}
+  ]
+}

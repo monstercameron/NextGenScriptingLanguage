@@ -21,13 +21,13 @@ pub mod desktop_entry;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod diagnostics;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod doctor;
-pub mod format;
-#[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "tooling")]
 pub mod discovery;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod doctor;
 #[cfg(feature = "failpoints")]
 pub(crate) mod failpoint;
+pub mod format;
 pub mod github_actions;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "graph")]
@@ -59,6 +59,8 @@ pub mod prompt;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "records")]
 pub mod record;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod redact;
 #[cfg(all(feature = "remote", not(target_arch = "wasm32")))]
 pub mod remote;
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,8 +72,6 @@ pub mod repl;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "records")]
 pub mod replay;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod redact;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod restart_required;
 #[cfg_attr(target_arch = "wasm32", path = "browser.rs")]
@@ -89,9 +89,9 @@ pub mod stream;
 mod structured;
 pub mod suggest;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod tasks;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod sysfacts;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tasks;
 pub mod terminal_text;
 pub mod working_dir;
 

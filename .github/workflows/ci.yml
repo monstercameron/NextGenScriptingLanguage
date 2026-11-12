@@ -518,6 +518,15 @@ jobs:
           "CARGO_TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Tests load the repository's own manifests folder, and the gate checks every
+          # ancestor of it. The checkout lives under a runner directory that grants
+          # Authenticated Users modify rights, which no ACL change on the manifests
+          # folder alone can fix. Build and test from a copy on the trusted volume.
+          $source = Join-Path $driveRoot "src"
+          & "$env:WINDIR/System32/robocopy.exe" $env:GITHUB_WORKSPACE $source /E /XD target /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "Could not copy the checkout to the trusted Windows CI volume" }
+          $global:LASTEXITCODE = 0
+          "NGS_SRC=$source" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
@@ -528,16 +537,22 @@ jobs:
           # post-job cache saving; keep the registry cache only.
           cache-targets: false
       - run: cargo fmt --check
+        working-directory: ${{ env.NGS_SRC }}
       - run: rustfmt --edition 2021 --check src/runtime/shared.rs
+        working-directory: ${{ env.NGS_SRC }}
       - name: Audit native-tool contracts and bundled index freshness
         # Pure-Python static audit: needs no build, so it runs even when the
         # bundled manifest index is stale (coordinator regenerates it).
         shell: bash
+        working-directory: ${{ env.NGS_SRC }}
         run: python tests/native_tool_contracts.py
       - run: cargo clippy --locked --features full,test-fixtures --target ${{ matrix.target }} --all-targets -- -D warnings
+        working-directory: ${{ env.NGS_SRC }}
       - run: cargo build --locked --target ${{ matrix.target }} --release --features full,test-fixtures --bins
+        working-directory: ${{ env.NGS_SRC }}
       - name: Verify Git for Windows MSYS printf fixture
         shell: pwsh
+        working-directory: ${{ env.NGS_SRC }}
         run: |
           $candidates = @(
             (Join-Path $env:ProgramFiles "Git/usr/bin/printf.exe")
@@ -553,20 +568,26 @@ jobs:
           Write-Host "Verified MSYS printf fixture: $fixture"
       - name: Put MSYS shell tools on PATH for the Unix-ported suites
         shell: pwsh
+        working-directory: ${{ env.NGS_SRC }}
         run: |
           "$env:ProgramFiles\Git\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           "$env:ProgramFiles\Git\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Install manifest fixture beside the release test binaries
         shell: pwsh
+        working-directory: ${{ env.NGS_SRC }}
         run: |
           $fixture = Join-Path $env:CARGO_TARGET_DIR "${{ matrix.target }}\manifests"
           if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
           Copy-Item -Path manifests -Destination $fixture -Recurse
 
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test windows_native --test parallel_each_windows --test worker_backend_windows --test applet_executable_pinning_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog --test prompt_inputs --test child_env_minimize_windows --test lane_w1_regressions --test lane_o_handoff --test checkpoint_resolve_elements --test crash_injection --test robustness --test applet_boundaries_bench --test adversarial --test cache_dependencies --test cache_security --test child_env_minimize --test cli --test conditions --test cpu --test direct_commands --test github_actions --test graph_composition_acceptance --test graph_result_events --test inspection --test invocation_io --test lane_a_cli --test lane_o_init --test loops --test manifest_catalog_cli --test model_cli --test model_control --test native_status --test opt_child_wakeup --test opt_diagnostics_poll --test opt_local_child_observer --test opt_services_checkpoint_listener --test opt_small_input --test opt_stdin_prefill --test process_inputs --test program_inputs --test program_module_accounting --test resume --test reusable_programs --test security_dataflow_runtime --test security_redaction --test service_environment --test stdin --test streaming --test structured_json --test terminal_output_escape --test timeout --test typed_contracts --test ui --test worker_backend -- --test-threads=1
+        working-directory: ${{ env.NGS_SRC }}
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test repair_from_record recorded_failure_repairs_and_resumes_without_repeating_completed_effects_portable -- --test-threads=1
+        working-directory: ${{ env.NGS_SRC }}
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --test repair_from_record repair_and_resume_refuse_an_oversize_executable_without_rerunning -- --test-threads=1
+        working-directory: ${{ env.NGS_SRC }}
       - run: cargo test --locked --target ${{ matrix.target }} --release --features full,test-fixtures --lib -- --test-threads=1
+        working-directory: ${{ env.NGS_SRC }}
       - name: Detach trusted Windows CI volume
         if: always()
         shell: pwsh

@@ -210,6 +210,24 @@ fn declared_sandbox_grant(grant: &AppletGrant, effects: &[String]) -> AppletGran
 mod execution_tests {
     use super::*;
 
+    #[test]
+    fn run_model_fixture_dir_is_set_cleared_and_refuses_empty() {
+        let registry = Registry::default();
+        assert!(run_model_fixture_dir(&registry).is_none());
+        set_run_model_fixture_dir(&registry, Some("fixtures")).unwrap();
+        assert_eq!(
+            run_model_fixture_dir(&registry).as_deref(),
+            Some("fixtures")
+        );
+        assert!(set_run_model_fixture_dir(&registry, Some("")).is_err());
+        assert_eq!(
+            run_model_fixture_dir(&registry).as_deref(),
+            Some("fixtures")
+        );
+        set_run_model_fixture_dir(&registry, None).unwrap();
+        assert!(run_model_fixture_dir(&registry).is_none());
+    }
+
     fn grant() -> AppletGrant {
         AppletGrant {
             capabilities: BTreeSet::from([
@@ -2897,6 +2915,32 @@ where
     // environment setup and the launch below share this lookup instead of
     // resolving (and cloning the manifest binary) again at each stage.
     let resolved_manifest = registry.resolve(applet_name);
+    // Under a run-level model fixture directory, a model call that names no
+    // fixture of its own replays from it. The directory gets the same applet
+    // read grant as a per-call `fixture` path, checked before any child spawns.
+    let arguments: Vec<OsString> = arguments
+        .into_iter()
+        .map(|argument| argument.as_ref().to_os_string())
+        .collect();
+    let arguments = match run_model_fixture_dir(registry) {
+        Some(dir)
+            if resolved_manifest
+                .as_ref()
+                .ok()
+                .is_some_and(|manifest| manifest.binary == "@execute-model")
+                && !model_argv_names_fixture(&arguments) =>
+        {
+            authorize_applet_host_path(
+                registry,
+                applet_name,
+                Path::new(&dir),
+                HostAccess::Read,
+                cwd.path(),
+            )?;
+            model_arguments_with_run_fixture(arguments, &dir)
+        }
+        _ => arguments,
+    };
     let names: Vec<&str> = resolved_manifest
         .as_ref()
         .ok()
@@ -4152,7 +4196,10 @@ pub fn authorize_model_endpoint_params(
         // Manifest validation rejects non-text values before execution.
         _ => bail!("model parameter \"endpoint\" must be text"),
     };
-    let allow_loopback = parameters.contains_key("fixture");
+    // A call replays (hermetic) when it names its own fixture or the run names
+    // a fixture directory that the call then uses (no own `fixture` parameter).
+    let allow_loopback =
+        parameters.contains_key("fixture") || run_model_fixture_dir(registry).is_some();
     authorize_model_endpoint(
         registry,
         &manifest.name,
@@ -4187,7 +4234,7 @@ fn authorize_default_model_sink(
     bindings: &BTreeMap<String, Value>,
     sensitivities: &SensitivitySet,
 ) -> Result<()> {
-    let hermetic = parameters.contains_key("fixture");
+    let hermetic = parameters.contains_key("fixture") || run_model_fixture_dir(registry).is_some();
     if hermetic || !crate::security::data_flow_policy_active(registry) {
         return Ok(());
     }
@@ -4252,6 +4299,75 @@ fn authorize_default_model_sink(
 /// environment filter the variable must additionally be allowlisted to reach
 /// the helper, mirroring `EXECUTE_MODEL_ALLOW_LOOPBACK`.
 pub(crate) const MODEL_GRANTED_ORIGIN_ENV: &str = "EXECUTE_MODEL_GRANTED_ORIGIN";
+
+/// Run-scoped model fixture directory, stored as registry host state.
+///
+/// While it is set, every `@execute-model` call in the run that names no
+/// `fixture` of its own replays `<request-hash>.json` from this directory. The
+/// call's own `fixture` parameter always wins. Command launch appends
+/// `--fixture-dir` to such calls, and the authorization checks treat them as
+/// hermetic replays exactly where they treat a per-call `fixture` as one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunModelFixtureDir(String);
+
+/// Set the run's model fixture directory, or clear it with `None`. An empty
+/// or NUL-containing directory is refused before any call can use it.
+pub fn set_run_model_fixture_dir(registry: &Registry, dir: Option<&str>) -> Result<()> {
+    let value = match dir {
+        None => None,
+        Some("") => bail!("model fixture directory must not be empty"),
+        Some(dir) if dir.contains('\0') => bail!("model fixture directory must not contain NUL"),
+        Some(dir) => Some(RunModelFixtureDir(dir.to_owned())),
+    };
+    registry.set_host_state(value);
+    Ok(())
+}
+
+/// The run's model fixture directory, when one is set.
+pub(crate) fn run_model_fixture_dir(registry: &Registry) -> Option<String> {
+    let configured = registry.host_state::<Option<RunModelFixtureDir>>();
+    configured.as_ref().as_ref().map(|dir| dir.0.clone())
+}
+
+/// Whether a model helper argv already names its own fixture (`--fixture` or
+/// `--fixture-dir`). Walks the argv the way the helper's parser does: option
+/// values are consumed in pairs and list options run to the next `--` token,
+/// so a question or label whose text is `--fixture` is not mistaken for the
+/// option.
+pub(crate) fn model_argv_names_fixture(arguments: &[OsString]) -> bool {
+    let mut index = 1;
+    while index < arguments.len() {
+        let flag = arguments[index].to_str().unwrap_or("");
+        if flag == "--labels" || flag == "--levels" {
+            index += 1;
+            while index < arguments.len()
+                && !arguments[index].to_str().unwrap_or("").starts_with("--")
+            {
+                index += 1;
+            }
+            continue;
+        }
+        if flag == "--fixture" || flag == "--fixture-dir" {
+            return true;
+        }
+        index += 2;
+    }
+    false
+}
+
+/// The helper argv for one model call under a run-level fixture directory: the
+/// argv unchanged when the call names its own fixture, otherwise the argv with
+/// `--fixture-dir DIR` appended.
+pub(crate) fn model_arguments_with_run_fixture(
+    mut arguments: Vec<OsString>,
+    dir: &str,
+) -> Vec<OsString> {
+    if !model_argv_names_fixture(&arguments) {
+        arguments.push(OsString::from("--fixture-dir"));
+        arguments.push(OsString::from(dir));
+    }
+    arguments
+}
 
 /// Whether a host path is being read or written, for filesystem policy checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

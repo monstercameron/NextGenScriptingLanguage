@@ -3284,6 +3284,155 @@ mod unit_tests {
         assert_eq!(diagnostic(&error), "fixture_missing");
     }
 
+    fn run_level_argv(instruction: &str) -> Vec<std::ffi::OsString> {
+        [
+            "generate",
+            "--provider",
+            "openai",
+            "--model",
+            "model-under-test",
+            "--instruction",
+            instruction,
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect()
+    }
+
+    fn argv_strings(arguments: Vec<std::ffi::OsString>) -> Vec<String> {
+        arguments
+            .into_iter()
+            .map(|part| part.into_string().expect("test argv is UTF-8"))
+            .collect()
+    }
+
+    fn run_level_request(instruction: &str, state: &str) -> Value {
+        json!({
+            "provider": "openai",
+            "kind": "generate",
+            "model": "model-under-test",
+            "state": state,
+            "instruction": instruction
+        })
+    }
+
+    #[test]
+    fn run_level_fixture_dir_replays_every_call_without_its_own_fixture() {
+        let temp = tempfile::tempdir().unwrap();
+        let calls = [
+            ("first instruction", "first state", "first result"),
+            ("second instruction", "second state", "second result"),
+        ];
+        for (instruction, state, text) in calls {
+            let expected = run_level_request(instruction, state);
+            let name = format!("{}.json", request_hash(&expected).unwrap());
+            std::fs::write(
+                temp.path().join(name),
+                json!({"expected_request": expected, "response": fixture_test_response(text)})
+                    .to_string(),
+            )
+            .unwrap();
+        }
+        let dir = temp.path().to_str().unwrap();
+        for (instruction, state, text) in calls {
+            let argv = crate::capabilities::model_arguments_with_run_fixture(
+                run_level_argv(instruction),
+                dir,
+            );
+            let mut input: &[u8] = state.as_bytes();
+            let mut output = Vec::new();
+            run(&argv_strings(argv), &mut input, &mut output)
+                .expect("run-level fixture directory replays the call");
+            let result: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(result["transport"], "fixture");
+            assert_eq!(result["text"], text);
+        }
+    }
+
+    #[test]
+    fn run_level_fixture_dir_yields_to_a_per_call_fixture() {
+        let run_dir = tempfile::tempdir().unwrap();
+        let call_dir = tempfile::tempdir().unwrap();
+        let expected = run_level_request("override instruction", "override state");
+        let name = format!("{}.json", request_hash(&expected).unwrap());
+        std::fs::write(
+            run_dir.path().join(name),
+            json!({"expected_request": expected, "response": fixture_test_response("run-level result")})
+                .to_string(),
+        )
+        .unwrap();
+        let call_fixture = call_dir.path().join("call.json");
+        std::fs::write(
+            &call_fixture,
+            json!({"expected_request": expected, "response": fixture_test_response("per-call result")})
+                .to_string(),
+        )
+        .unwrap();
+
+        let mut call = run_level_argv("override instruction");
+        call.push("--fixture".into());
+        call.push(call_fixture.into_os_string());
+        let argv = crate::capabilities::model_arguments_with_run_fixture(
+            call,
+            run_dir.path().to_str().unwrap(),
+        );
+        assert!(!argv
+            .iter()
+            .any(|part| part.as_os_str() == std::ffi::OsStr::new("--fixture-dir")));
+        let mut input: &[u8] = b"override state";
+        let mut output = Vec::new();
+        run(&argv_strings(argv), &mut input, &mut output).expect("per-call fixture replays");
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["text"], "per-call result");
+    }
+
+    #[test]
+    fn run_level_fixture_miss_fails_closed_without_a_provider_call() {
+        let run_dir = tempfile::tempdir().unwrap();
+        let argv = crate::capabilities::model_arguments_with_run_fixture(
+            run_level_argv("unrecorded instruction"),
+            run_dir.path().to_str().unwrap(),
+        );
+        let mut input: &[u8] = b"unrecorded state";
+        let mut output = Vec::new();
+        // A fall-through to the provider would fail with a transport or
+        // credential class instead, so this exact class shows no call was made.
+        let error = run(&argv_strings(argv), &mut input, &mut output).unwrap_err();
+        assert_eq!(diagnostic(&error), "fixture_missing");
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn model_argv_fixture_detection_follows_the_helper_grammar() {
+        let argv = |parts: &[&str]| -> Vec<std::ffi::OsString> {
+            parts
+                .iter()
+                .copied()
+                .map(std::ffi::OsString::from)
+                .collect()
+        };
+        // A question whose text is an option name is a value, not an option.
+        assert!(!crate::capabilities::model_argv_names_fixture(&argv(&[
+            "classify",
+            "--question",
+            "--fixture",
+            "--provider",
+            "jev"
+        ])));
+        // A list option ends at the next `--` token, which is then an option.
+        assert!(crate::capabilities::model_argv_names_fixture(&argv(&[
+            "classify",
+            "--labels",
+            "a",
+            "b",
+            "--fixture-dir",
+            "dir"
+        ])));
+        assert!(!crate::capabilities::model_argv_names_fixture(&argv(&[
+            "classify", "--labels", "a", "b"
+        ])));
+    }
+
     #[test]
     fn fixture_and_fixture_dir_are_mutually_exclusive() {
         let mut args = fixture_dir_args(std::path::Path::new("unused"));

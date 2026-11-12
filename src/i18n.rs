@@ -14,8 +14,9 @@
 //! ```
 //!
 //! `messages` maps a context (the empty string for none) to message ids. A value is either one
-//! string, used for every count, or an array with one string per plural form. Empty strings count
-//! as untranslated. Placeholders are written `{name}`; `{{` and `}}` produce literal braces.
+//! string, used for every count, an array with one string per plural form, or an object keyed by
+//! CLDR category name (`{"one": "...", "other": "..."}`). The object form is mapped onto the same
+//! forms by [`PluralRule`]; the array form keeps its order. Empty strings count as untranslated. Placeholders are written `{name}`; `{{` and `}}` produce literal braces.
 //!
 //! Plural selection never evaluates the `plural_forms` expression. The header must match one of
 //! the rules listed in [`PluralRule`]; anything else is rejected by name.
@@ -31,19 +32,28 @@ pub const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CATALOG_ENTRIES: usize = 200_000;
 
 /// The recognised plural rules, keyed by their normalised `Plural-Forms` text.
+///
+/// Each rule's form indices correspond to CLDR categories as follows. The object form of a
+/// catalog entry (`{"one": ..., "other": ...}`) is mapped through the same indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluralRule {
-    /// `nplurals=1; plural=0;` (for example ja, zh, ko)
+    /// `nplurals=1; plural=0;` (for example ja, zh, ko). Form 0 is `other`.
     OneForm,
-    /// `nplurals=2; plural=(n != 1);` (for example en, de, da)
+    /// `nplurals=2; plural=(n != 1);` (for example en, de, da). Form 0 is `one`, form 1 is `other`.
     NotOne,
-    /// `nplurals=2; plural=(n > 1);` (for example fr)
+    /// `nplurals=2; plural=(n > 1);` (for example fr). Form 0 is `one`, form 1 is `other`.
     GreaterThanOne,
-    /// `nplurals=3`, the Russian rule shared by Ukrainian, Serbian and Croatian.
+    /// `nplurals=3`, the Russian rule shared by Ukrainian, Serbian and Croatian. Form 0 is `one`,
+    /// form 1 is `few`, form 2 is `many`. `other` is accepted as another name for form 2, since
+    /// CLDR uses it for the same slot in these languages when the count is not an integer.
     Slavic,
-    /// `nplurals=3`, the Polish rule from the gettext manual.
+    /// `nplurals=3`, the Polish rule from the gettext manual. The category mapping is the same as
+    /// [`PluralRule::Slavic`].
     Polish,
 }
+
+/// The CLDR plural category names, in the order the specification lists them.
+const CLDR_CATEGORIES: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
 
 const SLAVIC_EXPR: &str = "n%10==1&&n%100!=11?0:n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?1:2";
 const POLISH_EXPR: &str = "n==1?0:n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?1:2";
@@ -82,6 +92,30 @@ impl PluralRule {
                     2
                 }
             }
+        }
+    }
+    /// The form index that a CLDR category name selects, or `None` when the rule has no such form.
+    fn category_slot(self, category: &str) -> Option<usize> {
+        match (self, category) {
+            (Self::OneForm, "other") => Some(0),
+            (Self::NotOne | Self::GreaterThanOne, "one") => Some(0),
+            (Self::NotOne | Self::GreaterThanOne, "other") => Some(1),
+            (Self::Slavic | Self::Polish, "one") => Some(0),
+            (Self::Slavic | Self::Polish, "few") => Some(1),
+            (Self::Slavic | Self::Polish, "many" | "other") => Some(2),
+            _ => None,
+        }
+    }
+
+    /// The CLDR category name of form `index`, for error messages.
+    fn form_name(self, index: usize) -> &'static str {
+        match (self, index) {
+            (Self::OneForm, _) => "other",
+            (Self::NotOne | Self::GreaterThanOne, 0) => "one",
+            (Self::NotOne | Self::GreaterThanOne, _) => "other",
+            (Self::Slavic | Self::Polish, 0) => "one",
+            (Self::Slavic | Self::Polish, 1) => "few",
+            (Self::Slavic | Self::Polish, _) => "many",
         }
     }
 }
@@ -157,6 +191,7 @@ struct RawCatalog {
 enum RawEntry {
     Text(String),
     Forms(Vec<String>),
+    Categories(HashMap<String, String>),
 }
 
 impl Catalog {
@@ -193,6 +228,56 @@ impl Catalog {
 
 fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
+}
+
+/// Converts the object form `{"one": ..., "other": ...}` into one string per plural form.
+///
+/// Each category must be a CLDR name that the rule has, each form may be named once, and every
+/// form must be present (an empty string is allowed and means untranslated). Errors name the
+/// category at fault.
+fn categories_to_forms(
+    rule: PluralRule,
+    categories: &HashMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let mut named: Vec<(&str, &str)> = categories
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str()))
+        .collect();
+    named.sort_unstable();
+    let mut slots: Vec<Option<(&str, &str)>> = vec![None; rule.form_count()];
+    for (name, text) in named {
+        if !CLDR_CATEGORIES.contains(&name) {
+            return Err(format!(
+                "`{name}` is not a CLDR plural category (zero, one, two, few, many, other)"
+            ));
+        }
+        let Some(index) = rule.category_slot(name) else {
+            let forms: Vec<&str> = (0..rule.form_count())
+                .map(|index| rule.form_name(index))
+                .collect();
+            return Err(format!(
+                "`{name}` is not a form of the catalog's plural rule, which has {}",
+                forms.join(", ")
+            ));
+        };
+        let slot = slots
+            .get_mut(index)
+            .ok_or_else(|| format!("`{name}` has no form slot"))?;
+        if let Some((earlier, _)) = *slot {
+            return Err(format!(
+                "`{earlier}` and `{name}` both give form {index} of the plural rule"
+            ));
+        }
+        *slot = Some((name, text));
+    }
+    let mut forms = Vec::with_capacity(slots.len());
+    for (index, slot) in slots.into_iter().enumerate() {
+        match slot {
+            Some((_, text)) => forms.push(text.to_string()),
+            None => return Err(format!("has no `{}` form", rule.form_name(index))),
+        }
+    }
+    Ok(forms)
 }
 
 /// Parses a catalog, rejecting input over [`MAX_CATALOG_BYTES`] or [`MAX_CATALOG_ENTRIES`].
@@ -237,6 +322,9 @@ fn parse_catalog_limited(
             let entry = match entry {
                 RawEntry::Text(text) => Entry::Text(text),
                 RawEntry::Forms(forms) if forms.len() == plural.form_count() => Entry::Forms(forms),
+                RawEntry::Categories(categories) => {
+                    Entry::Forms(categories_to_forms(plural, &categories).map_err(describe)?)
+                }
                 RawEntry::Forms(forms) => {
                     return Err(describe(format!(
                         "has {} plural forms but the plural rule needs {}",
@@ -424,6 +512,7 @@ pub enum I18nError {
         offset: usize,
         reason: &'static str,
     },
+    InvalidNumber(String),
 }
 
 impl fmt::Display for I18nError {
@@ -451,6 +540,10 @@ impl fmt::Display for I18nError {
                 describe_message(context, msgid)
             ),
             Self::MissingPlaceholder(name) => write!(f, "no value for placeholder `{name}`"),
+            Self::InvalidNumber(text) => write!(
+                f,
+                "`{text}` is not a plain decimal number: an optional sign, digits, and an optional fraction after a period"
+            ),
             Self::Template { offset, reason } => {
                 write!(f, "malformed template at byte {offset}: {reason}")
             }
@@ -465,6 +558,148 @@ fn describe_message(context: &str, msgid: &str) -> String {
         format!("message {msgid:?}")
     } else {
         format!("message {msgid:?} in context {context:?}")
+    }
+}
+
+/// Longest locale variable value, in bytes, that [`default_language`] reads.
+const MAX_ENV_LOCALE_BYTES: usize = 64;
+
+/// The language the environment asks for, by POSIX precedence, as a normalised tag such as `da_DK`.
+///
+/// `env` looks a variable up by name and returns `None` when it is unset, so tests can pass a
+/// closure. The effective locale is the first non-empty of `LC_ALL`, `LC_MESSAGES` and `LANG`.
+/// When it is `C` or `POSIX`, with or without a codeset, the result is `None` and `LANGUAGE` is
+/// ignored, as gettext does. Otherwise `LANGUAGE` is read as a colon list: the first entry that is
+/// a plausible tag is the answer, and a `C` or `POSIX` entry ends the list with `None`. Without a
+/// usable entry, the effective locale is used. The codeset and modifier are dropped, so
+/// `da_DK.UTF-8@euro` gives `da_DK`.
+///
+/// A value is read only if it is at most 64 bytes of ASCII letters, digits, `_`, `-`, `.` and `@`,
+/// and then only its language and region are kept. Anything else is ignored, so no environment
+/// value can become a path component.
+pub fn default_language(env: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let effective = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .find_map(|name| non_empty_variable(&env, name))?;
+    if is_c_or_posix(&effective) {
+        return None;
+    }
+    if let Some(list) = non_empty_variable(&env, "LANGUAGE") {
+        for entry in list.split(':') {
+            if is_c_or_posix(entry) {
+                return None;
+            }
+            if let Some(tag) = checked_tag(entry) {
+                return Some(tag);
+            }
+        }
+    }
+    checked_tag(&effective)
+}
+
+fn non_empty_variable(env: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+    env(name).filter(|value| !value.is_empty())
+}
+
+fn is_c_or_posix(tag: &str) -> bool {
+    matches!(tag.split(['.', '@']).next(), Some("C" | "POSIX"))
+}
+
+fn checked_tag(raw: &str) -> Option<String> {
+    let plausible = raw.len() <= MAX_ENV_LOCALE_BYTES
+        && raw
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'@'));
+    if plausible {
+        normalise_locale(raw)
+    } else {
+        None
+    }
+}
+
+/// Decimal separator and digit-group separator for each language in [`format_number`]'s table.
+const NUMBER_FORMATS: &[(&str, char, Option<char>)] = &[
+    ("en", '.', Some(',')),
+    ("da", ',', Some('.')),
+    ("de", ',', Some('.')),
+    ("fr", ',', Some('\u{202F}')),
+    ("sv", ',', Some('\u{00A0}')),
+    ("nb", ',', Some('\u{00A0}')),
+];
+
+/// Formats a decimal number, written as text, with the separators of a locale.
+///
+/// `value_text` is an optional sign (`-` or `+`), one or more digits, and an optional fraction
+/// after a period, such as `-1234.50`. It is never converted to a float, so every digit and the
+/// whole fraction are kept. Anything else is an [`I18nError::InvalidNumber`].
+///
+/// `locale` is a locale tag such as `da_DK`. This is a fixed table, not a CLDR implementation.
+/// It covers these languages, and a region falls back to its language:
+///
+/// - `en`: `.` decimal, `,` grouping (`1,234.5`)
+/// - `da`, `de`: `,` decimal, `.` grouping (`1.234,5`)
+/// - `fr`: `,` decimal, U+202F narrow no-break space grouping (`1 234,5`)
+/// - `sv`, `nb`: `,` decimal, U+00A0 no-break space grouping (`1 234,5`)
+///
+/// Every listed language groups the integer part in threes from the right, including four-digit
+/// integer parts. CLDR has minimum-grouping rules for some of these locales that are not applied
+/// here. The minus sign is always an ASCII hyphen-minus. A locale that is unknown or malformed
+/// formats as plain text with a period and no grouping. That is not an error.
+pub fn format_number(value_text: &str, locale: &str) -> Result<String, I18nError> {
+    let (negative, unsigned) = match value_text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, value_text.strip_prefix('+').unwrap_or(value_text)),
+    };
+    let (integer, fraction) = match unsigned.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (unsigned, None),
+    };
+    if !is_digits(integer) || fraction.is_some_and(|digits| !is_digits(digits)) {
+        return Err(I18nError::InvalidNumber(value_text.to_string()));
+    }
+    let (decimal, group) = number_convention(locale);
+    let mut out = String::with_capacity(value_text.len() + integer.len() / 3 + 1);
+    if negative {
+        out.push('-');
+    }
+    match group {
+        Some(separator) => push_grouped(&mut out, integer, separator),
+        None => out.push_str(integer),
+    }
+    if let Some(fraction) = fraction {
+        out.push(decimal);
+        out.push_str(fraction);
+    }
+    Ok(out)
+}
+
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// The decimal separator and group separator for `locale`, by language, or plain text.
+fn number_convention(locale: &str) -> (char, Option<char>) {
+    let Some(normal) = normalise_locale(locale) else {
+        return ('.', None);
+    };
+    let language = normal
+        .split_once('_')
+        .map_or(normal.as_str(), |(language, _)| language);
+    NUMBER_FORMATS
+        .iter()
+        .find(|(tag, _, _)| *tag == language)
+        .map_or(('.', None), |&(_, decimal, group)| (decimal, group))
+}
+
+/// Appends `digits` with `separator` before every group of three from the right. The input is
+/// ASCII digits, checked by the caller.
+fn push_grouped(out: &mut String, digits: &str, separator: char) {
+    let len = digits.len();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (len - index).is_multiple_of(3) {
+            out.push(separator);
+        }
+        out.push(digit);
     }
 }
 
@@ -793,5 +1028,288 @@ mod tests {
         let error = parse_catalog_limited(ENGLISH, 10_000, 1).unwrap_err();
         assert_eq!(error, I18nError::TooManyEntries { limit: 1 });
         assert!(parse_catalog_limited(ENGLISH, 10_000, 2).is_ok());
+    }
+
+    const ENGLISH_OBJECT: &str =
+        r#"{"messages":{"":{"{count} file":{"one":"{count} file","other":"{count} files"}}}}"#;
+
+    const RUSSIAN_OBJECT: &str = r#"{
+      "plural_forms": "nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);",
+      "messages": {"": {"{count} files": {"one": "{count} файл", "few": "{count} файла", "many": "{count} файлов"}}}
+    }"#;
+
+    const RUSSIAN_OTHER: &str = r#"{
+      "plural_forms": "nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);",
+      "messages": {"": {"{count} files": {"one": "{count} файл", "few": "{count} файла", "other": "{count} файлов"}}}
+    }"#;
+
+    fn render_count(catalog: &Catalog, msgid: &str, plural: &str, n: u64) -> String {
+        let count = n.to_string();
+        message(
+            &[catalog],
+            "",
+            msgid,
+            Some((plural, n)),
+            &[("count", count.as_str())],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn plural_object_form_and_array_form_give_the_same_result() {
+        let english_array = parse_catalog(ENGLISH).unwrap();
+        let english_object = parse_catalog(ENGLISH_OBJECT).unwrap();
+        for n in [0, 1, 2, 5, 11, 21, 100] {
+            assert_eq!(
+                render_count(&english_object, "{count} file", "{count} files", n),
+                render_count(&english_array, "{count} file", "{count} files", n),
+                "n = {n}"
+            );
+        }
+        let russian_array = parse_catalog(RUSSIAN).unwrap();
+        let russian_object = parse_catalog(RUSSIAN_OBJECT).unwrap();
+        let russian_other = parse_catalog(RUSSIAN_OTHER).unwrap();
+        for n in [1, 2, 5, 11, 12, 21, 22, 25, 101, 111, 112, 1000] {
+            let expected = render_count(&russian_array, "{count} files", "{count} files", n);
+            assert_eq!(
+                render_count(&russian_object, "{count} files", "{count} files", n),
+                expected,
+                "n = {n}"
+            );
+            assert_eq!(
+                render_count(&russian_other, "{count} files", "{count} files", n),
+                expected,
+                "n = {n}"
+            );
+        }
+        assert_eq!(
+            render_count(&russian_object, "{count} files", "{count} files", 21),
+            "21 файл"
+        );
+    }
+
+    #[test]
+    fn plural_object_form_rejects_categories_the_rule_does_not_have() {
+        let two = r#"{"messages":{"":{"x":{"one":"a","two":"b","other":"c"}}}}"#;
+        let error = parse_catalog(two).unwrap_err();
+        assert!(error.to_string().contains("`two`"), "{error}");
+
+        let japanese = r#"{"plural_forms":"nplurals=1; plural=0;","messages":{"":{"x":{"one":"a","other":"b"}}}}"#;
+        let error = parse_catalog(japanese).unwrap_err();
+        assert!(error.to_string().contains("`one`"), "{error}");
+
+        let unknown = r#"{"messages":{"":{"x":{"one":"a","other":"b","tiny":"c"}}}}"#;
+        let error = parse_catalog(unknown).unwrap_err();
+        assert!(
+            error.to_string().contains("`tiny` is not a CLDR"),
+            "{error}"
+        );
+
+        let missing = r#"{"messages":{"":{"x":{"other":"b"}}}}"#;
+        let error = parse_catalog(missing).unwrap_err();
+        assert!(error.to_string().contains("no `one` form"), "{error}");
+
+        let duplicate = r#"{"plural_forms":"nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);","messages":{"":{"x":{"one":"a","few":"b","many":"c","other":"d"}}}}"#;
+        let error = parse_catalog(duplicate).unwrap_err();
+        assert!(error.to_string().contains("both give form 2"), "{error}");
+    }
+
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let owned: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        move |name: &str| {
+            owned
+                .iter()
+                .find(|(key, _)| key.as_str() == name)
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    #[test]
+    fn default_language_follows_posix_precedence() {
+        assert_eq!(
+            default_language(env_of(&[
+                ("LANG", "en_US.UTF-8"),
+                ("LC_MESSAGES", "da_DK.UTF-8")
+            ]))
+            .as_deref(),
+            Some("da_DK")
+        );
+        assert_eq!(
+            default_language(env_of(&[
+                ("LANG", "en_US.UTF-8"),
+                ("LC_ALL", "de_DE.UTF-8"),
+                ("LC_MESSAGES", "da_DK"),
+            ]))
+            .as_deref(),
+            Some("de_DE")
+        );
+        assert_eq!(
+            default_language(env_of(&[("LANG", "fr_FR.UTF-8")])).as_deref(),
+            Some("fr_FR")
+        );
+        assert_eq!(default_language(env_of(&[])), None);
+    }
+
+    #[test]
+    fn default_language_strips_codeset_and_modifier() {
+        assert_eq!(
+            default_language(env_of(&[("LANG", "da_DK.UTF-8@euro")])).as_deref(),
+            Some("da_DK")
+        );
+        assert_eq!(
+            default_language(env_of(&[("LANG", "da-dk")])).as_deref(),
+            Some("da_DK")
+        );
+    }
+
+    #[test]
+    fn default_language_maps_c_and_posix_to_none() {
+        for locale in ["C", "POSIX", "C.UTF-8", "POSIX.UTF-8"] {
+            assert_eq!(
+                default_language(env_of(&[("LANG", locale)])),
+                None,
+                "{locale}"
+            );
+        }
+        // LC_ALL is the effective locale, so C there hides the da_DK in LANG.
+        assert_eq!(
+            default_language(env_of(&[("LC_ALL", "C"), ("LANG", "da_DK.UTF-8")])),
+            None
+        );
+    }
+
+    #[test]
+    fn language_list_is_read_only_under_a_real_locale() {
+        assert_eq!(
+            default_language(env_of(&[("LANG", "C"), ("LANGUAGE", "da:de")])),
+            None
+        );
+        assert_eq!(
+            default_language(env_of(&[("LANG", "en_US.UTF-8"), ("LANGUAGE", "da:de")])).as_deref(),
+            Some("da")
+        );
+        assert_eq!(
+            default_language(env_of(&[
+                ("LANG", "en_US.UTF-8"),
+                ("LANGUAGE", "::de_DE.UTF-8"),
+            ]))
+            .as_deref(),
+            Some("de_DE")
+        );
+        // A C entry in the list ends it, as it does in gettext.
+        assert_eq!(
+            default_language(env_of(&[("LANG", "en_US.UTF-8"), ("LANGUAGE", "C:da")])),
+            None
+        );
+    }
+
+    #[test]
+    fn empty_locale_variables_count_as_unset() {
+        assert_eq!(
+            default_language(env_of(&[("LC_ALL", ""), ("LANG", "da_DK")])).as_deref(),
+            Some("da_DK")
+        );
+        assert_eq!(
+            default_language(env_of(&[("LANG", ""), ("LANGUAGE", "da")])),
+            None
+        );
+    }
+
+    #[test]
+    fn hostile_environment_values_never_become_a_tag() {
+        let long = "a".repeat(200);
+        let hostile = [
+            "../../etc/passwd",
+            "da_DK/../../x",
+            "da\nDK",
+            "$(rm -rf ~)",
+            "de_DE; rm",
+            "..",
+            "da_DK\\..\\x",
+            "\u{0}",
+            long.as_str(),
+            "d",
+            "da_DK_extra",
+            "é_DK",
+        ];
+        for value in hostile {
+            for name in ["LANG", "LC_ALL", "LC_MESSAGES"] {
+                assert_eq!(
+                    default_language(env_of(&[(name, value)])),
+                    None,
+                    "{name}={value:?}"
+                );
+            }
+            // A hostile LANGUAGE entry is skipped and the usable locale is used.
+            assert_eq!(
+                default_language(env_of(&[("LANG", "da_DK"), ("LANGUAGE", value)])).as_deref(),
+                Some("da_DK"),
+                "LANGUAGE={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn danish_renders_13_1_with_a_decimal_comma() {
+        assert_eq!(format_number("13.1", "da").unwrap(), "13,1");
+        assert_eq!(format_number("13.1", "da_DK.UTF-8").unwrap(), "13,1");
+    }
+
+    #[test]
+    fn listed_locales_use_their_separators() {
+        assert_eq!(format_number("1234.5", "en_US").unwrap(), "1,234.5");
+        assert_eq!(format_number("1234.5", "de").unwrap(), "1.234,5");
+        assert_eq!(format_number("1234.5", "fr_FR").unwrap(), "1\u{202F}234,5");
+        assert_eq!(format_number("1234.5", "sv").unwrap(), "1\u{A0}234,5");
+        assert_eq!(format_number("1234.5", "nb_NO").unwrap(), "1\u{A0}234,5");
+    }
+
+    #[test]
+    fn negative_and_signed_numbers_keep_exact_digits() {
+        assert_eq!(format_number("-1234.50", "da").unwrap(), "-1.234,50");
+        assert_eq!(format_number("-0.5", "en").unwrap(), "-0.5");
+        assert_eq!(format_number("+1234", "en").unwrap(), "1,234");
+        assert_eq!(format_number("007", "da").unwrap(), "007");
+        assert_eq!(
+            format_number("0.10000000000000000001", "de").unwrap(),
+            "0,10000000000000000001"
+        );
+    }
+
+    #[test]
+    fn long_integer_parts_are_grouped_without_float_rounding() {
+        assert_eq!(
+            format_number("123456789012345678901234567890.5", "de").unwrap(),
+            "123.456.789.012.345.678.901.234.567.890,5"
+        );
+        assert_eq!(format_number("12345", "en").unwrap(), "12,345");
+        assert_eq!(format_number("123", "en").unwrap(), "123");
+    }
+
+    #[test]
+    fn invalid_numbers_are_errors() {
+        for text in [
+            "", "-", "+", ".5", "5.", "1e3", "1,5", "12a", "1.2.3", "--1", "+-1", " 1", "1 ",
+            "0x1F", "NaN", "\u{0661}",
+        ] {
+            assert_eq!(
+                format_number(text, "en"),
+                Err(I18nError::InvalidNumber(text.to_string())),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_locales_format_as_plain_text_not_an_error() {
+        assert_eq!(format_number("1234.5", "xx").unwrap(), "1234.5");
+        assert_eq!(format_number("1234.5", "").unwrap(), "1234.5");
+        assert_eq!(format_number("1234.5", "../../etc").unwrap(), "1234.5");
+        assert_eq!(format_number("-1234.5", "C").unwrap(), "-1234.5");
+        assert_eq!(format_number("1234.5", "pt_BR").unwrap(), "1234.5");
+        assert_eq!(format_number("1234.5", "fr_CA").unwrap(), "1\u{202F}234,5");
     }
 }

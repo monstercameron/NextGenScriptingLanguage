@@ -94,7 +94,7 @@ fn epoch_units(secs: i64, nanos: u32) -> Result<(i64, i64), AppletError> {
         .map_err(|_| invalid("epoch milliseconds are outside the signed 64-bit range"))?;
     Ok((epoch_ms, epoch_ns))
 }
-fn now(args: &Map<String, Value>) -> Result<(i64, u32), AppletError> {
+pub(super) fn now(args: &Map<String, Value>) -> Result<(i64, u32), AppletError> {
     if let Some(value) = args.get("epoch_s") {
         return value
             .as_i64()

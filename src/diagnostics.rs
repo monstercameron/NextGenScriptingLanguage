@@ -6932,6 +6932,161 @@ pub struct AppliedFixes {
     pub skipped: Vec<(usize, FixSkipReason)>,
 }
 
+/// Keys that the published check schema (`docs/check-result.schema.json`) marks as
+/// required, per object kind. The compact form keeps them even when their value is
+/// null, false or empty.
+const CHECK_RESULT_REQUIRED: &[&str] = &[
+    "protocol",
+    "validation",
+    "ok",
+    "path",
+    "path_bytes",
+    "diagnostics",
+];
+const DIAGNOSTIC_REQUIRED: &[&str] = &["severity", "code", "message"];
+const SPAN_REQUIRED: &[&str] = &[
+    "start_byte",
+    "end_byte",
+    "line",
+    "column",
+    "end_line",
+    "end_column",
+    "precision",
+];
+const FIX_REQUIRED: &[&str] = &["message", "edits"];
+const EDIT_REQUIRED: &[&str] = &["replacement"];
+
+/// Renders a check result, the object `check --json` writes, as one line of compact JSON.
+///
+/// The compact form carries the same information as the full form. It omits:
+/// - every key whose value is null, false, an empty array or an empty object, except the
+///   keys the schema requires (so `"ok": false` and `"diagnostics": []` stay);
+/// - a `path_bytes` array whose bytes are valid UTF-8 and equal the sibling `path`
+///   string, so the path is written once; a path that is not UTF-8 keeps its array;
+/// - the `span` of an edit that equals the span of its diagnostic.
+///
+/// The protocol id stays `execute.check/1`, as `inspect --json=compact` keeps its id.
+/// The schema requires `path_bytes` and an edit's `span`, so this form does not validate
+/// against `docs/check-result.schema.json` as it stands.
+pub fn render_check_compact(result: &JsonValue) -> String {
+    let compact = match result.as_object() {
+        Some(object) => {
+            let mut compact = compact_object(object, CHECK_RESULT_REQUIRED);
+            compact_list(object, &mut compact, "diagnostics", compact_diagnostic);
+            JsonValue::Object(compact)
+        }
+        None => result.clone(),
+    };
+    serde_json::to_string(&compact).unwrap_or_default()
+}
+
+fn compact_object(
+    object: &serde_json::Map<String, JsonValue>,
+    required: &[&str],
+) -> serde_json::Map<String, JsonValue> {
+    let path_bytes_is_redundant = path_bytes_matches_path(object);
+    object
+        .iter()
+        .filter(|(key, value)| {
+            let redundant = key.as_str() == "path_bytes" && path_bytes_is_redundant;
+            let kept = required.contains(&key.as_str()) || !is_default_value(value);
+            !redundant && kept
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Replaces the items of an array key that the compact object kept.
+fn compact_list(
+    object: &serde_json::Map<String, JsonValue>,
+    compact: &mut serde_json::Map<String, JsonValue>,
+    key: &str,
+    item: impl Fn(&JsonValue) -> JsonValue,
+) {
+    if !compact.contains_key(key) {
+        return;
+    }
+    if let Some(JsonValue::Array(items)) = object.get(key) {
+        compact.insert(
+            key.to_owned(),
+            JsonValue::Array(items.iter().map(item).collect()),
+        );
+    }
+}
+
+fn compact_diagnostic(diagnostic: &JsonValue) -> JsonValue {
+    let Some(object) = diagnostic.as_object() else {
+        return diagnostic.clone();
+    };
+    let mut compact = compact_object(object, DIAGNOSTIC_REQUIRED);
+    let span = object.get("span");
+    if let Some(span) = span {
+        compact.insert("span".to_owned(), compact_span(span));
+    }
+    compact_list(object, &mut compact, "fixes", |fix| compact_fix(fix, span));
+    JsonValue::Object(compact)
+}
+
+fn compact_span(span: &JsonValue) -> JsonValue {
+    match span.as_object() {
+        Some(object) => JsonValue::Object(compact_object(object, SPAN_REQUIRED)),
+        None => span.clone(),
+    }
+}
+
+fn compact_fix(fix: &JsonValue, diagnostic_span: Option<&JsonValue>) -> JsonValue {
+    let Some(object) = fix.as_object() else {
+        return fix.clone();
+    };
+    let mut compact = compact_object(object, FIX_REQUIRED);
+    compact_list(object, &mut compact, "edits", |edit| {
+        compact_edit(edit, diagnostic_span)
+    });
+    JsonValue::Object(compact)
+}
+
+fn compact_edit(edit: &JsonValue, diagnostic_span: Option<&JsonValue>) -> JsonValue {
+    let Some(object) = edit.as_object() else {
+        return edit.clone();
+    };
+    let mut compact = compact_object(object, EDIT_REQUIRED);
+    if let Some(edit_span) = object.get("span") {
+        if Some(edit_span) == diagnostic_span {
+            compact.remove("span");
+        } else {
+            compact.insert("span".to_owned(), compact_span(edit_span));
+        }
+    }
+    JsonValue::Object(compact)
+}
+
+/// Whether `path_bytes` is valid UTF-8 and equal to the object's `path` string.
+fn path_bytes_matches_path(object: &serde_json::Map<String, JsonValue>) -> bool {
+    let (Some(JsonValue::String(path)), Some(JsonValue::Array(bytes))) =
+        (object.get("path"), object.get("path_bytes"))
+    else {
+        return false;
+    };
+    let Some(raw) = bytes
+        .iter()
+        .map(|byte| byte.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+        .collect::<Option<Vec<u8>>>()
+    else {
+        return false;
+    };
+    std::str::from_utf8(&raw).is_ok_and(|text| text == path.as_str())
+}
+
+fn is_default_value(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::Null => true,
+        JsonValue::Bool(flag) => !flag,
+        JsonValue::Array(items) => items.is_empty(),
+        JsonValue::Object(fields) => fields.is_empty(),
+        JsonValue::String(_) | JsonValue::Number(_) => false,
+    }
+}
+
 /// Apply the first (most likely) machine-applicable fix of each diagnostic to `source`.
 ///
 /// Diagnostics are visited in source order, so an earlier fix wins a conflict. A fix is

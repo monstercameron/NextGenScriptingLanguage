@@ -1,0 +1,5 @@
+# Purpose: Record a first-boot snapshot of an Ubuntu server during unattended provisioning.
+# Input: none; reads the kernel name and the root filesystem usage of this host.
+# Output: One kernel line and one disk usage table on standard output, kept in the run record.
+run "uname" with arguments ["-a"]
+then "df" with arguments ["-h", "/"]

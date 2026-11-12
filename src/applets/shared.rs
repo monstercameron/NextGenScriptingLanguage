@@ -403,7 +403,7 @@ fn escape_extra_scalar(bytes: &[u8]) -> usize {
 #[target_feature(enable = "avx2")]
 unsafe fn escape_extra_avx2(bytes: &[u8]) -> usize {
     use std::arch::x86_64::*;
-    let mut blocks = bytes.chunks_exact(32);
+    let (blocks, remainder) = bytes.as_chunks::<32>();
     // SAFETY: the caller guarantees AVX2 is available (checked with runtime
     // feature detection on x86_64). Every intrinsic below runs under that
     // guarantee; every load reads exactly 32 bytes inside `bytes` via
@@ -425,8 +425,8 @@ unsafe fn escape_extra_avx2(bytes: &[u8]) -> usize {
         let mut quote_bs = 0usize;
         let mut ctrl = 0usize;
         let mut short_ctrl = 0usize;
-        for block in &mut blocks {
-            // `chunks_exact(32)` yields slices of exactly 32 bytes, so this
+        for block in blocks {
+            // `as_chunks::<32>()` yields arrays of exactly 32 bytes, so this
             // unaligned load stays in bounds.
             let values = _mm256_loadu_si256(block.as_ptr() as *const __m256i);
             let is_quote_bs = _mm256_or_si256(
@@ -447,13 +447,13 @@ unsafe fn escape_extra_avx2(bytes: &[u8]) -> usize {
         // hence the subtraction below.
         quote_bs + short_ctrl + (ctrl - short_ctrl) * 5
     };
-    vector + escape_extra_scalar(blocks.remainder())
+    vector + escape_extra_scalar(remainder)
 }
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn escape_extra_neon(bytes: &[u8]) -> usize {
     use std::arch::aarch64::*;
-    let mut blocks = bytes.chunks_exact(16);
+    let (blocks, remainder) = bytes.as_chunks::<16>();
     // SAFETY: NEON is part of the aarch64 baseline, so no runtime detection is
     // needed. Every intrinsic below runs under that guarantee; every load
     // reads exactly 16 bytes inside `bytes` via `vld1q_u8`, which needs no
@@ -472,8 +472,8 @@ unsafe fn escape_extra_neon(bytes: &[u8]) -> usize {
         let mut quote_bs = 0usize;
         let mut ctrl = 0usize;
         let mut short_ctrl = 0usize;
-        for block in &mut blocks {
-            // `chunks_exact(16)` yields slices of exactly 16 bytes, so this
+        for block in blocks {
+            // `as_chunks::<16>()` yields arrays of exactly 16 bytes, so this
             // load stays in bounds.
             let values = vld1q_u8(block.as_ptr());
             let is_quote_bs = vorrq_u8(vceqq_u8(values, quote), vceqq_u8(values, backslash));
@@ -493,7 +493,7 @@ unsafe fn escape_extra_neon(bytes: &[u8]) -> usize {
         // hence the subtraction below.
         quote_bs + short_ctrl + (ctrl - short_ctrl) * 5
     };
-    vector + escape_extra_scalar(blocks.remainder())
+    vector + escape_extra_scalar(remainder)
 }
 
 /// The vector path selected for `bytes` on this CPU, or `None` where no SIMD

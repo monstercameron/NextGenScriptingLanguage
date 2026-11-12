@@ -14,8 +14,10 @@
 //! contain. `files` maps paths relative to the working directory to their exact
 //! contents. `now` pins the injectable clock the tested program reads through
 //! `time.now` to a fixed Unix epoch second; `execute test --now EPOCH` pins every
-//! test that sets no `now` of its own. Output is TAP 13 by default, and `--json`
-//! prints one document for agents. The exit status is 0 only when every test passes.
+//! test that sets no `now` of its own. `--filter NAME` runs only the test named NAME
+//! (the file name without `.test.program`); the others are reported as skipped. Output
+//! is TAP 13 by default, and `--json` prints one document for agents. The exit status
+//! is 0 only when every test passes.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
@@ -78,11 +80,24 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     let mut json = false;
     let mut manifest_dir: Option<PathBuf> = None;
     let mut now: Option<i64> = None;
+    let mut filter: Option<String> = None;
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--json" => json = true,
+            "--filter" => {
+                if filter.is_some() {
+                    bail!("--filter may be specified only once");
+                }
+                index += 1;
+                filter = Some(
+                    arguments
+                        .get(index)
+                        .context("--filter requires a test name")?
+                        .clone(),
+                );
+            }
             "--now" => {
                 if now.is_some() {
                     bail!("--now may be specified only once");
@@ -125,6 +140,7 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     if files.is_empty() {
         bail!("no {PROGRAM_SUFFIX} files found under the given paths");
     }
+    let (files, not_run) = select_by_name(files, filter.as_deref())?;
     let executable = std::env::current_exe().context("locating the execute executable")?;
     let mut outcomes = Vec::new();
     for file in &files {
@@ -143,15 +159,39 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     }
     let failed = outcomes.iter().filter(|outcome| !outcome.passed()).count();
     let output = if json {
-        serde_json::to_string_pretty(&json_report(&outcomes))?
+        serde_json::to_string_pretty(&json_report(&outcomes, &not_run))?
     } else {
-        tap_report(&outcomes)
+        tap_report(&outcomes, &not_run)
     };
     writeln!(io::stdout(), "{output}")?;
     if failed > 0 {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Splits `files` into the tests that `filter` names and the names of the rest, which
+/// are reported as not run. With no filter every test is selected. A filter that names
+/// no test is an error that lists the tests that were found.
+fn select_by_name(
+    files: Vec<PathBuf>,
+    filter: Option<&str>,
+) -> Result<(Vec<PathBuf>, Vec<String>)> {
+    let Some(wanted) = filter else {
+        return Ok((files, Vec::new()));
+    };
+    let (selected, rest): (Vec<PathBuf>, Vec<PathBuf>) = files
+        .into_iter()
+        .partition(|file| test_name(file) == wanted);
+    if selected.is_empty() {
+        let found: Vec<String> = rest.iter().map(|file| test_name(file)).collect();
+        bail!(
+            "--filter {wanted:?} matches no test; tests found: {}",
+            found.join(", ")
+        );
+    }
+    let not_run = rest.iter().map(|file| test_name(file)).collect();
+    Ok((selected, not_run))
 }
 
 /// Collect `*.test.program` files under each root, in sorted order.
@@ -438,11 +478,12 @@ pub fn remove_tree(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// TAP 13. Strings in diagnostics are JSON-quoted, which is valid YAML.
-pub fn tap_report(outcomes: &[Outcome]) -> String {
+/// TAP 13. Strings in diagnostics are JSON-quoted, which is valid YAML. Tests named in
+/// `not_run` follow the run tests as skipped.
+pub fn tap_report(outcomes: &[Outcome], not_run: &[String]) -> String {
     let mut lines = vec![
         "TAP version 13".to_owned(),
-        format!("1..{}", outcomes.len()),
+        format!("1..{}", outcomes.len() + not_run.len()),
     ];
     for (index, outcome) in outcomes.iter().enumerate() {
         let number = index + 1;
@@ -465,11 +506,17 @@ pub fn tap_report(outcomes: &[Outcome]) -> String {
             lines.push("  ...".to_owned());
         }
     }
+    for (offset, name) in not_run.iter().enumerate() {
+        let number = outcomes.len() + offset + 1;
+        lines.push(format!(
+            "ok {number} - {name} # SKIP not selected by --filter"
+        ));
+    }
     lines.join("\n")
 }
 
-/// The JSON document: one entry per test and a summary.
-pub fn json_report(outcomes: &[Outcome]) -> Value {
+/// The JSON document: one entry per test, the names `--filter` left out, and a summary.
+pub fn json_report(outcomes: &[Outcome], not_run: &[String]) -> Value {
     let passed = outcomes.iter().filter(|outcome| outcome.passed()).count();
     json!({
         "protocol": "execute.test/1",
@@ -486,6 +533,7 @@ pub fn json_report(outcomes: &[Outcome]) -> Value {
             "stdout": outcome.stdout,
             "failures": outcome.failures,
         })).collect::<Vec<_>>(),
+        "not_run": not_run,
     })
 }
 
@@ -621,15 +669,65 @@ mod tests {
                 stderr: "boom".into(),
             },
         ];
-        let tap = tap_report(&outcomes);
+        let tap = tap_report(&outcomes, &[]);
         assert!(
             tap.starts_with("TAP version 13\n1..2\nok 1 - a\nnot ok 2 - b\n"),
             "{tap}"
         );
         assert!(tap.contains("stderr: \"boom\""), "{tap}");
-        let json = json_report(&outcomes);
+        let json = json_report(&outcomes, &[]);
         assert_eq!(json["summary"]["failed"], 1);
         assert_eq!(json["tests"][1]["status"], "fail");
+    }
+
+    #[test]
+    fn filter_selects_one_test_and_names_the_rest_as_not_run() {
+        let files = vec![
+            PathBuf::from("tests/a.test.program"),
+            PathBuf::from("tests/b.test.program"),
+            PathBuf::from("tests/c.test.program"),
+        ];
+        let (selected, not_run) = select_by_name(files.clone(), Some("b")).unwrap();
+        assert_eq!(selected, vec![PathBuf::from("tests/b.test.program")]);
+        assert_eq!(not_run, vec!["a", "c"]);
+        let (all, none) = select_by_name(files.clone(), None).unwrap();
+        assert_eq!(all, files);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn filter_naming_no_test_lists_the_tests_found() {
+        let files = vec![
+            PathBuf::from("a.test.program"),
+            PathBuf::from("b.test.program"),
+        ];
+        let error = select_by_name(files, Some("zz")).unwrap_err().to_string();
+        assert!(error.contains("matches no test"), "{error}");
+        assert!(error.contains("a, b"), "{error}");
+    }
+
+    #[test]
+    fn tap_numbers_not_run_tests_as_skipped_after_the_run_ones() {
+        let outcomes = vec![Outcome {
+            name: "b".into(),
+            file: PathBuf::from("b.test.program"),
+            failures: vec![],
+            exit: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        }];
+        let not_run = vec!["a".to_string(), "c".to_string()];
+        let tap = tap_report(&outcomes, &not_run);
+        assert!(tap.starts_with("TAP version 13\n1..3\nok 1 - b\n"), "{tap}");
+        assert!(
+            tap.contains("ok 2 - a # SKIP not selected by --filter"),
+            "{tap}"
+        );
+        assert!(
+            tap.contains("ok 3 - c # SKIP not selected by --filter"),
+            "{tap}"
+        );
+        assert_eq!(json_report(&outcomes, &not_run)["not_run"][1], "c");
     }
 
     #[test]

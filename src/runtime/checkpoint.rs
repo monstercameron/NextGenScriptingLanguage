@@ -293,6 +293,21 @@ pub(crate) enum ElementNodeKind {
     ParallelForEach,
 }
 
+/// One process launched for an in-flight node. Recorded so that a resume can tell
+/// whether a process from a killed run is still alive. `start_time` and `boot_id`
+/// together identify the process, so a reused pid is not mistaken for the original.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessRecord {
+    pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    process_group: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    boot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_time: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InFlightNode {
@@ -321,6 +336,10 @@ struct InFlightNode {
     /// failing closed where the kind matters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     element_kind: Option<ElementNodeKind>,
+    /// Processes launched for this node. Absent (read as empty) in journals written
+    /// before this field existed, and omitted while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    processes: Vec<ProcessRecord>,
 }
 
 impl InFlightNode {
@@ -1568,6 +1587,7 @@ impl Journal {
             elements: None,
             step_id,
             element_kind,
+            processes: Vec::new(),
         });
         // Re-beginning the same node on resume keeps the element records that were
         // replayed at open. A different node starts an empty element log.
@@ -5204,6 +5224,38 @@ mod tests {
     }
 
     #[test]
+    fn in_flight_process_records_round_trip_through_the_journal() {
+        let (_temp, options, cwd) = setup();
+        let mut journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        journal.begin_node("sleep", 0, 1, 1, &cwd, false).unwrap();
+        let record = ProcessRecord {
+            pid: 4242,
+            process_group: Some(4242),
+            boot_id: Some("boot-a".to_owned()),
+            start_time: Some(918_273),
+        };
+        journal.data.in_flight.as_mut().unwrap().processes = vec![record.clone()];
+        journal.persist().unwrap();
+        drop(journal);
+
+        let durable = read_journal(&options.directory.join("journal.json")).unwrap();
+        assert_eq!(durable.in_flight.unwrap().processes, vec![record]);
+    }
+
+    #[test]
+    fn in_flight_node_without_processes_writes_no_processes_key() {
+        let (_temp, options, cwd) = setup();
+        let mut journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        journal.begin_node("sleep", 0, 1, 1, &cwd, false).unwrap();
+        drop(journal);
+
+        let bytes = fs::read(options.directory.join("journal.json")).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("processes"));
+        let durable = read_journal(&options.directory.join("journal.json")).unwrap();
+        assert!(durable.in_flight.unwrap().processes.is_empty());
+    }
+
+    #[test]
     fn failed_completion_persistence_keeps_durable_in_flight_intent() {
         let (_temp, mut options, cwd) = setup();
         // Keep the journal's output cap small so snapshot creation fails after the
@@ -5416,6 +5468,28 @@ fn sync_directory(directory: &Path) -> Result<()> {
 #[cfg(test)]
 mod record_size_and_log_bound_tests {
     use super::*;
+
+    #[test]
+    fn process_record_serializes_only_present_fields_and_reads_absent_ones_as_none() {
+        let full = ProcessRecord {
+            pid: 7,
+            process_group: Some(7),
+            boot_id: Some("boot-a".to_owned()),
+            start_time: Some(99),
+        };
+        let json = serde_json::to_value(&full).unwrap();
+        assert_eq!(serde_json::from_value::<ProcessRecord>(json).unwrap(), full);
+
+        let bare = ProcessRecord {
+            pid: 8,
+            process_group: None,
+            boot_id: None,
+            start_time: None,
+        };
+        let json = serde_json::to_value(&bare).unwrap();
+        assert_eq!(json, serde_json::json!({ "pid": 8 }));
+        assert_eq!(serde_json::from_value::<ProcessRecord>(json).unwrap(), bare);
+    }
 
     #[test]
     fn execution_record_u8_arrays_are_sized_in_bytes() {

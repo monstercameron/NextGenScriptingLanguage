@@ -15,6 +15,9 @@ mod filesystem;
 mod glob;
 mod hash;
 mod ini;
+// #357: nothing calls the encoder until the journald socket send (NEEDS) lands.
+#[allow(dead_code)]
+mod journal;
 mod jsonc;
 mod list;
 mod path;

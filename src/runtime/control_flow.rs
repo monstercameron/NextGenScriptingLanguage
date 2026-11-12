@@ -138,6 +138,31 @@ fn preserve_cancellation(primary: Error, pending: Option<PendingExit>) -> Error 
     }
 }
 
+/// Context attached when a `finally` block fails while unwinding an earlier
+/// ordinary error. Structured `catch` keeps that earlier failure visible.
+#[derive(Debug)]
+pub(crate) struct FinallyUnwindContext {
+    prior: String,
+}
+
+impl FinallyUnwindContext {
+    pub(crate) fn new(prior: &Error) -> Self {
+        Self {
+            prior: format!("{prior:#}"),
+        }
+    }
+}
+
+impl std::fmt::Display for FinallyUnwindContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "finally block failed while unwinding earlier error: {}",
+            self.prior
+        )
+    }
+}
+
 struct TryFrame {
     catch: Option<(usize, String)>,
     finally: Option<usize>,
@@ -673,9 +698,7 @@ impl RuntimeState {
                             cancellation = true;
                         }
                         Some(PendingExit::Error { error: prior, .. }) => {
-                            error = error.context(format!(
-                                "finally block failed while unwinding earlier error: {prior:#}"
-                            ));
+                            error = error.context(FinallyUnwindContext::new(&prior));
                         }
                         Some(PendingExit::Transfer { kind, .. }) => {
                             error = error.context(format!(

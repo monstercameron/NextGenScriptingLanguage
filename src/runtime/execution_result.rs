@@ -3,6 +3,7 @@
 //! Ordinary applet outcomes keep their declared manifest classification.
 //! Runtime failures use separate kinds and never invent an exit status.
 
+use super::control_flow::FinallyUnwindContext;
 use crate::ast::Value;
 pub use crate::contracts::EffectCertainty;
 use crate::contracts::{Outcome, OutcomeKind};
@@ -855,8 +856,12 @@ pub(crate) fn result_for_error(error: &anyhow::Error) -> ExecutionResult {
         return error.result.clone();
     }
 
-    if let Some(error) = error.downcast_ref::<super::CommandFailed>() {
-        return command_failure_result(error);
+    if let Some(command) = error.downcast_ref::<super::CommandFailed>() {
+        let mut result = command_failure_result(command);
+        if let Some(context) = error.downcast_ref::<FinallyUnwindContext>() {
+            retain_unwind_context(&mut result, context);
+        }
+        return result;
     }
 
     if error.downcast_ref::<super::CommandTimedOut>().is_some() {
@@ -1054,6 +1059,17 @@ fn remote_effect_certainty(certainty: crate::contracts::EffectCertainty) -> Effe
         crate::contracts::EffectCertainty::KnownResponse => EffectCertainty::KnownResponse,
         crate::contracts::EffectCertainty::Uncertain => EffectCertainty::Uncertain,
     }
+}
+
+/// Keep the earlier failure named by a `finally` context in the finalizer's
+/// message. The finalizer's status and kind stay as they were.
+fn retain_unwind_context(result: &mut ExecutionResult, context: &FinallyUnwindContext) {
+    let finalizer = result.message.take().unwrap_or_default();
+    result.message = Some(if finalizer.is_empty() {
+        context.to_string()
+    } else {
+        format!("{context}; {finalizer}")
+    });
 }
 
 fn command_failure_result(error: &super::CommandFailed) -> ExecutionResult {
@@ -1702,6 +1718,74 @@ mod tests {
         assert_eq!(
             result.get("effect_certainty"),
             Some(&Value::String("uncertain".into()))
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(code as u32)
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn finally_failure_keeps_earlier_command_failure_in_message_with_its_own_status() {
+        use anyhow::Context;
+
+        let command_failure = |status: i32, diagnostic: &str| super::super::CommandFailed {
+            line: 3,
+            operation: "sh".into(),
+            status: exit_status(status),
+            outcome: None,
+            diagnostic: diagnostic.into(),
+            stderr: None,
+            stdout: None,
+            stages: Vec::new(),
+        };
+        let prior = anyhow::Error::new(command_failure(7, "body failed"));
+        let finalizer = anyhow::Error::new(command_failure(9, "cleanup failed"))
+            .context(FinallyUnwindContext::new(&prior));
+
+        let result = fields(error_value(&finalizer));
+
+        assert_eq!(result.get("status"), Some(&Value::Integer(9)));
+        assert_eq!(result.get("kind"), Some(&Value::String("failure".into())));
+        let Some(Value::String(message)) = result.get("message") else {
+            panic!("expected a message");
+        };
+        assert!(
+            message.starts_with("finally block failed while unwinding earlier error:"),
+            "{message}"
+        );
+        assert!(message.contains("body failed"), "{message}");
+        assert!(message.contains("cleanup failed"), "{message}");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn finally_failure_context_keeps_non_command_error_message_unchanged() {
+        use anyhow::Context;
+
+        let prior = anyhow!("prior runtime failure");
+        let finalizer =
+            anyhow!("cleanup runtime failure").context(FinallyUnwindContext::new(&prior));
+
+        let result = fields(error_value(&finalizer));
+
+        assert_eq!(result.get("status"), Some(&Value::Null));
+        assert_eq!(
+            result.get("message"),
+            Some(&Value::String(
+                "finally block failed while unwinding earlier error: prior runtime failure".into()
+            ))
         );
     }
 

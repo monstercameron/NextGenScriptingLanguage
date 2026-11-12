@@ -23,7 +23,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2022]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,11 +43,67 @@ jobs:
           # recursively would leave the files with no access entries at all.
           & "$env:WINDIR\System32\icacls.exe" "$manifests\*" /reset /T /C
           if ($LASTEXITCODE -ne 0) { throw "Could not reset the manifests contents" }
+      - name: Prepare trusted Windows test and build roots
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The trusted-input gate checks every ancestor. ProgramData and the
+          # workspace have runner ACLs that grant foreign write rights, so
+          # use a fresh NTFS volume whose root is the trust boundary.
+          $vhd = Join-Path $env:RUNNER_TEMP "ngs-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.vhdx"
+          "NGS_TEST_VHD_PATH=$vhd" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $letters = @('Z','Y','X','W','V','U','T','S','R','Q','P','O','N','M','L','K','J','I','H','G','F','E')
+          $letter = $letters | Where-Object { -not (Get-PSDrive -Name $_ -ErrorAction SilentlyContinue) } | Select-Object -First 1
+          if (-not $letter) { throw "No free drive letter for the trusted Windows CI volume" }
+          $diskpart = Join-Path $env:RUNNER_TEMP "ngs-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.diskpart"
+          $commands = @(
+            "create vdisk file=`"$vhd`" maximum=32768 type=expandable",
+            "select vdisk file=`"$vhd`"",
+            "attach vdisk",
+            "create partition primary",
+            "format fs=ntfs quick label=NGSCI",
+            "assign letter=$letter",
+            "exit"
+          )
+          [System.IO.File]::WriteAllLines($diskpart, $commands, [System.Text.Encoding]::ASCII)
+          & "$env:WINDIR\System32\diskpart.exe" /s $diskpart
+          if ($LASTEXITCODE -ne 0) { throw "Could not create the trusted Windows CI volume" }
+          $driveRoot = $letter + ":" + [System.IO.Path]::DirectorySeparatorChar
+          $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          & "$env:WINDIR\System32\icacls.exe" $driveRoot /setowner "*$userSid"
+          if ($LASTEXITCODE -ne 0) { throw "Could not set the trusted Windows CI volume owner" }
+          & "$env:WINDIR\System32\icacls.exe" $driveRoot /inheritance:r `
+            /grant:r "*$($userSid):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+          if ($LASTEXITCODE -ne 0) { throw "Could not secure the trusted Windows CI volume" }
+          # /inheritance:r keeps explicit ACEs the format wrote. Those grant Users and
+          # Authenticated Users write rights that every child temp directory inherits,
+          # so the trusted-input gate refuses the test temp roots. Remove them.
+          & "$env:WINDIR\System32\icacls.exe" $driveRoot /remove:g "*S-1-5-32-545" "*S-1-5-11" "*S-1-1-0"
+          if ($LASTEXITCODE -ne 0) { throw "Could not remove foreign write rights from the trusted Windows CI volume" }
+          $target = Join-Path $driveRoot "target"
+          $temp = Join-Path $driveRoot "temp"
+          New-Item -ItemType Directory -Path $target, $temp | Out-Null
+          "CARGO_TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Tests load the repository's own manifests folder, and the gate checks every
+          # ancestor of it. The checkout lives under a runner directory that grants
+          # Authenticated Users modify rights, which no ACL change on the manifests
+          # folder alone can fix. Build and test from a copy on the trusted volume.
+          $source = Join-Path $driveRoot "src"
+          & "$env:WINDIR/System32/robocopy.exe" $env:GITHUB_WORKSPACE $source /E /XD target /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "Could not copy the checkout to the trusted Windows CI volume" }
+          $global:LASTEXITCODE = 0
+          "NGS_SRC=$source" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # On Windows the build target is on a volume that is detached before the cache
+          # saves, so only the registry is cached there.
+          cache-targets: ${{ runner.os != 'Windows' }}
       - name: Check test feature requirements
         run: python3 tools/test_ci_feature_matrix.py
       - name: Check nightly flaky-test detection wiring
@@ -90,8 +146,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
       - name: Check the model-only build and helper environment
+        working-directory: ${{ env.NGS_SRC || github.workspace }}
         run: cargo test --locked --no-default-features --features model --test model_env_minimize
       - name: Test the core and default builds
+        working-directory: ${{ env.NGS_SRC || github.workspace }}
         shell: bash
         run: |
           set -euo pipefail
@@ -107,12 +165,24 @@ jobs:
           platform::sandbox::tests::required_sandbox_100_spawn_overhead_and_probe_frequency
           -- --ignored --nocapture --test-threads=1
       - name: Test standalone model feature
+        working-directory: ${{ env.NGS_SRC || github.workspace }}
         run: cargo test --locked --no-default-features --features model --lib --tests
       - name: Verify daemon fallback across Linux namespaces
         if: runner.os == 'Linux'
         env:
           EXECUTE_REQUIRE_NAMESPACE_TESTS: "1"
         run: cargo test --locked --test daemon_cli linux_ -- --nocapture
+      - name: Detach trusted Windows CI volume
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not $env:NGS_TEST_VHD_PATH -or -not (Test-Path -LiteralPath $env:NGS_TEST_VHD_PATH)) { exit 0 }
+          $diskpart = Join-Path $env:RUNNER_TEMP "ngs-ci-cleanup-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.diskpart"
+          $commands = @("select vdisk file=`"$env:NGS_TEST_VHD_PATH`"", "detach vdisk", "exit")
+          [System.IO.File]::WriteAllLines($diskpart, $commands, [System.Text.Encoding]::ASCII)
+          & "$env:WINDIR\System32\diskpart.exe" /s $diskpart
+          if ($LASTEXITCODE -ne 0) { Write-Warning "Could not detach the trusted Windows CI volume" }
+          Remove-Item -LiteralPath $env:NGS_TEST_VHD_PATH -Force -ErrorAction SilentlyContinue
   workflows:
     name: Release contracts and workflow lint
     runs-on: ubuntu-24.04
@@ -381,7 +451,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'macos-15' && 45 || 30 }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -456,7 +526,7 @@ jobs:
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

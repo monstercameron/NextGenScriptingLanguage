@@ -552,8 +552,13 @@ fn manifest_pin_and_policy_pin_must_both_match_the_executed_file() {
     // The manifest pin still names the executed file but the policy pin names
     // another file: preflight and launch disagree with the grant, so the
     // launch is refused.
-    place_fixture(&catalog.join("other.exe"));
+    // A byte-for-byte copy would hash the same as the pinned file, so the other file gets
+    // trailing bytes: it is never run, only hashed.
+    let mut other_bytes = fs::read(fixture_exe()).unwrap();
+    other_bytes.extend_from_slice(b"other");
+    fs::write(catalog.join("other.exe"), other_bytes).unwrap();
     let other_digest = flow::capabilities::sha256_file(&catalog.join("other.exe")).unwrap();
+    assert_ne!(other_digest, digest);
     write_policy(
         &policy,
         &format!(

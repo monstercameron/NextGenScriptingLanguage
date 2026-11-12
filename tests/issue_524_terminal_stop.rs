@@ -21,8 +21,10 @@ fn open_terminal() -> (OwnedFd, OwnedFd) {
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            // Apple's libc takes mutable pointers here and Linux takes const ones; a
+            // null mutable pointer coerces to both.
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
     assert_eq!(result, 0, "openpty failed");

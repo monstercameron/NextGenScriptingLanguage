@@ -31,6 +31,15 @@ condition = "AND"
 commits = ["bc9239987b4af26bcce685ccfa5062725ee47c67"]
 paths = ['''^tests/agent_explain_json\.rs$''']
 
+# This immutable commit adds synthetic token-shaped values to the unit tests of the
+# redaction engine, whose job is to recognise such shapes. Later versions of the file build
+# the same strings with concat! so the source no longer contains them.
+[[allowlists]]
+description = "Synthetic token-shaped fixtures in the redaction engine unit tests, as first committed"
+condition = "AND"
+commits = ["9abc45ec140d326a3ba2244d5d42e8d6d409d9a2"]
+paths = ['''^src/redact\.rs$''']
+
 [[rules]]
 id = "generic-api-key"
 

@@ -3345,7 +3345,7 @@ fn checkpoint_temporary_name(name: &std::ffi::OsStr, blob_folder: bool) -> bool 
 
 // An interrupted fresh initialization may leave the lock, the initial empty-output
 // blob, and recognized atomic-write files. Keep the general nonempty
-// directory refusal for every other case. On other platforms retain that refusal.
+// directory refusal for every other case. Windows has its own implementation below.
 #[cfg(unix)]
 fn fresh_initialization_artifacts_only(directory: &Path, allow_temps: bool) -> Result<bool> {
     let metadata = fs::symlink_metadata(directory)?;
@@ -3387,7 +3387,58 @@ fn fresh_initialization_artifacts_only(directory: &Path, allow_temps: bool) -> R
     Ok(true)
 }
 
-#[cfg(not(unix))]
+// Windows has no owner or mode check, so every entry is judged by its file type instead.
+// Reparse points (symlinks, junctions, mount points) are refused at each level, and the
+// accepted shape is the same as on Unix: the lock, the initial empty blob, and recognised
+// atomic-write temporaries when `allow_temps` is set. The caller holds the checkpoint lock
+// when it removes those temporaries.
+#[cfg(windows)]
+fn fresh_initialization_artifacts_only(directory: &Path, allow_temps: bool) -> Result<bool> {
+    let plain = |metadata: &fs::Metadata| {
+        !metadata.file_type().is_symlink() && !crate::platform::windows::is_reparse(metadata)
+    };
+    let metadata = fs::symlink_metadata(directory)?;
+    if !metadata.is_dir() || !plain(&metadata) {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if !plain(&metadata) {
+            return Ok(false);
+        }
+        if name == "lock" && metadata.is_file() {
+            continue;
+        }
+        if name == "blobs" && metadata.is_dir() {
+            for blob in fs::read_dir(entry.path())? {
+                let blob = blob?;
+                let name = blob.file_name();
+                let metadata = fs::symlink_metadata(blob.path())?;
+                if !plain(&metadata) {
+                    return Ok(false);
+                }
+                let initial_empty_blob = metadata.is_file()
+                    && name == std::ffi::OsStr::new(&hex_digest(b""))
+                    && metadata.len() == 0;
+                let temporary =
+                    allow_temps && metadata.is_file() && checkpoint_temporary_name(&name, true);
+                if !initial_empty_blob && !temporary {
+                    return Ok(false);
+                }
+            }
+            continue;
+        }
+        if allow_temps && metadata.is_file() && checkpoint_temporary_name(&name, false) {
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn fresh_initialization_artifacts_only(_directory: &Path, _allow_temps: bool) -> Result<bool> {
     Ok(false)
 }
@@ -5541,5 +5592,92 @@ mod temporary_name_tests {
                 "{name}"
             );
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_fresh_initialization_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn setup() -> (tempfile::TempDir, CheckpointOptions, PathBuf) {
+        let temp = tempdir().unwrap();
+        let program_path = temp.path().join("flow.txt");
+        fs::write(&program_path, "workflow").unwrap();
+        let initial_cwd = temp.path().join("work");
+        fs::create_dir(&initial_cwd).unwrap();
+        let options = CheckpointOptions {
+            directory: temp.path().join("checkpoint"),
+            program_path,
+            resume: false,
+            retry_uncertain: false,
+        };
+        (temp, options, initial_cwd)
+    }
+
+    #[test]
+    fn fresh_open_retries_after_interruption_before_journal_publish() {
+        let (_temp, options, cwd) = setup();
+        // Interrupted right after the private blobs directory was created.
+        fs::create_dir_all(options.directory.join("blobs")).unwrap();
+        let journal = Journal::open_with_inputs(&options, &cwd, "finite", 1024, None).unwrap();
+        drop(journal);
+        assert!(options.directory.join("journal.json").is_file());
+        assert!(options
+            .directory
+            .join("blobs")
+            .join(hex_digest(b""))
+            .is_file());
+    }
+
+    #[test]
+    fn fresh_open_recovers_interrupted_initialization_with_temporaries_under_lock() {
+        let (_temp, options, cwd) = setup();
+        fs::create_dir_all(options.directory.join("blobs")).unwrap();
+        let initial_blob = options.directory.join("blobs").join(hex_digest(b""));
+        fs::write(&initial_blob, b"").unwrap();
+        let stale_journal = options.directory.join(".journal-123-7.tmp");
+        let stale_blob = options
+            .directory
+            .join("blobs")
+            .join(format!(".{}-123-8.tmp", "a".repeat(64)));
+        fs::write(&stale_journal, b"incomplete").unwrap();
+        fs::write(&stale_blob, b"incomplete").unwrap();
+        let held = lock_directory(&options.directory).unwrap();
+        assert!(Journal::open_with_inputs(&options, &cwd, "finite", 1024, None).is_err());
+        assert!(stale_journal.exists());
+        assert!(stale_blob.exists());
+        drop(held);
+        let journal = Journal::open_with_inputs(&options, &cwd, "finite", 1024, None).unwrap();
+        assert!(!stale_journal.exists());
+        assert!(!stale_blob.exists());
+        assert!(initial_blob.is_file());
+        assert!(options.directory.join("journal.json").is_file());
+        drop(journal);
+    }
+
+    #[test]
+    fn fresh_open_does_not_clean_in_unrelated_nonempty_directory_on_windows() {
+        let (_temp, options, cwd) = setup();
+        fs::create_dir(&options.directory).unwrap();
+        let stale = options.directory.join(".journal-123-7.tmp");
+        let unrelated = options.directory.join("keep.txt");
+        fs::write(&stale, b"keep too").unwrap();
+        fs::write(&unrelated, b"keep").unwrap();
+        assert!(Journal::open_with_inputs(&options, &cwd, "finite", 1024, None).is_err());
+        assert_eq!(fs::read(stale).unwrap(), b"keep too");
+        assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+        assert!(!options.directory.join("lock").exists());
+    }
+
+    #[test]
+    fn fresh_open_refuses_unrelated_file_inside_blobs_on_windows() {
+        let (_temp, options, cwd) = setup();
+        fs::create_dir_all(options.directory.join("blobs")).unwrap();
+        let unrelated = options.directory.join("blobs").join("notes.txt");
+        fs::write(&unrelated, b"keep").unwrap();
+        assert!(Journal::open_with_inputs(&options, &cwd, "finite", 1024, None).is_err());
+        assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+        assert!(!options.directory.join("journal.json").exists());
     }
 }

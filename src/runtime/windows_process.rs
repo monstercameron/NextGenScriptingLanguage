@@ -248,8 +248,9 @@ fn wait_for_supervision_event(children: &Children, signals: &Signals) {
     // SAFETY: every handle is a live process handle owned by a `Child` in
     // `children`, which outlives this call; the count is within the wait
     // limit, and the wait only observes the handles without modifying them.
-    let status =
-        unsafe { WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 0, millis) };
+    let count = handles.len() as u32;
+    // SAFETY: as above, `handles` holds `count` live process handles for the whole call.
+    let status = unsafe { WaitForMultipleObjects(count, handles.as_ptr(), 0, millis) };
     if status == WAIT_FAILED {
         std::thread::sleep(timeout);
     }

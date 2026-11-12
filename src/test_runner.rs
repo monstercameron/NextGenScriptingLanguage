@@ -238,17 +238,12 @@ fn run_one(
 ) -> Result<Outcome> {
     let sidecar = load_sidecar(file)?;
     let program = fs::canonicalize(file)?;
-    let fixtures = program
-        .parent()
-        .map(|parent| parent.join("fixtures"))
-        .unwrap_or_else(|| PathBuf::from("fixtures"));
     // The guard removes the directory when this function returns, on success or error.
     let work = WorkDir::create()?;
     let (exit, stdout, stderr, failures) = run_in(
         executable,
         &program,
         &sidecar,
-        &fixtures,
         manifest_dir,
         policy,
         now,
@@ -270,12 +265,15 @@ fn run_in(
     executable: &Path,
     program: &Path,
     sidecar: &Sidecar,
-    fixtures: &Path,
     manifest_dir: Option<&Path>,
     policy: &crate::execution_policy_options::ExecutionPolicyOptions,
     now: Option<i64>,
     work: &Path,
 ) -> Result<RunResult> {
+    let fixtures = program
+        .parent()
+        .map(|parent| parent.join("fixtures"))
+        .unwrap_or_else(|| PathBuf::from("fixtures"));
     let mut command = Command::new(executable);
     command.current_dir(work).arg(program);
     // A per-test `now` wins over the run-wide `--now`; either pins the

@@ -112,9 +112,15 @@ GET event protocol without graph caller parameters. Event frames retain the
 source event name, opaque resume cursor, and duplicate-cursor marker for
 at-least-once delivery. Hosts that accept stdin must inject a `GraphStdinSource`
 (for example, a bounded `ChannelStdinSource`); graphs never read ambient
-process stdin. Cancelling or reconfiguring a `GraphSession`, or reaching its
-total deadline, cancels and joins listener workers and closes their bounded
-queues.
+process stdin. `GraphSession::cancel`, and reaching the session's total
+deadline, only request cancellation and close the bounded queues; they return
+without waiting for listener workers to stop. `GraphSession::cancel_and_join`
+is the explicit join boundary: it returns after the workers have stopped and
+reports a recorded worker failure as an error. Reconfiguring a session
+(`reconfigure`, `try_reconfigure`) calls `cancel_and_join` on the old
+generation before the replacement starts. Dropping a session only requests
+cancellation and cannot report join failures, so call `cancel_and_join` first
+when a host needs workers fully stopped or their errors.
 
 A finite applet can opt into publishing its result on one declared event port:
 

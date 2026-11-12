@@ -1341,6 +1341,10 @@ impl GraphSession {
         }
     }
 
+    /// Request cancellation and close every queue. This does not wait for
+    /// workers: a worker that is still running may keep running after this
+    /// returns. Use [`GraphSession::cancel_and_join`] to wait for termination
+    /// and to receive worker join errors.
     pub fn cancel(&mut self) {
         self.cancelled.store(true, Ordering::Release);
         for queue in &self.all_queues {
@@ -1348,6 +1352,10 @@ impl GraphSession {
         }
     }
 
+    /// Cancel every worker, wait until all of them have stopped, and return
+    /// the first worker failure recorded before or during the stop, if any.
+    /// Dropping the session does not wait for workers and cannot report their
+    /// join errors, so call this method when either matters.
     pub fn cancel_and_join(&mut self) -> Result<()> {
         // `TaskScope::cancel_and_join` only waits for workers; their typed
         // results stay in these handles, so a worker that failed after the

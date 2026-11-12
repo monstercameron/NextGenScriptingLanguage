@@ -13,13 +13,14 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const PROGRAM_SUFFIX: &str = ".program";
 const STATE_FILE: &str = "state.json";
+const LOCK_FILE: &str = "state.lock";
 
 #[derive(Default)]
 struct Options {
@@ -69,10 +70,6 @@ pub fn cli(arguments: &[String]) -> Result<()> {
         .context("run-parts requires a directory")?;
     let programs = list_programs(&directory)?;
     let executable = std::env::current_exe().context("locating the execute executable")?;
-    let mut state = match &options.once {
-        Some(dir) => load_state(&dir.join(STATE_FILE))?,
-        None => BTreeMap::new(),
-    };
 
     let mut entries = Vec::new();
     let mut stopped = false;
@@ -87,18 +84,28 @@ pub fn cli(arguments: &[String]) -> Result<()> {
             });
             continue;
         }
-        let recorded = state.get(&name).cloned();
-        let status = match (&options.once, recorded) {
-            (Some(_), Some(previous)) if previous == hash => Status::Skipped,
-            (Some(_), Some(_)) => Status::Changed,
-            _ => run_program(&executable, &path, &options, &name)?,
-        };
-        if status == Status::Ran {
-            if let Some(dir) = &options.once {
-                state.insert(name.clone(), hash.clone());
-                save_state(&dir.join(STATE_FILE), &state)?;
+        let status = match &options.once {
+            Some(dir) => {
+                // The lock covers the whole read, run and write of this program. An
+                // overlapping invocation waits here, then reads the completion record
+                // and skips the program instead of running it a second time.
+                let _lock = StateLock::acquire(dir)?;
+                let state_path = dir.join(STATE_FILE);
+                let recorded = load_state(&state_path)?.get(&name).cloned();
+                match recorded {
+                    Some(previous) if previous == hash => Status::Skipped,
+                    Some(_) => Status::Changed,
+                    None => {
+                        let status = run_program(&executable, &path, &options, &name)?;
+                        if status == Status::Ran {
+                            record_completion(&state_path, &name, &hash)?;
+                        }
+                        status
+                    }
+                }
             }
-        }
+            None => run_program(&executable, &path, &options, &name)?,
+        };
         if matches!(status, Status::Failed(_)) && !options.continue_after_failure {
             stopped = true;
         }
@@ -201,23 +208,71 @@ fn run_program(executable: &Path, path: &Path, options: &Options, name: &str) ->
         command.arg("--manifest-dir").arg(manifest_dir);
     }
     options.policy.forward(&mut command);
-    let output = command
-        .output()
+    // The program's output is copied through as it is written, so a long program shows
+    // progress and holds no more than one chunk per stream in memory. In JSON mode it
+    // goes to standard error so that standard output carries only the report.
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .with_context(|| format!("starting {}", executable.display()))?;
-    // Forward the program's output. In JSON mode it goes to standard error so that
-    // standard output carries only the report.
-    if options.json {
-        eprint!("{}", String::from_utf8_lossy(&output.stdout));
-    } else {
-        io::stdout().write_all(&output.stdout)?;
-    }
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    let _ = name;
-    if output.status.success() {
+    let child_stdout = child
+        .stdout
+        .take()
+        .context("capturing the program's standard output")?;
+    let child_stderr = child
+        .stderr
+        .take()
+        .context("capturing the program's standard error")?;
+    let json = options.json;
+    let (stdout_result, stderr_result, status) = std::thread::scope(|scope| {
+        let stdout_copy = scope.spawn(move || {
+            if json {
+                forward(child_stdout, &mut io::stderr().lock())
+            } else {
+                forward(child_stdout, &mut io::stdout().lock())
+            }
+        });
+        let stderr_copy = scope.spawn(move || forward(child_stderr, &mut io::stderr().lock()));
+        let status = child.wait();
+        (stdout_copy.join(), stderr_copy.join(), status)
+    });
+    let status = status.with_context(|| format!("waiting for {name}"))?;
+    stdout_result.map_err(|_| anyhow::anyhow!("copying the output of {name} panicked"))??;
+    stderr_result.map_err(|_| anyhow::anyhow!("copying the output of {name} panicked"))??;
+    if status.success() {
         Ok(Status::Ran)
     } else {
-        Ok(Status::Failed(output.status.code()))
+        Ok(Status::Failed(status.code()))
     }
+}
+
+/// Copy `from` to `to` as the bytes arrive, flushing after each chunk. If a write fails,
+/// the rest of the stream is still read and discarded so the child never blocks on a full
+/// pipe, and the first write error is returned.
+fn forward(mut from: impl Read, to: &mut impl Write) -> io::Result<()> {
+    let mut buffer = [0u8; 8192];
+    let mut failure: Option<io::Error> = None;
+    loop {
+        let count = match from.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+                break;
+            }
+        };
+        if failure.is_none() {
+            if let Err(error) = to.write_all(&buffer[..count]).and_then(|()| to.flush()) {
+                failure = Some(error);
+            }
+        }
+    }
+    failure.map_or(Ok(()), Err)
 }
 
 fn describe(status: &Status) -> String {
@@ -244,6 +299,38 @@ fn load_state(path: &Path) -> Result<BTreeMap<String, String>> {
     }
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// An exclusive lock on `STATE_DIR/state.lock`, held until dropped. It blocks while
+/// another `--once` invocation holds it.
+struct StateLock {
+    _file: File,
+}
+
+impl StateLock {
+    fn acquire(state_dir: &Path) -> Result<Self> {
+        fs::create_dir_all(state_dir)
+            .with_context(|| format!("creating {}", state_dir.display()))?;
+        let path = state_dir.join(LOCK_FILE);
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("locking {}", path.display()))?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// Record a completed program in the state file. The caller holds the `StateLock`; the
+/// file is re-read first so records that another run wrote meanwhile are kept.
+fn record_completion(state_path: &Path, name: &str, hash: &str) -> Result<()> {
+    let mut state = load_state(state_path)?;
+    state.insert(name.to_owned(), hash.to_owned());
+    save_state(state_path, &state)
 }
 
 /// Write the state through a temporary file and a rename, so an interrupted write
@@ -339,5 +426,114 @@ mod tests {
         .unwrap();
         assert!(options.continue_after_failure);
         assert_eq!(options.once, Some(PathBuf::from("st")));
+    }
+
+    #[test]
+    fn state_lock_blocks_a_second_holder_until_the_first_is_dropped() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = directory.path().join("state");
+        let holder = StateLock::acquire(&state_dir).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiter_dir = state_dir.clone();
+        let waiter = std::thread::spawn(move || {
+            let _lock = StateLock::acquire(&waiter_dir).unwrap();
+            sender.send(()).unwrap();
+        });
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "a second lock was granted while the first was still held"
+        );
+        drop(holder);
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the waiting lock was never granted");
+        waiter.join().unwrap();
+    }
+
+    #[test]
+    fn a_completion_is_recorded_on_top_of_what_another_run_wrote() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_path = directory.path().join(STATE_FILE);
+        // This run loaded an empty state; another run then recorded "a" before the save.
+        let mut other_run = BTreeMap::new();
+        other_run.insert("a.program".to_owned(), sha256_hex(b"a"));
+        save_state(&state_path, &other_run).unwrap();
+        record_completion(&state_path, "b.program", &sha256_hex(b"b")).unwrap();
+        let state = load_state(&state_path).unwrap();
+        assert_eq!(state.get("a.program"), Some(&sha256_hex(b"a")));
+        assert_eq!(state.get("b.program"), Some(&sha256_hex(b"b")));
+    }
+
+    /// Writer that records everything written so far in a shared buffer.
+    struct Recorder(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl Write for Recorder {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Reader that yields one chunk per call and notes how much output had already
+    /// reached the writer when each read happened.
+    struct Chunks {
+        pending: std::collections::VecDeque<Vec<u8>>,
+        written: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
+        written_at_each_read: Vec<usize>,
+    }
+
+    impl Read for Chunks {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.written_at_each_read.push(self.written.borrow().len());
+            match self.pending.pop_front() {
+                Some(chunk) => {
+                    buffer[..chunk.len()].copy_from_slice(&chunk);
+                    Ok(chunk.len())
+                }
+                None => Ok(0),
+            }
+        }
+    }
+
+    #[test]
+    fn program_output_is_forwarded_as_it_arrives() {
+        let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut reader = Chunks {
+            pending: vec![b"first\n".to_vec(), b"second\n".to_vec()].into(),
+            written: written.clone(),
+            written_at_each_read: Vec::new(),
+        };
+        let mut writer = Recorder(written.clone());
+        forward(&mut reader, &mut writer).unwrap();
+        assert_eq!(written.borrow().as_slice(), b"first\nsecond\n");
+        // Each chunk reached the writer before the next read, so nothing waited for exit.
+        assert_eq!(reader.written_at_each_read, vec![0, 6, 13]);
+    }
+
+    #[test]
+    fn a_failed_write_still_drains_the_program_and_is_reported() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut reader = Chunks {
+            pending: vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into(),
+            written,
+            written_at_each_read: Vec::new(),
+        };
+        let error = forward(&mut reader, &mut Broken).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(reader.pending.is_empty(), "the program was not drained");
     }
 }

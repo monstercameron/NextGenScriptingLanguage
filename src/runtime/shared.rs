@@ -236,6 +236,34 @@ fn known_folder(value: &crate::ast::Value, cwd: &Path, cwd_known: bool) -> Optio
     path.is_dir().then_some(path)
 }
 
+thread_local! {
+    static SKIP_EXECUTABLE_PREFLIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Restores the previous preflight setting when a replay run ends, even on a panic.
+struct PreflightRestore(bool);
+
+impl Drop for PreflightRestore {
+    fn drop(&mut self) {
+        SKIP_EXECUTABLE_PREFLIGHT.with(|skip| skip.set(self.0));
+    }
+}
+
+/// Runs `run` on this thread without the executable preflight. Replay answers every
+/// recorded group from its record, so no executable is launched and none needs to
+/// be present. Request matching still applies to each group, and a call that does
+/// not match the record stops the replay before anything runs.
+pub fn without_executable_preflight<T>(run: impl FnOnce() -> T) -> T {
+    let previous = SKIP_EXECUTABLE_PREFLIGHT.with(|skip| skip.replace(true));
+    let _restore = PreflightRestore(previous);
+    run()
+}
+
+/// Whether the executable preflight is skipped on this thread (replay only).
+pub(crate) fn executable_preflight_skipped() -> bool {
+    SKIP_EXECUTABLE_PREFLIGHT.with(std::cell::Cell::get)
+}
+
 /// Resolve every executable the run is certain to reach, before the first effect,
 /// and report all unresolved ones together. Top-level commands, task groups and
 /// jobs count, and so do branches and loop bodies whose condition is statically

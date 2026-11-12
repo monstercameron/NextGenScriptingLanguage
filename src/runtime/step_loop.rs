@@ -368,7 +368,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     let resuming = journal
         .as_deref()
         .is_some_and(|journal| !journal.completed_nodes().is_empty());
-    if !resuming {
+    // A replay answers every group from its record, so it launches nothing and
+    // needs no executable present.
+    if !resuming && !executable_preflight_skipped() {
         preflight_executables(program, registry, &cwd)?;
     }
     // Live snapshots contain bindings and data, not worker handles. A job is

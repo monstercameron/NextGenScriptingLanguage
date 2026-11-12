@@ -318,7 +318,9 @@ pub fn replay(arguments: &[String]) -> Result<()> {
         loop_budget_scope,
         ..RunOptions::new(env::current_dir().context("could not determine current directory")?)
     };
-    let result = runtime::with_streamed_stdout(|| runtime::run(&program, &registry, &options));
+    let result = runtime::with_streamed_stdout(|| {
+        runtime::without_executable_preflight(|| runtime::run(&program, &registry, &options))
+    });
     drop(guard);
     if result.is_ok() {
         replayer.finish_check();

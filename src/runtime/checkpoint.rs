@@ -157,6 +157,43 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Lineage digest of a journal identity: SHA-256 over a length-prefixed encoding of the
+/// program path, the initial working directory, the execution mode and the keyed input
+/// signature. Each of those is checked on every resume, so the digest is the same for a
+/// run and its resumes. The input signature is an HMAC-SHA256 under the per-user input
+/// key over each input's kind and value, so no raw input value is hashed or stored here.
+/// The legacy unkeyed signature is a plain hash of the input values, which could be
+/// guessed offline, so an identity that holds it has no lineage digest.
+#[cfg(feature = "records")]
+fn lineage_digest_of(identity: &Identity) -> Result<String> {
+    let signature = match (identity.input_signature.as_deref(), identity.keyed_inputs) {
+        (Some(keyed), true) => Some(keyed),
+        (None, false) => None,
+        _ => bail!(
+            "the checkpoint identity holds an unkeyed input digest, so it has no lineage digest"
+        ),
+    };
+    let mut encoding = Vec::new();
+    push_lineage_field(&mut encoding, b"execute.checkpoint-lineage-v1");
+    push_lineage_field(&mut encoding, &identity.program_path.0);
+    push_lineage_field(&mut encoding, &identity.initial_cwd.0);
+    push_lineage_field(&mut encoding, identity.mode.as_bytes());
+    match signature {
+        Some(keyed) => {
+            encoding.push(1);
+            push_lineage_field(&mut encoding, keyed.as_bytes());
+        }
+        None => encoding.push(0),
+    }
+    Ok(format!("{:x}", Sha256::digest(&encoding)))
+}
+
+#[cfg(feature = "records")]
+fn push_lineage_field(encoding: &mut Vec<u8>, bytes: &[u8]) {
+    encoding.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    encoding.extend_from_slice(bytes);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct EncodedPath(Vec<u8>);
 
@@ -602,8 +639,28 @@ impl Journal {
 
     /// Open a journal, computing the input signature with the key policy the stored
     /// journal allows: a resume of a journal that records keyed inputs never creates
-    /// a new per-user key.
+    /// a new per-user key. Once the journal is open, its lineage digest goes to the
+    /// checkpoint sink of a recording run, if one is installed.
     pub fn open_with_input_key(
+        options: &CheckpointOptions,
+        initial_cwd: &Path,
+        mode: &str,
+        max_output_bytes: usize,
+        input_signature: &dyn Fn(super::InputKey) -> Result<Option<super::InputSignatures>>,
+    ) -> Result<Self> {
+        let journal = Self::open_journal(
+            options,
+            initial_cwd,
+            mode,
+            max_output_bytes,
+            input_signature,
+        )?;
+        #[cfg(feature = "records")]
+        crate::record::announce_checkpoint_open(&journal.lineage_digest()?)?;
+        Ok(journal)
+    }
+
+    fn open_journal(
         options: &CheckpointOptions,
         initial_cwd: &Path,
         mode: &str,
@@ -995,6 +1052,14 @@ impl Journal {
             journal.persist()?;
             Ok(journal)
         }
+    }
+
+    /// The lineage digest of this journal's identity (see `lineage_digest_of`). A run
+    /// and each resume of its checkpoint have the same digest; another program path,
+    /// working directory, mode or set of inputs has a different one.
+    #[cfg(feature = "records")]
+    pub fn lineage_digest(&self) -> Result<String> {
+        lineage_digest_of(&self.data.identity)
     }
 
     pub fn completed_nodes(&self) -> &[CompletedNode] {
@@ -5628,6 +5693,112 @@ mod temporary_name_tests {
                 "{name}"
             );
         }
+    }
+}
+
+#[cfg(all(test, feature = "records"))]
+mod lineage_digest_tests {
+    use super::{lineage_digest_of, CheckpointOptions, EncodedPath, Identity, Journal};
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    fn setup() -> (tempfile::TempDir, CheckpointOptions, PathBuf) {
+        let temp = tempdir().unwrap();
+        let program_path = temp.path().join("flow.txt");
+        fs::write(&program_path, "workflow").unwrap();
+        let initial_cwd = temp.path().join("work");
+        fs::create_dir(&initial_cwd).unwrap();
+        let options = CheckpointOptions {
+            directory: temp.path().join("checkpoint"),
+            program_path,
+            resume: false,
+            retry_uncertain: false,
+        };
+        (temp, options, initial_cwd)
+    }
+
+    fn signatures(keyed: &str, legacy: &str) -> Option<super::super::InputSignatures> {
+        Some(super::super::InputSignatures {
+            keyed: keyed.to_owned(),
+            legacy: legacy.to_owned(),
+        })
+    }
+
+    #[test]
+    fn lineage_digest_survives_resume_and_separates_inputs_and_programs() {
+        let (temp, mut options, cwd) = setup();
+        let journal = Journal::open_with_inputs(
+            &options,
+            &cwd,
+            "finite",
+            1024,
+            signatures("inputs-v2:keyed-now", "inputs-v1:unkeyed-then"),
+        )
+        .unwrap();
+        let digest = journal.lineage_digest().unwrap();
+        assert_eq!(digest.len(), 64);
+        drop(journal);
+
+        // A resume of the same checkpoint reads the same identity, so the digest is equal.
+        options.resume = true;
+        let resumed = Journal::open_with_inputs(
+            &options,
+            &cwd,
+            "finite",
+            1024,
+            signatures("inputs-v2:keyed-now", "inputs-v1:unkeyed-then"),
+        )
+        .unwrap();
+        assert_eq!(resumed.lineage_digest().unwrap(), digest);
+        drop(resumed);
+
+        // The same program with other keyed inputs is another lineage.
+        let other_inputs = CheckpointOptions {
+            directory: temp.path().join("other-inputs"),
+            resume: false,
+            ..options.clone()
+        };
+        let journal = Journal::open_with_inputs(
+            &other_inputs,
+            &cwd,
+            "finite",
+            1024,
+            signatures("inputs-v2:changed", "inputs-v1:changed"),
+        )
+        .unwrap();
+        assert_ne!(journal.lineage_digest().unwrap(), digest);
+        drop(journal);
+
+        // Another program path is another lineage, with the same inputs.
+        let other_program_path = temp.path().join("other.program");
+        fs::write(&other_program_path, "workflow").unwrap();
+        let other_program = CheckpointOptions {
+            directory: temp.path().join("other-program"),
+            program_path: other_program_path,
+            resume: false,
+            ..options.clone()
+        };
+        let journal = Journal::open_with_inputs(
+            &other_program,
+            &cwd,
+            "finite",
+            1024,
+            signatures("inputs-v2:keyed-now", "inputs-v1:unkeyed-then"),
+        )
+        .unwrap();
+        assert_ne!(journal.lineage_digest().unwrap(), digest);
+        drop(journal);
+
+        // An identity that holds only the unkeyed digest never yields a lineage digest.
+        let legacy = Identity {
+            input_signature: Some("inputs-v1:unkeyed-then".to_owned()),
+            keyed_inputs: false,
+            program_path: EncodedPath::from_path(&options.program_path),
+            initial_cwd: EncodedPath::from_path(&cwd),
+            mode: "finite".to_owned(),
+        };
+        assert!(lineage_digest_of(&legacy).is_err());
     }
 }
 

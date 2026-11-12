@@ -25,6 +25,67 @@ pub fn run_recorded(
     drain_timeout: std::time::Duration,
     provenance: record::RecordProvenance<'_>,
 ) -> Result<RunResult> {
+    let recorder = start_recording(
+        directory,
+        source_path,
+        program,
+        registry,
+        options,
+        provenance,
+    )?;
+    let guard = runtime::observe::install(recorder.clone())?;
+    let result = runtime::with_streamed_stdout(|| {
+        runtime::run_with_drain_timeout(program, registry, options, drain_timeout)
+    });
+    drop(guard);
+    finish_recording(&recorder, directory, source_path, result)
+}
+
+/// Run a finite program through the checkpointed runner and keep its record in `directory`.
+/// A fresh checkpoint writes the first record of its lineage; a resume (`checkpoint.resume`)
+/// writes a further record for the same checkpoint. Each header carries the checkpoint's
+/// lineage digest, so the records of one lineage link to each other.
+// Unused until main.rs routes `--record` with `--checkpoint` here (#544 NEEDS).
+#[allow(dead_code)]
+pub fn run_recorded_checkpointed(
+    directory: &Path,
+    source_path: &Path,
+    program: &Program,
+    registry: &flow::manifest::Registry,
+    options: &RunOptions,
+    checkpoint: &runtime::CheckpointOptions,
+    provenance: record::RecordProvenance<'_>,
+) -> Result<RunResult> {
+    let recorder = start_recording(
+        directory,
+        source_path,
+        program,
+        registry,
+        options,
+        provenance,
+    )?;
+    let sink_recorder = recorder.clone();
+    let sink: record::CheckpointSink =
+        Arc::new(move |digest: &str| sink_recorder.set_checkpoint(digest));
+    let guard = runtime::observe::install(recorder.clone())?;
+    let result = runtime::with_streamed_stdout(|| {
+        record::with_checkpoint_sink(sink, || {
+            runtime::run_checkpointed(program, registry, options, checkpoint)
+        })
+    });
+    drop(guard);
+    finish_recording(&recorder, directory, source_path, result)
+}
+
+/// Create the record for a run: the program copy, the plan, the inputs and the loop budget.
+fn start_recording(
+    directory: &Path,
+    source_path: &Path,
+    program: &Program,
+    registry: &flow::manifest::Registry,
+    options: &RunOptions,
+    provenance: record::RecordProvenance<'_>,
+) -> Result<Arc<Recorder>> {
     if program.trigger.is_some() {
         bail!("--record applies to finite programs; triggered programs cannot be recorded");
     }
@@ -62,11 +123,16 @@ pub fn run_recorded(
         what_if_fingerprint: provenance.what_if_fingerprint,
     })?);
     recorder.set_loop_budget(options.max_loop_iterations, options.loop_budget_scope)?;
-    let guard = runtime::observe::install(recorder.clone())?;
-    let result = runtime::with_streamed_stdout(|| {
-        runtime::run_with_drain_timeout(program, registry, options, drain_timeout)
-    });
-    drop(guard);
+    Ok(recorder)
+}
+
+/// Write the run's outcome into its record and print the repair hints for a failure.
+fn finish_recording(
+    recorder: &Recorder,
+    directory: &Path,
+    source_path: &Path,
+    result: Result<RunResult>,
+) -> Result<RunResult> {
     let summary = match &result {
         Ok(result) => {
             let exit_status = result.exit.as_ref().map(|exit| i32::from(exit.status));

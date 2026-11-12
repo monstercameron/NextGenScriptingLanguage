@@ -65,6 +65,7 @@ pub use crate::security::{register_sensitive_inputs, register_sensitive_program}
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(any(not(unix), test))]
 use std::fs;
@@ -288,6 +289,9 @@ pub struct Recorder {
 struct RecorderState {
     loop_limit: Option<usize>,
     loop_scope: Option<crate::runtime::LoopBudgetScope>,
+    /// Lineage digest of the checkpoint this run executes under, if any. Set once the
+    /// journal is open; a run without a checkpoint never sets it.
+    checkpoint: Option<String>,
     steps: usize,
     blob_bytes: usize,
     truncated: bool,
@@ -1210,6 +1214,38 @@ fn persistence_allowed(
         .is_ok()
 }
 
+/// Receives the checkpoint lineage digest of a journal, once the journal is open.
+pub type CheckpointSink = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
+
+thread_local! {
+    static CHECKPOINT_SINK: RefCell<Option<CheckpointSink>> = const { RefCell::new(None) };
+}
+
+/// Run `body` with `sink` installed on this thread. A checkpoint journal opened inside
+/// `body` hands its lineage digest to `sink` before its run executes. The previous sink
+/// is restored when `body` returns or unwinds.
+pub fn with_checkpoint_sink<T>(sink: CheckpointSink, body: impl FnOnce() -> T) -> T {
+    struct Restore(Option<CheckpointSink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            CHECKPOINT_SINK.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let previous = CHECKPOINT_SINK.with(|slot| slot.replace(Some(sink)));
+    let _restore = Restore(previous);
+    body()
+}
+
+/// Called by the checkpoint journal after it opens, with its lineage digest.
+pub(crate) fn announce_checkpoint_open(digest: &str) -> Result<()> {
+    let sink = CHECKPOINT_SINK.with(|slot| slot.borrow().clone());
+    match sink {
+        Some(sink) => sink(digest),
+        None => Ok(()),
+    }
+}
+
 impl Recorder {
     /// Create the record directory and store the program copy. Fails if the
     /// directory exists and is not empty, so a record is never mixed with another.
@@ -1294,6 +1330,7 @@ impl Recorder {
             state: Mutex::new(RecorderState {
                 loop_limit: None,
                 loop_scope: None,
+                checkpoint: None,
                 steps: 0,
                 blob_bytes: 0,
                 truncated: false,
@@ -1320,6 +1357,18 @@ impl Recorder {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.loop_limit = Some(limit);
         state.loop_scope = Some(scope);
+        self.write_run_document_locked(&mut state, false, None)
+    }
+
+    /// Record the lineage digest of the checkpoint this run executes under. Set once the
+    /// journal is open, and rewritten into `run.json` the same way as the loop budget.
+    /// A run without a checkpoint never calls it, so its header has no such field.
+    pub fn set_checkpoint(&self, digest: &str) -> Result<()> {
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("a checkpoint lineage digest is 64 hexadecimal characters");
+        }
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.checkpoint = Some(digest.to_owned());
         self.write_run_document_locked(&mut state, false, None)
     }
 
@@ -1440,6 +1489,10 @@ impl Recorder {
                 "executables": state.executables,
             },
         });
+        // Present only for a checkpointed run, so every other record keeps its exact bytes.
+        if let Some(digest) = &state.checkpoint {
+            document["checkpoint"] = json!(digest);
+        }
         // Seal the whole record after every other field is set: the seal
         // covers the run document itself plus the recorded program copy, the
         // trace and every kept blob, so any post-run edit breaks it.
@@ -2558,8 +2611,14 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
         RecordVerification::Unsealed { reason } => Json::String((*reason).to_owned()),
         RecordVerification::Untrusted { error } => Json::String(error.clone()),
     };
+    // Shown only for a checkpointed run: records without one keep their exact output.
+    let checkpoint = record
+        .run
+        .get("checkpoint")
+        .and_then(Json::as_str)
+        .map(str::to_owned);
     if as_json {
-        let document = json!({
+        let mut document = json!({
             "protocol": "execute.show-run/1",
             "ok": ok,
             "exit_status": record.run["result"]["exit_status"],
@@ -2587,6 +2646,9 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
             "record_verified": record_verified,
             "record_error": record_error,
         });
+        if let Some(digest) = &checkpoint {
+            document["checkpoint"] = json!(digest);
+        }
         return Ok(
             crate::terminal_text::escape_json_for_terminal(&serde_json::to_string_pretty(
                 &document,
@@ -2599,6 +2661,9 @@ pub fn show_run_with_key(directory: &Path, as_json: bool, seal_key: SealKey<'_>)
         directory.display(),
         if ok { "ok" } else { "failed" }
     ));
+    if let Some(digest) = &checkpoint {
+        text.push_str(&format!("checkpoint lineage: {digest}\n"));
+    }
     // The record seal covers the run document, the recorded program copy,
     // the trace and every kept blob; the audit seal covers policy
     // decisions, record identity and policy context.
@@ -5878,5 +5943,72 @@ mod policy_audit_tests {
                 .unwrap();
         assert_eq!(report["audit_verified"], true);
         assert_eq!(report["decision_count"], total);
+    }
+
+    fn checkpoint_digest() -> String {
+        "a".repeat(64)
+    }
+
+    #[test]
+    fn records_without_a_checkpoint_have_no_checkpoint_field_or_line() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = start_model_recorder(&directory, &registry);
+        finish_model_recorder(&recorder);
+        assert!(run_document(&directory).get("checkpoint").is_none());
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        assert!(!text.contains("checkpoint lineage"), "{text}");
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert!(report.get("checkpoint").is_none());
+    }
+
+    #[test]
+    fn checkpoint_digest_is_sealed_and_shown_once_set() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = start_model_recorder(&directory, &registry);
+        recorder.set_checkpoint(&checkpoint_digest()).unwrap();
+        finish_model_recorder(&recorder);
+        assert_eq!(run_document(&directory)["checkpoint"], checkpoint_digest());
+        let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();
+        assert!(
+            text.contains(&format!("checkpoint lineage: {}", checkpoint_digest())),
+            "{text}"
+        );
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["checkpoint"], checkpoint_digest());
+        let stored = StoredRecord::open(directory.path()).unwrap();
+        assert!(matches!(
+            stored.record_integrity(&test_seal()),
+            RecordVerification::Verified
+        ));
+        // The digest is inside the sealed document, so changing it after the run breaks the seal.
+        let mut edited = run_document(&directory);
+        edited["checkpoint"] = json!("b".repeat(64));
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            serde_json::to_string_pretty(&edited).unwrap(),
+        )
+        .unwrap();
+        let stored = StoredRecord::open(directory.path()).unwrap();
+        assert!(matches!(
+            stored.record_integrity(&test_seal()),
+            RecordVerification::Untrusted { .. }
+        ));
+    }
+
+    #[test]
+    fn checkpoint_digest_must_be_64_hex_characters() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = start_model_recorder(&directory, &registry);
+        assert!(recorder.set_checkpoint("not-a-digest").is_err());
+        assert!(recorder.set_checkpoint(&"g".repeat(64)).is_err());
+        finish_model_recorder(&recorder);
+        assert!(run_document(&directory).get("checkpoint").is_none());
     }
 }

@@ -1501,6 +1501,13 @@ impl Journal {
                 return Err(error);
             }
         };
+        // The binding blobs are published but no log line names them yet. A fault here
+        // leaves them unreferenced, which reopen-time collection reclaims.
+        #[cfg(feature = "failpoints")]
+        if let Err(error) = crate::failpoint::hit("checkpoint.elements.commit_state.published") {
+            self.persistence_failed = true;
+            return Err(error.into());
+        }
         self.append_element_buffered(&ElementLine::Commit {
             index,
             fingerprint,
@@ -1608,6 +1615,57 @@ mod tests {
 
     fn start_node(journal: &mut Journal, cwd: &Path, fingerprint: &str) {
         journal.begin_node(fingerprint, 0, 2, 1, cwd, true).unwrap();
+    }
+
+    #[test]
+    fn interrupted_commits_leave_blobs_that_reopen_reclaims() {
+        let temp = tempdir().unwrap();
+        let options = options(temp.path());
+        let cwd = temp.path().join("work");
+        fs::create_dir(&cwd).unwrap();
+        let mut journal = open(&options, &cwd);
+        start_node(&mut journal, &cwd, "loop-node");
+        // Each interrupted attempt publishes its binding blob, then stops before its
+        // commit line is appended. Every attempt binds a different value.
+        let mut orphans = Vec::new();
+        for attempt in 0..3 {
+            let value = Value::String(format!("attempt-{attempt}"));
+            let bindings = BTreeMap::from([("acc".to_owned(), value.clone())]);
+            journal.element_state_refs(&cwd, &bindings).unwrap();
+            orphans.push(hex_digest(&serde_json::to_vec(&value).unwrap()));
+        }
+        for name in &orphans {
+            assert!(journal.blobs_directory.join(name).exists());
+        }
+        // The attempt that commits names its own blob, and survives the reopen.
+        let committed = Value::String("committed".into());
+        let bindings = BTreeMap::from([("acc".to_owned(), committed.clone())]);
+        let first = element_fingerprint("loop-node", 0, &Value::String("a".into())).unwrap();
+        journal
+            .append_element(&ElementLine::Begin {
+                index: 0,
+                fingerprint: first.clone(),
+                uncertain: false,
+            })
+            .unwrap();
+        journal
+            .commit_state(0, first, &cwd, b"done", &bindings)
+            .unwrap();
+        journal.sync_elements().unwrap();
+        drop(journal);
+
+        let mut reopened = open(&resuming(&options), &cwd);
+        for name in &orphans {
+            assert!(
+                !reopened.blobs_directory.join(name).exists(),
+                "orphaned blob {name} survived reopen"
+            );
+        }
+        let committed_name = hex_digest(&serde_json::to_vec(&committed).unwrap());
+        assert!(reopened.blobs_directory.join(committed_name).exists());
+        let replay = reopened.take_element_replay().unwrap();
+        assert_eq!(replay.commits.len(), 1);
+        assert_eq!(replay.commits[0].state.as_ref().unwrap().output, b"done");
     }
 
     #[test]

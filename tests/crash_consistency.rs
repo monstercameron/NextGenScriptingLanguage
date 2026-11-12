@@ -547,9 +547,9 @@ fn blob_gc_abort_preserves_checkpoint_recovery() {
     assert!(blob_path.is_file(), "aborted collection removed the orphan");
 
     check_resume(&fixture, &expected, "blob GC abort");
-    // Collection may not run again after recovery commits the final checkpoint state;
-    // leaving an orphan behind must not affect the recovered state.
-    assert!(blob_path.is_file());
+    // Reopening an unfinished checkpoint collects blobs that no durable state names
+    // (#730), so the orphan left by the aborted collection is reclaimed by the recovery.
+    assert!(!blob_path.exists(), "recovery left the orphan blob behind");
 }
 
 #[test]

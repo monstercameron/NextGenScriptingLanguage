@@ -877,6 +877,13 @@ impl Journal {
             // Element progress is authoritative only for the in-flight node, so the
             // log is read once here and handed to the runtime at that node.
             journal.load_elements()?;
+            // An interrupted element commit can leave binding blobs that no log line names.
+            // The directory lock is held and nothing has been appended since the logs were
+            // read, so collection can prove each blob unreferenced before deleting it.
+            // Finished journals have nothing in flight, so they skip this.
+            if !journal.is_finished() {
+                journal.collect_unreferenced_blobs();
+            }
             clean_checkpoint_temporaries(
                 &journal.directory,
                 &journal.blobs_directory,

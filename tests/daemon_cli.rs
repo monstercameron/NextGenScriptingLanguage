@@ -1074,6 +1074,63 @@ fn forwarded_run_exit_status_and_output_match_a_cold_run() {
     assert_eq!(warm.stdout, cold.stdout);
 }
 
+/// A forwarded run with its own manifest source tree, for freshness tests.
+fn run_forwarded_with_sources(
+    runtime_dir: &Path,
+    directory: &Path,
+    sources: &Path,
+    source: &str,
+) -> Output {
+    let path = directory.join("workflow.program");
+    fs::write(&path, source).unwrap();
+    Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime_dir)
+        .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .arg("run")
+        .arg(&path)
+        .arg("--manifest-dir")
+        .arg(sources)
+        .arg("--daemon")
+        .output()
+        .unwrap()
+}
+
+/// A forwarded run must see a manifest edited under its source tree (#447): the
+/// daemon re-stats manifest sources and reloads instead of serving stale applets.
+#[test]
+fn daemon_forwarded_run_sees_edited_manifest_sources() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background_accepting(runtime.path());
+    let sources = tempfile::tempdir().unwrap();
+    let manifest = |tag: &str| {
+        format!(
+            "{{\"name\":\"tagged\",\"description\":\"tagged applet\",\"phrases\":[\"print tag\"],\
+             \"binary\":\"printf\",\"parameters\":{{\"message\":{{\"type\":\"string\",\"required\":true}}}},\
+             \"arguments\":[{{\"literal\":\"{tag}: %s\\n\"}},{{\"parameter\":\"message\"}}],\
+             \"contract\":{{\"version\":1,\"backend\":\"command\",\
+             \"lifecycle\":{{\"kind\":\"oneshot\"}},\"output\":{{\"type\":\"text\",\"encoding\":\"raw\"}},\
+             \"capabilities\":[\"process.exec\"],\"effects\":[]}}}}"
+        )
+    };
+    let manifest_path = sources.path().join("tagged.json");
+    fs::write(&manifest_path, manifest("one")).unwrap();
+    let program = "run print tag with message \"hi\"\n";
+    let first = run_forwarded_with_sources(runtime.path(), work.path(), sources.path(), program);
+    assert!(first.status.success(), "{first:?}");
+    assert_eq!(first.stdout, b"one: hi\n");
+    fs::write(&manifest_path, manifest("two")).unwrap();
+    let second = run_forwarded_with_sources(runtime.path(), work.path(), sources.path(), program);
+    assert!(second.status.success(), "{second:?}");
+    assert_eq!(
+        second.stdout, b"two: hi\n",
+        "the forwarded run must see the edited manifest"
+    );
+}
+
 #[test]
 fn concurrent_forwarded_runs_each_get_their_own_output_and_status() {
     let runtime = tempfile::tempdir().unwrap();

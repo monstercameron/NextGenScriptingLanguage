@@ -92,6 +92,7 @@ pub(super) fn ensure_line(
         Some(Some("absent")) => false,
         Some(_) => return Err(invalid("args.state must be \"present\" or \"absent\"")),
     };
+    let preview = optional_bool(args, "preview", false)?;
     let current = read_current(&path, context)?;
     let existing = match &current {
         Some(current) => Some(
@@ -100,7 +101,31 @@ pub(super) fn ensure_line(
         ),
         None => None,
     };
-    let updated: Option<String> = match (present, existing) {
+    let updated = line_text_update(existing, line, present);
+    if preview {
+        // Read-only: nothing is written and no lock file is created. The diff is
+        // what a real apply would change, so `--what-if` can show it.
+        let diff = updated.as_deref().map_or_else(String::new, |after| {
+            unified_diff(text, existing.unwrap_or(""), after)
+        });
+        return Ok(json!({
+            "changed": updated.is_some(),
+            "path": text,
+            "preview": true,
+            "diff": diff,
+        }));
+    }
+    if let Some(content) = &updated {
+        let expected = expected_hash(current.as_ref());
+        write_locked(&path, content.as_bytes(), &expected, None, None, context)?;
+    }
+    Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
+/// The text of a file after `fs.ensure_line` with `line` present or absent, or
+/// `None` when the file already holds that state.
+fn line_text_update(existing: Option<&str>, line: &str, present: bool) -> Option<String> {
+    match (present, existing) {
         (true, None) => Some(format!("{line}\n")),
         (true, Some(content)) => {
             if content
@@ -132,12 +157,63 @@ pub(super) fn ensure_line(
                 .collect();
             (kept.len() != content.len()).then_some(kept)
         }
-    };
-    if let Some(content) = &updated {
-        let expected = expected_hash(current.as_ref());
-        write_locked(&path, content.as_bytes(), &expected, None, None, context)?;
     }
-    Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
+/// A unified diff of `before` to `after`, with one hunk spanning the lines that
+/// differ. Leading and trailing lines common to both are left out of the hunk,
+/// so unchanged lines may sit between the first and last change. Empty when the
+/// texts are equal.
+fn unified_diff(path: &str, before: &str, after: &str) -> String {
+    if before == after {
+        return String::new();
+    }
+    let old: Vec<&str> = before.split_inclusive('\n').collect();
+    let new: Vec<&str> = after.split_inclusive('\n').collect();
+    let prefix = old
+        .iter()
+        .zip(&new)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let old_changed = &old[prefix..old.len() - suffix];
+    let new_changed = &new[prefix..new.len() - suffix];
+    // An empty side is shown at the line before the change, as unified diffs do.
+    let old_start = if old_changed.is_empty() {
+        prefix
+    } else {
+        prefix + 1
+    };
+    let new_start = if new_changed.is_empty() {
+        prefix
+    } else {
+        prefix + 1
+    };
+    let mut out = format!(
+        "--- {path}\n+++ {path}\n@@ -{old_start},{} +{new_start},{} @@\n",
+        old_changed.len(),
+        new_changed.len()
+    );
+    for piece in old_changed {
+        push_diff_line(&mut out, '-', piece);
+    }
+    for piece in new_changed {
+        push_diff_line(&mut out, '+', piece);
+    }
+    out
+}
+
+fn push_diff_line(out: &mut String, sign: char, piece: &str) {
+    out.push(sign);
+    out.push_str(piece);
+    if !piece.ends_with('\n') {
+        out.push_str("\n\\ No newline at end of file\n");
+    }
 }
 
 /// `conf.set`: set one `key` to `value` in a key/value config file, changing the
@@ -1362,8 +1438,9 @@ fn remove_matching_text(
 mod set_key_tests {
     use super::{
         conf_ensure_block, conf_ensure_line_near, conf_remove_block, conf_remove_matching,
-        ensure_block_text, ensure_line_near_text, remove_block_text, remove_matching_text,
-        set_key_text, ConfStyle, ExecutionContext, MatchMode, Placement, BLOCK_ID_MAX_BYTES,
+        ensure_block_text, ensure_line, ensure_line_near_text, remove_block_text,
+        remove_matching_text, set_key_text, unified_diff, ConfStyle, ExecutionContext, MatchMode,
+        Placement, BLOCK_ID_MAX_BYTES,
     };
     use serde_json::{json, Map, Value};
     use std::fs;
@@ -2585,5 +2662,121 @@ mod set_key_tests {
             fs::read_to_string(dir.path().join("target.conf")).unwrap(),
             "a\n"
         );
+    }
+
+    #[test]
+    fn ensure_line_preview_returns_the_diff_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.conf");
+        fs::write(&path, "name = demo\n").unwrap();
+        let bytes_before = fs::read(&path).unwrap();
+        let modified_before = fs::metadata(&path).unwrap().modified().unwrap();
+        let output = ensure_line(
+            &args(json!({"path": "app.conf", "line": "port = 80", "preview": true})),
+            dir.path(),
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(output["changed"], true);
+        assert_eq!(output["preview"], true);
+        assert_eq!(
+            output["diff"],
+            json!("--- app.conf\n+++ app.conf\n@@ -1,0 +2,1 @@\n+port = 80\n")
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes_before);
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            modified_before
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn ensure_line_preview_of_an_absent_line_shows_the_removed_line() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("app.conf"), "a\nneedle\nb\n").unwrap();
+        let output = ensure_line(
+            &args(
+                json!({"path": "app.conf", "line": "needle", "state": "absent", "preview": true}),
+            ),
+            dir.path(),
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(output["changed"], true);
+        assert_eq!(
+            output["diff"],
+            json!("--- app.conf\n+++ app.conf\n@@ -2,1 +1,0 @@\n-needle\n")
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            "a\nneedle\nb\n"
+        );
+    }
+
+    #[test]
+    fn unified_diff_marks_a_missing_final_newline() {
+        assert_eq!(
+            unified_diff("p", "a", "a\nb\n"),
+            "--- p\n+++ p\n@@ -1,1 +1,2 @@\n-a\n\\ No newline at end of file\n+a\n+b\n"
+        );
+        assert_eq!(unified_diff("p", "a\n", "a\n"), "");
+    }
+
+    #[test]
+    fn reconciler_over_ensure_line_applies_once_then_applies_nothing() {
+        use crate::contracts::reconcile::{reconcile, Operations, Outcome};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.conf");
+        fs::write(&path, "name = demo\n").unwrap();
+        let context = ExecutionContext::unrestricted();
+        let desired = json!({"line_present": true});
+        let run = || {
+            reconcile(
+                &desired,
+                Operations {
+                    observe: Box::new(|| {
+                        let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+                        Ok(json!({"line_present": text.lines().any(|line| line == "port = 80")}))
+                    }),
+                    diff: None,
+                    apply: Box::new(|_diff: &Value| {
+                        ensure_line(
+                            &args(json!({"path": "app.conf", "line": "port = 80"})),
+                            dir.path(),
+                            &context,
+                        )
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                    }),
+                    verify: None,
+                },
+            )
+        };
+        assert_eq!(
+            run(),
+            Outcome::Changed {
+                diff: json!({"line_present": true}),
+                observed: json!({"line_present": true}),
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            "name = demo\nport = 80\n"
+        );
+        assert_eq!(
+            run(),
+            Outcome::Unchanged {
+                observed: json!({"line_present": true}),
+            }
+        );
+        let preview = ensure_line(
+            &args(json!({"path": "app.conf", "line": "port = 80", "preview": true})),
+            dir.path(),
+            &ExecutionContext::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(preview["changed"], false);
+        assert_eq!(preview["diff"], "");
     }
 }

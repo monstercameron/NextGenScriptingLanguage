@@ -1,13 +1,17 @@
 #![cfg(feature = "graph")]
 use anyhow::Result;
 use flow::ast::Value;
+#[cfg(unix)]
+use flow::contracts::OutputType;
+#[cfg(unix)]
+use flow::contracts::ValueSchema;
 use flow::graph::PortRef;
 use flow::graph::{
     self, GraphContext, GraphExecutor, GraphNode, GraphRunOptions, GraphSession, NodeIo, PortValue,
     RuntimeGraphExecutor,
 };
 #[cfg(unix)]
-use flow::graph::{EdgeSpec, GraphNodeKind};
+use flow::graph::{EdgeSpec, GraphNodeKind, PortSchema};
 use flow::manifest::Registry;
 use flow::modules::{load_program_module_package, ProgramModuleSession};
 use flow::runtime::RunOptions;
@@ -1161,6 +1165,27 @@ fn wait_for_marker_count(path: &Path, expected: usize, deadline: Instant) -> usi
 }
 
 #[cfg(unix)]
+fn timer_tick_schema() -> ValueSchema {
+    ValueSchema {
+        min_items: None,
+        scalar_only: false,
+        additional_properties: None,
+        min_properties: None,
+        max_properties: None,
+        nonempty: false,
+        kind: OutputType::Integer,
+        nullable: false,
+        fields: BTreeMap::new(),
+        required: Vec::new(),
+        items: None,
+        enum_values: None,
+        single_line: false,
+        minimum: None,
+        pattern: None,
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn cancelling_a_service_blocked_by_a_full_lossless_edge_queue_joins_it() {
     let marker_root = tempfile::tempdir().unwrap();
@@ -1186,7 +1211,7 @@ fn cancelling_a_service_blocked_by_a_full_lossless_edge_queue_joins_it() {
         kind: GraphNodeKind::Timer { interval_ms: 1 },
         inputs: BTreeMap::from([("updated".into(), event_schema)]),
         outputs: BTreeMap::new(),
-        events: BTreeMap::new(),
+        events: BTreeMap::from([("tick".into(), PortSchema::events(timer_tick_schema()))]),
         line: None,
     })
     .unwrap();

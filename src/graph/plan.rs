@@ -1196,6 +1196,7 @@ impl GraphPlan {
                         line: node.line,
                     });
                 }
+                validate_timer_event_port(node, &mut issues);
             }
         }
 
@@ -1746,6 +1747,35 @@ fn sensitivity_name(sensitivity: Sensitivity) -> &'static str {
         Sensitivity::Confidential => "confidential",
         Sensitivity::Secret => "secret",
         Sensitivity::Unknown => "unknown",
+    }
+}
+
+/// The runtime emits integer ticks on the timer's only event port, so a timer
+/// must declare exactly one event port and that port must carry integers.
+fn validate_timer_event_port(node: &GraphNode, issues: &mut Vec<GraphDiagnostic>) {
+    let mut events = node.events.iter();
+    let issue = match (events.next(), events.next()) {
+        (None, _) => Some(format!(
+            "timer node {:?} has no event port; declare exactly one integer event port (for example \"tick\")",
+            node.id
+        )),
+        (Some((name, port)), None) if port.schema.kind != OutputType::Integer => Some(format!(
+            "timer node {:?} event port {:?} must have integer schema, found {:?}",
+            node.id, name, port.schema.kind
+        )),
+        (Some(_), None) => None,
+        (Some(_), Some(_)) => Some(format!(
+            "timer node {:?} has {} event ports; a timer must declare exactly one integer event port",
+            node.id,
+            node.events.len()
+        )),
+    };
+    if let Some(message) = issue {
+        issues.push(GraphDiagnostic {
+            code: "invalid_timer_event_port",
+            message,
+            line: node.line,
+        });
     }
 }
 

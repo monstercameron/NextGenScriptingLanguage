@@ -1,0 +1,17 @@
+# Execute
+
+> Execute runs controlled-English `.program` files that glue native command-line
+> tools together. Programs are plain text with lowercase keywords, explicit argv
+> and no shell. Computation belongs in applets, not in the grammar.
+
+## Agent guidance
+
+- [Agent card](docs/agents/execute.md): grammar forms, common idioms, the review loop and pitfalls.
+- [Porting skill](docs/agents/execute-port-skill.md): how to port a shell script to a `.program` file and check it.
+
+## Reference
+
+- [Language reference](docs/language.md): behavior, restrictions and runtime contracts.
+- [Grammar](docs/grammar.md): EBNF of accepted program forms, with examples parsed by the test suite.
+- [Project README](README.md): installation and runnable examples.
+- [Stability](docs/stability.md): which language and output versions are compatibility promises.

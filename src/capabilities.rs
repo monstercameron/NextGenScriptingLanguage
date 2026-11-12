@@ -351,6 +351,141 @@ mod execution_tests {
         );
     }
 
+    /// Five `for each` items, each taking a lease before its (injected) spawn.
+    /// Returns the items that started, the refusals by diagnostic, and the usage.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    fn run_five_items(text: &str) -> (Vec<usize>, Vec<String>, crate::models::BudgetUsage) {
+        let registry = budgeted_registry(text);
+        let hold = hold_model_budget(&registry, true);
+        let mut started = Vec::new();
+        let mut refused = Vec::new();
+        for item in 0..5 {
+            match begin_model_call(&hold, true, || classify_argv(Some("100"))) {
+                Ok(Some(lease)) => {
+                    let (spawned, lease) = lease.spawn(|| Ok::<usize, std::io::Error>(item));
+                    started.push(spawned.expect("the injected spawn succeeds"));
+                    if let Some(lease) = lease {
+                        lease.settle(Some(br#"{"usage":{"total_tokens":7}}"#));
+                    }
+                }
+                Ok(None) => panic!("a budgeted model stage always takes a lease"),
+                Err(error) => refused.push(crate::models::diagnostic(&error)),
+            }
+        }
+        let usage = hold.as_deref().expect("budget is held").usage();
+        (started, refused, usage)
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_lease_runs_three_of_five_items_under_calls_three() {
+        let (started, refused, usage) = run_five_items("calls=3");
+        assert_eq!(started, vec![0, 1, 2]);
+        assert_eq!(refused, vec!["model_budget_exhausted"; 2]);
+        assert_eq!((usage.calls, usage.tokens), (3, 21));
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_lease_with_a_larger_budget_runs_all_five_items() {
+        let (started, refused, usage) = run_five_items("calls=10");
+        assert_eq!(started, vec![0, 1, 2, 3, 4]);
+        assert!(refused.is_empty());
+        assert_eq!((usage.calls, usage.tokens), (5, 35));
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_lease_failed_spawn_consumes_no_call() {
+        let registry = budgeted_registry("calls=1");
+        let hold = hold_model_budget(&registry, true);
+        let lease = begin_model_call(&hold, true, || classify_argv(Some("100")))
+            .unwrap()
+            .expect("leased");
+        let (spawned, lease) = lease.spawn(|| Err::<(), _>(std::io::Error::other("no such file")));
+        assert!(spawned.is_err());
+        assert!(lease.is_none());
+        assert_eq!(
+            hold.as_deref().expect("budget is held").usage(),
+            crate::models::BudgetUsage::default()
+        );
+        // The released call frees the only slot for the next attempt.
+        let lease = begin_model_call(&hold, true, || classify_argv(None))
+            .unwrap()
+            .expect("leased");
+        let (spawned, lease) = lease.spawn(|| Ok::<(), std::io::Error>(()));
+        assert!(spawned.is_ok());
+        lease.expect("spawned").settle(None);
+        assert_eq!(hold.as_deref().expect("budget is held").usage().calls, 1);
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_lease_dropped_unsettled_keeps_its_reservation_as_uncertain() {
+        let registry = budgeted_registry("calls=5,tokens=1000");
+        let hold = hold_model_budget(&registry, true);
+        let lease = begin_model_call(&hold, true, || classify_argv(None))
+            .unwrap()
+            .expect("leased");
+        let (spawned, lease) = lease.spawn(|| Ok::<(), std::io::Error>(()));
+        assert!(spawned.is_ok());
+        // A timeout or a failed wait drops the lease without a result.
+        drop(lease);
+        let usage = hold.as_deref().expect("budget is held").usage();
+        assert_eq!((usage.calls, usage.tokens), (1, 512));
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_lease_without_a_budget_or_a_model_stage_takes_nothing() {
+        let registry = Registry::default();
+        let hold = hold_model_budget(&registry, true);
+        let mut read = false;
+        let lease = begin_model_call(&hold, true, || {
+            read = true;
+            classify_argv(None)
+        })
+        .unwrap();
+        assert!(lease.is_none());
+        assert!(!read);
+        // A budget never leases a stage that is not an `@execute-model` call.
+        let budgeted = budgeted_registry("calls=1");
+        let hold = hold_model_budget(&budgeted, false);
+        assert!(hold.is_none());
+        let hold = hold_model_budget(&budgeted, true);
+        assert!(begin_model_call(&hold, false, || classify_argv(None))
+            .unwrap()
+            .is_none());
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+    #[test]
+    fn model_lease_parallel_calls_share_one_budget() {
+        let registry = budgeted_registry("calls=3");
+        let hold = hold_model_budget(&registry, true);
+        let granted: usize = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        // A dropped lease keeps its reservation, so each grant is one call.
+                        usize::from(
+                            begin_model_call(&hold, true, || classify_argv(Some("1")))
+                                .ok()
+                                .flatten()
+                                .is_some(),
+                        )
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("worker finished"))
+                .sum()
+        });
+        assert_eq!(granted, 3);
+        assert_eq!(hold.as_deref().expect("budget is held").usage().calls, 3);
+    }
+
     fn grant() -> AppletGrant {
         AppletGrant {
             capabilities: BTreeSet::from([
@@ -4515,6 +4650,180 @@ pub fn model_call_outcome(stdout: Option<&[u8]>) -> crate::models::CallOutcome {
     match total {
         Some(total_tokens) => crate::models::CallOutcome::Reported { total_tokens },
         None => crate::models::CallOutcome::Uncertain,
+    }
+}
+
+/// The run's model budget as a group holds it while it spawns and waits: the
+/// shared budget when the group has an `@execute-model` stage under a budget,
+/// and nothing otherwise, so a run without a budget takes no lock.
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+pub(crate) type ModelBudgetHold = Option<std::sync::Arc<crate::models::RunModelBudget>>;
+
+/// Without the model feature no `@execute-model` stage exists, so nothing is held.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "model")))]
+pub(crate) type ModelBudgetHold = ();
+
+/// Take the run's model budget for a group whose stages include `@execute-model`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+pub(crate) fn hold_model_budget(registry: &Registry, model_stage: bool) -> ModelBudgetHold {
+    if model_stage {
+        run_model_budget(registry)
+    } else {
+        None
+    }
+}
+
+/// Without the model feature no budget exists.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "model")))]
+pub(crate) fn hold_model_budget(_registry: &Registry, _model_stage: bool) -> ModelBudgetHold {}
+
+/// One `@execute-model` spawn's hold on the run budget. It is reserved before
+/// the child starts, released when the spawn fails (no call was made), and
+/// settled after the wait with the helper's usage. A lease dropped unsettled
+/// keeps its full reservation as uncertain: a timeout, a failed wait, a
+/// nonzero exit, a cancelled or panicking run, and a child that was handed over
+/// or detached all may have reached the provider.
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+#[must_use = "a model call lease must be spawned under, then settled after the wait"]
+pub(crate) struct ModelCallLease<'budget> {
+    budget: &'budget crate::models::RunModelBudget,
+    reservation: Option<crate::models::Reservation<'budget>>,
+    started: std::time::Instant,
+}
+
+/// Without the model feature no lease is ever created.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "model")))]
+pub(crate) enum ModelCallLease<'budget> {
+    #[allow(dead_code)] // Never constructed without the model feature.
+    Never(
+        std::convert::Infallible,
+        std::marker::PhantomData<&'budget ()>,
+    ),
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+impl<'budget> ModelCallLease<'budget> {
+    /// Reserve one call before its spawn. A refusal is the typed
+    /// `model_budget_exhausted` failure and nothing has started.
+    fn begin(
+        budget: &'budget crate::models::RunModelBudget,
+        arguments: &[OsString],
+    ) -> Result<Self> {
+        let reservation = budget
+            .reserve(crate::models::CallEstimate {
+                max_tokens: model_argv_max_tokens(arguments),
+            })
+            .map_err(anyhow::Error::from)?;
+        Ok(Self {
+            budget,
+            reservation: Some(reservation),
+            started: std::time::Instant::now(),
+        })
+    }
+
+    /// Run the spawn under the reservation. A failed spawn gives the call back
+    /// in full, so it consumes no call; a successful spawn returns the lease
+    /// to be settled after the wait.
+    pub(crate) fn spawn<T, E>(
+        self,
+        spawn: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> (std::result::Result<T, E>, Option<Self>) {
+        match spawn() {
+            Ok(value) => (Ok(value), Some(self)),
+            Err(error) => {
+                self.release();
+                (Err(error), None)
+            }
+        }
+    }
+
+    fn release(mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            self.budget.release(reservation);
+        }
+    }
+
+    /// Settle after the wait. `stdout` is the helper's captured output for a
+    /// child that exited successfully; `None` keeps the reservation uncertain.
+    pub(crate) fn settle(mut self, stdout: Option<&[u8]>) {
+        if let Some(reservation) = self.reservation.take() {
+            self.budget.settle(
+                reservation,
+                model_call_outcome(stdout),
+                self.started.elapsed(),
+            );
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+impl Drop for ModelCallLease<'_> {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            self.budget.settle(
+                reservation,
+                crate::models::CallOutcome::Uncertain,
+                self.started.elapsed(),
+            );
+        }
+    }
+}
+
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "model")))]
+impl ModelCallLease<'_> {
+    pub(crate) fn spawn<T, E>(
+        self,
+        _spawn: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> (std::result::Result<T, E>, Option<Self>) {
+        match self {
+            Self::Never(never, _) => match never {},
+        }
+    }
+
+    pub(crate) fn settle(self, _stdout: Option<&[u8]>) {
+        match self {
+            Self::Never(never, _) => match never {},
+        }
+    }
+}
+
+/// The lease for one spawn of a group stage. It is `Some` only for an
+/// `@execute-model` stage under a run budget, and `arguments` is read only
+/// then. A refusal returns `model_budget_exhausted`, and nothing is spawned.
+#[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
+pub(crate) fn begin_model_call<'budget>(
+    hold: &'budget ModelBudgetHold,
+    model_stage: bool,
+    arguments: impl FnOnce() -> Vec<OsString>,
+) -> Result<Option<ModelCallLease<'budget>>> {
+    let Some(budget) = hold.as_deref().filter(|_| model_stage) else {
+        return Ok(None);
+    };
+    ModelCallLease::begin(budget, &arguments()).map(Some)
+}
+
+/// Without the model feature no stage is a model call, so no lease is taken.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "model")))]
+pub(crate) fn begin_model_call<'budget>(
+    _hold: &'budget ModelBudgetHold,
+    _model_stage: bool,
+    _arguments: impl FnOnce() -> Vec<OsString>,
+) -> Result<Option<ModelCallLease<'budget>>> {
+    Ok(None)
+}
+
+/// Settle a group's leases after its wait. Only the final stage's lease takes
+/// `stdout`, since only its output reaches the group; every earlier stage's
+/// output went to the next stage, so its lease is dropped and stays uncertain.
+pub(crate) fn settle_model_leases(
+    leases: Vec<(usize, ModelCallLease<'_>)>,
+    last: usize,
+    stdout: Option<&[u8]>,
+) {
+    for (index, lease) in leases {
+        if index == last {
+            lease.settle(stdout);
+        }
     }
 }
 

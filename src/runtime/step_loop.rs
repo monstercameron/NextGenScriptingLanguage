@@ -2492,6 +2492,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 command.env(crate::capabilities::MODEL_GRANTED_ORIGIN_ENV, granted);
                             }
                         }
+                        // A handed-over or detached model child writes its own output, so
+                        // its lease is never settled from stdout and keeps the reservation
+                        // as uncertain. Its refusal starts nothing.
+                        let model_hold = crate::capabilities::hold_model_budget(
+                            registry,
+                            manifest.binary == "@execute-model",
+                        );
+                        let lease = crate::capabilities::begin_model_call(
+                            &model_hold,
+                            manifest.binary == "@execute-model",
+                            || command.get_args().map(OsStr::to_os_string).collect(),
+                        )?;
                         match request {
                             handoff::ProcessRequest::HandOver => {
                                 // Output of earlier statements is written now, before the
@@ -2562,7 +2574,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     }
                                     None => None,
                                 };
-                                handoff::launch_detached(command, output).with_context(|| {
+                                let (launched, _detached_lease) = match lease {
+                                    Some(lease) => {
+                                        lease.spawn(|| handoff::launch_detached(command, output))
+                                    }
+                                    None => (handoff::launch_detached(command, output), None),
+                                };
+                                launched.with_context(|| {
                                     format!("line {}: launch detached", step.line)
                                 })?;
                                 result.launched_processes += 1;

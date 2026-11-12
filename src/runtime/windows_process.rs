@@ -550,6 +550,15 @@ fn execute_group_with_sink(
                 "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
             );
         }
+        // The run's model budget is held for the whole group only when a stage is
+        // an `@execute-model` call; each such spawn leases one call from it.
+        let model_budget = crate::capabilities::hold_model_budget(
+            registry,
+            calls
+                .iter()
+                .any(|(_, manifest, _)| manifest.binary == "@execute-model"),
+        );
+        let mut model_leases = Vec::new();
         // Set when a terminal-stage child's stdout is captured for the lossy
         // console relay below instead of inherited from a console.
         let mut console_relay = false;
@@ -706,7 +715,22 @@ fn execute_group_with_sink(
                 }
             };
             command.stdin(stdin);
-            let (mut child, job) = Job::spawn(&mut command).map_err(|error| {
+            let model_lease = crate::capabilities::begin_model_call(
+                &model_budget,
+                manifest.binary == "@execute-model",
+                || command.get_args().map(OsStr::to_os_string).collect(),
+            )
+            .map_err(|error| {
+                spawn::model_budget_refusal(error, calls, &children, &observed_stages, signals)
+            })?;
+            let (spawned, model_lease) = match model_lease {
+                Some(lease) => lease.spawn(|| Job::spawn(&mut command)),
+                None => (Job::spawn(&mut command), None),
+            };
+            if let Some(lease) = model_lease {
+                model_leases.push((index, lease));
+            }
+            let (mut child, job) = spawned.map_err(|error| {
                 let failure = native_spawn_failure(
                     format!("line {line}: spawning {}: {error:#}", binary.display()),
                     index,
@@ -924,6 +948,13 @@ fn execute_group_with_sink(
                 if let Some(sink) = sink.as_deref_mut() {
                     sink.finish(signals)?;
                 }
+                // Only a successful final stage's captured stdout can settle its model call.
+                let model_stdout = (status == Some(0)).then_some(output.as_slice());
+                crate::capabilities::settle_model_leases(
+                    model_leases,
+                    calls.len() - 1,
+                    model_stdout,
+                );
                 return Ok(GroupOutput {
                     bytes: output,
                     typed_json: None,

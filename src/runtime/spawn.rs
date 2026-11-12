@@ -586,6 +586,27 @@ pub(super) fn native_spawn_failure(
     .into()
 }
 
+/// A refused `@execute-model` reservation. The refused stage never spawned, so
+/// its failure carries the typed diagnostic `model_budget_exhausted` through the
+/// same execution-failure record a spawn failure uses, and `try` can catch it.
+pub(super) fn model_budget_refusal(
+    error: anyhow::Error,
+    calls: &[(&Invocation, &Manifest, usize)],
+    children: &Children,
+    observed: &[Option<execution_result::StageResult>],
+    signals: &Signals,
+) -> anyhow::Error {
+    native_execution_failure(
+        execution_result::ExecutionKind::ResourceExhaust,
+        error.to_string(),
+        calls,
+        children,
+        observed,
+        signals,
+    )
+    .into()
+}
+
 /// The terminal stdout of a group whose command just failed.
 pub(super) struct FailedStdout<'a, R> {
     /// Whether the group captures its terminal stdout for the pipeline at all.
@@ -844,6 +865,15 @@ pub(super) fn execute_group_with_sink(
             "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
         );
     }
+    // The run's model budget is held for the whole group only when a stage is an
+    // `@execute-model` call; each such spawn leases one call from it.
+    let model_budget = crate::capabilities::hold_model_budget(
+        registry,
+        calls
+            .iter()
+            .any(|(_, manifest, _)| manifest.binary == "@execute-model"),
+    );
+    let mut model_leases = Vec::new();
     // Assigned for each command before its first use, so it needs no initial value.
     let mut terminal_foreground: Option<TerminalForeground>;
     for (index, (call, manifest, line)) in calls.iter().enumerate() {
@@ -968,7 +998,22 @@ pub(super) fn execute_group_with_sink(
         };
         command.stdin(stdin);
         check_native_abort(calls, &children, &observed_stages, signals)?;
-        let mut child = command.spawn().map_err(|error| {
+        let model_lease = crate::capabilities::begin_model_call(
+            &model_budget,
+            manifest.binary == "@execute-model",
+            || command.get_args().map(OsStr::to_os_string).collect(),
+        )
+        .map_err(|error| {
+            model_budget_refusal(error, calls, &children, &observed_stages, signals)
+        })?;
+        let (spawned, model_lease) = match model_lease {
+            Some(lease) => lease.spawn(|| command.spawn()),
+            None => (command.spawn(), None),
+        };
+        if let Some(lease) = model_lease {
+            model_leases.push((index, lease));
+        }
+        let mut child = spawned.map_err(|error| {
             let failure = native_spawn_failure(
                 format!("line {line}: spawning {}: {error}", binary.display()),
                 index,
@@ -1387,6 +1432,9 @@ pub(super) fn execute_group_with_sink(
                 .then_some(128 + libc::SIGPIPE)
             })
         });
+    // Only a successful final stage's captured stdout can settle its model call.
+    let model_stdout = (status == Some(0)).then_some(output.as_slice());
+    crate::capabilities::settle_model_leases(model_leases, calls.len() - 1, model_stdout);
     Ok(GroupOutput {
         bytes: output,
         typed_json: None,

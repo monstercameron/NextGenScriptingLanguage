@@ -1430,6 +1430,131 @@ pub fn load_program_module(
     })
 }
 
+/// Generate the strict JSON package manifest for one finite `.program` entry,
+/// so an author does not hand-write the export or its digests. The entry's
+/// `accept` declarations become the export inputs, and `source_sha256` is the
+/// SHA-256 of the source bytes. The export is named after its entry, uses the
+/// one-shot finite interface, and declares a `json` output because programs
+/// cannot yet declare an output schema (#365). Capabilities and effects are
+/// left empty (#216). `source` is written relative to `manifest_dir`, the
+/// directory the returned JSON is saved into.
+pub fn generate_program_module_manifest(
+    source_path: &Path,
+    manifest_dir: &Path,
+    name: &str,
+    version: &str,
+    entry: &str,
+) -> Result<String> {
+    let source_bytes = read_limited(
+        source_path,
+        MAX_PROGRAM_MODULE_GRAPH_BYTES,
+        "program module source",
+    )?;
+    let source_sha256 = sha256_hex(&source_bytes);
+    let source = std::str::from_utf8(&source_bytes).with_context(|| {
+        format!(
+            "program module source {} is not UTF-8",
+            source_path.display()
+        )
+    })?;
+    let program = parse_module_source(source, source_path)?;
+    let definition = program.definitions.get(entry).ok_or_else(|| {
+        anyhow!(
+            "program module source {} does not define entry {entry:?}",
+            source_path.display()
+        )
+    })?;
+    let inputs = definition
+        .inputs
+        .iter()
+        .map(|input| {
+            let kind = match input.kind {
+                InputType::Text => ProgramModuleInputType::Text,
+                InputType::Integer => ProgramModuleInputType::Integer,
+                InputType::Boolean => ProgramModuleInputType::Boolean,
+                InputType::TextList => ProgramModuleInputType::TextList,
+                InputType::Json => ProgramModuleInputType::Json,
+                other => bail!(
+                    "program module input {:?} has type {other:?}, which interface version {PROGRAM_MODULE_INTERFACE_VERSION} cannot express",
+                    input.name
+                ),
+            };
+            Ok(ProgramModuleInput {
+                name: input.name.clone(),
+                kind,
+                required: input.default.is_none(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let output = serde_json::from_value::<OutputSchema>(
+        serde_json::json!({ "type": "json", "encoding": "json" }),
+    )?;
+    let source_name = relative_source_path(manifest_dir, source_path)?;
+    let manifest = ProgramModulePackageManifest {
+        format_version: PROGRAM_MODULE_PACKAGE_FORMAT,
+        name: name.to_owned(),
+        version: version.to_owned(),
+        interface_version: PROGRAM_MODULE_INTERFACE_VERSION,
+        source: PathBuf::from(source_name),
+        source_sha256,
+        exports: BTreeMap::from([(
+            entry.to_owned(),
+            ProgramModuleExport {
+                entry: entry.to_owned(),
+                interface_version: PROGRAM_MODULE_INTERFACE_VERSION,
+                inputs,
+                output,
+                outcomes: Vec::new(),
+                result_envelope: false,
+                lifecycle: ModuleLifecycle::OneShot,
+                capabilities: Vec::new(),
+                effects: Vec::new(),
+                ports: None,
+            },
+        )]),
+        dependencies: BTreeMap::new(),
+    };
+    validate_package_manifest(&manifest)?;
+    let mut text = serde_json::to_string_pretty(&manifest)?;
+    text.push('\n');
+    Ok(text)
+}
+
+/// Portable (`/`-separated) path from `manifest_dir` to `source_path`, using
+/// `..` to climb out of the manifest directory when needed.
+fn relative_source_path(manifest_dir: &Path, source_path: &Path) -> Result<String> {
+    let manifest_dir = canonical_directory(manifest_dir, "module manifest directory")?;
+    let source_path = fs::canonicalize(source_path)
+        .with_context(|| format!("resolving program module source {}", source_path.display()))?;
+    let base = manifest_dir.components().collect::<Vec<_>>();
+    let target = source_path.components().collect::<Vec<_>>();
+    let common = base
+        .iter()
+        .zip(&target)
+        .take_while(|(left, right)| left == right)
+        .count();
+    if common == 0 {
+        bail!(
+            "program module source {} and manifest directory {} share no root",
+            source_path.display(),
+            manifest_dir.display()
+        );
+    }
+    let mut parts = vec!["..".to_owned(); base.len() - common];
+    for component in &target[common..] {
+        match component {
+            Component::Normal(value) => parts.push(
+                value
+                    .to_str()
+                    .ok_or_else(|| anyhow!("program module source path is not UTF-8"))?
+                    .to_owned(),
+            ),
+            _ => bail!("program module source path has an unsupported component"),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 fn parse_module_source(source: &str, source_path: &Path) -> Result<Program> {
     let program = crate::parser::parse(source)
         .with_context(|| format!("parsing program module source {}", source_path.display()))?;
@@ -3535,5 +3660,63 @@ mod tests {
             InputType::UsizeList,
             u64::MAX
         ));
+    }
+
+    #[test]
+    fn generated_package_manifest_loads_through_package_loader() {
+        let temp = tempdir().unwrap();
+        let source = "define a program named echo_record\n  accept payload as json\n  then encode payload as json\n";
+        let source_path = temp.path().join("echo.program");
+        fs::write(&source_path, source).unwrap();
+        let package_dir = temp.path().join("package");
+        fs::create_dir(&package_dir).unwrap();
+
+        let manifest = generate_program_module_manifest(
+            &source_path,
+            &package_dir,
+            "examples.echo",
+            "1.0.0",
+            "echo_record",
+        )
+        .unwrap();
+        let manifest_path = package_dir.join("program.modules.json");
+        fs::write(&manifest_path, &manifest).unwrap();
+
+        let loaded = load_program_module_package(&manifest_path, temp.path(), None).unwrap();
+        assert_eq!(loaded.manifest.source, PathBuf::from("../echo.program"));
+        assert_eq!(loaded.source_sha256, sha256_hex(source.as_bytes()));
+        assert_eq!(loaded.manifest.source_sha256, loaded.source_sha256);
+        let export = loaded.export("echo_record").unwrap();
+        assert_eq!(
+            export.export.inputs,
+            vec![ProgramModuleInput {
+                name: "payload".into(),
+                kind: ProgramModuleInputType::Json,
+                required: true,
+            }]
+        );
+        assert_eq!(export.export.output.kind, OutputType::Json);
+        assert_eq!(export.export.lifecycle, ModuleLifecycle::OneShot);
+        assert!(export.export.capabilities.is_empty());
+    }
+
+    #[test]
+    fn generated_package_manifest_rejects_unknown_entry() {
+        let temp = tempdir().unwrap();
+        let source_path = temp.path().join("echo.program");
+        fs::write(
+            &source_path,
+            "define a program named echo_record\n  accept payload as json\n  then encode payload as json\n",
+        )
+        .unwrap();
+        let error = generate_program_module_manifest(
+            &source_path,
+            temp.path(),
+            "examples.echo",
+            "1.0.0",
+            "missing",
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("does not define entry \"missing\""));
     }
 }

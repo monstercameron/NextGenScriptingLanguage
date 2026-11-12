@@ -22,6 +22,7 @@ pub fn run_recorded(
     program: &Program,
     registry: &flow::manifest::Registry,
     options: &RunOptions,
+    drain_timeout: std::time::Duration,
     provenance: record::RecordProvenance<'_>,
 ) -> Result<RunResult> {
     if program.trigger.is_some() {
@@ -62,7 +63,9 @@ pub fn run_recorded(
     })?);
     recorder.set_loop_budget(options.max_loop_iterations, options.loop_budget_scope)?;
     let guard = runtime::observe::install(recorder.clone())?;
-    let result = runtime::with_streamed_stdout(|| runtime::run(program, registry, options));
+    let result = runtime::with_streamed_stdout(|| {
+        runtime::run_with_drain_timeout(program, registry, options, drain_timeout)
+    });
     drop(guard);
     let summary = match &result {
         Ok(result) => {

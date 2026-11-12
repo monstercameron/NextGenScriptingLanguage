@@ -2234,6 +2234,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &program,
                         &registry,
                         &options,
+                        args.drain_timeout.unwrap_or(runtime::DEFAULT_DRAIN_TIMEOUT),
                         flow::record::RecordProvenance {
                             capability_policy_path: args.capability_policy.as_deref(),
                             data_flow_policy_path: args.data_flow_policy.as_deref(),

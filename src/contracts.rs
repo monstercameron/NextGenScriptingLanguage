@@ -3157,6 +3157,19 @@ impl AppletContract {
         }
     }
 
+    /// The `check` hint for a superseded spelling: one line naming the applet
+    /// and its canonical replacement. `None` unless the contract is
+    /// `deprecated` and names a `replaced_by` target.
+    pub fn deprecation_warning(&self, applet: &str) -> Option<String> {
+        if !self.deprecated {
+            return None;
+        }
+        let target = self.replaced_by.as_deref()?;
+        Some(format!(
+            "applet `{applet}` is deprecated; use `{target}` instead"
+        ))
+    }
+
     pub fn output_kind(&self) -> Option<InputType> {
         if self.result_envelope {
             Some(InputType::Json)
@@ -3945,6 +3958,38 @@ mod deprecation_field_tests {
         let result: Result<AppletContract, _> =
             serde_json::from_value(json!({"version": 1, "deprecated": "yes"}));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn deprecated_contract_warns_once_naming_both_applets() {
+        let contract: AppletContract = serde_json::from_value(json!({
+            "version": 1,
+            "deprecated": true,
+            "replaced_by": "text.upper"
+        }))
+        .unwrap();
+        let warning = contract.deprecation_warning("upper");
+        assert_eq!(
+            warning.as_deref(),
+            Some("applet `upper` is deprecated; use `text.upper` instead")
+        );
+    }
+
+    #[test]
+    fn non_deprecated_contract_has_no_deprecation_warning() {
+        let contract: AppletContract = serde_json::from_value(json!({
+            "version": 1,
+            "replaced_by": "text.upper"
+        }))
+        .unwrap();
+        assert_eq!(contract.deprecation_warning("upper"), None);
+    }
+
+    #[test]
+    fn deprecated_without_replacement_has_no_deprecation_warning() {
+        let contract: AppletContract =
+            serde_json::from_value(json!({"version": 1, "deprecated": true})).unwrap();
+        assert_eq!(contract.deprecation_warning("upper"), None);
     }
 }
 

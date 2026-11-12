@@ -6,6 +6,7 @@ use crate::{
     runtime,
 };
 use anyhow::{bail, Context, Result};
+use std::num::IntErrorKind;
 /// A key the screen language can name. Terminal input is reduced to these
 /// before screen logic sees it, so parsing needs no terminal crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +117,7 @@ pub struct Shortcut {
     pub label: String,
 }
 impl Shortcut {
-    fn parse(value: &str) -> Result<Self> {
+    fn parse(value: &str) -> Result<Self, DetailedError> {
         let (modifiers, prefix, key) = if let Some(key) = value.strip_prefix("Ctrl-") {
             (KeyModifiers::CONTROL, "Ctrl-", key)
         } else if let Some(key) = value.strip_prefix("Alt-") {
@@ -140,16 +141,27 @@ impl Shortcut {
         } else if modifiers == KeyModifiers::NONE && key == "Escape" {
             (KeyCode::Esc, "Escape".into())
         } else if modifiers == KeyModifiers::NONE && key.starts_with('F') {
-            let number: u8 = key[1..].parse().context("expected F1 through F12")?;
+            let number: u8 = key[1..].parse().map_err(|error: std::num::ParseIntError| {
+                DetailedError::unplaced("parse.syntax", format!("expected F1 through F12: {error}"))
+            })?;
             if !(1..=12).contains(&number) {
-                bail!("expected F1 through F12");
+                return Err(DetailedError::unplaced(
+                    "check.range",
+                    "expected F1 through F12",
+                ));
             }
             (KeyCode::F(number), format!("F{number}"))
         } else {
-            bail!("shortcut must be an ASCII letter/digit, Ctrl-/Alt- letter/digit, Escape, or F1 through F12");
+            return Err(DetailedError::unplaced(
+                "parse.syntax",
+                "shortcut must be an ASCII letter/digit, Ctrl-/Alt- letter/digit, Escape, or F1 through F12",
+            ));
         };
         if ["Ctrl-C", "Ctrl-U"].contains(&label.as_str()) {
-            bail!("{label} is reserved for terminal interruption or text editing");
+            return Err(DetailedError::unplaced(
+                "parse.syntax",
+                format!("{label} is reserved for terminal interruption or text editing"),
+            ));
         }
         Ok(Self {
             code,
@@ -216,11 +228,190 @@ pub struct Screen {
     pub components: BTreeMap<String, Component>,
     pub links: Vec<Link>,
 }
+
+/// A screen syntax error with its position and a stable code from `diagnostics::CODES`.
+///
+/// `message` is the text `parse` returns, in `{:#}` form, so a message that names a
+/// line starts with `line N: `. `line` is 1-based and `column` is the 1-based character
+/// column of the failing token, set only where the parser knows that token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetailedError {
+    pub code: &'static str,
+    pub line: usize,
+    pub column: Option<usize>,
+    pub message: String,
+    /// The outermost context layer when `message` is `<layer>: <cause>`. `parse` shows
+    /// only this layer with `{}`, as it did before this type existed.
+    outer: Option<String>,
+    /// A token index into the statement being parsed. `within` turns it into a column.
+    token: Option<usize>,
+}
+
+impl DetailedError {
+    fn new(code: &'static str, line: usize, column: Option<usize>, message: String) -> Self {
+        Self {
+            code,
+            line,
+            column,
+            message,
+            outer: None,
+            token: None,
+        }
+    }
+
+    /// An error whose line is not known yet. The enclosing statement supplies it.
+    fn unplaced(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(code, 0, None, message.into())
+    }
+
+    fn at_token(mut self, index: usize) -> Self {
+        self.token = Some(index);
+        self
+    }
+
+    fn shift_token(mut self, by: usize) -> Self {
+        self.token = self.token.map(|index| index + by);
+        self
+    }
+
+    /// Add a statement's line as the outermost layer, as `with_context` did. An error
+    /// without a line takes this one, and its token index becomes a column.
+    fn within(mut self, line: &Line<'_>) -> Self {
+        if self.line == 0 {
+            self.line = line.number;
+        }
+        if self.column.is_none() {
+            self.column = self.token.and_then(|index| line.column(index));
+        }
+        self.token = None;
+        let layer = format!("line {}", line.number);
+        self.message = format!("{layer}: {}", self.message);
+        self.outer = Some(layer);
+        self
+    }
+
+    /// A finite-parser error. Its `line N:` prefix, if any, gives the line.
+    fn from_anyhow(error: anyhow::Error) -> Self {
+        let message = format!("{error:#}");
+        let code = if error
+            .downcast_ref::<parser::LocatedParseError>()
+            .and_then(parser::LocatedParseError::source_range)
+            .is_some()
+        {
+            "parse.lexical"
+        } else {
+            code_for(&message)
+        };
+        Self {
+            code,
+            line: message_line(&message).unwrap_or(0),
+            column: None,
+            message,
+            outer: None,
+            token: None,
+        }
+    }
+
+    /// The `anyhow` error `parse` returns, with the same message and the same outer layer.
+    fn into_anyhow(self) -> anyhow::Error {
+        match self.outer {
+            Some(layer) => {
+                let cause = self
+                    .message
+                    .strip_prefix(layer.as_str())
+                    .and_then(|rest| rest.strip_prefix(": "))
+                    .unwrap_or(&self.message)
+                    .to_owned();
+                anyhow::Error::msg(cause).context(layer)
+            }
+            None => anyhow::Error::msg(self.message),
+        }
+    }
+}
+
+impl std::fmt::Display for DetailedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DetailedError {}
+
 struct Line<'source> {
     number: usize,
     indent: usize,
     tokens: Vec<Token<'source>>,
+    /// The 1-based character column of each token in the source line.
+    columns: Vec<usize>,
 }
+
+impl Line<'_> {
+    fn column(&self, index: usize) -> Option<usize> {
+        self.columns.get(index).copied()
+    }
+}
+
+/// An error on `line`, at the column of its first token.
+fn at_line(line: &Line<'_>, code: &'static str, message: &str) -> DetailedError {
+    DetailedError::new(code, line.number, line.column(0), message.to_owned())
+}
+
+/// A tokenizer failure on the line numbered `line`. `offset` is where the tokenized
+/// text starts in `raw`. The line is the outer layer, as the tokenizer's context made it.
+fn lexical_error(error: &anyhow::Error, line: usize, raw: &str, offset: usize) -> DetailedError {
+    let column = error
+        .downcast_ref::<parser::LocatedParseError>()
+        .and_then(parser::LocatedParseError::source_range)
+        .map(|range| column_of(raw, offset + range.start));
+    let layer = format!("line {line}");
+    DetailedError {
+        code: "parse.lexical",
+        line,
+        column,
+        message: format!("{layer}: {error:#}"),
+        outer: Some(layer),
+        token: None,
+    }
+}
+
+/// The finite parser reads a trigger as line 1 of its own source. Its message is kept
+/// and attached to the real line of the `every` statement.
+fn interval_error(error: &anyhow::Error, line: &Line<'_>) -> DetailedError {
+    let text = format!("{error:#}");
+    let message = text.strip_prefix("line 1: ").unwrap_or(&text);
+    at_line(line, "parse.syntax", message)
+}
+
+/// The stable code for a finite-parser message that is not a located token error.
+fn code_for(message: &str) -> &'static str {
+    if message.contains("tabs are not allowed for indentation")
+        || message.contains("inconsistent indentation")
+    {
+        "parse.indentation"
+    } else if message.contains("unsupported control") || message.contains("control nesting") {
+        "parse.control"
+    } else {
+        "parse.syntax"
+    }
+}
+
+/// The 1-based character column of byte `offset` in `text`.
+fn column_of(text: &str, offset: usize) -> usize {
+    text.get(..offset)
+        .map_or(offset + 1, |prefix| prefix.chars().count() + 1)
+}
+
+/// The number after the first `line N:` in a message, as the finite parser writes it.
+fn message_line(message: &str) -> Option<usize> {
+    message.match_indices("line ").find_map(|(index, _)| {
+        let rest = &message[index + "line ".len()..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        (digits > 0 && rest[digits..].starts_with(':'))
+            .then(|| rest[..digits].parse().ok())
+            .flatten()
+    })
+}
+
 fn words<'source>(tokens: &[Token<'source>]) -> Vec<&'source str> {
     tokens
         .iter()
@@ -230,13 +421,28 @@ fn words<'source>(tokens: &[Token<'source>]) -> Vec<&'source str> {
         })
         .collect()
 }
-fn text(tokens: &[Token<'_>], n: usize) -> Result<String> {
+/// A number written as a word. An out-of-range number is `check.range`, and any
+/// other non-number is `parse.syntax`.
+fn integer<T>(word: &str, index: usize) -> Result<T, DetailedError>
+where
+    T: std::str::FromStr<Err = std::num::ParseIntError>,
+{
+    word.parse::<T>().map_err(|error| {
+        let code = if *error.kind() == IntErrorKind::PosOverflow {
+            "check.range"
+        } else {
+            "parse.syntax"
+        };
+        DetailedError::unplaced(code, error.to_string()).at_token(index)
+    })
+}
+fn text(tokens: &[Token<'_>], n: usize) -> Result<String, DetailedError> {
     match tokens.get(n) {
         Some(Token::String(s)) => Ok(s.clone().into_owned()),
-        _ => bail!("expected quoted text"),
+        _ => Err(DetailedError::unplaced("parse.syntax", "expected quoted text").at_token(n)),
     }
 }
-fn name(tokens: &[Token<'_>], n: usize) -> Result<String> {
+fn name(tokens: &[Token<'_>], n: usize) -> Result<String, DetailedError> {
     match tokens.get(n) {
         Some(Token::Word(s))
             if !s.is_empty()
@@ -246,7 +452,7 @@ fn name(tokens: &[Token<'_>], n: usize) -> Result<String> {
         {
             Ok((*s).to_owned())
         }
-        _ => bail!("expected a name"),
+        _ => Err(DetailedError::unplaced("parse.syntax", "expected a name").at_token(n)),
     }
 }
 pub fn is_screen(source: &str) -> bool {
@@ -259,8 +465,14 @@ pub fn is_screen(source: &str) -> bool {
 }
 
 pub fn parse(source: &str) -> Result<Screen> {
+    parse_detailed(source).map_err(DetailedError::into_anyhow)
+}
+
+/// `parse` with each error's code, line and column. The message is the one `parse` returns.
+pub fn parse_detailed(source: &str) -> Result<Screen, DetailedError> {
     let mut lines = Vec::new();
     for (index, raw) in source.lines().enumerate() {
+        let number = index + 1;
         let raw = parser::strip_comment(raw);
         if raw.trim().is_empty() {
             continue;
@@ -269,14 +481,25 @@ pub fn parse(source: &str) -> Result<Screen> {
             .chars()
             .take_while(|c| c.is_whitespace())
             .collect::<String>();
-        if prefix.contains('\t') {
-            bail!("line {}: tabs are not allowed", index + 1);
+        if let Some(tab) = prefix.find('\t') {
+            return Err(DetailedError::new(
+                "parse.indentation",
+                number,
+                Some(column_of(raw, tab)),
+                format!("line {number}: tabs are not allowed"),
+            ));
         }
-        let tokens = parser::tokenize(raw.trim()).with_context(|| format!("line {}", index + 1))?;
+        let (tokens, ranges) = parser::tokenize_with_ranges(raw.trim())
+            .map_err(|error| lexical_error(&error, number, raw, prefix.len()))?;
+        let columns = ranges
+            .iter()
+            .map(|range| column_of(raw, prefix.len() + range.start))
+            .collect();
         lines.push(Line {
-            number: index + 1,
+            number,
             indent: prefix.len(),
             tokens,
+            columns,
         });
     }
     let mut screen = Screen {
@@ -286,17 +509,24 @@ pub fn parse(source: &str) -> Result<Screen> {
         components: BTreeMap::new(),
         links: Vec::new(),
     };
+    // The source line of each definition and connection, for the count limits.
+    let mut component_lines = Vec::new();
+    let mut link_lines = Vec::new();
     let mut i = 0;
     while i < lines.len() {
         let line = &lines[i];
         let w = words(&line.tokens);
-        let result = (|| -> Result<()> {
+        let result = (|| -> Result<(), DetailedError> {
             if line.indent != 0 {
-                bail!("unexpected top-level indentation");
+                return Err(at_line(
+                    line,
+                    "parse.indentation",
+                    "unexpected top-level indentation",
+                ));
             }
             if w.len() == 5 && w[..4] == ["open", "a", "screen", "titled"] {
                 if !screen.title.is_empty() {
-                    bail!("only one screen is allowed");
+                    return Err(at_line(line, "parse.syntax", "only one screen is allowed"));
                 }
                 screen.title = text(&line.tokens, 4)?;
             } else if w == ["divide", "the", "screen", "into", "two", "columns"] {
@@ -307,22 +537,38 @@ pub fn parse(source: &str) -> Result<Screen> {
             {
                 let id = name(&line.tokens, 1)?;
                 if screen.placements.contains(&id) {
-                    bail!("component is placed twice");
+                    return Err(at_line(
+                        line,
+                        "check.duplicate_name",
+                        "component is placed twice",
+                    ));
                 }
                 if (w[4] == "left" && !screen.placements.is_empty())
                     || (w[4] == "right" && screen.placements.len() != 1)
                 {
-                    bail!("place the left component before the right component");
+                    return Err(at_line(
+                        line,
+                        "parse.syntax",
+                        "place the left component before the right component",
+                    ));
                 }
                 screen.placements.push(id);
             } else if w.len() == 7 && w[0] == "give" && w[3..] == ["percent", "of", "the", "width"]
             {
                 if screen.placements.first() != Some(&name(&line.tokens, 1)?) {
-                    bail!("width must name the left component");
+                    return Err(at_line(
+                        line,
+                        "parse.syntax",
+                        "width must name the left component",
+                    ));
                 }
-                screen.first_width = w[2].parse()?;
+                screen.first_width = integer(w[2], 2)?;
                 if !(10..=90).contains(&screen.first_width) {
-                    bail!("column width must be between 10 and 90 percent");
+                    return Err(at_line(
+                        line,
+                        "check.range",
+                        "column width must be between 10 and 90 percent",
+                    ));
                 }
             } else if w.len() == 8
                 && w[0] == "connect"
@@ -336,31 +582,62 @@ pub fn parse(source: &str) -> Result<Screen> {
                     input: name(&line.tokens, 5)?,
                     target: name(&line.tokens, 7)?,
                 });
+                link_lines.push(line.number);
             } else if w.len() == 5 && w[..4] == ["define", "a", "program", "named"] {
                 let id = name(&line.tokens, 4)?;
                 i += 1;
                 let component = parse_component(&lines, &mut i)?;
                 if screen.components.insert(id, component).is_some() {
-                    bail!("duplicate component definition");
+                    return Err(at_line(
+                        line,
+                        "check.duplicate_name",
+                        "duplicate component definition",
+                    ));
                 }
+                component_lines.push(line.number);
                 return Ok(());
             } else {
-                bail!("unknown screen declaration");
+                return Err(at_line(line, "parse.syntax", "unknown screen declaration"));
             }
             i += 1;
             Ok(())
         })();
-        result.with_context(|| format!("line {}", line.number))?;
+        result.map_err(|error| error.within(line))?;
     }
+    let first_line = lines.first().map_or(1, |line| line.number);
+    let last_line = lines.last().map_or(1, |line| line.number);
     if screen.title.is_empty() || screen.placements.is_empty() || screen.placements.len() > 2 {
-        bail!("a screen needs a title and one or two placed components");
+        // Nothing in the file names the missing parts, so the error points at the
+        // first line for a missing title and at the last for missing placements.
+        let line = if screen.title.is_empty() {
+            first_line
+        } else {
+            last_line
+        };
+        return Err(DetailedError::new(
+            "parse.syntax",
+            line,
+            None,
+            "a screen needs a title and one or two placed components".to_owned(),
+        ));
     }
     if screen.components.len() > 16 || screen.links.len() > 32 {
-        bail!("too many components or connections");
+        // The first component or connection past the limit.
+        let over = if screen.components.len() > 16 {
+            component_lines.get(16)
+        } else {
+            link_lines.get(32)
+        };
+        return Err(DetailedError::new(
+            "check.range",
+            over.copied().unwrap_or(last_line),
+            None,
+            "too many components or connections".to_owned(),
+        ));
     }
     Ok(screen)
 }
-fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
+fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component, DetailedError> {
     let mut component = Component {
         inputs: BTreeSet::new(),
         outputs: BTreeSet::new(),
@@ -369,13 +646,18 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
     };
     while let Some(line) = lines.get(*i).filter(|l| l.indent > 0) {
         if line.indent != 2 {
-            bail!(
-                "line {}: component declarations need two spaces",
-                line.number
-            );
+            return Err(DetailedError::new(
+                "parse.indentation",
+                line.number,
+                line.column(0),
+                format!(
+                    "line {}: component declarations need two spaces",
+                    line.number
+                ),
+            ));
         }
         let w = words(&line.tokens);
-        let result = (|| -> Result<()> {
+        let result = (|| -> Result<(), DetailedError> {
             if w.len() == 4 && ["accept", "offer"].contains(&w[0]) && w[2..] == ["as", "text"] {
                 let set = if w[0] == "accept" {
                     &mut component.inputs
@@ -383,14 +665,18 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                     &mut component.outputs
                 };
                 if !set.insert(name(&line.tokens, 1)?) {
-                    bail!("duplicate interface port");
+                    return Err(at_line(
+                        line,
+                        "check.duplicate_name",
+                        "duplicate interface port",
+                    ));
                 }
                 *i += 1;
             } else if w.first() == Some(&"show") {
                 let named = w
                     .iter()
                     .position(|s| *s == "named")
-                    .context("widgets must have a name")?;
+                    .ok_or_else(|| at_line(line, "parse.syntax", "widgets must have a name"))?;
                 let kind = match &w[1..named] {
                     ["a", "heading"] => Kind::Heading,
                     ["a", "text", "field"] => Kind::Input,
@@ -401,7 +687,7 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                     ["a", "button"] => Kind::Button,
                     ["a", "line", "chart"] => Kind::Chart,
                     ["a", "bar", "chart"] => Kind::Bars,
-                    _ => bail!("unsupported widget kind"),
+                    _ => return Err(at_line(line, "parse.syntax", "unsupported widget kind")),
                 };
                 let mut widget = Widget {
                     id: name(&line.tokens, named + 1)?,
@@ -425,16 +711,25 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                     }
                     ["labelled", ""] => widget.initial = text(&line.tokens, named + 3)?,
                     ["with", "key", ""] => widget.key = Some(text(&line.tokens, named + 4)?),
-                    _ => bail!("unknown widget property"),
+                    _ => return Err(at_line(line, "parse.syntax", "unknown widget property")),
                 }
                 if component.widgets.iter().any(|v| v.id == widget.id) {
-                    bail!("duplicate widget name");
+                    return Err(at_line(
+                        line,
+                        "check.duplicate_name",
+                        "duplicate widget name",
+                    ));
                 }
                 *i += 1;
                 while let Some(child) = lines.get(*i).filter(|l| l.indent > 2) {
                     let cw = words(&child.tokens);
                     if child.indent != 4 {
-                        bail!("line {}: widget items need four spaces", child.number);
+                        return Err(DetailedError::new(
+                            "parse.indentation",
+                            child.number,
+                            child.column(0),
+                            format!("line {}: widget items need four spaces", child.number),
+                        ));
                     }
                     if widget.kind == Kind::List && cw == ["include", ""] {
                         widget.items.push(text(&child.tokens, 1)?);
@@ -446,48 +741,77 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                         && cw == ["label", "each", "bar", "from", ""]
                     {
                         if widget.bar_label.replace(text(&child.tokens, 4)?).is_some() {
-                            bail!("duplicate bar label field");
+                            return Err(at_line(
+                                child,
+                                "parse.syntax",
+                                "duplicate bar label field",
+                            ));
                         }
                     } else if widget.kind == Kind::Bars && cw == ["size", "each", "bar", "from", ""]
                     {
                         if widget.bar_value.replace(text(&child.tokens, 4)?).is_some() {
-                            bail!("duplicate bar value field");
+                            return Err(at_line(
+                                child,
+                                "parse.syntax",
+                                "duplicate bar value field",
+                            ));
                         }
                     } else if widget.kind == Kind::Bars
                         && cw == ["label", "bar", "values", "with", ""]
                     {
                         widget.bar_suffix = text(&child.tokens, 4)?;
                     } else {
-                        bail!("line {}: invalid widget item", child.number);
+                        return Err(DetailedError::new(
+                            "parse.syntax",
+                            child.number,
+                            child.column(0),
+                            format!("line {}: invalid widget item", child.number),
+                        ));
                     }
                     *i += 1;
                 }
                 if widget.items.len() > 256 || widget.columns.len() > 16 {
-                    bail!("a widget supports at most 256 list items and 16 table columns");
+                    return Err(at_line(
+                        line,
+                        "check.range",
+                        "a widget supports at most 256 list items and 16 table columns",
+                    ));
                 }
                 if widget.kind == Kind::Input && widget.initial.len() > 512 {
-                    bail!("text field initial value exceeds 512 bytes");
+                    return Err(at_line(
+                        line,
+                        "check.range",
+                        "text field initial value exceeds 512 bytes",
+                    ));
                 }
                 if widget.kind == Kind::Table && widget.columns.is_empty() {
-                    bail!("a table needs columns");
+                    return Err(at_line(line, "parse.syntax", "a table needs columns"));
                 }
                 if widget.kind == Kind::Bars
                     && (widget.bar_label.is_none() || widget.bar_value.is_none())
                 {
-                    bail!("a bar chart needs label and size fields");
+                    return Err(at_line(
+                        line,
+                        "parse.syntax",
+                        "a bar chart needs label and size fields",
+                    ));
                 }
                 component.widgets.push(widget);
             } else if w.len() == 4 && w[0] == "give" && w[3] == "rows" {
                 let id = name(&line.tokens, 1)?;
-                let rows: u16 = w[2].parse()?;
+                let rows: u16 = integer(w[2], 2)?;
                 if !(1..=40).contains(&rows) {
-                    bail!("widget height must be between 1 and 40 rows");
+                    return Err(at_line(
+                        line,
+                        "check.range",
+                        "widget height must be between 1 and 40 rows",
+                    ));
                 }
                 component
                     .widgets
                     .iter_mut()
                     .find(|v| v.id == id)
-                    .context("unknown widget height target")?
+                    .ok_or_else(|| at_line(line, "parse.syntax", "unknown widget height target"))?
                     .rows = Some(rows);
                 *i += 1;
             } else if w.len() == 7 && w[..2] == ["label", "the"] && w[3..5] == ["axis", "of"] {
@@ -496,22 +820,33 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                     .widgets
                     .iter_mut()
                     .find(|v| v.id == id)
-                    .context("unknown chart label target")?;
+                    .ok_or_else(|| at_line(line, "parse.syntax", "unknown chart label target"))?;
                 if widget.kind != Kind::Chart {
-                    bail!("axis labels require a line chart");
+                    return Err(at_line(
+                        line,
+                        "parse.syntax",
+                        "axis labels require a line chart",
+                    ));
                 }
                 match w[2] {
                     "horizontal" => widget.horizontal_label = text(&line.tokens, 6)?,
                     "vertical" => widget.vertical_label = text(&line.tokens, 6)?,
-                    _ => bail!("expected horizontal or vertical axis"),
+                    _ => {
+                        return Err(at_line(
+                            line,
+                            "parse.syntax",
+                            "expected horizontal or vertical axis",
+                        ))
+                    }
                 }
                 *i += 1;
             } else if w.first() == Some(&"whenever") || w.first() == Some(&"every") {
                 let event = match w.as_slice() {
                     ["whenever", "the", "program", "opens"] => Event::Open,
-                    ["whenever", "key", "", "is", "pressed"] => {
-                        Event::Key(Shortcut::parse(&text(&line.tokens, 2)?)?)
-                    }
+                    ["whenever", "key", "", "is", "pressed"] => Event::Key(
+                        Shortcut::parse(&text(&line.tokens, 2)?)
+                            .map_err(|error| error.at_token(2))?,
+                    ),
                     ["whenever", port, "arrives"] => Event::Input((*port).into()),
                     ["whenever", widget, "is", "submitted"] => Event::Submit((*widget).into()),
                     ["whenever", widget, "is", "pressed"] => Event::Press((*widget).into()),
@@ -520,21 +855,27 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                     }
                     ["whenever", "a", "command", "fails"] => Event::Error,
                     ["every", _, _] => {
-                        let trigger = parser::parse(&format!("{}\n  run pwd", w.join(" ")))?;
+                        let trigger = parser::parse(&format!("{}\n  run pwd", w.join(" ")))
+                            .map_err(|error| interval_error(&error, line))?;
                         match trigger.trigger {
                             Some(crate::ast::Trigger::Every { interval_ms, .. }) => {
                                 Event::Every(interval_ms)
                             }
-                            _ => bail!("expected interval"),
+                            _ => return Err(at_line(line, "parse.syntax", "expected interval")),
                         }
                     }
-                    _ => bail!("unsupported component event"),
+                    _ => return Err(at_line(line, "parse.syntax", "unsupported component event")),
                 };
                 *i += 1;
                 let mut actions = Vec::new();
                 while let Some(child) = lines.get(*i).filter(|l| l.indent > 2) {
                     if child.indent != 4 {
-                        bail!("line {}: actions need four spaces", child.number);
+                        return Err(DetailedError::new(
+                            "parse.indentation",
+                            child.number,
+                            child.column(0),
+                            format!("line {}: actions need four spaces", child.number),
+                        ));
                     }
                     if matches!(
                         words(&child.tokens).first(),
@@ -549,39 +890,49 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                             })
                         };
                         let mut steps = Vec::new();
-                        parser::parse_statement(&view, i, 4, &mut steps, 0)?;
+                        parser::parse_statement(&view, i, 4, &mut steps, 0)
+                            .map_err(DetailedError::from_anyhow)?;
                         actions.extend(steps.into_iter().map(Action::Native));
                     } else {
-                        actions.push(
-                            parse_action(child)
-                                .with_context(|| format!("line {}", child.number))?,
-                        );
+                        actions.push(parse_action(child).map_err(|error| error.within(child))?);
                         *i += 1;
                     }
                 }
                 if actions.is_empty() {
-                    bail!("event handler needs actions");
+                    return Err(at_line(line, "parse.syntax", "event handler needs actions"));
                 }
                 component.handlers.push(Handler { event, actions });
             } else {
-                bail!("unknown component declaration");
+                return Err(at_line(
+                    line,
+                    "parse.syntax",
+                    "unknown component declaration",
+                ));
             }
             Ok(())
         })();
-        result.with_context(|| format!("line {}", line.number))?;
+        result.map_err(|error| error.within(line))?;
     }
     if component.widgets.is_empty() || component.widgets.len() > 32 || component.handlers.len() > 32
     {
-        bail!("a component needs between 1 and 32 widgets, and at most 32 handlers");
+        return Err(DetailedError::unplaced(
+            "check.range",
+            "a component needs between 1 and 32 widgets, and at most 32 handlers",
+        ));
     }
     Ok(component)
 }
-fn parse_action(line: &Line<'_>) -> Result<Action> {
-    let mut tokens = line.tokens.as_slice();
-    if words(tokens).first() == Some(&"then") {
-        tokens = &tokens[1..];
-    }
+fn parse_action(line: &Line<'_>) -> Result<Action, DetailedError> {
+    // A leading `then` is part of the statement's tokens, not of the action.
+    let shift = usize::from(words(&line.tokens).first() == Some(&"then"));
+    action(line, &line.tokens[shift..]).map_err(|error| error.shift_token(shift))
+}
+/// One action statement. `tokens` is the line's tokens after any leading `then`, so token
+/// indexes returned here are relative to it.
+fn action(line: &Line<'_>, tokens: &[Token<'_>]) -> Result<Action, DetailedError> {
     let w = words(tokens);
+    let failure =
+        |code: &'static str, message: &str| DetailedError::unplaced(code, message).at_token(0);
     if w == ["close", "the", "screen"] {
         return Ok(Action::CloseScreen);
     }
@@ -592,14 +943,14 @@ fn parse_action(line: &Line<'_>) -> Result<Action> {
         return match w[3] {
             "rows" => Ok(Action::Rows(name(tokens, 5)?)),
             "bars" => Ok(Action::Bars(name(tokens, 5)?)),
-            _ => bail!("expected rows or bars"),
+            _ => Err(failure("parse.syntax", "expected rows or bars")),
         };
     }
     if w.len() == 7 && w[..4] == ["show", "the", "result", "as"] && w[5] == "in" {
         return match w[4] {
             "rows" => Ok(Action::Rows(name(tokens, 6)?)),
             "bars" => Ok(Action::Bars(name(tokens, 6)?)),
-            _ => bail!("expected rows or bars"),
+            _ => Err(failure("parse.syntax", "expected rows or bars")),
         };
     }
     if w.len() == 5 && w[..2] == ["show", "field"] && w[3] == "in" {
@@ -613,9 +964,9 @@ fn parse_action(line: &Line<'_>) -> Result<Action> {
         let split = w
             .iter()
             .position(|s| *s == separator)
-            .context("missing action destination")?;
+            .ok_or_else(|| failure("parse.syntax", "missing action destination"))?;
         if split + 2 != w.len() {
-            bail!("invalid action destination");
+            return Err(failure("parse.syntax", "invalid action destination"));
         }
         let value = match &w[1..split] {
             [""] => Value::Literal(text(tokens, 1)?),
@@ -623,7 +974,7 @@ fn parse_action(line: &Line<'_>) -> Result<Action> {
             ["that", "item"] => Value::Item,
             ["the", "result"] => Value::Result,
             ["the", "error"] | ["its", "error"] => Value::Error,
-            _ => bail!("unsupported action value"),
+            _ => return Err(failure("parse.syntax", "unsupported action value")),
         };
         return Ok(if w[0] == "send" {
             Action::Send(value, name(tokens, split + 1)?)
@@ -634,7 +985,7 @@ fn parse_action(line: &Line<'_>) -> Result<Action> {
     Ok(Action::Native(Step {
         line: line.number,
         label: None,
-        kind: parser::parse_line(&line.tokens)?,
+        kind: parser::parse_line(&line.tokens).map_err(DetailedError::from_anyhow)?,
     }))
 }
 pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 512;

@@ -2,8 +2,10 @@
 use crate::ast::{Connection, Program, StepKind};
 use crate::manifest::Registry;
 use crate::{parser, runtime};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use parser::Token;
+use std::num::IntErrorKind;
+use std::ops::Range;
 
 /// A native pipeline that writes each final output record to stdout.
 ///
@@ -15,6 +17,70 @@ pub struct StreamProgram {
     pub pipeline: Program,
     pub line_limit: Option<usize>,
 }
+
+/// A stream syntax error with its position and a stable code from `diagnostics::CODES`.
+///
+/// `message` is the text `parse` returns, in `{:#}` form, so a message that names a
+/// line starts with `line N: `. `line` is 1-based and `column` is the 1-based character
+/// column of the failing token, set only where the parser knows that token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetailedError {
+    pub code: &'static str,
+    pub line: usize,
+    pub column: Option<usize>,
+    pub message: String,
+    /// The outermost context layer when `message` is `<layer>: <cause>`. `parse` shows
+    /// only this layer with `{}`, as it did before this type existed.
+    outer: Option<String>,
+}
+
+impl DetailedError {
+    fn new(code: &'static str, line: usize, column: Option<usize>, message: String) -> Self {
+        Self {
+            code,
+            line,
+            column,
+            message,
+            outer: None,
+        }
+    }
+
+    /// Add a statement's line as the outermost layer, as `with_context` did. An error
+    /// created without a line takes this one.
+    fn within(mut self, line: usize) -> Self {
+        if self.line == 0 {
+            self.line = line;
+        }
+        let layer = format!("line {line}");
+        self.message = format!("{layer}: {}", self.message);
+        self.outer = Some(layer);
+        self
+    }
+
+    /// The `anyhow` error `parse` returns, with the same message and the same outer layer.
+    fn into_anyhow(self) -> anyhow::Error {
+        match self.outer {
+            Some(layer) => {
+                let cause = self
+                    .message
+                    .strip_prefix(layer.as_str())
+                    .and_then(|rest| rest.strip_prefix(": "))
+                    .unwrap_or(&self.message)
+                    .to_owned();
+                anyhow::Error::msg(cause).context(layer)
+            }
+            None => anyhow::Error::msg(self.message),
+        }
+    }
+}
+
+impl std::fmt::Display for DetailedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DetailedError {}
 
 /// Identify stream syntax from the first nonempty, uncommented line.
 pub fn is_stream(source: &str) -> bool {
@@ -29,11 +95,20 @@ pub fn is_stream(source: &str) -> bool {
 /// Parse the stream header and directives, delegating invocation syntax to the
 /// ordinary finite-program parser so applet parameters stay identical.
 pub fn parse(source: &str) -> Result<StreamProgram> {
+    parse_detailed(source).map_err(DetailedError::into_anyhow)
+}
+
+/// `parse` with each error's code, line and column. The message is the one `parse` returns.
+pub fn parse_detailed(source: &str) -> Result<StreamProgram, DetailedError> {
     let mut normalized = String::new();
     let mut saw_header = false;
     let mut saw_sink = false;
     let mut saw_take = false;
     let mut line_limit = None;
+    // The header's line number, the byte offset of its applet phrase in that line, and the line.
+    let mut header: Option<(usize, usize, String)> = None;
+    let mut first_statement = None;
+    let mut last_statement = None;
 
     for (index, raw_line) in source.lines().enumerate() {
         let line_number = index + 1;
@@ -43,8 +118,24 @@ pub fn parse(source: &str) -> Result<StreamProgram> {
             normalized.push('\n');
             continue;
         }
+        if first_statement.is_none() {
+            first_statement = Some(line_number);
+        }
+        last_statement = Some(line_number);
+        let at = |code: &'static str, column: usize, text: &str| {
+            DetailedError::new(
+                code,
+                line_number,
+                Some(column),
+                format!("line {line_number}: {text}"),
+            )
+        };
         if uncommented.trim_start().len() != uncommented.len() {
-            bail!("line {line_number}: stream statements must not be indented");
+            return Err(at(
+                "parse.indentation",
+                1,
+                "stream statements must not be indented",
+            ));
         }
 
         if !saw_header {
@@ -53,11 +144,17 @@ pub fn parse(source: &str) -> Result<StreamProgram> {
                 normalized.push('\n');
                 continue;
             }
-            let body = stream_header_body(line)
-                .ok_or_else(|| anyhow!("line {line_number}: expected `stream from <applet>`"))?;
+            let Some(body) = stream_header_body(line) else {
+                return Err(at("parse.syntax", 1, "expected `stream from <applet>`"));
+            };
             if body.is_empty() {
-                bail!("line {line_number}: stream source requires an applet phrase");
+                return Err(at(
+                    "parse.syntax",
+                    column_of(line, line.len()),
+                    "stream source requires an applet phrase",
+                ));
             }
+            header = Some((line_number, line.len() - body.len(), line.to_owned()));
             normalized.push_str("run ");
             normalized.push_str(body);
             normalized.push('\n');
@@ -65,10 +162,15 @@ pub fn parse(source: &str) -> Result<StreamProgram> {
             continue;
         }
 
-        let tokens = parser::tokenize(line).with_context(|| format!("line {line_number}"))?;
+        let (tokens, ranges) = parser::tokenize_with_ranges(line)
+            .map_err(|error| lexical_error(&error, line_number, line))?;
         if begins_with_words(&tokens, &["pipe", "to"]) {
             if saw_take || saw_sink {
-                bail!("line {line_number}: native pipeline stages must precede `take` and the final sink");
+                return Err(at(
+                    "parse.syntax",
+                    1,
+                    "native pipeline stages must precede `take` and the final sink",
+                ));
             }
             normalized.push_str(line);
             normalized.push('\n');
@@ -76,41 +178,75 @@ pub fn parse(source: &str) -> Result<StreamProgram> {
         }
         if begins_with_words(&tokens, &["take"]) {
             if saw_take {
-                bail!("line {line_number}: `take` may appear only once");
+                return Err(at("parse.syntax", 1, "`take` may appear only once"));
             }
             if saw_sink {
-                bail!("line {line_number}: statements cannot follow the final sink");
+                return Err(at(
+                    "parse.syntax",
+                    1,
+                    "statements cannot follow the final sink",
+                ));
             }
-            line_limit =
-                Some(parse_line_limit(&tokens).with_context(|| format!("line {line_number}"))?);
+            line_limit = Some(
+                parse_line_limit(line, &tokens, &ranges)
+                    .map_err(|error| error.within(line_number))?,
+            );
             saw_take = true;
             normalized.push('\n');
             continue;
         }
         if begins_with_words(&tokens, &["show"]) {
             if !is_show_each_line(&tokens) {
-                bail!("line {line_number}: expected final sink `show each line`");
+                return Err(at(
+                    "parse.syntax",
+                    1,
+                    "expected final sink `show each line`",
+                ));
             }
             if saw_sink {
-                bail!("line {line_number}: the final sink may appear only once");
+                return Err(at("parse.syntax", 1, "the final sink may appear only once"));
             }
             saw_sink = true;
             normalized.push('\n');
             continue;
         }
         if saw_sink {
-            bail!("line {line_number}: statements cannot follow the final sink");
+            return Err(at(
+                "parse.syntax",
+                1,
+                "statements cannot follow the final sink",
+            ));
         }
-        bail!("line {line_number}: expected `pipe to <applet>`, `take the first <count> lines`, or final sink `show each line`");
+        return Err(at(
+            "parse.syntax",
+            1,
+            "expected `pipe to <applet>`, `take the first <count> lines`, or final sink `show each line`",
+        ));
     }
 
-    if !saw_header {
-        bail!("stream program requires `stream from <applet>`");
-    }
+    let Some((header_line, body_offset, header_text)) = header else {
+        return Err(DetailedError::new(
+            "parse.syntax",
+            first_statement.unwrap_or(1),
+            None,
+            "stream program requires `stream from <applet>`".to_owned(),
+        ));
+    };
     if !saw_sink {
-        bail!("stream program requires final sink `show each line`");
+        return Err(DetailedError::new(
+            "parse.syntax",
+            last_statement.unwrap_or(header_line),
+            None,
+            "stream program requires final sink `show each line`".to_owned(),
+        ));
     }
-    let pipeline = parser::parse(&normalized).context("parsing stream native pipeline")?;
+    let pipeline = parser::parse(&normalized).map_err(|error| {
+        native_pipeline_error(
+            &error,
+            &normalized,
+            (header_line, body_offset, header_text.as_str()),
+        )
+    })?;
     Ok(StreamProgram {
         pipeline,
         line_limit,
@@ -180,6 +316,92 @@ pub(crate) fn validate_with_inputs(
     Ok(())
 }
 
+/// A tokenizer failure on the statement at `line_number`. The line is the outer layer,
+/// as the tokenizer's `with_context` made it.
+fn lexical_error(error: &anyhow::Error, line_number: usize, text: &str) -> DetailedError {
+    let column = error
+        .downcast_ref::<parser::LocatedParseError>()
+        .and_then(parser::LocatedParseError::source_range)
+        .map(|range| column_of(text, range.start));
+    let layer = format!("line {line_number}");
+    DetailedError {
+        code: "parse.lexical",
+        line: line_number,
+        column,
+        message: format!("{layer}: {error:#}"),
+        outer: Some(layer),
+    }
+}
+
+/// A finite-parser failure on the normalized pipeline. Normalization keeps one output
+/// line per source line, so the parser's `line N:` is the source line. The header line
+/// reads `run <applet>` there, so its columns are mapped back to the source text.
+fn native_pipeline_error(
+    error: &anyhow::Error,
+    normalized: &str,
+    (header_line, body_offset, header_text): (usize, usize, &str),
+) -> DetailedError {
+    let text = format!("{error:#}");
+    let line = message_line(&text).unwrap_or(header_line);
+    let normalized_line = normalized.lines().nth(line.saturating_sub(1)).unwrap_or("");
+    let lexical = error
+        .downcast_ref::<parser::LocatedParseError>()
+        .and_then(parser::LocatedParseError::source_range);
+    let column = lexical.and_then(|range| {
+        if line == header_line {
+            range
+                .start
+                .checked_sub("run ".len())
+                .map(|offset| column_of(header_text, offset + body_offset))
+        } else {
+            Some(column_of(normalized_line, range.start))
+        }
+    });
+    let code = if lexical.is_some() {
+        "parse.lexical"
+    } else {
+        code_for(&text)
+    };
+    let layer = "parsing stream native pipeline";
+    DetailedError {
+        code,
+        line,
+        column,
+        message: format!("{layer}: {text}"),
+        outer: Some(layer.to_owned()),
+    }
+}
+
+/// The stable code for a finite-parser message that is not a located token error.
+fn code_for(message: &str) -> &'static str {
+    if message.contains("tabs are not allowed for indentation")
+        || message.contains("inconsistent indentation")
+    {
+        "parse.indentation"
+    } else if message.contains("unsupported control") || message.contains("control nesting") {
+        "parse.control"
+    } else {
+        "parse.syntax"
+    }
+}
+
+/// The 1-based character column of byte `offset` in `text`.
+fn column_of(text: &str, offset: usize) -> usize {
+    text.get(..offset)
+        .map_or(offset + 1, |prefix| prefix.chars().count() + 1)
+}
+
+/// The number after the first `line N:` in a message, as the finite parser writes it.
+fn message_line(message: &str) -> Option<usize> {
+    message.match_indices("line ").find_map(|(index, _)| {
+        let rest = &message[index + "line ".len()..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        (digits > 0 && rest[digits..].starts_with(':'))
+            .then(|| rest[..digits].parse().ok())
+            .flatten()
+    })
+}
+
 fn stream_header_body(line: &str) -> Option<&str> {
     let after_stream = line.strip_prefix("stream")?;
     let after_stream = after_stream.trim_start();
@@ -208,21 +430,55 @@ fn is_show_each_line(tokens: &[Token<'_>]) -> bool {
     tokens.len() == 3 && begins_with_words(tokens, &["show", "each", "line"])
 }
 
-fn parse_line_limit(tokens: &[Token<'_>]) -> Result<usize> {
+/// `take the first <count> lines`. Errors name the token that failed and carry no line.
+fn parse_line_limit(
+    line: &str,
+    tokens: &[Token<'_>],
+    ranges: &[Range<usize>],
+) -> Result<usize, DetailedError> {
+    let column = |index: usize| ranges.get(index).map(|range| column_of(line, range.start));
+    let shape = |index: usize| {
+        DetailedError::new(
+            "parse.syntax",
+            0,
+            column(index),
+            "expected `take the first <positive integer> lines`".to_owned(),
+        )
+    };
     if tokens.len() != 5 || !begins_with_words(tokens, &["take", "the", "first"]) {
-        bail!("expected `take the first <positive integer> lines`");
+        return Err(shape(0));
     }
     if !matches!(tokens.get(4), Some(Token::Word("line" | "lines"))) {
-        bail!("expected `take the first <positive integer> lines`");
+        return Err(shape(4));
     }
     let Some(Token::Word(count)) = tokens.get(3) else {
-        bail!("line count must be a positive integer");
+        return Err(DetailedError::new(
+            "parse.syntax",
+            0,
+            column(3),
+            "line count must be a positive integer".to_owned(),
+        ));
     };
-    let count = count
-        .parse::<usize>()
-        .map_err(|_| anyhow!("line count must be a positive integer in range"))?;
+    let count = count.parse::<usize>().map_err(|error| {
+        let code = if *error.kind() == IntErrorKind::PosOverflow {
+            "check.range"
+        } else {
+            "parse.syntax"
+        };
+        DetailedError::new(
+            code,
+            0,
+            column(3),
+            "line count must be a positive integer in range".to_owned(),
+        )
+    })?;
     if count == 0 {
-        bail!("line count must be greater than zero");
+        return Err(DetailedError::new(
+            "check.range",
+            0,
+            column(3),
+            "line count must be greater than zero".to_owned(),
+        ));
     }
     Ok(count)
 }

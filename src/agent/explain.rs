@@ -24,8 +24,8 @@
 //! are not containment guarantees. Enforcement is the capability policy.
 
 use crate::ast::{
-    Connection, InputDeclaration, InputSource, Invocation, LoopKind, Program, RedirectTarget,
-    ReusableProgram, Step, StepKind, Value,
+    Condition, ConditionOperator, Connection, InputDeclaration, InputSource, Invocation, LoopKind,
+    Program, RedirectTarget, ReusableProgram, Step, StepKind, Value,
 };
 use crate::manifest::{Builtin, Registry};
 use crate::privilege::is_privileged_step;
@@ -126,6 +126,8 @@ struct Row {
     program_stdout: Option<&'static str>,
     binding: Option<String>,
     status_binding: Option<String>,
+    /// The guard of an `if` row. Set only in structure mode; see `explain_json_with_structure`.
+    condition: Option<Json>,
 }
 
 impl Row {
@@ -188,6 +190,9 @@ impl Row {
         if self.resolved_path_inferred {
             row["resolved_path_inferred"] = json!(true);
         }
+        if let Some(condition) = &self.condition {
+            row["condition"] = condition.clone();
+        }
         row
     }
 }
@@ -227,7 +232,23 @@ pub fn explain_json_with_inputs(
     program_path: &str,
     inputs: &BTreeMap<String, Value>,
 ) -> Result<Json> {
-    explain_json_version(program, registry, program_path, inputs, false, None)
+    explain_json_version(program, registry, program_path, inputs, false, None, false)
+}
+
+/// Like `explain_json_with_inputs`, plus the structure of control flow: each
+/// `if` row carries a `condition` object. Its operands are `{"ref": NAME}` for a
+/// binding or input (never its value), `{"literal": VALUE}` for a literal, and
+/// `{"list": [...]}` or `{"record": {...}}` for compound values. `op` is
+/// `equals` or `contains`, and `negated` is true for `is not`. Other rows are
+/// unchanged, so the published schema needs a `condition` property before a
+/// caller emits this output.
+pub fn explain_json_with_structure(
+    program: &Program,
+    registry: &Registry,
+    program_path: &str,
+    inputs: &BTreeMap<String, Value>,
+) -> Result<Json> {
+    explain_json_version(program, registry, program_path, inputs, false, None, true)
 }
 
 /// Build an explain plan for a what-if review. Unlike ordinary explain output,
@@ -248,6 +269,7 @@ pub fn explain_json_for_what_if(
         inputs,
         legacy,
         Some(*path_hmac_key),
+        false,
     )
 }
 
@@ -260,6 +282,7 @@ pub fn explain_json_v1(program: &Program, registry: &Registry, program_path: &st
         &BTreeMap::new(),
         true,
         None,
+        false,
     )
 }
 
@@ -270,6 +293,7 @@ fn explain_json_version(
     inputs: &BTreeMap<String, Value>,
     legacy: bool,
     path_hmac_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
+    structure: bool,
 ) -> Result<Json> {
     let mut known = BTreeMap::new();
     let mut known_literals = BTreeMap::new();
@@ -343,6 +367,7 @@ fn explain_json_version(
             program_path,
         )),
         path_hmac_key,
+        structure,
     };
     if let Some(crate::ast::Trigger::Listen {
         source: crate::ast::ListenSource::Applet(call),
@@ -420,6 +445,8 @@ struct Walker<'a> {
     /// The calling program's directory. Called files are shown relative to it.
     program_directory: Option<std::path::PathBuf>,
     path_hmac_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
+    /// Emit control-flow structure (`condition` on `if` rows). Off for the published shape.
+    structure: bool,
 }
 
 impl Walker<'_> {
@@ -739,7 +766,13 @@ impl Walker<'_> {
                 LoopKind::While { .. } => self.push_plain(line, "loop_while", scope),
             },
             StepKind::EndLoop { .. } => self.push_plain(line, "end_loop", scope),
-            StepKind::If { .. } => self.push_plain(line, "if", scope),
+            StepKind::If { condition, .. } => {
+                let mut row = Row::plain(line, "if", scope);
+                if self.structure {
+                    row.condition = Some(condition_json(condition));
+                }
+                self.rows.push(row);
+            }
             StepKind::IfCommand { call, .. } => {
                 self.invocation(line, "if_command", call, scope, true);
             }
@@ -1395,6 +1428,39 @@ fn encode_literal(value: Json) -> Json {
             json!({"record": fields.into_iter().map(|(key, value)| (key, encode_literal(value))).collect::<serde_json::Map<String, Json>>() })
         }
         scalar => scalar,
+    }
+}
+
+/// The `condition` object of an `if` row. Operands are shown as written: a
+/// reference is its name, never the value an input supplies.
+fn condition_json(condition: &Condition) -> Json {
+    let op = match condition.operator {
+        ConditionOperator::Equals => "equals",
+        ConditionOperator::Contains => "contains",
+    };
+    json!({
+        "left": operand_json(&condition.left),
+        "op": op,
+        "negated": condition.negated,
+        "right": operand_json(&condition.right),
+    })
+}
+
+fn operand_json(value: &Value) -> Json {
+    match value {
+        Value::Reference(name) => json!({"ref": name}),
+        Value::List(items) => json!({"list": items.iter().map(operand_json).collect::<Vec<_>>()}),
+        Value::Record(fields) => json!({
+            "record": fields
+                .iter()
+                .map(|(name, value)| (name.clone(), operand_json(value)))
+                .collect::<serde_json::Map<String, Json>>()
+        }),
+        // A literal that cannot be rendered is marked, not shown as a false value.
+        literal => match crate::inputs::literal_json(literal) {
+            Ok(shown) => json!({"literal": shown}),
+            Err(_) => json!({"unrendered": true}),
+        },
     }
 }
 

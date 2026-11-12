@@ -8,7 +8,7 @@ fn bundled_registry(manifest_root: &std::path::Path) -> Result<flow::manifest::R
     for (position, entry) in index.entries().iter().enumerate() {
         std::fs::write(manifest_root.join(entry.file()), index.body(position)?)?;
     }
-    Ok(flow::manifest::Registry::from_bundled(manifest_root)?)
+    flow::manifest::Registry::from_bundled(manifest_root)
 }
 
 fn run_caught(source: &str) -> Result<serde_json::Value> {

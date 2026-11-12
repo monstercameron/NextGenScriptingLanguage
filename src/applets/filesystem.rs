@@ -21,7 +21,8 @@
 //! capped at 16 MiB to keep reads and CAS checks bounded.
 
 use super::{
-    checkpoint_work, failed, invalid, io_error, required_string, AppletError, ExecutionContext,
+    checkpoint_work, failed, invalid, io_error, optional_bool, required_string, AppletError,
+    ExecutionContext,
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -226,6 +227,119 @@ pub(super) fn unlink_checked(
             "symlink": symlink,
         }))
     })
+}
+
+/// `fs.stat`: one typed record for `path`. A trailing symbolic link is not
+/// followed unless `follow` is true, so `type` then names the link itself. An
+/// absent path, or one whose parent is not a directory, answers
+/// `{"type": "absent"}` with null fields rather than an error, as `fs.test`
+/// does. A dangling link is absent under `follow`. `mode` is Unix permission
+/// bits and `read_only` is the Windows attribute; each is null elsewhere.
+/// `mtime_ns` is nanoseconds since the Unix epoch, null when the platform
+/// does not report it.
+// The dispatch arm (`"fs.stat" => filesystem::stat(...)`) lives in applets/mod.rs,
+// which this lane does not own; the attribute goes once that arm lands.
+#[allow(dead_code)]
+pub(super) fn stat(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let path = resolve_path(required_string(args, "path")?, cwd);
+    let follow = optional_bool(args, "follow", false)?;
+    context.checkpoint()?;
+    let looked_up = if follow {
+        fs::metadata(&path)
+    } else {
+        fs::symlink_metadata(&path)
+    };
+    let metadata = match looked_up {
+        Ok(metadata) => metadata,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(serde_json::json!({
+                "type": "absent",
+                "size": null,
+                "mode": null,
+                "read_only": null,
+                "mtime_ns": null,
+            }));
+        }
+        Err(error) => return Err(io_error(error, format!("checking {}", path.display()))),
+    };
+    let file_type = metadata.file_type();
+    let kind = if file_type.is_symlink() {
+        "symlink"
+    } else if file_type.is_file() {
+        "file"
+    } else if file_type.is_dir() {
+        "directory"
+    } else {
+        "other"
+    };
+    Ok(serde_json::json!({
+        "type": kind,
+        "size": metadata.len(),
+        "mode": file_mode(&metadata),
+        "read_only": read_only_flag(&metadata),
+        "mtime_ns": modified_ns(&metadata),
+    }))
+}
+
+/// Windows read-only attribute; `None` on other platforms, where `mode` is the
+/// meaningful permission report.
+#[allow(dead_code)]
+#[cfg(windows)]
+fn read_only_flag(metadata: &fs::Metadata) -> Option<bool> {
+    Some(metadata.permissions().readonly())
+}
+
+#[allow(dead_code)]
+#[cfg(not(windows))]
+fn read_only_flag(metadata: &fs::Metadata) -> Option<bool> {
+    let _ = metadata;
+    None
+}
+
+/// Modification time as signed nanoseconds since the Unix epoch. Times before
+/// the epoch are negative. `None` when the platform reports no time or the
+/// value does not fit in 64 bits.
+#[allow(dead_code)]
+fn modified_ns(metadata: &fs::Metadata) -> Option<i64> {
+    let modified = metadata.modified().ok()?;
+    match modified.duration_since(std::time::UNIX_EPOCH) {
+        Ok(after) => i64::try_from(after.as_nanos()).ok(),
+        Err(before) => i64::try_from(before.duration().as_nanos())
+            .ok()
+            .map(|nanos| -nanos),
+    }
+}
+
+/// `fs.realpath`: the canonical form of an existing `path`, with every symbolic
+/// link resolved. An absent path is refused with the `not_found` absence error
+/// rather than answered, because it has no canonical name.
+// Dispatch arm `"fs.realpath" => filesystem::realpath(...)` is pending in
+// applets/mod.rs (not owned by this lane).
+#[allow(dead_code)]
+pub(super) fn realpath(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let path = resolve_path(required_string(args, "path")?, cwd);
+    context.checkpoint()?;
+    let resolved = fs::canonicalize(&path)
+        .map_err(|error| io_error(error, format!("resolving {}", path.display())))?;
+    let resolved = strip_verbatim(resolved);
+    Ok(serde_json::json!({
+        "realpath": result_path(&resolved)?,
+    }))
 }
 
 pub(crate) struct PathLock {
@@ -1259,6 +1373,7 @@ impl Drop for TempCleanup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::applets::AppletErrorKind;
 
     fn write_args() -> Map<String, Value> {
         serde_json::json!({
@@ -1499,5 +1614,166 @@ mod tests {
             .iter()
             .filter_map(|result| result.as_ref().err())
             .all(|error| error.code == "conflict"));
+    }
+
+    fn path_args(path: &Path, extra: Value) -> Map<String, Value> {
+        let mut args = serde_json::json!({ "path": path.to_str().unwrap() })
+            .as_object()
+            .unwrap()
+            .clone();
+        if let Value::Object(extra) = extra {
+            args.extend(extra);
+        }
+        args
+    }
+
+    #[test]
+    fn stat_reports_a_file_and_a_directory_with_typed_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let file = directory.path().join("file.txt");
+        fs::write(&file, b"hello").unwrap();
+        let record = stat(&path_args(&file, Value::Null), directory.path(), &context).unwrap();
+        assert_eq!(record["type"], "file");
+        assert_eq!(record["size"], 5);
+        assert!(record["mtime_ns"].as_i64().is_some(), "{record}");
+        assert_eq!(record["mode"].is_u64(), cfg!(unix), "{record}");
+        assert_eq!(record["read_only"].is_boolean(), cfg!(windows), "{record}");
+
+        let subdirectory = directory.path().join("sub");
+        fs::create_dir(&subdirectory).unwrap();
+        let record = stat(
+            &path_args(&subdirectory, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["type"], "directory");
+    }
+
+    #[test]
+    fn stat_of_an_absent_path_is_a_typed_result_not_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let missing = directory.path().join("missing");
+        let record = stat(
+            &path_args(&missing, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["type"], "absent");
+        assert!(record["size"].is_null());
+        assert!(record["mtime_ns"].is_null());
+
+        let file = directory.path().join("file.txt");
+        fs::write(&file, b"").unwrap();
+        let under_file = file.join("child");
+        let record = stat(
+            &path_args(&under_file, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["type"], "absent");
+    }
+
+    #[test]
+    fn stat_rejects_a_missing_path_argument() {
+        let context = ExecutionContext::unrestricted();
+        assert!(stat(&Map::new(), Path::new("/"), &context).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_does_not_follow_a_trailing_symlink_unless_asked() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let target = directory.path().join("target.txt");
+        fs::write(&target, b"abc").unwrap();
+        let link = directory.path().join("link");
+        symlink(&target, &link).unwrap();
+
+        let record = stat(&path_args(&link, Value::Null), directory.path(), &context).unwrap();
+        assert_eq!(record["type"], "symlink");
+        let record = stat(
+            &path_args(&link, serde_json::json!({ "follow": true })),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["type"], "file");
+        assert_eq!(record["size"], 3);
+
+        let dangling = directory.path().join("dangling");
+        symlink(directory.path().join("nowhere"), &dangling).unwrap();
+        let record = stat(
+            &path_args(&dangling, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["type"], "symlink");
+        let record = stat(
+            &path_args(&dangling, serde_json::json!({ "follow": true })),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["type"], "absent");
+    }
+
+    #[test]
+    fn realpath_resolves_an_existing_file_and_refuses_an_absent_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let file = directory.path().join("file.txt");
+        fs::write(&file, b"").unwrap();
+        let result = realpath(&path_args(&file, Value::Null), directory.path(), &context).unwrap();
+        let expected = strip_verbatim(fs::canonicalize(&file).unwrap());
+        assert_eq!(result["realpath"], expected.to_str().unwrap());
+
+        let missing = directory.path().join("missing");
+        let error = realpath(
+            &path_args(&missing, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "not_found");
+        assert_eq!(error.kind, AppletErrorKind::Absence);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn realpath_resolves_symlinks_and_refuses_a_dangling_link() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let real_directory = directory.path().join("real");
+        fs::create_dir(&real_directory).unwrap();
+        let file = real_directory.join("file.txt");
+        fs::write(&file, b"").unwrap();
+        let link = directory.path().join("link");
+        symlink(&real_directory, &link).unwrap();
+
+        let result = realpath(
+            &path_args(&link.join("file.txt"), Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        let expected = fs::canonicalize(&file).unwrap();
+        assert_eq!(result["realpath"], expected.to_str().unwrap());
+
+        let dangling = directory.path().join("dangling");
+        symlink(directory.path().join("nowhere"), &dangling).unwrap();
+        assert!(realpath(
+            &path_args(&dangling, Value::Null),
+            directory.path(),
+            &context
+        )
+        .is_err());
     }
 }

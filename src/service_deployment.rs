@@ -60,6 +60,23 @@ pub fn render_for_workflow(request: &WorkflowServiceRequest<'_>) -> Result<Strin
     render_for_workflow_with_launchd_home(request, None)
 }
 
+/// Render a systemd unit with an explicit hardening mode. In `Derived` mode the
+/// program's effect plan is computed with `registry`; any undeclared step makes
+/// the unit get the baseline, with that step named in a comment.
+pub fn render_for_workflow_with_hardening(
+    request: &WorkflowServiceRequest<'_>,
+    registry: &crate::manifest::Registry,
+    hardening: HardeningMode,
+) -> Result<String> {
+    render_for_workflow_with_launchd_home_and_catalog(
+        request,
+        None,
+        None,
+        Some(registry),
+        hardening,
+    )
+}
+
 /// Render a service that explicitly uses one packed manifest catalog.
 ///
 /// The generated command stores the canonical catalog file path, so it does
@@ -68,20 +85,34 @@ pub fn render_for_workflow_with_manifest_catalog(
     request: &WorkflowServiceRequest<'_>,
     manifest_catalog: &Path,
 ) -> Result<String> {
-    render_for_workflow_with_launchd_home_and_catalog(request, None, Some(manifest_catalog))
+    render_for_workflow_with_launchd_home_and_catalog(
+        request,
+        None,
+        Some(manifest_catalog),
+        None,
+        HardeningMode::Derived,
+    )
 }
 
 fn render_for_workflow_with_launchd_home(
     request: &WorkflowServiceRequest<'_>,
     launchd_home: Option<&Path>,
 ) -> Result<String> {
-    render_for_workflow_with_launchd_home_and_catalog(request, launchd_home, None)
+    render_for_workflow_with_launchd_home_and_catalog(
+        request,
+        launchd_home,
+        None,
+        None,
+        HardeningMode::Derived,
+    )
 }
 
 fn render_for_workflow_with_launchd_home_and_catalog(
     request: &WorkflowServiceRequest<'_>,
     launchd_home: Option<&Path>,
     manifest_catalog: Option<&Path>,
+    registry: Option<&crate::manifest::Registry>,
+    hardening_mode: HardeningMode,
 ) -> Result<String> {
     if manifest_catalog.is_some() && request.manifest_directory.is_some() {
         bail!("manifest directory and packed manifest catalog are mutually exclusive");
@@ -174,13 +205,28 @@ fn render_for_workflow_with_launchd_home_and_catalog(
     };
     // Computed before the policy path is moved into argv below.
     let hardening = match request.format {
-        ServiceFormat::Systemd | ServiceFormat::SystemdTimer => {
-            let policy = capability_policy
-                .as_deref()
-                .map(read_policy_for_review)
-                .transpose()?;
-            derived_hardening(policy.as_ref(), &working_directory)?
-        }
+        ServiceFormat::Systemd | ServiceFormat::SystemdTimer => match hardening_mode {
+            HardeningMode::Off => String::new(),
+            HardeningMode::Baseline => format!(
+                "# baseline: always-safe directives requested for this unit\n{}",
+                baseline_directives()
+            ),
+            HardeningMode::Derived => {
+                let policy = capability_policy
+                    .as_deref()
+                    .map(read_policy_for_review)
+                    .transpose()?;
+                let undeclared = match registry {
+                    Some(registry) if policy.is_some() => undeclared_step_reasons(
+                        &program,
+                        registry,
+                        &workflow.display().to_string(),
+                    )?,
+                    _ => Vec::new(),
+                };
+                derived_hardening(policy.as_ref(), &working_directory, &undeclared)?
+            }
+        },
         ServiceFormat::Launchd => String::new(),
     };
     let mut argv = vec![utf8_path(&executable, "execute binary")?, "run".into()];
@@ -459,6 +505,71 @@ fn read_policy_for_review(path: &Path) -> Result<crate::capabilities::Capability
         .with_context(|| format!("loading capability policy {}", path.display()))
 }
 
+/// Which sandbox directives a systemd unit receives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HardeningMode {
+    /// Directives the capability policy states. A program with undeclared
+    /// effects gets the baseline instead, with the steps that forced it named.
+    Derived,
+    /// The always-safe baseline, whether or not a policy is supplied.
+    Baseline,
+    /// No sandbox directives (`--hardening none`).
+    Off,
+}
+
+impl HardeningMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "derived" => Ok(Self::Derived),
+            "baseline" => Ok(Self::Baseline),
+            "none" => Ok(Self::Off),
+            _ => bail!("hardening must be `derived`, `baseline`, or `none`"),
+        }
+    }
+}
+
+/// Directives used when the program's effects cannot all be stated. Each one
+/// is safe for any program, so none of them claims more than the plan supports.
+const BASELINE_DIRECTIVES: &[&str] = &[
+    "PrivateTmp=yes",
+    "ProtectKernelTunables=yes",
+    "ProtectKernelModules=yes",
+    "ProtectControlGroups=yes",
+    "LockPersonality=yes",
+];
+
+fn baseline_directives() -> String {
+    BASELINE_DIRECTIVES
+        .iter()
+        .map(|directive| format!("{directive}\n"))
+        .collect()
+}
+
+/// One line per undeclared step of the program's effect plan, naming the step.
+/// The plan is computed from the same registry the run path would use.
+fn undeclared_step_reasons(
+    program: &crate::ast::Program,
+    registry: &crate::manifest::Registry,
+    workflow: &str,
+) -> Result<Vec<String>> {
+    let plan = crate::agent::explain::explain_json(program, registry, workflow)?;
+    let mut reasons = Vec::new();
+    for row in plan["steps"].as_array().into_iter().flatten() {
+        if row["undeclared"] != true {
+            continue;
+        }
+        let line = row["line"]
+            .as_u64()
+            .map_or_else(|| "?".to_owned(), |line| line.to_string());
+        let what = row["binary"]
+            .as_str()
+            .or_else(|| row["kind"].as_str())
+            .unwrap_or("step");
+        reasons.push(format!("line {line}: {what} has no declared effects"));
+    }
+    Ok(reasons)
+}
+
 /// Sandbox directives that the capability policy itself states, each preceded
 /// by a comment naming the policy fact that justifies it.
 ///
@@ -467,13 +578,38 @@ fn read_policy_for_review(path: &Path) -> Result<crate::capabilities::Capability
 /// and one `ReadWritePaths=` per grant. Without a policy nothing is derived, and
 /// a relative write grant is reported rather than derived, because it resolves
 /// against a working directory that the workflow may change.
+///
+/// `undeclared` lists steps whose effects are not declared. When there are any,
+/// the result is the baseline only, and each step is named in a comment.
 fn derived_hardening(
     policy: Option<&crate::capabilities::CapabilityPolicy>,
     working_directory: &Path,
+    undeclared: &[String],
 ) -> Result<String> {
     let Some(policy) = policy else {
         return Ok(String::new());
     };
+    if !undeclared.is_empty() {
+        let mut lines = String::from(
+            "# baseline: the program has steps whose effects are not declared, so no more is claimed\n",
+        );
+        for reason in undeclared {
+            // Keep each reason on one comment line, so it cannot inject a directive.
+            let text: String = reason
+                .chars()
+                .map(|character| {
+                    if character.is_control() {
+                        ' '
+                    } else {
+                        character
+                    }
+                })
+                .collect();
+            lines.push_str(&format!("# baseline forced by: {text}\n"));
+        }
+        lines.push_str(&baseline_directives());
+        return Ok(lines);
+    }
     let mut lines = String::new();
     if policy.deny_privileged {
         lines.push_str("# derived: capability policy sets deny_privileged\n");
@@ -1970,7 +2106,7 @@ exec '/usr/bin/execute' run '/home/cam/theme.program' --confirm sha256:abc123\n"
     /// Derive the hardening lines for a policy given as JSON, against `work`.
     fn hardening_for(policy: &serde_json::Value, work: &Path) -> String {
         let policy = crate::capabilities::CapabilityPolicy::from_json(&policy.to_string()).unwrap();
-        derived_hardening(Some(&policy), work).unwrap()
+        derived_hardening(Some(&policy), work, &[]).unwrap()
     }
 
     /// Render a whole unit for a policy file on disk. `policy` receives the
@@ -3291,5 +3427,116 @@ exec '/usr/bin/execute' run '/home/cam/theme.program' --confirm sha256:abc123\n"
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o644);
+    }
+
+    #[test]
+    fn undeclared_steps_fall_back_to_the_baseline_and_name_the_step() {
+        let directory = tempdir().unwrap();
+        let data = directory.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let work = directory.path().join("work");
+        fs::create_dir(&work).unwrap();
+        let policy = crate::capabilities::CapabilityPolicy::from_json(
+            &serde_json::json!({
+                "version": 1,
+                "deny_privileged": true,
+                "applets": {
+                    "writer": {
+                        "capabilities": ["filesystem.write"],
+                        "filesystem": { "write": [data.display().to_string()] }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reasons = vec!["line 3: /opt/tool has no declared effects".to_owned()];
+        let rendered = derived_hardening(Some(&policy), &work, &reasons).unwrap();
+
+        assert!(
+            rendered.contains("# baseline forced by: line 3: /opt/tool has no declared effects\n")
+        );
+        for directive in BASELINE_DIRECTIVES {
+            assert!(
+                rendered.lines().any(|line| line == *directive),
+                "{directive}"
+            );
+        }
+        assert!(!rendered.contains("NoNewPrivileges"));
+        assert!(!rendered.contains("PrivateNetwork"));
+        assert!(!rendered.contains("ProtectSystem"));
+        assert!(!rendered.contains("ReadWritePaths"));
+    }
+
+    #[test]
+    fn undeclared_reason_text_cannot_inject_a_directive() {
+        let directory = tempdir().unwrap();
+        let policy = crate::capabilities::CapabilityPolicy::from_json(
+            &serde_json::json!({ "version": 1, "deny_privileged": true, "applets": {} })
+                .to_string(),
+        )
+        .unwrap();
+        let reasons = vec!["line 1: tool\nPrivateTmp=no".to_owned()];
+        let rendered = derived_hardening(Some(&policy), directory.path(), &reasons).unwrap();
+
+        assert!(!rendered.lines().any(|line| line == "PrivateTmp=no"));
+        assert!(rendered.lines().any(|line| line == "PrivateTmp=yes"));
+    }
+
+    #[test]
+    fn hardening_mode_none_emits_no_sandbox_lines() {
+        assert_eq!(HardeningMode::parse("none").unwrap(), HardeningMode::Off);
+        assert_eq!(
+            HardeningMode::parse("baseline").unwrap(),
+            HardeningMode::Baseline
+        );
+        assert!(HardeningMode::parse("strict").is_err());
+
+        let directory = tempdir().unwrap();
+        let workflow = directory.path().join("writer.program");
+        fs::write(
+            &workflow,
+            "every 5 minutes\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let working_directory = directory.path().join("work");
+        fs::create_dir(&working_directory).unwrap();
+        let policy_path = directory.path().join("policy.json");
+        fs::write(
+            &policy_path,
+            serde_json::json!({ "version": 1, "deny_privileged": true, "applets": {} }).to_string(),
+        )
+        .unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let inputs = BTreeMap::new();
+        let arguments: Vec<String> = Vec::new();
+        let request = WorkflowServiceRequest {
+            format: ServiceFormat::Systemd,
+            workflow_path: &workflow,
+            executable: &executable,
+            working_directory: &working_directory,
+            manifest_directory: None,
+            execution_mode: None,
+            capability_policy: Some(&policy_path),
+            data_flow_policy: None,
+            child_environment_allowlist: None,
+            answers_file: None,
+            label: Some("com.example.writer"),
+            inputs: &inputs,
+            program_arguments: &arguments,
+            persistent: false,
+        };
+        let registry = crate::manifest::Registry::default();
+        let off =
+            render_for_workflow_with_hardening(&request, &registry, HardeningMode::Off).unwrap();
+        assert!(!off.contains("NoNewPrivileges"));
+        assert!(!off.contains("PrivateTmp"));
+        assert!(!off.contains("# derived"));
+
+        let baseline =
+            render_for_workflow_with_hardening(&request, &registry, HardeningMode::Baseline)
+                .unwrap();
+        assert!(baseline.contains("PrivateTmp=yes\n"));
+        assert!(!baseline.contains("NoNewPrivileges"));
     }
 }

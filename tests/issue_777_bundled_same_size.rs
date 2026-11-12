@@ -42,10 +42,7 @@ fn same_size_edit_to_bundled_manifest_fails_closed_with_documented_diagnostic() 
     // Lazy: the default directory loads, and the edited applet fails on first use.
     let lazy = Registry::load_default(dir.path(), ManifestCheck::Lazy).unwrap();
     assert_eq!(lazy.resolve("cat").unwrap().name, "cat");
-    let lazy_error = format!(
-        "{:#}",
-        lazy.resolve("awk").err().expect("edited awk refused")
-    );
+    let lazy_error = format!("{:#}", lazy.resolve("awk").expect_err("edited awk refused"));
     assert!(
         lazy_error.starts_with("manifest awk.json in "),
         "{lazy_error}"
@@ -63,8 +60,7 @@ fn same_size_edit_to_bundled_manifest_fails_closed_with_documented_diagnostic() 
     let full_error = format!(
         "{:#}",
         Registry::load_default(dir.path(), ManifestCheck::Full)
-            .err()
-            .expect("full check refuses the edited directory")
+            .expect_err("full check refuses the edited directory")
     );
     assert_eq!(full_error, lazy_error);
 }

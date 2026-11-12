@@ -114,6 +114,7 @@ pub(super) fn journal() -> (tempfile::TempDir, CheckpointOptions, Journal) {
         element_state_cache: None,
         element_replay: None,
         element_buffer: Vec::new(),
+        listener_stream_offset: None,
         _lock: super::DirectoryLock(lock),
     };
     journal.persist().unwrap();

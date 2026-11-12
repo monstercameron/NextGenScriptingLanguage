@@ -317,9 +317,13 @@ struct JournalData {
     emitted_sha256: Option<String>,
 }
 
-/// A local cursor for listener records admitted to a checkpoint. It is not a
-/// producer offset or acknowledgement and cannot recover bytes read from an
-/// uncooperative stdin/pipe before the event snapshot is durably published.
+/// A local cursor for listener records admitted to a checkpoint. `stream_offset`
+/// is the producer byte offset just past the newest admitted record, written in
+/// the same journal publish as that record's snapshot. It is recorded for every
+/// applet and stdin listener. Only an applet whose manifest declares
+/// `replayable_stream` restarts from byte 0, so only that producer has the
+/// committed prefix skipped. Live sources resume at their current position, and
+/// bytes they read before the event snapshot is published are not recovered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ListenerEventCursor {
@@ -329,6 +333,12 @@ pub(super) struct ListenerEventCursor {
     pub pending_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_committed_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_offset")]
+    pub stream_offset: u64,
+}
+
+fn is_zero_offset(value: &u64) -> bool {
+    *value == 0
 }
 
 /// The version 3 journal body. Completed nodes are not inline: `completed_count`
@@ -548,6 +558,9 @@ pub(super) struct Journal {
     elements_synced_at: std::time::Instant,
     /// Binding references of the last sequential commit.
     element_state_cache: Option<elements::ElementStateCache>,
+    /// Producer offset of the record the listener is about to admit. Set by the
+    /// listener before each handler run and read by `begin_listener_event_parts`.
+    listener_stream_offset: Option<u64>,
     /// The element log replayed at open, held until the runtime takes it.
     element_replay: Option<ElementReplay>,
     /// Reused for element and binding JSON; erased after every write, including errors.
@@ -837,6 +850,7 @@ impl Journal {
                 element_state_cache: None,
                 element_replay: None,
                 element_buffer: Vec::new(),
+                listener_stream_offset: None,
                 _lock: lock,
             };
             // Fail at open on truncated, missing, oversized, or corrupt state blobs.
@@ -969,6 +983,7 @@ impl Journal {
                 element_state_cache: None,
                 element_replay: None,
                 element_buffer: Vec::new(),
+                listener_stream_offset: None,
                 _lock: lock,
             };
             journal.persist()?;
@@ -1222,15 +1237,24 @@ impl Journal {
         if !self.data.identity.mode.starts_with("service:") {
             bail!("listener event cursor is only valid for service checkpoints");
         }
+        // Offsets are not monotonic across restarts of a live source, which counts from
+        // its new stream start, so no ordering check is made here.
+        let stream_offset = self
+            .listener_stream_offset
+            .ok_or_else(|| anyhow!("listener stream offset was not set for this event"))?;
         self.begin_execution_parts_with_listener_event(
             cwd,
             output,
             bindings,
-            Some(hex_digest(output)),
+            Some((hex_digest(output), stream_offset)),
         )
     }
 
-    #[cfg(all(test, unix))]
+    /// Sets the producer offset for the next `begin_listener_event_parts` call.
+    pub fn set_listener_stream_offset(&mut self, offset: u64) {
+        self.listener_stream_offset = Some(offset);
+    }
+
     pub fn listener_event_cursor(&self) -> Option<ListenerEventCursor> {
         self.data.listener_cursor.clone()
     }
@@ -1240,7 +1264,7 @@ impl Journal {
         cwd: &Path,
         output: &[u8],
         bindings: impl IntoIterator<Item = (&'a str, &'a Value)>,
-        listener_event_digest: Option<String>,
+        listener_event: Option<(String, u64)>,
     ) -> Result<()> {
         if self.data.identity.mode == "finite" {
             bail!("begin_execution is only valid for service checkpoints");
@@ -1254,7 +1278,7 @@ impl Journal {
         {
             bail!("a listener event is already pending in the checkpoint");
         }
-        let next_listener_sequence = if listener_event_digest.is_some() {
+        let next_listener_sequence = if listener_event.is_some() {
             let accepted = self
                 .data
                 .listener_cursor
@@ -1286,7 +1310,7 @@ impl Journal {
         let previous_snapshot = std::mem::replace(&mut self.data.snapshot, snapshot);
         let previous_error = self.data.error.take();
         let previous_listener_cursor = self.data.listener_cursor.clone();
-        if let Some(event_digest) = listener_event_digest {
+        if let Some((event_digest, stream_offset)) = listener_event {
             let cursor = self
                 .data
                 .listener_cursor
@@ -1295,9 +1319,11 @@ impl Journal {
                     committed_sequence: 0,
                     pending_sha256: None,
                     last_committed_sha256: None,
+                    stream_offset: 0,
                 });
             cursor.accepted_sequence = next_listener_sequence.expect("listener sequence prepared");
             cursor.pending_sha256 = Some(event_digest);
+            cursor.stream_offset = stream_offset;
         }
         self.data.status = Status::Running;
         if let Err(error) = self.persist() {
@@ -4576,12 +4602,14 @@ mod tests {
         let event = b"event one\n";
         let event_digest = hex_digest(event);
         let binding = Value::String(String::from_utf8(event.to_vec()).unwrap());
+        journal.set_listener_stream_offset(event.len() as u64);
         journal
             .begin_listener_event_parts(&cwd, event, [("event", &binding)])
             .unwrap();
         let cursor = journal.listener_event_cursor().unwrap();
         assert_eq!(cursor.accepted_sequence, 1);
         assert_eq!(cursor.committed_sequence, 0);
+        assert_eq!(cursor.stream_offset, event.len() as u64);
         assert_eq!(
             cursor.pending_sha256.as_deref(),
             Some(event_digest.as_str())
@@ -4601,6 +4629,7 @@ mod tests {
         let cursor = resumed.listener_event_cursor().unwrap();
         assert_eq!(cursor.accepted_sequence, 1);
         assert_eq!(cursor.committed_sequence, 0);
+        assert_eq!(cursor.stream_offset, event.len() as u64);
 
         // The completed handler and successful sink delivery advance the
         // local cursor together when finish persists the idle checkpoint.
@@ -4709,6 +4738,7 @@ mod tests {
             committed_sequence: 0,
             pending_sha256: None,
             last_committed_sha256: None,
+            stream_offset: 0,
         });
         journal.persist().unwrap();
         assert!(read_journal(&options.directory.join("journal.json")).is_err());

@@ -48,6 +48,10 @@ pub struct Manifest {
     /// A failed attempt may already have caused an external effect, such as billing.
     #[serde(skip_serializing_if = "is_false")]
     pub uncertain_on_failure: bool,
+    /// The output stream replays from its first byte on every start, so a restarted
+    /// listener may skip the bytes it already committed. Live event sources omit this.
+    #[serde(skip_serializing_if = "is_false")]
+    pub replayable_stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     contract: Option<AppletContract>,
     /// The gated build feature this applet needs, when its backend alone does not say so.
@@ -1139,6 +1143,7 @@ impl Registry {
             cacheable: false,
             cache_dependencies: Vec::new(),
             uncertain_on_failure: false,
+            replayable_stream: false,
             contract: None,
             stdio: None,
             origin: None,
@@ -3926,6 +3931,8 @@ struct RawManifest {
     cache_dependencies: Vec<String>,
     #[serde(default)]
     uncertain_on_failure: bool,
+    #[serde(default)]
+    replayable_stream: bool,
     #[serde(default, deserialize_with = "crate::contracts::deserialize_present")]
     contract: Option<AppletContract>,
     #[serde(default)]
@@ -4466,6 +4473,7 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         cacheable: raw.cacheable,
         cache_dependencies: raw.cache_dependencies,
         uncertain_on_failure: raw.uncertain_on_failure,
+        replayable_stream: raw.replayable_stream,
         contract: raw.contract,
         build_feature: raw.build_feature,
         stdio: raw.stdio,

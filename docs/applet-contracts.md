@@ -77,6 +77,14 @@ metadata. A `cacheable` declaration does not prove purity, and an
 once effects. Use this view to inspect the declared interface, then use the
 versioned fields below for typed values and backend behavior.
 
+A manifest may declare `replayable_stream: true` when the applet's output
+starts again from its first byte on every start, as a reader of a growing file
+does. A checkpointed listener records the producer's byte offset with each
+admitted record; for a replayable stream it skips the committed bytes after a
+restart and refuses a producer that ends before that offset. Without the
+declaration, which is right for live event sources, a restarted listener reads
+from the producer's first byte and nothing is skipped or refused.
+
 Shipped manifests describe what each applet returns and put a `description` on
 each in-process parameter. In-process manifests also include one or two
 `examples`, each with a `.program` source string and its JSON `expected_output`.

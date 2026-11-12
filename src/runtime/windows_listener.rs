@@ -119,6 +119,21 @@ fn listen(
             WindowsListenerReader::Child(reader)
         }
     };
+    // Every applet records its producer offset with each admitted record. Only a manifest
+    // that declares `replayable_stream` restarts its stream from byte 0, so only that producer
+    // has its committed prefix discarded. Live sources (stdin, event monitors, followers) emit
+    // just new events after a restart, so they are never seeked and never refused.
+    let mut skip = match (
+        source_manifest.filter(|manifest| manifest.replayable_stream),
+        journal.as_deref(),
+    ) {
+        (Some(_), Some(journal)) => journal
+            .listener_event_cursor()
+            .map_or(0, |cursor| cursor.stream_offset),
+        _ => 0,
+    };
+    // Producer bytes read so far, including the discarded prefix.
+    let mut stream_offset = 0u64;
     let mut record = Vec::new();
     let mut buffer = [0u8; 8192];
     let mut eof = false;
@@ -130,7 +145,13 @@ fn listen(
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     eof = true;
+                    if skip > 0 {
+                        bail!("listener producer ended before its committed stream offset");
+                    }
                     if !record.is_empty() {
+                        if let Some(journal) = journal.as_deref_mut() {
+                            journal.set_listener_stream_offset(stream_offset);
+                        }
                         fire(
                             FiniteRun {
                                 program: body,
@@ -154,7 +175,11 @@ fn listen(
                     }
                 }
                 Ok(count) => {
-                    let mut offset = 0;
+                    let chunk_start = stream_offset;
+                    stream_offset += count as u64;
+                    let discarded = skip.min(count as u64) as usize;
+                    skip -= discarded as u64;
+                    let mut offset = discarded;
                     while offset < count {
                         let (length, terminated) = next_record_segment(
                             &buffer[offset..count],
@@ -164,6 +189,9 @@ fn listen(
                         record.extend_from_slice(&buffer[offset..offset + length]);
                         offset += length;
                         if terminated {
+                            if let Some(journal) = journal.as_deref_mut() {
+                                journal.set_listener_stream_offset(chunk_start + offset as u64);
+                            }
                             fire(
                                 FiniteRun {
                                     program: body,

@@ -1658,6 +1658,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             let policy_program = flow::ast::Program {
                 definitions: Default::default(),
                 inputs: Vec::new(),
+                output: None,
                 steps: screen
                     .components
                     .values()

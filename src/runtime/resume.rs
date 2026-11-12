@@ -1514,6 +1514,7 @@ mod tests {
                     },
                 },
             ],
+            output: None,
             trigger: None,
         };
 

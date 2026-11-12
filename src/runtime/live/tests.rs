@@ -84,12 +84,14 @@ fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
         definitions: program.definitions.clone(),
         inputs: program.inputs.clone(),
         steps: program.steps[..end].to_vec(),
+        output: None,
         trigger: None,
     };
     let second = Program {
         definitions: program.definitions.clone(),
         inputs: program.inputs.clone(),
         steps: program.steps[end..].to_vec(),
+        output: None,
         trigger: None,
     };
     let jobs = Arc::new(JobSession::new());
@@ -151,12 +153,14 @@ fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
         definitions: program.definitions.clone(),
         inputs: program.inputs.clone(),
         steps: program.steps[..split].to_vec(),
+        output: None,
         trigger: None,
     };
     let second = Program {
         definitions: program.definitions.clone(),
         inputs: program.inputs.clone(),
         steps: program.steps[split..].to_vec(),
+        output: None,
         trigger: None,
     };
     let source_last_uses = job_last_uses(&program.steps);

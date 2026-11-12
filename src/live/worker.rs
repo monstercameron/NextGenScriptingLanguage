@@ -355,6 +355,7 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
             definitions: state.plan.program.definitions.clone(),
             inputs: state.plan.program.inputs.clone(),
             steps: state.plan.program.steps[start..end].to_vec(),
+            output: None,
             trigger: None,
         };
         let context = state.doc.node_state();

@@ -579,6 +579,7 @@ impl ProgramModuleSession {
                     definitions: loaded.program.definitions.clone(),
                     inputs: definition.inputs.clone(),
                     steps: definition.steps.clone(),
+                    output: None,
                     trigger: None,
                 };
                 crate::runtime::validate(&child_program, &child_registry)

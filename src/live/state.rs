@@ -119,6 +119,7 @@ impl Plan {
                     definitions: Default::default(),
                     inputs: Vec::new(),
                     steps: Vec::new(),
+                    output: None,
                     trigger: None,
                 },
                 stream: None,
@@ -445,6 +446,7 @@ pub(crate) fn validate(
                         _ => None,
                     })
                     .collect(),
+                output: None,
                 trigger: None,
             };
             crate::capabilities::preflight(&policy_program, registry, &doc.cwd)?;
@@ -532,6 +534,7 @@ pub(crate) fn validate(
                                         connection: crate::ast::Connection::Start,
                                     },
                                 }],
+                                output: None,
                                 trigger: None,
                             },
                             line_limit: None,
@@ -552,6 +555,7 @@ pub(crate) fn validate(
             definitions: plan.program.definitions.clone(),
             inputs: plan.program.inputs.clone(),
             steps: plan.program.steps[doc.cursor..].to_vec(),
+            output: None,
             trigger: None,
         };
         // Live documents refuse hand-over and detached launch anywhere in the program.

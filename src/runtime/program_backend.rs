@@ -67,6 +67,7 @@ pub(super) fn execute(
         definitions: loaded.program.definitions.clone(),
         inputs: definition.inputs.clone(),
         steps: definition.steps.clone(),
+        output: None,
         trigger: None,
     };
     let child_options = RunOptions {

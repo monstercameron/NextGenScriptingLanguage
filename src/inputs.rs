@@ -1,5 +1,5 @@
 //! Declared program inputs: one schema for CLI values, runtime calls and live edits.
-use crate::ast::{InputDeclaration, InputSource, InputType, Value};
+use crate::ast::{InputDeclaration, InputSource, InputType, OutputDeclaration, Value};
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -774,6 +774,17 @@ pub fn describe(
     declarations: &[InputDeclaration],
     supplied: &BTreeMap<String, Value>,
 ) -> Result<serde_json::Value> {
+    describe_with_output(declarations, supplied, None)
+}
+
+/// `describe` for a whole program: the same input description, plus an `output` object
+/// when the program declares its result with `produce`. Without a declaration the
+/// object has no `output` key, so its output is unchanged.
+pub fn describe_with_output(
+    declarations: &[InputDeclaration],
+    supplied: &BTreeMap<String, Value>,
+    output: Option<&OutputDeclaration>,
+) -> Result<serde_json::Value> {
     let known = known_values(declarations, supplied)?;
     let mut inputs = Vec::with_capacity(declarations.len());
     let mut missing = Vec::new();
@@ -836,11 +847,23 @@ pub fn describe(
         }
         inputs.push(spec);
     }
-    Ok(serde_json::json!({
+    let mut description = serde_json::json!({
         "protocol": "execute.inspect/1", "validation": "static",
         "language_version": crate::parser::LANGUAGE_VERSION,
         "inputs": inputs, "inputs_complete": missing.is_empty(), "missing_inputs": missing
-    }))
+    });
+    if let Some(output) = output {
+        description["output"] = output_description(output);
+    }
+    Ok(description)
+}
+
+fn output_description(output: &OutputDeclaration) -> serde_json::Value {
+    let mut spec = serde_json::json!({"type": output.kind.label(), "line": output.line});
+    if let Some(text) = &output.description {
+        spec["description"] = text.clone().into();
+    }
+    spec
 }
 
 pub(crate) fn literal_json(value: &Value) -> Result<serde_json::Value> {

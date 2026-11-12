@@ -160,6 +160,7 @@ pub(super) fn finish(
         return Ok(Program {
             inputs,
             steps,
+            output: None,
             trigger,
             definitions: Arc::default(),
         });
@@ -193,6 +194,7 @@ pub(super) fn finish(
     Ok(Program {
         inputs,
         steps,
+        output: None,
         trigger,
         definitions: Arc::new(compiled),
     })

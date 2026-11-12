@@ -675,6 +675,7 @@ impl App {
                             definitions: Default::default(),
                             inputs: Vec::new(),
                             steps,
+                            output: None,
                             trigger: None,
                         },
                         &registry,

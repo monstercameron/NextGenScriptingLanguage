@@ -1,6 +1,7 @@
 use crate::ast::{
     Condition, ConditionOperator, Connection, InputDeclaration, InputSource, InputType, Invocation,
-    ListenSource, LoopKind, Program, RedirectTarget, RetryPolicy, Step, StepKind, Trigger, Value,
+    ListenSource, LoopKind, OutputDeclaration, OutputType, Program, RedirectTarget, RetryPolicy,
+    Step, StepKind, Trigger, Value,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use std::borrow::Cow;
@@ -179,6 +180,7 @@ pub(crate) const STATEMENT_KEYWORDS: &[&str] = &[
     "listen",
     "otherwise",
     "pipe",
+    "produce",
     "read",
     "redirect",
     "repeat",
@@ -347,6 +349,11 @@ pub(crate) fn statement_completion_forms() -> &'static [StatementCompletionForm]
             label: "pipe to",
             detail: "Pipe stdout into the next command",
             snippet: Some("pipe to ${1:tool}"),
+        },
+        StatementCompletionForm {
+            label: "produce",
+            detail: "Declare the program's result type",
+            snippet: Some("produce ${1:text}"),
         },
         StatementCompletionForm {
             label: "race",
@@ -1355,6 +1362,7 @@ fn emit_handler_blocks<'arena, 'source: 'arena>(
 /// A parsed program before lowering. Its file-call operands are still unresolved.
 pub(crate) struct RawProgram {
     pub(crate) inputs: Vec<InputDeclaration>,
+    pub(crate) output: Option<OutputDeclaration>,
     pub(crate) steps: Vec<Step>,
     pub(crate) trigger: Option<Trigger>,
     pub(crate) definitions: BTreeMap<String, crate::ast::ReusableProgram>,
@@ -1371,7 +1379,10 @@ pub fn parse(source: &str) -> Result<Program> {
 
 /// Expand same-file program calls and produce the executable program.
 pub(crate) fn lower(raw: RawProgram) -> Result<Program> {
-    reusable::finish(raw.inputs, raw.steps, raw.trigger, raw.definitions)
+    let output = raw.output;
+    let mut program = reusable::finish(raw.inputs, raw.steps, raw.trigger, raw.definitions)?;
+    program.output = output;
+    Ok(program)
 }
 
 /// Syntax errors found by `parse_collecting_errors`, in the order the parser meets them.
@@ -1498,6 +1509,7 @@ fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<R
     take_language_version(&mut statements)?;
     let mut definitions = BTreeMap::new();
     let mut inputs = Vec::new();
+    let mut output: Option<OutputDeclaration> = None;
     let mut steps: Vec<Step> = Vec::new();
     let mut token_arena = Vec::new();
     let mut lines = Vec::new();
@@ -1515,6 +1527,7 @@ fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<R
             // Declarations, triggers and clauses are not steps, so they cannot be labelled.
             if [
                 "accept",
+                "produce",
                 "define",
                 "every",
                 "on",
@@ -1649,6 +1662,37 @@ fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<R
             cursor += 1;
             continue;
         }
+        if word_is(line_tokens.first(), "produce") {
+            if steps.len() > openers.count {
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!(
+                        "line {}: the output declaration must precede executable statements",
+                        line.number
+                    )
+                );
+            }
+            if let Some(first) = &output {
+                skip_item!(
+                    start,
+                    steps_before,
+                    anyhow!(
+                        "line {}: a program declares one output, and line {} already declares it",
+                        line.number,
+                        first.line
+                    )
+                );
+            }
+            output = Some(recover_item!(
+                start,
+                steps_before,
+                parse_output(line_tokens, line.number)
+                    .map_err(|error| anyhow!("line {}: {error:#}", line.number))
+            ));
+            cursor += 1;
+            continue;
+        }
         if is_trigger_header(line_tokens) {
             if steps.iter().any(|step| !is_trigger_setup(&step.kind)) {
                 skip_item!(
@@ -1728,6 +1772,7 @@ fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<R
             crate::inputs::validate(&inputs)?;
             return Ok(RawProgram {
                 inputs,
+                output,
                 steps,
                 trigger: Some(trigger),
                 definitions,
@@ -1752,6 +1797,7 @@ fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<R
     if !no_recovered_errors(&recovery) {
         return Ok(RawProgram {
             inputs,
+            output,
             steps,
             trigger: None,
             definitions,
@@ -1770,6 +1816,7 @@ fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<R
     crate::inputs::validate(&inputs)?;
     Ok(RawProgram {
         inputs,
+        output,
         steps,
         trigger: None,
         definitions,
@@ -1806,29 +1853,10 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
             "expected `accept <name> as <text|integer|boolean|list of text|list of integer|list of json|json>`"
         );
     }
-    let (kind, mut cursor) = match tokens.get(3) {
-        Some(Token::Word("text")) => (InputType::Text, 4),
-        Some(Token::Word("integer")) => (InputType::Integer, 4),
-        Some(Token::Word("boolean")) => (InputType::Boolean, 4),
-        Some(Token::Word("json")) => (InputType::Json, 4),
-        Some(Token::Word("list"))
-            if word_is(tokens.get(4), "of") && word_is(tokens.get(5), "text") =>
-        {
-            (InputType::TextList, 6)
-        }
-        Some(Token::Word("list"))
-            if word_is(tokens.get(4), "of") && word_is(tokens.get(5), "integer") =>
-        {
-            (InputType::IntegerList, 6)
-        }
-        Some(Token::Word("list"))
-            if word_is(tokens.get(4), "of") && word_is(tokens.get(5), "json") =>
-        {
-            (InputType::JsonList, 6)
-        }
-        _ => bail!(
+    let Some((kind, mut cursor)) = parse_type_words(tokens, 3) else {
+        bail!(
             "input type must be text, integer, boolean, list of text, list of integer, list of json, or json"
-        ),
+        )
     };
     let choices = if word_is(tokens.get(cursor), "one") && word_is(tokens.get(cursor + 1), "of") {
         if kind != InputType::Text {
@@ -1955,11 +1983,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
             if description.is_some() {
                 bail!("input declares its description more than once");
             }
-            let Some(Token::String(text)) = tokens.get(cursor + 2) else {
-                bail!("`described as` must be followed by a quoted description");
-            };
-            description = Some(text.clone().into_owned());
-            cursor += 3;
+            description = Some(parse_description(tokens, &mut cursor)?);
         } else {
             break;
         }
@@ -1991,6 +2015,73 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         line,
         description,
         choices,
+    })
+}
+
+/// The type words that `accept` and `produce` share, read from `start`: `text`,
+/// `integer`, `boolean`, `json`, `list of text`, `list of integer` and `list of json`.
+/// Returns the type and the cursor after it, or `None` when no such type starts there.
+fn parse_type_words(tokens: &[Token<'_>], start: usize) -> Option<(InputType, usize)> {
+    match tokens.get(start) {
+        Some(Token::Word("text")) => Some((InputType::Text, start + 1)),
+        Some(Token::Word("integer")) => Some((InputType::Integer, start + 1)),
+        Some(Token::Word("boolean")) => Some((InputType::Boolean, start + 1)),
+        Some(Token::Word("json")) => Some((InputType::Json, start + 1)),
+        Some(Token::Word("list")) if word_is(tokens.get(start + 1), "of") => {
+            match tokens.get(start + 2) {
+                Some(Token::Word("text")) => Some((InputType::TextList, start + 3)),
+                Some(Token::Word("integer")) => Some((InputType::IntegerList, start + 3)),
+                Some(Token::Word("json")) => Some((InputType::JsonList, start + 3)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `described as "TEXT"` at `cursor`; the caller has checked that `described as`
+/// starts there. Advances `cursor` past the quoted text.
+fn parse_description(tokens: &[Token<'_>], cursor: &mut usize) -> Result<String> {
+    let Some(Token::String(text)) = tokens.get(*cursor + 2) else {
+        bail!("`described as` must be followed by a quoted description");
+    };
+    *cursor += 3;
+    Ok(text.clone().into_owned())
+}
+
+/// `produce TYPE [described as "TEXT"]`. The types are the subset of the shared type
+/// words this release accepts for a result, plus `none`. Lists of integers or JSON,
+/// one-of choices, bytes and schema or field-list forms are refused here.
+fn parse_output(tokens: &[Token<'_>], line: usize) -> Result<OutputDeclaration> {
+    let refused =
+        || anyhow!("output type must be text, integer, boolean, list of text, json, or none");
+    let (kind, mut cursor) = if word_is(tokens.get(1), "none") {
+        (OutputType::None, 2)
+    } else {
+        let Some((input_kind, cursor)) = parse_type_words(tokens, 1) else {
+            return Err(refused());
+        };
+        let kind = match input_kind {
+            InputType::Text => OutputType::Text,
+            InputType::Integer => OutputType::Integer,
+            InputType::Boolean => OutputType::Boolean,
+            InputType::TextList => OutputType::TextList,
+            InputType::Json => OutputType::Json,
+            _ => return Err(refused()),
+        };
+        (kind, cursor)
+    };
+    let description =
+        if word_is(tokens.get(cursor), "described") && word_is(tokens.get(cursor + 1), "as") {
+            Some(parse_description(tokens, &mut cursor)?)
+        } else {
+            None
+        };
+    ensure_end(tokens, cursor)?;
+    Ok(OutputDeclaration {
+        kind,
+        description,
+        line,
     })
 }
 
@@ -2424,6 +2515,9 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
     if word_is(tokens.first(), "accept") {
         bail!("input declarations must be unindented and precede executable statements");
     }
+    if word_is(tokens.first(), "produce") {
+        bail!("the output declaration must be unindented and precede executable statements");
+    }
     if word_is(tokens.first(), "use") {
         return parse_use(tokens);
     }
@@ -2530,7 +2624,10 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn is_input_header(line: &str) -> bool {
-    line.split_ascii_whitespace().next() == Some("accept")
+    matches!(
+        line.split_ascii_whitespace().next(),
+        Some("accept" | "produce")
+    )
 }
 
 /// `then capture bytes as NAME`: the pipeline bytes are bound unchanged.
@@ -4109,6 +4206,12 @@ pub const GRAMMAR_FORMS: &[GrammarForm] = &[
 "#,
     },
     GrammarForm {
+        rule: "produce-decl",
+        body: r#""produce " output-type (" described as " text)?"#,
+        example: r#"produce json described as "Report with per-host status"
+"#,
+    },
+    GrammarForm {
         rule: "run-direct",
         body: r#""run " text (" with " argument (" and " argument)*)? (" as " name)?"#,
         example: r#"run "printf" with arguments ["count"] as label
@@ -4161,6 +4264,7 @@ name ::= [A-Za-z_] [A-Za-z0-9_]*
 applet ::= name ("." name)*
 target ::= text | applet
 type-name ::= "text" | "integer" | "boolean" | "list of text" | "json"
+output-type ::= "text" | "integer" | "boolean" | "list of text" | "json" | "none"
 item ::= text | integer | boolean | name
 list ::= "[" " "? (item (" "? "," " "? item)*)? "]"
 value ::= text | integer | boolean | name | list
@@ -4208,6 +4312,85 @@ mod tests {
             error.to_string().contains("invalid environment name"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn produce_declares_each_result_type_with_and_without_a_description() {
+        for (line, kind) in [
+            ("produce text", OutputType::Text),
+            ("produce integer", OutputType::Integer),
+            ("produce boolean", OutputType::Boolean),
+            ("produce list of text", OutputType::TextList),
+            ("produce json", OutputType::Json),
+            ("produce none", OutputType::None),
+        ] {
+            let plain = parse(&format!("{line}\n")).expect(line);
+            let output = plain.output.expect(line);
+            assert_eq!(
+                (output.kind, output.description, output.line),
+                (kind, None, 1)
+            );
+            let described = parse(&format!("{line} described as \"Result\"\n")).expect(line);
+            let output = described.output.expect(line);
+            assert_eq!(output.kind, kind);
+            assert_eq!(output.description.as_deref(), Some("Result"));
+        }
+    }
+
+    #[test]
+    fn produce_is_optional_and_takes_its_place_before_statements() {
+        assert!(parse("run \"true\"\n").unwrap().output.is_none());
+        let program = parse("accept name as text\nproduce text\nrun \"true\"\n").unwrap();
+        assert_eq!(program.output.map(|output| output.line), Some(2));
+        assert_eq!(program.inputs.len(), 1);
+    }
+
+    #[test]
+    fn produce_near_misses_are_parse_errors() {
+        for (source, expected) in [
+            ("produce\n", "output type must be"),
+            (
+                "produce text described as\n",
+                "must be followed by a quoted",
+            ),
+            (
+                "produce text described \"Result\"\n",
+                "stray token `described`",
+            ),
+            ("produce text extra\n", "stray token `extra`"),
+            ("produce bytes\n", "output type must be"),
+            ("produce list of integer\n", "output type must be"),
+            ("produce list of json\n", "output type must be"),
+            ("produce text one of [\"a\", \"b\"]\n", "stray token `one`"),
+            ("produce schema.json\n", "output type must be"),
+            ("produce text\nproduce json\n", "already declares it"),
+            (
+                "run \"true\"\nproduce text\n",
+                "must precede executable statements",
+            ),
+            ("result: produce text\n", "cannot precede a declaration"),
+        ] {
+            let error = parse(source).expect_err(source);
+            let message = format!("{error:#}");
+            assert!(message.contains(expected), "{source}: {message}");
+        }
+    }
+
+    #[test]
+    fn a_second_produce_names_both_lines() {
+        let error = parse("accept x as text\nproduce text\nproduce json\n").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message
+                .contains("line 3: a program declares one output, and line 2 already declares it"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn produce_is_a_reserved_statement_head() {
+        assert!(STATEMENT_KEYWORDS.contains(&"produce"));
+        assert!(parse("produce text\n").is_ok());
     }
 
     #[test]
@@ -4272,6 +4455,7 @@ mod tests {
             "parallel",
             "parallel for each",
             "pipe to",
+            "produce",
             "race",
             "read",
             "read from stdin",

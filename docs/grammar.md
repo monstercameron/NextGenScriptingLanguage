@@ -31,9 +31,19 @@ source      = "environment" TEXT | "arguments" | "argument" INTEGER
             | "option" TEXT [ "alias" TEXT ]        (text or integer inputs only)
             | [ "secret" ] "prompt" TEXT
 TYPE        = "text" | "integer" | "boolean" | "list" "of" "text" | "json"
+output      = "produce" OUTTYPE [ "described" "as" TEXT ]
+OUTTYPE     = "text" | "integer" | "boolean" | "list" "of" "text" | "json" | "none"
 ```
 
 Declarations come before statements. A declaration after a statement is an error.
+A program has at most one `produce` declaration, and a second one is an error that
+names both lines. `produce` is unindented, like `accept`. It declares the program's
+result type and changes nothing at run time: the final value is not checked against
+it yet. A program without it behaves as before.
+
+```program
+produce json described as "Report with per-host status"
+```
 
 The optional `version` line is the first statement of the file, with no indentation.
 It names the language version the program was written for. Only `execute 1` is
@@ -361,6 +371,7 @@ Which modifiers may follow each statement. A `yes` cell is accepted by the parse
 | `pipe to` | yes, on the group's final stage (see note) | no | no | yes, after `as NAME` | no | no | yes, bounds the whole group |
 | `run program NAME` (reusable) | yes | yes | no | no | no | no | no |
 | `take` | no | no | no | no | no | no | no |
+| `produce` (output declaration) | no | no | no | no | no | no | no |
 | `every`, `on schedule`, `listen to` | no | no | no | no | no | no | no |
 
 `pipe to ... as NAME` binds the pipe group's final output, the terminal stage's
@@ -404,8 +415,8 @@ row per statement form. `tests/lane_a_grammar_doc.rs` checks that each row's exa
 parses and appears in this document, so the table and this index cannot disagree
 about the forms they cover.
 
-The generated grammar covers only the forms in that table: `accept` declarations,
-`run` (direct and applet targets), `then`, `pipe to`, `use value` and `use folder`,
+The generated grammar covers only the forms in that table: `accept` and `produce`
+declarations, `run` (direct and applet targets), `then`, `pipe to`, `use value` and `use folder`,
 each on one unindented line. It does not yet encode indented blocks, `take`,
 suffixes other than `as NAME`, declaration options, or context rules such as "`then`
 needs a preceding step". It is therefore looser than the parser in those places. The

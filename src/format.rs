@@ -234,6 +234,9 @@ pub fn first_meaning_difference(source: &str) -> Option<String> {
 /// where their statements sit compare equal.
 fn without_spans(mut program: Program) -> Program {
     clear_inputs(&mut program.inputs);
+    if let Some(output) = program.output.as_mut() {
+        output.line = 0;
+    }
     clear_steps(&mut program.steps);
     if let Some(trigger) = program.trigger.as_mut() {
         match trigger {

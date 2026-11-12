@@ -649,8 +649,48 @@ pub struct Program {
     pub definitions: Arc<BTreeMap<String, ReusableProgram>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<InputDeclaration>,
+    /// The `produce TYPE` declaration, when the program states its result type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<OutputDeclaration>,
     pub steps: Vec<Step>,
     pub trigger: Option<Trigger>,
+}
+
+/// The declared result of a program, from `produce TYPE [described as "TEXT"]`.
+/// Declaration only: the final value is not checked against it yet.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OutputDeclaration {
+    pub kind: OutputType,
+    /// Human-readable text from `described as "TEXT"`, shown by inspect and help.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub line: usize,
+}
+
+/// The result types a `produce` declaration may name in this release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutputType {
+    Text,
+    Integer,
+    Boolean,
+    TextList,
+    Json,
+    /// `produce none`: the program produces no value.
+    None,
+}
+
+impl OutputType {
+    /// The language spelling of the type, as inspect and help report it.
+    pub fn label(self) -> &'static str {
+        match self {
+            OutputType::Text => "text",
+            OutputType::Integer => "integer",
+            OutputType::Boolean => "boolean",
+            OutputType::TextList => "list of text",
+            OutputType::Json => "json",
+            OutputType::None => "none",
+        }
+    }
 }
 
 fn definitions_empty(definitions: &Arc<BTreeMap<String, ReusableProgram>>) -> bool {

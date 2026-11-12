@@ -148,12 +148,14 @@ pub(super) fn split_program(program: &Program) -> (Program, Program) {
             definitions: program.definitions.clone(),
             inputs: program.inputs.clone(),
             steps: program.steps[..setup_length].to_vec(),
+            output: None,
             trigger: None,
         },
         Program {
             definitions: program.definitions.clone(),
             inputs: program.inputs.clone(),
             steps: program.steps[setup_length..].to_vec(),
+            output: None,
             trigger: None,
         },
     )

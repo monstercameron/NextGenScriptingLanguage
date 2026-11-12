@@ -5234,6 +5234,7 @@ pub(crate) fn invoke_call_with_context(
     let program = Program {
         definitions: Default::default(),
         inputs: Vec::new(),
+        output: None,
         steps: vec![crate::ast::Step {
             line: 1,
             label: None,

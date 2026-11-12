@@ -121,6 +121,17 @@
       }
     },
     "inputs_complete": { "type": "boolean" },
-    "missing_inputs": { "type": "array", "items": { "type": "string" } }
+    "missing_inputs": { "type": "array", "items": { "type": "string" } },
+    "output": {
+      "description": "The result the program declares with `produce`. Present only when the program has a produce declaration. Declaration only: the final value is not checked against it yet.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "line"],
+      "properties": {
+        "type": { "enum": ["text", "integer", "boolean", "list of text", "json", "none"] },
+        "description": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 }
+      }
+    }
   }
 }

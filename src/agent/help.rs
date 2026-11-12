@@ -97,12 +97,21 @@ pub fn render_program_help(program: &Program, program_path: &str) -> String {
 /// The help object for one parsed program.
 pub fn describe(program: &Program, program_path: &str) -> Value {
     let inputs: Vec<Value> = program.inputs.iter().map(input_entry).collect();
-    json!({
+    let mut help = json!({
         "protocol": PROTOCOL,
         "program": program_path,
         "usage": format!("execute {program_path} [--input NAME=VALUE ...] [-- OPTIONS]"),
         "inputs": inputs,
-    })
+    });
+    // Only a program that declares its result (`produce`) gets an output entry.
+    if let Some(output) = &program.output {
+        help["output"] = json!({
+            "type": output.kind.label(),
+            "description": output.description,
+            "line": output.line,
+        });
+    }
+    help
 }
 
 fn input_entry(input: &InputDeclaration) -> Value {
@@ -238,6 +247,16 @@ fn render_text(description: &Value) -> String {
     }
     let usage = escape_terminal_field(description["usage"].as_str().unwrap_or(""));
     text.push_str(&format!("{usage}\n"));
+    if let Some(output) = description
+        .get("output")
+        .filter(|output| output.is_object())
+    {
+        text.push_str(&format!(
+            "\nOutput: {}",
+            escape_terminal_field(output["type"].as_str().unwrap_or(""))
+        ));
+        push_description(&mut text, output);
+    }
     let inputs = description["inputs"]
         .as_array()
         .cloned()
@@ -395,6 +414,27 @@ fn header_value(text: &str) -> String {
 mod tests {
     use super::{describe, render_text};
     use serde_json::json;
+
+    #[test]
+    fn declared_output_is_reported_next_to_the_inputs() {
+        let declared = crate::parser::parse(
+            "accept name as text\nproduce json described as \"Per-host report\"\nrun \"true\"\n",
+        )
+        .unwrap();
+        let description = describe(&declared, "report.program");
+        assert_eq!(
+            description["output"],
+            json!({"type": "json", "description": "Per-host report", "line": 2})
+        );
+        let text = render_text(&description);
+        assert!(text.contains("\nOutput: json  Per-host report\n"), "{text}");
+        assert!(text.contains("\nInputs:\n  name  text  required"), "{text}");
+
+        let plain = crate::parser::parse("run \"true\"\n").unwrap();
+        let description = describe(&plain, "plain.program");
+        assert!(description.get("output").is_none(), "{description}");
+        assert!(!render_text(&description).contains("Output:"));
+    }
 
     #[test]
     fn generated_usage_places_flags_after_the_argument_separator() {

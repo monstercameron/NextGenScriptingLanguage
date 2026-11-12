@@ -8,7 +8,10 @@ finite graphs, and one `execute.graph-event/1` JSON line per terminal event as
 it arrives for graphs with persistent nodes (timers, listeners, native
 streams, program services, or renderers). `--events document` keeps the
 closing document and `--events jsonl` streams lines for any graph without a
-checkpoint; streamed runs hold no collected outputs, so a persistent graph can
+checkpoint. Without `--events`, a graph with persistent nodes streams as jsonl
+and a finite graph prints the closing document; the persistent nodes are the
+plan's timer, listener, native stream, program service and renderer nodes
+(`GraphPlan::has_persistent_nodes`). Streamed runs hold no collected outputs, so a persistent graph can
 run indefinitely, and closing the reader (`| head -n 3`) cancels the session
 and exits quietly through the SIGPIPE convention (141). Each streamed line is
 bounded by a per-event limit derived from the message byte limit, queued

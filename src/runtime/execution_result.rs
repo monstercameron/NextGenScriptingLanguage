@@ -839,8 +839,56 @@ impl std::error::Error for ExecutionFailure {}
 
 /// Convert a runtime error into the stable value exposed by `catch`.
 /// Unrecognized errors are conservative: the effect may have happened.
+/// A caught task-group failure also carries a `task_group` record with its
+/// failed task, outcome, uncertainty and redacted partial results.
 pub fn error_value(error: &anyhow::Error) -> Value {
-    result_for_error(error).to_value()
+    let mut value = result_for_error(error).to_value();
+    if let (Value::Record(fields), Some(failure)) = (
+        &mut value,
+        error.downcast_ref::<super::tasks::TaskGroupFailure>(),
+    ) {
+        fields.insert("task_group".into(), task_group_value(failure));
+    }
+    value
+}
+
+/// Structured task-group metadata for `catch`. The partial results and message
+/// were redacted when the group failure was built.
+fn task_group_value(failure: &super::tasks::TaskGroupFailure) -> Value {
+    let mode = match failure.mode {
+        crate::ast::TaskGroupMode::Join => "join",
+        crate::ast::TaskGroupMode::Race => "race",
+    };
+    let mut fields = BTreeMap::new();
+    fields.insert("mode".into(), Value::String(mode.into()));
+    fields.insert(
+        "failed_task".into(),
+        Value::String(failure.failed_task.clone()),
+    );
+    fields.insert(
+        "outcome".into(),
+        optional_text(
+            failure
+                .outcome
+                .as_ref()
+                .map(|outcome| outcome.name.as_str()),
+        ),
+    );
+    fields.insert(
+        "status".into(),
+        optional_integer(failure.outcome.as_ref().map(|outcome| outcome.status)),
+    );
+    fields.insert("uncertain".into(), Value::Bool(failure.uncertain));
+    fields.insert(
+        "launched_processes".into(),
+        Value::Integer(i64::try_from(failure.launched_processes).unwrap_or(i64::MAX)),
+    );
+    fields.insert(
+        "partial_results_schema_version".into(),
+        optional_integer(failure.partial_results_schema_version.map(i32::from)),
+    );
+    fields.insert("partial_results".into(), failure.partial_results.clone());
+    Value::Record(fields)
 }
 
 /// Preserve the typed execution metadata carried by a runtime error.
@@ -854,6 +902,10 @@ pub(crate) fn result_for_error(error: &anyhow::Error) -> ExecutionResult {
 
     if let Some(error) = error.downcast_ref::<super::jobs::JobSpawnFailure>() {
         return error.result.clone();
+    }
+
+    if let Some(failure) = error.downcast_ref::<super::tasks::TaskGroupFailure>() {
+        return task_group_failure_result(failure);
     }
 
     if let Some(command) = error.downcast_ref::<super::CommandFailed>() {
@@ -902,6 +954,27 @@ pub(crate) fn result_for_error(error: &anyhow::Error) -> ExecutionResult {
         error.to_string(),
         EffectCertainty::Uncertain,
     )
+}
+
+/// Classify a failed task group by its failed task's declared outcome. Without
+/// an outcome, or when any sibling may have acted, the effect stays uncertain.
+fn task_group_failure_result(failure: &super::tasks::TaskGroupFailure) -> ExecutionResult {
+    let (kind, certainty) = match &failure.outcome {
+        Some(outcome) => (
+            ExecutionKind::from_outcome(outcome.kind),
+            outcome.effect_certainty,
+        ),
+        None => (ExecutionKind::UnknownError, EffectCertainty::Uncertain),
+    };
+    let effect_certainty = if failure.uncertain {
+        EffectCertainty::Uncertain
+    } else {
+        certainty
+    };
+    let mut result = ExecutionResult::runtime_failure(kind, failure.to_string(), effect_certainty);
+    result.outcome = failure.outcome.as_ref().map(|outcome| outcome.name.clone());
+    result.status = failure.outcome.as_ref().map(|outcome| outcome.status);
+    result
 }
 
 /// The typed output-limit scope carried by a runtime error, when the

@@ -17,6 +17,12 @@
       "min_length": 1,
       "nonempty": true
     },
+    "act_on": {
+      "type": "list",
+      "items": "string",
+      "min_items": 1,
+      "description": "The decision that counts as acting: `true` or `false`. Adds `act` (accepted and the decision matches act_on) and `reason` to the result."
+    },
     "minimum": {
       "type": "integer",
       "minimum": 0,
@@ -66,6 +72,17 @@
     },
     {
       "parameter": "question"
+    },
+    {
+      "when_present": "act_on",
+      "append": [
+        {
+          "literal": "--act-on"
+        },
+        {
+          "spread": "act_on"
+        }
+      ]
     },
     {
       "when_present": "minimum",
@@ -175,6 +192,12 @@
         },
         "accepted": {
           "type": "boolean"
+        },
+        "act": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "text"
         }
       },
       "required": [

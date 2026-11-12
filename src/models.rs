@@ -111,6 +111,29 @@ impl Kind {
     }
 }
 
+/// The validated `--act-on` value of a Jev classify, judge or score call. It
+/// names the decisions that count as acting; it never changes the model request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ActOn {
+    /// Classify: a nonempty subset of the call's labels.
+    Labels(Vec<String>),
+    /// Judge: the yes (`true`) or no (`false`) decision.
+    Decision(bool),
+    /// Score: exactly this level.
+    Level(String),
+    /// Score: this level or any level above it.
+    AtLeast(String),
+}
+
+/// The decision a Jev answer made, before the confidence gate.
+#[derive(Clone, Debug, PartialEq)]
+enum Decided {
+    Label(String),
+    Decision(bool),
+    /// A score, read as the nearest level.
+    Score(f64),
+}
+
 #[derive(Debug)]
 struct Options {
     kind: Kind,
@@ -126,6 +149,8 @@ struct Options {
     levels: Vec<String>,
     questions: Option<Vec<BatchQuestion>>,
     minimum: u8,
+    /// Which decisions count as acting. Absent leaves `act` and `reason` out.
+    act_on: Option<ActOn>,
     max_tokens: Option<u32>,
     effort: Option<String>,
     temperature: Option<f64>,
@@ -325,6 +350,7 @@ pub fn help() -> &'static str {
 Reads state/input bytes from stdin and writes one execute.model/1 JSON result.\n\
 Options: --provider jev|openai --model NAME --question TEXT --instruction TEXT\n\
          --labels LABEL... | --criteria JSON --levels LEVEL... --questions JSON\n\
+         --act-on LABEL... | true|false | LEVEL | at_least LEVEL\n\
          --schema JSON --minimum 0..100 --max-tokens N --timeout-ms N\n\
          --max-bytes N --env-file PATH --endpoint URL\n\
          --api-key-env EXECUTE_MODEL_KEY_NAME\n\
@@ -370,6 +396,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
         levels: Vec::new(),
         questions: None,
         minimum: 0,
+        act_on: None,
         max_tokens: None,
         effort: None,
         temperature: None,
@@ -383,10 +410,11 @@ fn parse_args(args: &[String]) -> Result<Options> {
         schema: None,
     };
     let mut seen = BTreeSet::new();
+    let mut act_on_values: Option<Vec<String>> = None;
     let mut index = 1;
     while index < args.len() {
         let flag = args[index].as_str();
-        if flag == "--labels" || flag == "--levels" {
+        if flag == "--labels" || flag == "--levels" || flag == "--act-on" {
             if !seen.insert(flag.to_owned()) {
                 bail!("duplicate list option");
             }
@@ -401,8 +429,10 @@ fn parse_args(args: &[String]) -> Result<Options> {
             }
             if flag == "--labels" {
                 options.labels = values;
-            } else {
+            } else if flag == "--levels" {
                 options.levels = values;
+            } else {
+                act_on_values = Some(values);
             }
             continue;
         }
@@ -482,7 +512,56 @@ fn parse_args(args: &[String]) -> Result<Options> {
         bail!("fixture and fixture-dir are mutually exclusive");
     }
     validate_options(&mut options, &seen)?;
+    if let Some(values) = act_on_values {
+        options.act_on = Some(parse_act_on(
+            options.kind,
+            &values,
+            &options.labels,
+            &options.levels,
+        )?);
+    }
     Ok(options)
+}
+
+/// Parse `--act-on` against the call's own closed set, before any request.
+/// Classify takes a nonempty subset of its labels; judge takes `true` or
+/// `false`; score takes one level, or `at_least` followed by one level.
+fn parse_act_on(
+    kind: Kind,
+    values: &[String],
+    labels: &[String],
+    levels: &[String],
+) -> Result<ActOn> {
+    match kind {
+        Kind::Classify => {
+            if values.is_empty() {
+                bail!("act-on needs at least one label");
+            }
+            let mut unique = BTreeSet::new();
+            for value in values {
+                if !labels.contains(value) {
+                    bail!("act-on labels must be labels of the classify call");
+                }
+                if !unique.insert(value) {
+                    bail!("act-on labels must be unique");
+                }
+            }
+            Ok(ActOn::Labels(values.to_vec()))
+        }
+        Kind::Judge => match values {
+            [value] if value == "true" => Ok(ActOn::Decision(true)),
+            [value] if value == "false" => Ok(ActOn::Decision(false)),
+            _ => bail!("act-on for judge is true or false"),
+        },
+        Kind::Score => match values {
+            [level] if levels.contains(level) => Ok(ActOn::Level(level.clone())),
+            [word, level] if word == "at_least" && levels.contains(level) => {
+                Ok(ActOn::AtLeast(level.clone()))
+            }
+            _ => bail!("act-on for score is one level, or at_least and one level"),
+        },
+        _ => bail!("act-on is only supported by classify, judge and score"),
+    }
 }
 
 fn parse_effort(value: &str) -> Result<String> {
@@ -1813,8 +1892,97 @@ fn normalize_jev_answer(
         &options.levels,
         options.minimum,
     )?;
+    let gate = match &options.act_on {
+        Some(act_on) => {
+            let (decided, accepted) = decided_from_fields(options.kind, &fields)?;
+            Some(act_and_reason(&decided, accepted, act_on, &options.levels)?)
+        }
+        None => None,
+    };
     out.extend(fields);
+    if let Some((act, reason)) = gate {
+        out.insert("act".into(), json!(act));
+        out.insert("reason".into(), json!(reason));
+    }
     Ok(())
+}
+
+/// The decision and the confidence gate of one normalized Jev answer.
+fn decided_from_fields(kind: Kind, fields: &Map<String, Value>) -> Result<(Decided, bool)> {
+    let malformed = || anyhow!("provider answer is malformed");
+    let accepted = fields
+        .get("accepted")
+        .and_then(Value::as_bool)
+        .ok_or_else(malformed)?;
+    let decided = match kind {
+        Kind::Classify => Decided::Label(
+            fields
+                .get("label")
+                .and_then(Value::as_str)
+                .ok_or_else(malformed)?
+                .to_owned(),
+        ),
+        Kind::Judge => Decided::Decision(
+            fields
+                .get("decision")
+                .and_then(Value::as_bool)
+                .ok_or_else(malformed)?,
+        ),
+        Kind::Score => Decided::Score(
+            fields
+                .get("score")
+                .and_then(Value::as_f64)
+                .ok_or_else(malformed)?,
+        ),
+        _ => bail!("act-on is only supported by classify, judge and score"),
+    };
+    Ok((decided, accepted))
+}
+
+/// `act` and `reason` for one Jev answer. `act` is true only when the answer
+/// passed the confidence gate (`accepted`) and its decision is in `act_on`.
+/// `reason` names the first condition that failed: `low_confidence` when the
+/// gate failed whatever the decision, else `other_label` when the decision is
+/// outside `act_on`, else `accepted`. A score is read as its nearest level.
+fn act_and_reason(
+    decided: &Decided,
+    accepted: bool,
+    act_on: &ActOn,
+    levels: &[String],
+) -> Result<(bool, &'static str)> {
+    let level_index = |name: &str| {
+        levels
+            .iter()
+            .position(|level| level == name)
+            .ok_or_else(|| anyhow!("act-on level is not one of the levels"))
+    };
+    let in_act_on = match (decided, act_on) {
+        (Decided::Label(label), ActOn::Labels(labels)) => labels.contains(label),
+        (Decided::Decision(decision), ActOn::Decision(wanted)) => decision == wanted,
+        (Decided::Score(score), ActOn::Level(level)) => {
+            let nearest = score.round() as usize;
+            if nearest >= levels.len() {
+                bail!("score is outside the requested rubric");
+            }
+            nearest == level_index(level.as_str())?
+        }
+        (Decided::Score(score), ActOn::AtLeast(level)) => {
+            let nearest = score.round() as usize;
+            if nearest >= levels.len() {
+                bail!("score is outside the requested rubric");
+            }
+            nearest >= level_index(level.as_str())?
+        }
+        _ => bail!("act-on does not match the decision kind"),
+    };
+    let reason = if !accepted {
+        "low_confidence"
+    } else if !in_act_on {
+        "other_label"
+    } else {
+        "accepted"
+    };
+    Ok((accepted && in_act_on, reason))
 }
 
 /// Validate one Jev answer against the request that produced it and return its
@@ -4381,6 +4549,162 @@ mod unit_tests {
         let error = budget.reserve(CallEstimate { max_tokens: 1 }).unwrap_err();
         assert_eq!(error.limit(), BudgetLimit::Seconds);
         assert_eq!((error.configured(), error.used()), (10, 10));
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn gate(
+        decided: Decided,
+        accepted: bool,
+        act_on: ActOn,
+        levels: &[&str],
+    ) -> (bool, &'static str) {
+        act_and_reason(&decided, accepted, &act_on, &strings(levels)).expect("valid decision")
+    }
+
+    #[test]
+    fn classify_acts_only_when_accepted_and_the_label_is_in_the_subset() {
+        let on = || ActOn::Labels(strings(&["error", "warn"]));
+        let label = |name: &str| Decided::Label(name.to_owned());
+        assert_eq!(gate(label("error"), true, on(), &[]), (true, "accepted"));
+        assert_eq!(gate(label("warn"), true, on(), &[]), (true, "accepted"));
+        assert_eq!(
+            gate(label("noise"), true, on(), &[]),
+            (false, "other_label")
+        );
+        assert_eq!(
+            gate(label("error"), false, on(), &[]),
+            (false, "low_confidence")
+        );
+        assert_eq!(
+            gate(label("noise"), false, on(), &[]),
+            (false, "low_confidence")
+        );
+    }
+
+    #[test]
+    fn judge_acts_on_the_wanted_decision_only_when_accepted() {
+        let yes = || ActOn::Decision(true);
+        assert_eq!(
+            gate(Decided::Decision(true), true, yes(), &[]),
+            (true, "accepted")
+        );
+        assert_eq!(
+            gate(Decided::Decision(false), true, yes(), &[]),
+            (false, "other_label")
+        );
+        assert_eq!(
+            gate(Decided::Decision(true), false, yes(), &[]),
+            (false, "low_confidence")
+        );
+        assert_eq!(
+            gate(Decided::Decision(false), false, yes(), &[]),
+            (false, "low_confidence")
+        );
+        let no = || ActOn::Decision(false);
+        assert_eq!(
+            gate(Decided::Decision(false), true, no(), &[]),
+            (true, "accepted")
+        );
+        assert_eq!(
+            gate(Decided::Decision(true), true, no(), &[]),
+            (false, "other_label")
+        );
+    }
+
+    #[test]
+    fn score_exact_level_reads_the_nearest_level() {
+        let medium = || ActOn::Level("medium".to_owned());
+        let rubric = ["low", "medium", "high"];
+        assert_eq!(
+            gate(Decided::Score(1.0), true, medium(), &rubric),
+            (true, "accepted")
+        );
+        assert_eq!(
+            gate(Decided::Score(1.4), true, medium(), &rubric),
+            (true, "accepted")
+        );
+        assert_eq!(
+            gate(Decided::Score(1.6), true, medium(), &rubric),
+            (false, "other_label")
+        );
+        assert_eq!(
+            gate(Decided::Score(2.0), true, medium(), &rubric),
+            (false, "other_label")
+        );
+        assert_eq!(
+            gate(Decided::Score(1.0), false, medium(), &rubric),
+            (false, "low_confidence")
+        );
+    }
+
+    #[test]
+    fn score_at_least_level_accepts_that_level_and_above() {
+        let at_least = || ActOn::AtLeast("medium".to_owned());
+        let rubric = ["low", "medium", "high"];
+        assert_eq!(
+            gate(Decided::Score(0.0), true, at_least(), &rubric),
+            (false, "other_label")
+        );
+        assert_eq!(
+            gate(Decided::Score(1.0), true, at_least(), &rubric),
+            (true, "accepted")
+        );
+        assert_eq!(
+            gate(Decided::Score(2.0), true, at_least(), &rubric),
+            (true, "accepted")
+        );
+        assert_eq!(
+            gate(Decided::Score(2.0), false, at_least(), &rubric),
+            (false, "low_confidence")
+        );
+    }
+
+    #[test]
+    fn act_on_must_match_the_decision_kind() {
+        let error = act_and_reason(
+            &Decided::Decision(true),
+            true,
+            &ActOn::Labels(strings(&["a"])),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn act_on_parses_against_the_closed_set_before_any_call() {
+        let labels = strings(&["error", "warn", "noise"]);
+        let levels = strings(&["low", "medium", "high"]);
+        let parse = |kind, values: &[&str]| parse_act_on(kind, &strings(values), &labels, &levels);
+        assert_eq!(
+            parse(Kind::Classify, &["error", "warn"]).unwrap(),
+            ActOn::Labels(strings(&["error", "warn"]))
+        );
+        assert!(parse(Kind::Classify, &["missing"]).is_err());
+        assert!(parse(Kind::Classify, &["error", "error"]).is_err());
+        assert!(parse(Kind::Judge, &["true"]).is_ok());
+        assert_eq!(
+            parse(Kind::Judge, &["false"]).unwrap(),
+            ActOn::Decision(false)
+        );
+        assert!(parse(Kind::Judge, &["yes"]).is_err());
+        assert!(parse(Kind::Judge, &["true", "false"]).is_err());
+        assert_eq!(
+            parse(Kind::Score, &["high"]).unwrap(),
+            ActOn::Level("high".to_owned())
+        );
+        assert_eq!(
+            parse(Kind::Score, &["at_least", "medium"]).unwrap(),
+            ActOn::AtLeast("medium".to_owned())
+        );
+        assert!(parse(Kind::Score, &["urgent"]).is_err());
+        assert!(parse(Kind::Score, &["at_least", "urgent"]).is_err());
+        assert!(parse(Kind::Score, &["above", "medium"]).is_err());
+        assert!(parse(Kind::Ask, &["error"]).is_err());
+        assert!(parse(Kind::Classify, &[]).is_err());
     }
 }
 

@@ -2396,7 +2396,7 @@ impl Manifest {
                 ArgumentNode::Literal { literal } if literal.starts_with("--") => {
                     // The helper treats these as variable-length list options;
                     // their token consumption is not a normal option/value pair.
-                    if matches!(literal.as_str(), "--labels" | "--levels") {
+                    if matches!(literal.as_str(), "--labels" | "--levels" | "--act-on") {
                         return None;
                     }
                     if !matches!(

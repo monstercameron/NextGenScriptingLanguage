@@ -32,6 +32,12 @@
       "min_length": 1,
       "nonempty": true
     },
+    "act_on": {
+      "type": "list",
+      "items": "string",
+      "min_items": 1,
+      "description": "Labels whose decision counts as acting; each must be one of labels or criteria. Adds `act` (accepted and the label is in act_on) and `reason` to the result."
+    },
     "minimum": {
       "type": "integer",
       "minimum": 0,
@@ -101,6 +107,17 @@
         },
         {
           "json_parameter": "criteria"
+        }
+      ]
+    },
+    {
+      "when_present": "act_on",
+      "append": [
+        {
+          "literal": "--act-on"
+        },
+        {
+          "spread": "act_on"
         }
       ]
     },
@@ -212,6 +229,12 @@
         },
         "accepted": {
           "type": "boolean"
+        },
+        "act": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "text"
         }
       },
       "required": [

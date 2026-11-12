@@ -23,6 +23,12 @@
       "min_length": 1,
       "nonempty": true
     },
+    "act_on": {
+      "type": "list",
+      "items": "string",
+      "min_items": 1,
+      "description": "One level, or `at_least` followed by one level. The score is read as its nearest level; act_on matches that level exactly, or it and every level above. Adds `act` and `reason` to the result."
+    },
     "minimum": {
       "type": "integer",
       "minimum": 0,
@@ -78,6 +84,17 @@
     },
     {
       "spread": "levels"
+    },
+    {
+      "when_present": "act_on",
+      "append": [
+        {
+          "literal": "--act-on"
+        },
+        {
+          "spread": "act_on"
+        }
+      ]
     },
     {
       "when_present": "minimum",
@@ -187,6 +204,12 @@
         },
         "accepted": {
           "type": "boolean"
+        },
+        "act": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "text"
         }
       },
       "required": [

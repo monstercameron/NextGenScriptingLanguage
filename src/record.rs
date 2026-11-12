@@ -1440,10 +1440,34 @@ impl Recorder {
         document["record_mac"] = record_mac;
         document["record_seal_version"] = json!(RECORD_SEAL_VERSION);
         let text = serde_json::to_string_pretty(&document)?;
+        if finished {
+            self.sync_completed_record(state)?;
+        }
         #[cfg(unix)]
         atomic_write_private_at(&self.directory_handle, RUN_FILE, text.as_bytes())?;
         #[cfg(not(unix))]
         atomic_write_private(&self.directory.join(RUN_FILE), text.as_bytes())?;
+        Ok(())
+    }
+
+    /// Make the trace and the blob directory entries durable before a finished
+    /// `run.json` is published, so a power loss cannot leave the finished
+    /// marker ahead of the trace lines and blob names it counts. Each blob file
+    /// is already synced when written. On Unix a sync failure is an error, so
+    /// the run is not reported as completed. Windows cannot fsync a directory
+    /// handle and NTFS journals directory entries, so there only the trace
+    /// file is synced.
+    fn sync_completed_record(&self, state: &mut RecorderState) -> Result<()> {
+        state.trace.flush()?;
+        state
+            .trace
+            .get_ref()
+            .sync_all()
+            .context("syncing record trace")?;
+        #[cfg(unix)]
+        self.blobs_handle
+            .sync_all()
+            .context("syncing record blob directory")?;
         Ok(())
     }
 
@@ -1721,6 +1745,11 @@ pub struct StoredRecord {
     /// written, so the last step may have run without being recorded.
     /// Repair and resume refuse such records; `show-run` still opens them.
     pub torn_trace: bool,
+    /// A finished, untruncated run whose trace holds a different number of
+    /// steps than `run.steps`. Such a record lost trace data after its final
+    /// marker was published, so its completed prefix is unproven. `show-run`
+    /// still opens it; repair and resume refuse it.
+    pub trace_count_mismatch: bool,
 }
 
 /// Refuse a repair or resume from a record that cannot prove its completed
@@ -1999,6 +2028,12 @@ impl StoredRecord {
         // The program copy is not hash-checked here: `show-run` is warn-open
         // and must still present an edited record (labeled untrusted), while
         // repair and resume refuse it in `check_from_record_usable`.
+        // A finished, untruncated run must hold exactly the steps it counts.
+        // A truncated record keeps no trace line for steps past its bounds,
+        // so it is excluded here and refused by its own check.
+        let trace_count_mismatch = run["finished"].as_bool() == Some(true)
+            && !run["truncated"].as_bool().unwrap_or(false)
+            && run["steps"].as_u64() != Some(steps.len() as u64);
         Ok(Self {
             directory: directory.to_path_buf(),
             program_directory,
@@ -2009,6 +2044,7 @@ impl StoredRecord {
             run,
             steps,
             torn_trace,
+            trace_count_mismatch,
         })
     }
 
@@ -3601,6 +3637,49 @@ mod policy_audit_tests {
     fn run_document(directory: &tempfile::TempDir) -> Value {
         let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// Simulates a finished marker that survived a crash ahead of its trace:
+    /// the document counts a step the trace file never received.
+    #[test]
+    fn finished_record_whose_trace_lacks_counted_steps_is_flagged() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        finished_recorder(&directory, &registry);
+        let consistent = StoredRecord::open(directory.path()).unwrap();
+        assert!(!consistent.trace_count_mismatch);
+
+        let mut document = run_document(&directory);
+        document["steps"] = json!(1);
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+        let record = StoredRecord::open(directory.path()).unwrap();
+        assert!(record.trace_count_mismatch);
+        let error = super::check_from_record_usable_with_key(
+            &record,
+            &crate::manifest::Registry::default(),
+            directory.path(),
+            &test_seal(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("trace holds 0 steps"),
+            "{error:#}"
+        );
+
+        // An explicitly truncated record keeps its own refusal and is not
+        // reported as a trace mismatch.
+        document["truncated"] = json!(true);
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+        let truncated = StoredRecord::open(directory.path()).unwrap();
+        assert!(!truncated.trace_count_mismatch);
     }
 
     #[test]

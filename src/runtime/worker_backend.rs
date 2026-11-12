@@ -992,6 +992,9 @@ struct WorkerProcess {
     next_request_id: u64,
     protocol_version: u32,
     negotiated: bool,
+    /// Set once a Unix worker's direct child was signalled and reaped by the idle probe.
+    #[cfg(unix)]
+    reaped: bool,
 }
 
 #[cfg(any(unix, windows))]
@@ -1084,6 +1087,8 @@ impl WorkerProcess {
             next_request_id: 1,
             protocol_version: launch.protocol_version,
             negotiated: launch.protocol_version == 1,
+            #[cfg(unix)]
+            reaped: false,
         })
     }
 
@@ -1106,7 +1111,21 @@ impl WorkerProcess {
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        return Ok(true);
+                        // An open stdout with no bytes proves nothing about the direct
+                        // worker: a descendant that inherited the pipe keeps it open.
+                        let exited =
+                            direct_child_exited_unreaped(&self.child).map_err(|error| {
+                                WorkerError::new(
+                                    WorkerErrorKind::IoError,
+                                    false,
+                                    None,
+                                    format!("checking idle worker process: {error}"),
+                                )
+                            })?;
+                        if !exited {
+                            return Ok(true);
+                        }
+                        return self.retire_exited_worker(&mut byte);
                     }
                     Err(error) => {
                         return Err(WorkerError::new(
@@ -1178,6 +1197,38 @@ impl WorkerProcess {
                         .into());
                     }
                 }
+            }
+        }
+    }
+
+    /// Retire a Unix worker whose direct child exited while its stdout stays open.
+    /// The group is signalled before the child is reaped, so descendants that
+    /// stayed in it release the pipe. Bytes the worker wrote before exiting are
+    /// still buffered and are reported as a protocol violation. Nothing here waits
+    /// on a descendant that keeps the pipe open, so the probe stays bounded.
+    #[cfg(unix)]
+    fn retire_exited_worker(&mut self, byte: &mut [u8; 1]) -> Result<bool> {
+        let _ = UnreapedWorker {
+            child: &mut self.child,
+        }
+        .kill_group_and_reap();
+        self.reaped = true;
+        loop {
+            match self.output.read(byte) {
+                Ok(0) => return Ok(false),
+                Ok(_) => {
+                    return Err(WorkerError::new(
+                        WorkerErrorKind::ProtocolError,
+                        false,
+                        None,
+                        "persistent worker wrote unsolicited bytes between requests",
+                    )
+                    .into());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                // WouldBlock: nothing is buffered. Any other error also retires the
+                // worker, which the caller replaces.
+                Err(_) => return Ok(false),
             }
         }
     }
@@ -1554,10 +1605,14 @@ impl Drop for WorkerProcess {
         #[cfg(unix)]
         {
             // The group is signalled while the child is still unreaped; see UnreapedWorker.
-            let _ = UnreapedWorker {
-                child: &mut self.child,
+            // A worker the idle probe already signalled and reaped is never signalled again,
+            // because its pid may be reused once the group is empty.
+            if !self.reaped {
+                let _ = UnreapedWorker {
+                    child: &mut self.child,
+                }
+                .kill_group_and_reap();
             }
-            .kill_group_and_reap();
         }
         #[cfg(windows)]
         {
@@ -1605,6 +1660,28 @@ impl UnreapedWorker<'_> {
         }
         self.child.wait()
     }
+}
+
+/// Whether the direct child has exited without being reaped. `waitid` with WNOWAIT leaves the
+/// zombie in place, which keeps its pid reserved for the group signal in `UnreapedWorker`.
+#[cfg(unix)]
+fn direct_child_exited_unreaped(child: &std::process::Child) -> std::io::Result<bool> {
+    // SAFETY: siginfo_t is plain data, and all-zero is a valid bit pattern for it.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: waitid writes only into `info`, a live siginfo_t. WNOWAIT leaves the child
+    // unreaped, and WNOHANG makes the call return at once. The pid is the unreaped child's.
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.si_signo == libc::SIGCHLD)
 }
 
 #[cfg(unix)]
@@ -2103,5 +2180,56 @@ mod tests {
         };
 
         assert_eq!(next_slot_id(&mut state), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_probe_retires_exited_worker_whose_stdout_a_descendant_holds() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        // The direct worker starts a descendant that inherits stdout, then exits.
+        // The descendant stays in the worker's process group and keeps the pipe open.
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("sleep 30 & exit 0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = command.spawn().expect("spawn shell worker");
+        let input = child.stdin.take().expect("worker stdin pipe");
+        let output = child.stdout.take().expect("worker stdout pipe");
+        set_nonblocking(&output).expect("worker stdout is nonblocking");
+        let mut worker = WorkerProcess {
+            child,
+            input,
+            output,
+            next_request_id: 1,
+            protocol_version: 1,
+            negotiated: true,
+            reaped: false,
+        };
+
+        let started = Instant::now();
+        while !direct_child_exited_unreaped(&worker.child).expect("waitid on worker") {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "shell worker did not exit"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // The pipe still has a writer, so a stdout-only probe would wrongly report idle.
+        let cancelled = AtomicBool::new(false);
+        let deadline = Some(Instant::now() + Duration::from_secs(5));
+        let probe_started = Instant::now();
+        let idle = worker
+            .probe_idle(&cancelled, deadline)
+            .expect("idle probe of exited worker");
+        assert!(!idle, "an exited direct worker must not be reused");
+        assert!(worker.reaped, "the exited worker is signalled and reaped");
+        assert!(probe_started.elapsed() < Duration::from_secs(5));
     }
 }

@@ -9,10 +9,88 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sbom import build_sbom, directory_sha256  # noqa: E402
-from verify_iana_time_zone import compare_files  # noqa: E402
+from verify_iana_time_zone import PATCH_RECORD, check_patch, compare_files  # noqa: E402
+
+
+def _sha(data):
+    return hashlib.sha256(data).hexdigest()
 
 
 class VendoredIanaTimeZoneTests(unittest.TestCase):
+    def setUp(self):
+        self.upstream = {
+            "Cargo.lock": b"lock",
+            "src/lib.rs": b"upstream lib",
+            "README.md": b"readme",
+        }
+        self.record = {
+            "missing": frozenset({"Cargo.lock"}),
+            "vendored_only": {"src/extra.rs": _sha(b"extra")},
+            "changed": {"src/lib.rs": _sha(b"patched lib")},
+        }
+
+    def test_expected_patch_passes(self):
+        vendored = {
+            "README.md": b"readme",
+            "src/lib.rs": b"patched lib",
+            "src/extra.rs": b"extra",
+        }
+        self.assertEqual(check_patch(self.upstream, vendored, self.record), [])
+
+    def test_unexpected_changed_file_fails_naming_path(self):
+        vendored = {
+            "README.md": b"edited readme",
+            "src/lib.rs": b"patched lib",
+            "src/extra.rs": b"extra",
+        }
+        problems = check_patch(self.upstream, vendored, self.record)
+        self.assertEqual(problems, ["unexpected content difference: README.md"])
+
+    def test_changed_patched_file_hash_mismatch_fails_naming_path(self):
+        vendored = {
+            "README.md": b"readme",
+            "src/lib.rs": b"patched lib, edited again",
+            "src/extra.rs": b"extra",
+        }
+        problems = check_patch(self.upstream, vendored, self.record)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("patched file changed: src/lib.rs", problems[0])
+
+    def test_unexpected_vendored_only_file_fails_naming_path(self):
+        vendored = {
+            "README.md": b"readme",
+            "src/lib.rs": b"patched lib",
+            "src/extra.rs": b"extra",
+            "src/rogue.rs": b"rogue",
+        }
+        problems = check_patch(self.upstream, vendored, self.record)
+        self.assertEqual(problems, ["unexpected vendored-only file: src/rogue.rs"])
+
+    def test_recorded_patch_identical_to_upstream_is_stale(self):
+        vendored = {
+            "README.md": b"readme",
+            "src/lib.rs": b"upstream lib",
+            "src/extra.rs": b"extra",
+        }
+        problems = check_patch(self.upstream, vendored, self.record)
+        self.assertEqual(
+            problems, ["recorded patch no longer differs from upstream: src/lib.rs"]
+        )
+
+    def test_shipped_record_hashes_are_sha256_hex(self):
+        self.assertEqual(
+            set(PATCH_RECORD["changed"]),
+            {"Cargo.toml", "Cargo.toml.orig", "src/lib.rs"},
+        )
+        self.assertEqual(
+            set(PATCH_RECORD["vendored_only"]), {"src/tz_darwin_macos.rs"}
+        )
+        self.assertEqual(PATCH_RECORD["missing"], frozenset({"Cargo.lock"}))
+        for digest in list(PATCH_RECORD["changed"].values()) + list(
+            PATCH_RECORD["vendored_only"].values()
+        ):
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
     def test_upstream_comparison_detects_changed_added_and_missing_files(self):
         upstream = {"src/lib.rs": b"upstream", "README.md": b"readme"}
         vendored = {"src/lib.rs": b"changed", "extra.txt": b"extra"}

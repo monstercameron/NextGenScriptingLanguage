@@ -3006,7 +3006,8 @@ fn cache_key_for_applet(
     cwd: &Path,
     input: &[u8],
 ) -> Result<String> {
-    let environment = crate::capabilities::effective_environment(registry, &manifest.name)?;
+    let environment =
+        crate::capabilities::effective_environment_for_cache(registry, &manifest.name)?;
     cache_key_with_environment(manifest, argv, executable, cwd, input, || environment)
 }
 
@@ -3019,7 +3020,8 @@ fn cache_key_for_program_module(
     input: &[u8],
     module_fingerprint: &str,
 ) -> Result<String> {
-    let environment = crate::capabilities::effective_environment(registry, &manifest.name)?;
+    let environment =
+        crate::capabilities::effective_environment_for_cache(registry, &manifest.name)?;
     let mut hash = Sha256::new();
     hash_field(&mut hash, b"flow-cache-program-module-v1");
     let mut serialized = Vec::with_capacity(128);
@@ -3132,7 +3134,8 @@ pub(crate) fn program_module_body_call_fingerprint(
         return Ok(None);
     };
     let manifest = registry.resolve_call(invocation)?;
-    let environment = crate::capabilities::effective_environment(registry, &manifest.name)?;
+    let environment =
+        crate::capabilities::effective_environment_for_cache(registry, &manifest.name)?;
     let mut hash = Sha256::new();
     hash_field(&mut hash, b"execute-module-body-call-environment-v1");
     hash_field(&mut hash, call_identity.as_bytes());
@@ -8141,5 +8144,117 @@ mod lane_v2_path_tests {
                 samples[0][3], samples[1][3]
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod issue_696_cache_overlay_tests {
+    use super::*;
+    use crate::capabilities::{CommandEnvOverlay, CommandEnvScope};
+    use tempfile::tempdir;
+
+    fn issue_696_registry(dir: &Path) -> Registry {
+        let manifest_path = dir.join("cached-tool.json");
+        fs::write(
+            &manifest_path,
+            r#"{"name":"cached-tool","binary":"tool","arguments":[{"literal":"x"}]}"#,
+        )
+        .unwrap();
+        Registry::load(&manifest_path).unwrap()
+    }
+
+    fn issue_696_overlay(set: &[(&str, &str)], unset: &[&str]) -> Option<CommandEnvOverlay> {
+        Some(CommandEnvOverlay {
+            set: set
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+            unset: unset.iter().map(|name| (*name).to_owned()).collect(),
+        })
+    }
+
+    fn issue_696_applet_key(
+        registry: &Registry,
+        executable: &Path,
+        cwd: &Path,
+        overlay: Option<CommandEnvOverlay>,
+    ) -> Result<String> {
+        let _scope = CommandEnvScope::enter(overlay);
+        let manifest = registry.resolve("cached-tool")?;
+        cache_key_for_applet(
+            registry,
+            manifest,
+            &["cached-tool".to_owned()],
+            executable,
+            cwd,
+            b"input",
+        )
+    }
+
+    fn issue_696_module_key(
+        registry: &Registry,
+        cwd: &Path,
+        overlay: Option<CommandEnvOverlay>,
+    ) -> Result<String> {
+        let _scope = CommandEnvScope::enter(overlay);
+        let manifest = registry.resolve("cached-tool")?;
+        cache_key_for_program_module(
+            registry,
+            manifest,
+            &["cached-tool".to_owned()],
+            b"{}",
+            cwd,
+            b"input",
+            "module-fingerprint",
+        )
+    }
+
+    #[test]
+    fn issue_696_workflow_overlay_values_change_applet_cache_key() {
+        let dir = tempdir().unwrap();
+        let registry = issue_696_registry(dir.path());
+        let executable = dir.path().join("cached-tool-binary");
+        fs::write(&executable, b"synthetic executable bytes").unwrap();
+        let cwd = dir.path();
+        let key = |overlay| issue_696_applet_key(&registry, &executable, cwd, overlay).unwrap();
+
+        let red = key(issue_696_overlay(&[("CACHE_VARIANT", "red")], &[]));
+        let blue = key(issue_696_overlay(&[("CACHE_VARIANT", "blue")], &[]));
+        let unset = key(issue_696_overlay(&[], &["CACHE_VARIANT"]));
+        assert_ne!(red, blue, "a changed overlay value must miss the cache");
+        assert_ne!(red, unset, "an unset must change the cache key");
+        assert_ne!(blue, unset, "an unset must change the cache key");
+        assert_eq!(
+            red,
+            key(issue_696_overlay(&[("CACHE_VARIANT", "red")], &[])),
+            "an identical overlay must hit the cache"
+        );
+        assert_eq!(
+            unset,
+            key(issue_696_overlay(&[], &["CACHE_VARIANT"])),
+            "an identical unset must hit the cache"
+        );
+    }
+
+    #[test]
+    fn issue_696_workflow_overlay_values_change_program_module_cache_key() {
+        let dir = tempdir().unwrap();
+        let registry = issue_696_registry(dir.path());
+        let cwd = dir.path();
+        let key = |overlay| issue_696_module_key(&registry, cwd, overlay).unwrap();
+
+        let red = key(issue_696_overlay(&[("CACHE_VARIANT", "red")], &[]));
+        let blue = key(issue_696_overlay(&[("CACHE_VARIANT", "blue")], &[]));
+        let unset = key(issue_696_overlay(&[], &["CACHE_VARIANT"]));
+        assert_ne!(
+            red, blue,
+            "a changed overlay value must miss the module cache"
+        );
+        assert_ne!(red, unset, "an unset must change the module cache key");
+        assert_eq!(
+            red,
+            key(issue_696_overlay(&[("CACHE_VARIANT", "red")], &[])),
+            "an identical overlay must hit the module cache"
+        );
     }
 }

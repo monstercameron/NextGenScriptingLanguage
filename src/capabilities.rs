@@ -3219,6 +3219,18 @@ pub fn effective_environment(
     effective_environment_for_manifest(registry, applet_name, &configured, manifest)
 }
 
+/// The child environment a cached invocation launches with: the applet's
+/// effective environment with the active command overlay (workflow-scoped or
+/// per-command) applied exactly as `command_for` applies it. Cache identity
+/// hashes this result, so overlay sets and unsets change the key.
+pub(crate) fn effective_environment_for_cache(
+    registry: &Registry,
+    applet_name: &str,
+) -> Result<Vec<(OsString, OsString)>> {
+    let environment = effective_environment(registry, applet_name)?;
+    apply_command_overlay(registry, applet_name, environment)
+}
+
 /// Environment setup for a manifest the caller already resolved: `command_for`
 /// passes the applet it borrowed for launch validation so one spawn resolves
 /// the registry once instead of again here. A missing manifest falls back to

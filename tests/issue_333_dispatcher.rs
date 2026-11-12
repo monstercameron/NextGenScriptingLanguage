@@ -117,14 +117,14 @@ fn dispatcher_replaces_its_own_shim_when_the_fingerprint_changes() {
     let dir = networkmanager_dispatcher_directory(root.path());
     let first = render_network_dispatcher(&dispatcher_spec()).unwrap();
     let plan = plan_hook_install(&dir, &first).unwrap();
-    apply_hook_install(&dir, &plan).unwrap();
+    let _first_outcome = apply_hook_install(&dir, &plan).unwrap();
 
     let mut reviewed_again = dispatcher_spec();
     reviewed_again.fingerprint = "sha256:fff000".into();
     let second = render_network_dispatcher(&reviewed_again).unwrap();
     let replan = plan_hook_install(&dir, &second).unwrap();
     assert_eq!(replan.files[0].action, InstallAction::Replace);
-    apply_hook_install(&dir, &replan).unwrap();
+    let _second_outcome = apply_hook_install(&dir, &replan).unwrap();
     assert_eq!(
         fs::read_to_string(dir.join("execute-network")).unwrap(),
         second.contents

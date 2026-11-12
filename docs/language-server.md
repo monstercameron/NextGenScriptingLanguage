@@ -10,7 +10,8 @@ execute lsp
 The process reads and writes LSP JSON-RPC frames on standard input and output.
 It implements incremental document synchronization, structured diagnostics,
 applet and parameter completion, applet and reusable-program hover, local
-reusable-program definition and references, and reusable-program rename. Rename
+reusable-program definition and references, binding definition (the nearest
+earlier line that introduces the name), and reusable-program rename. Rename
 returns a workspace edit only when the proposed identifier is valid, does not
 collide with another reusable program in the file, and the edited document still
 parses. Navigation and rename are limited to local `define a program named`,

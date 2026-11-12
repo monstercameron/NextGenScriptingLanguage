@@ -4801,66 +4801,135 @@ fn collect_step_value_references(
                 diagnostics,
             );
         }
-        match &step.kind {
-            StepKind::Invoke { call, .. } => add_call_bindings(call, known_names),
-            StepKind::TaskGroup {
-                binding,
-                tasks,
-                each,
-                ..
-            } => {
-                known_names.insert(binding.clone());
-                if let Some(each) = each {
-                    known_names.insert(each.binding.clone());
-                }
-                for call in tasks {
-                    add_call_bindings(call, known_names);
-                }
-            }
-            StepKind::SpawnJob { name, stages } => {
-                known_names.insert(name.clone());
-                for stage in stages {
-                    add_call_bindings(&stage.call, known_names);
-                }
-            }
-            StepKind::InspectJob { binding, .. } => {
-                known_names.insert(binding.clone());
-            }
-            StepKind::AwaitJob {
-                status_binding,
-                result_binding,
-                ..
-            } => {
-                known_names.extend(status_binding.iter().cloned());
-                known_names.extend(result_binding.iter().cloned());
-            }
-            StepKind::Catch { binding, .. }
-            | StepKind::TempScope { binding, .. }
-            | StepKind::CaptureBytes { binding } => {
-                known_names.insert(binding.clone());
-            }
-            StepKind::Read { binding, .. } | StepKind::ReadStdin { binding } => {
-                known_names.extend(binding.iter().cloned());
-            }
-            StepKind::ReadCallInput { binding } => {
-                known_names.extend(binding.iter().cloned());
-            }
-            StepKind::ParseJson { binding }
-            | StepKind::BindValue { binding, .. }
-            | StepKind::TakeJson { binding, .. }
-            | StepKind::TakeJsonDynamic { binding, .. } => {
-                known_names.insert(binding.clone());
-            }
-            StepKind::Loop {
-                kind: crate::ast::LoopKind::ForEach { binding, .. },
-                ..
-            } => {
-                known_names.insert(binding.clone());
-            }
-            StepKind::CallProgram { call, .. } => add_call_bindings(call, known_names),
-            _ => {}
+        for (name, _) in step_introductions(&step.kind) {
+            known_names.insert(name.to_owned());
         }
     }
+}
+
+/// A name a program text introduces: the name, the 1-based line that introduces
+/// it, and the kind of introduction (`result`, `input`, `loop variable`, `error`,
+/// `scope`, `task`, `job` or `status`). Callers that only need names use the
+/// same rows as the validator's flat name set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "lsp"), allow(dead_code))]
+pub(crate) struct BindingIntroduction {
+    pub(crate) name: String,
+    pub(crate) line: usize,
+    pub(crate) kind: &'static str,
+}
+
+/// Every name the program text introduces, as the validator sees them: declared
+/// inputs of the main program and of each reusable program, and every binding
+/// form of each statement. The statements are walked by the same traversal as
+/// the undefined-result check.
+#[cfg_attr(not(feature = "lsp"), allow(dead_code))]
+pub(crate) fn binding_introductions(program: &Program) -> Vec<BindingIntroduction> {
+    let inputs = program
+        .inputs
+        .iter()
+        .chain(
+            program
+                .definitions
+                .values()
+                .flat_map(|definition| definition.inputs.iter()),
+        )
+        .map(|input| BindingIntroduction {
+            name: input.name.clone(),
+            line: input.line,
+            kind: "input",
+        });
+    let steps = program.steps.iter().chain(
+        program
+            .definitions
+            .values()
+            .flat_map(|definition| definition.steps.iter()),
+    );
+    let statements = steps.flat_map(|step| {
+        step_introductions(&step.kind)
+            .into_iter()
+            .map(move |(name, kind)| BindingIntroduction {
+                name: name.to_owned(),
+                line: step.line,
+                kind,
+            })
+    });
+    inputs.chain(statements).collect()
+}
+
+/// The names one statement introduces, with the kind of each introduction. This
+/// is the single list of introducing forms: the validator's flat name set and
+/// the language server's binding lookup both read it.
+fn step_introductions(kind: &StepKind) -> Vec<(&str, &'static str)> {
+    let mut names = Vec::new();
+    match kind {
+        StepKind::Invoke { call, .. } | StepKind::CallProgram { call, .. } => {
+            push_call_introductions(call, &mut names);
+        }
+        StepKind::TaskGroup {
+            binding,
+            tasks,
+            each,
+            ..
+        } => {
+            names.push((binding.as_str(), "task"));
+            if let Some(each) = each {
+                names.push((each.binding.as_str(), "loop variable"));
+            }
+            for call in tasks {
+                push_call_introductions(call, &mut names);
+            }
+        }
+        StepKind::SpawnJob { name, stages } => {
+            names.push((name.as_str(), "job"));
+            for stage in stages {
+                push_call_introductions(&stage.call, &mut names);
+            }
+        }
+        StepKind::InspectJob { binding, .. } => names.push((binding.as_str(), "job")),
+        StepKind::AwaitJob {
+            status_binding,
+            result_binding,
+            ..
+        } => {
+            names.extend(status_binding.iter().map(|name| (name.as_str(), "status")));
+            names.extend(result_binding.iter().map(|name| (name.as_str(), "result")));
+        }
+        StepKind::Catch { binding, .. } => names.push((binding.as_str(), "error")),
+        StepKind::TempScope { binding, .. } => names.push((binding.as_str(), "scope")),
+        StepKind::CaptureBytes { binding }
+        | StepKind::ParseJson { binding }
+        | StepKind::BindValue { binding, .. }
+        | StepKind::TakeJson { binding, .. }
+        | StepKind::TakeJsonDynamic { binding, .. } => {
+            names.push((binding.as_str(), "result"));
+        }
+        StepKind::Read { binding, .. }
+        | StepKind::ReadStdin { binding }
+        | StepKind::ReadCallInput { binding } => {
+            names.extend(binding.iter().map(|name| (name.as_str(), "result")));
+        }
+        StepKind::Loop {
+            kind: crate::ast::LoopKind::ForEach { binding, .. },
+            ..
+        } => names.push((binding.as_str(), "loop variable")),
+        _ => {}
+    }
+    names
+}
+
+fn push_call_introductions<'a>(call: &'a Invocation, names: &mut Vec<(&'a str, &'static str)>) {
+    names.extend(call.binding.iter().map(|name| (name.as_str(), "result")));
+    names.extend(
+        call.status_binding
+            .iter()
+            .map(|name| (name.as_str(), "status")),
+    );
+    names.extend(
+        call.result_binding
+            .iter()
+            .map(|name| (name.as_str(), "result")),
+    );
 }
 
 fn record_binding_type(

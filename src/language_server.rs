@@ -3397,10 +3397,60 @@ fn definition(params: &JsonValue, documents: &BTreeMap<String, Document>) -> Jso
     let Some(offset) = position_to_byte(&document.text, position) else {
         return JsonValue::Null;
     };
-    let Some((_, symbol)) = program_symbol_at(&document.text, offset) else {
+    if let Some((_, symbol)) = program_symbol_at(&document.text, offset) {
+        return json!({ "uri": uri, "range": range_from_offsets(&document.text, symbol.start, symbol.end) });
+    }
+    let Some((_, symbol)) = binding_definition_at(&document.text, offset) else {
         return JsonValue::Null;
     };
     json!({ "uri": uri, "range": range_from_offsets(&document.text, symbol.start, symbol.end) })
+}
+
+/// The introduction of the binding named by the word at `offset`: the nearest
+/// introduction at or before the word's line, as the validator resolves a use.
+/// Returns None for a position on no word, a quoted word, or a name the program
+/// does not introduce before that line.
+fn binding_definition_at(source: &str, offset: usize) -> Option<(String, SymbolLocation)> {
+    let word = lexical_words(source)
+        .into_iter()
+        .find(|word| !word.quoted && word.text_start <= offset && offset <= word.text_end)?;
+    let name = &source[word.text_start..word.text_end];
+    let program = crate::parser::parse(source).ok()?;
+    let introduction = crate::diagnostics::binding_introductions(&program)
+        .into_iter()
+        .filter(|introduction| introduction.name == name && introduction.line <= word.line)
+        .max_by_key(|introduction| introduction.line)?;
+    let location = binding_name_location(source, introduction.line, name)?;
+    Some((name.to_owned(), location))
+}
+
+/// The range of the name `name` on its introducing line (1-based). When the name
+/// occurs more than once there, the occurrence that follows an introducing keyword
+/// (`as`, `each`, `catch`, `accept`) wins, else the first occurrence.
+fn binding_name_location(source: &str, line: usize, name: &str) -> Option<SymbolLocation> {
+    let words = lexical_words(source);
+    let occurrences = (0..words.len())
+        .filter(|&index| {
+            words[index].line == line
+                && !words[index].quoted
+                && &source[words[index].text_start..words[index].text_end] == name
+        })
+        .collect::<Vec<_>>();
+    let index = occurrences
+        .iter()
+        .copied()
+        .find(|&index| {
+            ["as", "each", "catch", "accept"]
+                .iter()
+                .any(|keyword| index > 0 && word_eq(source, &words, index - 1, keyword))
+        })
+        .or_else(|| occurrences.first().copied())?;
+    let word = &words[index];
+    Some(SymbolLocation {
+        start: word.text_start,
+        end: word.text_end,
+        line: word.line,
+    })
 }
 
 fn references(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
@@ -5473,6 +5523,83 @@ mod tests {
             .unwrap()
             .iter()
             .all(|edit| edit["newText"] == "emit_text"));
+    }
+
+    fn binding_definition_response(source: &str, line: u64, character: u64) -> JsonValue {
+        let uri = "file:///tmp/binding-definition.program";
+        let mut input = frame(request(1, "initialize", JsonValue::Null));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "version": 1, "text": source } }
+        })));
+        input.extend(frame(request(
+            2,
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            }),
+        )));
+        input.extend(frame(request(3, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({ "jsonrpc": "2.0", "method": "exit" })));
+
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        decode_frames(&output)
+            .into_iter()
+            .find(|message| message["id"] == 2)
+            .unwrap()["result"]
+            .clone()
+    }
+
+    #[test]
+    fn binding_definition_resolves_a_use_to_the_nearer_of_two_introductions() {
+        // Line 2 uses `raw` after two introductions of it; the second one is nearer.
+        let source =
+            "run fixture.first as raw\nrun fixture.second as raw\nrun fixture.use with text raw\n";
+        let result = binding_definition_response(source, 2, 26);
+        assert_eq!(result["range"]["start"]["line"], 1, "{result}");
+        assert_eq!(result["range"]["start"]["character"], 22, "{result}");
+        assert_eq!(result["range"]["end"]["character"], 25, "{result}");
+    }
+
+    #[test]
+    fn binding_definition_reaches_loop_variables_and_names_bound_before_the_loop() {
+        let source = "run fixture.paths as paths\nfor each path in paths\n  run fixture.text with text path\n";
+        // `paths` in the loop header resolves to the `as paths` before the loop.
+        let list = binding_definition_response(source, 1, 17);
+        assert_eq!(list["range"]["start"]["line"], 0, "{list}");
+        assert_eq!(list["range"]["start"]["character"], 21, "{list}");
+        // `path` in the loop body resolves to the loop variable after `for each`.
+        let body = binding_definition_response(source, 2, 29);
+        assert_eq!(body["range"]["start"]["line"], 1, "{body}");
+        assert_eq!(body["range"]["start"]["character"], 9, "{body}");
+    }
+
+    #[test]
+    fn binding_definition_reaches_a_declared_input() {
+        let source = "accept shout as text\nrun fixture.text with text shout\n";
+        let result = binding_definition_response(source, 1, 27);
+        assert_eq!(result["range"]["start"]["line"], 0, "{result}");
+        assert_eq!(result["range"]["start"]["character"], 7, "{result}");
+    }
+
+    #[test]
+    fn binding_definition_is_null_off_names_and_before_introduction() {
+        let source = "accept shout as text\nrun fixture.text with text shout\nrun fixture.late with text later\nrun fixture.late as later\n";
+        // The keyword `run` is no binding.
+        assert_eq!(binding_definition_response(source, 1, 0), JsonValue::Null);
+        // `later` is used on line 2 and introduced only on line 3.
+        assert_eq!(binding_definition_response(source, 2, 27), JsonValue::Null);
+    }
+
+    #[test]
+    fn program_symbol_definition_still_resolves_beside_bindings() {
+        let source =
+            "accept shout as text\ndefine a program named emit\n  run printf\nrun program emit\n";
+        let result = binding_definition_response(source, 3, 12);
+        assert_eq!(result["range"]["start"]["line"], 1, "{result}");
+        assert_eq!(result["range"]["start"]["character"], 23, "{result}");
     }
 
     #[test]

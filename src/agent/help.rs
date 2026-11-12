@@ -5,6 +5,7 @@
 //! prints the `# omarchy:` command-metadata lines that the declarations can supply.
 //! A `# execute-description: TEXT` header in the leading comment block gives the
 //! program's purpose, shown above the usage line and in the `description` field.
+//! Each `# execute-example: TEXT` header adds one usage example to the `examples` field.
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
 use crate::terminal_text::{escape_controls, escape_terminal_field};
@@ -20,6 +21,9 @@ const USAGE: &str = "usage: execute help FILE [--json | --format omarchy-metadat
 /// The leading-comment header that states a program's purpose.
 const DESCRIPTION_HEADER: &str = "execute-description:";
 const DESCRIPTION_WORD: &str = "execute-description";
+/// The leading-comment header that gives one usage example. A program may repeat it.
+const EXAMPLE_HEADER: &str = "execute-example:";
+const EXAMPLE_WORD: &str = "execute-example";
 /// The `--format` value that prints Omarchy command-metadata comment lines.
 const OMARCHY_METADATA: &str = "omarchy-metadata";
 /// Omarchy reads its metadata from the first 80 lines of a command file.
@@ -75,8 +79,11 @@ pub fn cli_with_access(
         io::stdout().write_all(render_omarchy_metadata(&program).as_bytes())?;
         return Ok(0);
     }
-    let mut description = describe(&program, Path::new(file).to_string_lossy().as_ref());
-    description["description"] = json!(header_description(&source)?);
+    let description = help_object(
+        &program,
+        Path::new(file).to_string_lossy().as_ref(),
+        &source,
+    )?;
     if as_json {
         writeln!(
             io::stdout(),
@@ -87,6 +94,15 @@ pub fn cli_with_access(
         io::stdout().write_all(render_text(&description).as_bytes())?;
     }
     Ok(0)
+}
+
+/// The `--json` object for one program: `describe` plus the leading-comment `description`
+/// and `examples` fields.
+fn help_object(program: &Program, program_path: &str, source: &str) -> Result<Value> {
+    let mut help = describe(program, program_path);
+    help["description"] = json!(header_description(source)?);
+    help["examples"] = json!(header_examples(source)?);
+    Ok(help)
 }
 
 /// The same text `execute help FILE` prints, for a script's own `--help`.
@@ -208,22 +224,7 @@ fn source_label(source: &InputSource, public: bool) -> String {
 /// closed like the policy header: a malformed, empty or repeated header is an error,
 /// and a header below the first non-comment line is not read.
 pub fn header_description(source: &str) -> Result<Option<String>> {
-    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-    let mut headers = Vec::new();
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !trimmed.starts_with('#') {
-            break;
-        }
-        if let Some(rest) = description_rest(trimmed) {
-            headers.push(rest.trim().to_owned());
-        } else if trimmed.contains(DESCRIPTION_WORD) {
-            bail!("malformed `# {DESCRIPTION_HEADER}` header: {trimmed}");
-        }
-    }
+    let headers = leading_headers(source, DESCRIPTION_HEADER, DESCRIPTION_WORD)?;
     match headers.as_slice() {
         [] => Ok(None),
         [single] if single.is_empty() => {
@@ -234,13 +235,45 @@ pub fn header_description(source: &str) -> Result<Option<String>> {
     }
 }
 
-fn description_rest(comment: &str) -> Option<&str> {
+/// The texts of the program's `# execute-example:` headers, in source order. A program may
+/// have several. Same leading-comment rules as the description header; an empty one fails.
+pub fn header_examples(source: &str) -> Result<Vec<String>> {
+    let examples = leading_headers(source, EXAMPLE_HEADER, EXAMPLE_WORD)?;
+    if examples.iter().any(String::is_empty) {
+        bail!("`# {EXAMPLE_HEADER}` needs text after the colon");
+    }
+    Ok(examples)
+}
+
+/// The trimmed texts of every `# HEADER text` line in the leading comment block. A line
+/// that names `WORD` but does not match `HEADER` is malformed and fails the read.
+fn leading_headers(source: &str, header: &str, word: &str) -> Result<Vec<String>> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    let mut headers = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !trimmed.starts_with('#') {
+            break;
+        }
+        if let Some(rest) = header_rest(trimmed, header) {
+            headers.push(rest.trim().to_owned());
+        } else if trimmed.contains(word) {
+            bail!("malformed `# {header}` header: {trimmed}");
+        }
+    }
+    Ok(headers)
+}
+
+fn header_rest<'a>(comment: &'a str, header: &str) -> Option<&'a str> {
     comment
         .strip_prefix('#')?
         .trim_start()
         .trim_start_matches('#')
         .trim_start()
-        .strip_prefix(DESCRIPTION_HEADER)
+        .strip_prefix(header)
 }
 
 fn render_text(description: &Value) -> String {
@@ -571,6 +604,38 @@ mod tests {
         assert!(super::header_description(empty).is_err());
         let repeated = "# execute-description: one\n## execute-description: two\n";
         assert!(super::header_description(repeated).is_err());
+    }
+
+    #[test]
+    fn example_headers_are_listed_in_help_json_in_source_order() {
+        let source = "# execute-description: Switch the theme\n\
+                      # execute-example: execute theme.program --input theme_name=dark\n\
+                      # execute-example: execute theme.program --input theme_name=light\n\
+                      accept theme_name as text\nrun \"true\"\n";
+        let program = crate::parser::parse(source).unwrap();
+        let help = super::help_object(&program, "theme.program", source).unwrap();
+        assert_eq!(
+            help["examples"],
+            json!([
+                "execute theme.program --input theme_name=dark",
+                "execute theme.program --input theme_name=light"
+            ])
+        );
+        assert_eq!(help["description"], json!("Switch the theme"));
+
+        let plain = "accept name as text\nrun \"true\"\n";
+        let program = crate::parser::parse(plain).unwrap();
+        let help = super::help_object(&program, "plain.program", plain).unwrap();
+        assert_eq!(help["examples"], json!([]));
+        assert_eq!(help["description"], json!(null));
+    }
+
+    #[test]
+    fn example_header_fails_closed_when_empty_or_malformed() {
+        assert!(super::header_examples("# execute-example:   \n").is_err());
+        assert!(super::header_examples("# execute-example run it\n").is_err());
+        let late = "accept name as text\n# execute-example: too late\n";
+        assert!(super::header_examples(late).unwrap().is_empty());
     }
 
     #[test]

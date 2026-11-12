@@ -11,6 +11,11 @@ use std::collections::BTreeSet;
 use std::error::Error as StdError;
 use std::fmt;
 
+/// Deterministic narration verifier (#392). No consumer until the
+/// `narrate.verify` applet lands, so the non-test build allows dead code here.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod narrate;
+
 #[derive(Debug)]
 pub(crate) struct DuplicateJsonKey;
 

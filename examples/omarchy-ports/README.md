@@ -52,6 +52,29 @@ actual desktop effects, or package operations. The `setsid` example proves
 argument forwarding only; the fake backend never starts Nautilus. No system
 commands are replaced or installed by this directory.
 
+## Campaign status
+
+The replacement gate for real Omarchy ports is gate 5 in
+[replacement-challenge.md](../../docs/replacement-challenge.md): 150 ports, drawn from a
+pinned upstream sample chosen by stratified quotas before translating, with 95% behavioural
+equivalence and 100% safety assertions. The count below is taken from the pinned inventory
+([omarchy-inventory.json](../../docs/omarchy-inventory.json), 444 commands) and this directory.
+
+| Measure | Count |
+| --- | --- |
+| Commands in the pinned inventory | 444 |
+| Ports in this directory (10 interface ports, 20 behaviour-compared ports) | 30 |
+| Ports whose name is in the pinned inventory | 28 |
+| Ports whose names are not in the pinned inventory (`omarchy-toggle-animations`, `omarchy-toggle-theme-sync`) | 2 |
+| Inventory commands with no port | 416 |
+| Behaviour-compared case files (`case.json`, 20 files) | 76 cases |
+| Ports toward the 150 gate | 30 of 150 (gate not met) |
+
+Upstream Bash sources are present in the repository for the 30 ported commands only, plus
+ten commands under `tests/fixtures/omarchy-rewrites/`, which are already rewritten under
+`examples/omarchy-rewrites/` and tested there, not here. No sample of 150 has been
+pre-registered. The seeded sample required before wave 1 is not yet committed.
+
 ## Command metadata
 
 `execute help FILE --format omarchy-metadata` prints the `# omarchy:summary=` and
@@ -65,7 +88,7 @@ Omarchy its summary and usage text. The output has no `group`, `alias`, `hidden`
 Twenty more scripts live in subdirectories, `omarchy-ports/<script>/`, each with three
 files: `original.sh` (the upstream Bash script, with its MIT header and the license
 beside it), `port.program` (the Execute port) and `case.json` (the cases). Together they
-hold 75 cases covering both branches of each script, usage paths, empty arguments and
+hold 76 cases covering both branches of each script, usage paths, empty arguments and
 failing backends. The scripts are the toggles (screensaver, theme sync, suspend,
 notification silencing, animations, touchpad, touchscreen, bar, Hyprland), theme lookups,
 launchers, notifications, package checks and restarts.

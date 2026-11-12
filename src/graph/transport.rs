@@ -60,7 +60,7 @@ pub const MAX_LISTENER_PORTS_PER_SOURCE: usize = 64;
 
 /// A payload crossing one graph edge. `sequence` is allocated once before
 /// fanout so every subscriber observes the same event identity.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EventEnvelope {
     pub port: PortRef,
     pub input: Option<PortRef>,
@@ -72,6 +72,27 @@ pub struct EventEnvelope {
     /// for deduplication/checkpointing but are redacted from Debug output.
     pub remote: Option<RemoteEventMetadata>,
     pub payload: PortValue,
+    /// Serialized size of `payload`, recorded once when the event is emitted so
+    /// that terminal collection does not serialize the payload a second time.
+    /// `None` for events that did not pass through `emit`; their size is then
+    /// computed on demand.
+    pub encoded_bytes: Option<usize>,
+}
+
+/// Two envelopes are the same event when their identity, metadata and payload agree. The
+/// cached `encoded_bytes` is derived from the payload, so it takes no part in equality: an
+/// event compares equal whether or not its size has been recorded yet.
+impl PartialEq for EventEnvelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.port == other.port
+            && self.input == other.input
+            && self.generation == other.generation
+            && self.revision == other.revision
+            && self.sequence == other.sequence
+            && self.sensitivity == other.sensitivity
+            && self.remote == other.remote
+            && self.payload == other.payload
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -701,6 +722,7 @@ impl NodeIo {
             sensitivity,
             remote: None,
             payload,
+            encoded_bytes: None,
         })))
     }
 
@@ -974,7 +996,8 @@ impl NodeIo {
         })?;
         validate_payload(&schema.schema, &payload)
             .with_context(|| format!("payload for {}.{}", self.node, port))?;
-        if payload_size(&payload)? > self.max_message_bytes {
+        let encoded_bytes = payload_size(&payload)?;
+        if encoded_bytes > self.max_message_bytes {
             bail!(
                 "payload for {}.{} exceeds graph message limit of {} bytes",
                 self.node,
@@ -1042,6 +1065,7 @@ impl NodeIo {
             sensitivity,
             remote,
             payload,
+            encoded_bytes: Some(encoded_bytes),
         };
         let mut report = PortEmitReport::default();
         // Deliver to every edge with room before waiting on any full lossless
@@ -1914,7 +1938,10 @@ impl Drop for GraphSession {
 }
 
 fn event_size(event: &EventEnvelope) -> Result<usize> {
-    payload_size(&event.payload)
+    match event.encoded_bytes {
+        Some(bytes) => Ok(bytes),
+        None => payload_size(&event.payload),
+    }
 }
 
 /// Next terminal event for the current generation and revision: the queued
@@ -2103,6 +2130,23 @@ mod payload_size_tests {
                 expected_bytes.len()
             );
         }
+    }
+
+    #[test]
+    fn emitted_size_is_recorded_once_and_reused_at_collection() {
+        let value = Value::String("é🦀\n\t\0\"\\".into());
+        let exact_size = serde_json::to_vec(&value).unwrap().len();
+        let (_scope, mut io, queue) = node_io(exact_size);
+        io.emit("out", PortValue::Value(value)).unwrap();
+        let event = queue.try_recv().unwrap().unwrap();
+        assert_eq!(event.encoded_bytes, Some(exact_size));
+        assert_eq!(event_size(&event).unwrap(), exact_size);
+        // A recorded size is used as-is, so collection does not serialize again.
+        let recorded = EventEnvelope {
+            encoded_bytes: Some(7),
+            ..event
+        };
+        assert_eq!(event_size(&recorded).unwrap(), 7);
     }
 
     #[test]
@@ -3966,6 +4010,7 @@ mod input_cursor_tests {
             sensitivity: SensitivitySet::empty(),
             remote: None,
             payload: PortValue::Value(Value::Integer(sequence as i64)),
+            encoded_bytes: None,
         }
     }
 
@@ -4751,6 +4796,7 @@ mod emit_fanout_tests {
             ]),
             remote,
             payload,
+            encoded_bytes: None,
         }
     }
 
@@ -4944,6 +4990,7 @@ mod terminal_order_tests {
             sensitivity: SensitivitySet::empty(),
             remote: None,
             payload: PortValue::Value(Value::String(port.to_owned())),
+            encoded_bytes: None,
         }
     }
 

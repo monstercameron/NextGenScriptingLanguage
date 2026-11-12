@@ -160,27 +160,58 @@ impl Plan {
         let mut index = 0;
         while let Some(step) = self.program.steps.get(index) {
             match &step.kind {
+                // A reusable call's body is callee-local; only the names the
+                // call returns to this scope are inventoried.
                 StepKind::CallProgram { call, end, .. } => {
-                    names.extend(call.binding.iter().cloned());
+                    push_call_names(call, &mut names);
                     index += end;
                     continue;
                 }
-                StepKind::Loop { end, .. } => {
-                    // Names created inside a loop are iteration-local. Outer
-                    // names rebound by its body are already tracked outside it.
-                    index += end;
-                    continue;
+                // A loop body runs in this scope. Its writes are either outer
+                // names, which reset must restore, or iteration-local names,
+                // which reset removes when unseeded. Walk the body like other steps.
+                StepKind::Loop { kind, .. } => {
+                    if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
+                        names.push(binding.clone());
+                    }
                 }
                 StepKind::Read { binding, .. } | StepKind::ReadStdin { binding } => {
                     names.extend(binding.iter().cloned())
                 }
-                StepKind::ParseJson { binding } | StepKind::TakeJson { binding, .. } => {
-                    names.push(binding.clone())
+                StepKind::ParseJson { binding }
+                | StepKind::TakeJson { binding, .. }
+                | StepKind::TakeJsonDynamic { binding, .. }
+                | StepKind::BindValue { binding, .. }
+                | StepKind::CaptureBytes { binding }
+                | StepKind::InspectJob { binding, .. }
+                | StepKind::Catch { binding, .. }
+                | StepKind::TempScope { binding, .. } => names.push(binding.clone()),
+                StepKind::AwaitJob {
+                    status_binding,
+                    result_binding,
+                    ..
+                } => {
+                    names.extend(status_binding.iter().cloned());
+                    names.extend(result_binding.iter().cloned());
                 }
-                StepKind::Invoke { call, .. } => {
-                    names.extend(call.binding.iter().cloned());
-                    names.extend(call.status_binding.iter().cloned());
+                StepKind::TaskGroup {
+                    binding,
+                    tasks,
+                    each,
+                    ..
+                } => {
+                    names.push(binding.clone());
+                    names.extend(each.iter().map(|each| each.binding.clone()));
+                    for call in tasks {
+                        push_call_names(call, &mut names);
+                    }
                 }
+                StepKind::SpawnJob { stages, .. } => {
+                    for stage in stages {
+                        push_call_names(&stage.call, &mut names);
+                    }
+                }
+                StepKind::Invoke { call, .. } => push_call_names(call, &mut names),
                 _ => {}
             }
             index += 1;
@@ -192,6 +223,32 @@ impl Plan {
     }
     pub fn end(&self, cursor: usize) -> usize {
         runtime::live::node_end(&self.program, cursor)
+    }
+}
+
+/// The names a native or program call writes into the scope that invokes it.
+fn push_call_names(call: &crate::ast::Invocation, names: &mut Vec<String>) {
+    names.extend(call.binding.iter().cloned());
+    names.extend(call.status_binding.iter().cloned());
+    names.extend(call.result_binding.iter().cloned());
+}
+
+/// Reset or restart: each script-written name returns to its startup value, or is
+/// removed when the startup seed does not provide one. Other bindings stay put.
+fn restore_locals(
+    bindings: &mut BTreeMap<String, Json>,
+    locals: &[String],
+    initial: &BTreeMap<String, Json>,
+) {
+    for name in locals {
+        match initial.get(name) {
+            Some(value) => {
+                bindings.insert(name.clone(), value.clone());
+            }
+            None => {
+                bindings.remove(name);
+            }
+        }
     }
 }
 
@@ -723,6 +780,79 @@ pub(crate) fn restore_secret_bindings(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod locals_inventory_tests {
+    use super::*;
+
+    fn locals(source: &str) -> Vec<String> {
+        Plan::parse(source).unwrap().locals()
+    }
+
+    fn has(names: &[String], name: &str) -> bool {
+        names.iter().any(|candidate| candidate == name)
+    }
+
+    #[test]
+    fn reusable_native_job_and_group_outputs_are_inventoried() {
+        let names = locals(concat!(
+            "define a program named tool\n",
+            "  accept x as text\n",
+            "  run \"printf\" with arguments [\"%s\", x] and keep status as callee_status\n",
+            "run program tool with x \"v\" and keep status as reusable_status\n",
+            "run \"printf\" with arguments [\"a\"] and keep status as native_status and keep result as native_result\n",
+            "spawn as build\n",
+            "  run \"printf\" with arguments [\"a\"]\n",
+            "inspect build as build_state\n",
+            "await build and keep status as build_status and keep result as build_result\n",
+            "parallel for each item in [\"a\", \"b\"] at most 2 as results\n",
+            "  run \"printf\" with arguments [\"%s\", item]\n",
+        ));
+        for name in [
+            "reusable_status",
+            "native_status",
+            "native_result",
+            "build_state",
+            "build_status",
+            "build_result",
+            "results",
+        ] {
+            assert!(has(&names, name), "{name} missing from {names:?}");
+        }
+        assert!(
+            !has(&names, "callee_status"),
+            "callee-local names stay private: {names:?}"
+        );
+    }
+
+    #[test]
+    fn loop_body_writes_are_inventoried() {
+        let names = locals(concat!(
+            "repeat 2 times\n",
+            "  run \"printf\" with arguments [\"a\"] and keep status as loop_status\n",
+            "  run \"printf\" with arguments [\"b\"] and keep result as loop_result\n",
+        ));
+        assert!(has(&names, "loop_status"), "{names:?}");
+        assert!(has(&names, "loop_result"), "{names:?}");
+    }
+
+    #[test]
+    fn reset_restores_seeded_names_and_clears_unseeded_ones() {
+        // `s` is seeded with 7 and a run left 0 in it; `extra` has no seed.
+        // A user binding that no program writes must survive the reset.
+        let mut bindings = BTreeMap::from([
+            ("s".to_owned(), json!(0)),
+            ("extra".to_owned(), json!(1)),
+            ("note".to_owned(), json!("user")),
+        ]);
+        let initial = BTreeMap::from([("s".to_owned(), json!(7))]);
+        let names = locals("run \"printf\" with arguments [\"a\"] and keep status as s\nrun \"printf\" with arguments [\"b\"] and keep status as extra\n");
+        restore_locals(&mut bindings, &names, &initial);
+        assert_eq!(bindings["s"], json!(7));
+        assert!(!bindings.contains_key("extra"));
+        assert_eq!(bindings["note"], json!("user"));
     }
 }
 
@@ -1295,13 +1425,11 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                         return Err(fail("busy", "pause/cancel and wait before resetting"));
                     }
                     let mut candidate = state.doc.clone();
-                    for name in state.plan.locals() {
-                        if let Some(initial) = shared.initial_bindings.get(&name) {
-                            candidate.bindings.insert(name, initial.clone());
-                        } else {
-                            candidate.bindings.remove(&name);
-                        }
-                    }
+                    restore_locals(
+                        &mut candidate.bindings,
+                        &state.plan.locals(),
+                        &shared.initial_bindings,
+                    );
                     candidate.cursor = 0;
                     candidate.cwd = shared.initial_cwd.clone();
                     candidate.input = shared.initial_input.clone();

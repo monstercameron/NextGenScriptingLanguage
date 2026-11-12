@@ -47,8 +47,12 @@ pub mod models;
 pub mod modules;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod named_state;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod packages;
 pub mod parser;
 pub mod privilege;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod process_table;
 pub mod program_files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prompt;

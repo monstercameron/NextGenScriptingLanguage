@@ -143,13 +143,29 @@ fn probe(
             }
             Ok(TcpStream::connect_timeout(&addr, max_duration).is_ok())
         }
-        "command_succeeds" | "process_exited" | "socket_exists" | "file_changed" => Err(invalid(
-            format!("probe {kind:?} is not supported by this in-process wait applet"),
-        )),
+        "socket_exists" => {
+            let path = cwd.join(required_string(args, "path")?);
+            socket_file_exists(&path)
+        }
+        "command_succeeds" | "process_exited" | "file_changed" => Err(invalid(format!(
+            "probe {kind:?} is not supported by this in-process wait applet"
+        ))),
         _ => Err(invalid(
-            "probe must be file_exists, file_readable, or tcp_port_open",
+            "probe must be file_exists, file_readable, socket_exists, or tcp_port_open",
         )),
     }
+}
+#[cfg(unix)]
+fn socket_file_exists(path: &Path) -> Result<bool, AppletError> {
+    use std::os::unix::fs::FileTypeExt;
+    // Follows symlinks, like `test -S`.
+    Ok(std::fs::metadata(path).is_ok_and(|meta| meta.file_type().is_socket()))
+}
+#[cfg(not(unix))]
+fn socket_file_exists(_path: &Path) -> Result<bool, AppletError> {
+    Err(invalid(
+        "probe \"socket_exists\" is only supported on Unix platforms",
+    ))
 }
 
 #[cfg(test)]
@@ -220,5 +236,43 @@ mod tests {
             ("timeout_ms".into(), Value::from(0)),
         ]);
         assert!(wait(&mapped, Path::new("."), &ExecutionContext::unrestricted()).is_ok());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn socket_exists_matches_only_unix_sockets() {
+        use std::os::unix::net::UnixListener;
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("ready.sock");
+        let file_path = temp.path().join("plain.txt");
+        std::fs::write(&file_path, b"not a socket").unwrap();
+        let probe_args = |path: &Path| {
+            Map::from_iter([
+                ("probe".into(), Value::String("socket_exists".into())),
+                ("path".into(), Value::String(path.to_string_lossy().into())),
+                ("timeout_ms".into(), Value::from(0)),
+            ])
+        };
+        let context = ExecutionContext::unrestricted();
+        // Absent path: not ready.
+        let got = wait(&probe_args(&socket_path), temp.path(), &context).unwrap();
+        assert_eq!(got["ready"], false);
+        // Regular file at the path: not a socket, not ready.
+        let got = wait(&probe_args(&file_path), temp.path(), &context).unwrap();
+        assert_eq!(got["ready"], false);
+        // Bound Unix socket: ready.
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+        let got = wait(&probe_args(&socket_path), temp.path(), &context).unwrap();
+        assert_eq!(got["ready"], true);
+    }
+    #[cfg(not(unix))]
+    #[test]
+    fn socket_exists_fails_closed_off_unix() {
+        let args = Map::from_iter([
+            ("probe".into(), Value::String("socket_exists".into())),
+            ("path".into(), Value::String("any.sock".into())),
+            ("timeout_ms".into(), Value::from(0)),
+        ]);
+        let error = wait(&args, Path::new("."), &ExecutionContext::unrestricted()).unwrap_err();
+        assert!(error.message.contains("Unix"), "{}", error.message);
     }
 }

@@ -177,7 +177,7 @@ fn oversized_stdin_is_refused_before_list_and_text_work() {
 
 #[test]
 fn aggregation_rejects_oversized_values_and_pipeline_line_counts() {
-    let input = vec![b'\n'; 1_000_001];
+    let input = vec![b'\n'; 10_000_001];
     for name in ["list.count", "list.unique"] {
         assert_eq!(
             applets::execute(name, &serde_json::Map::new(), &input)

@@ -3,7 +3,8 @@ use super::{checkpoint_work, invalid, AppletError, ExecutionContext};
 use serde_json::{Number, Value};
 use std::cmp::Ordering;
 
-pub(super) const MAX_ITEMS: usize = 1_000_000;
+/// The one shared item bound, the same as the list, CSV and JSON applets use.
+pub(super) const MAX_ITEMS: usize = super::list::ITEM_LIMIT;
 pub(super) const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_DEPTH: usize = 128;
 

@@ -1246,6 +1246,13 @@ pub(crate) fn announce_checkpoint_open(digest: &str) -> Result<()> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam for #740: the next `sync_completed_record` on this thread fails
+    /// at the trace sync, before any finished marker is published.
+    static INJECT_TRACE_SYNC_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl Recorder {
     /// Create the record directory and store the program copy. Fails if the
     /// directory exists and is not empty, so a record is never mixed with another.
@@ -1519,6 +1526,12 @@ impl Recorder {
     /// file is synced.
     fn sync_completed_record(&self, state: &mut RecorderState) -> Result<()> {
         state.trace.flush()?;
+        #[cfg(test)]
+        {
+            if INJECT_TRACE_SYNC_FAILURE.with(|flag| flag.replace(false)) {
+                bail!("injected trace sync failure");
+            }
+        }
         state
             .trace
             .get_ref()
@@ -4378,6 +4391,49 @@ mod policy_audit_tests {
         .unwrap();
         let truncated = StoredRecord::open(directory.path()).unwrap();
         assert!(!truncated.trace_count_mismatch);
+    }
+
+    /// #740: a finished marker must never be published ahead of the trace data
+    /// it counts. An injected failure at the completed-record trace sync must
+    /// fail `finish` and leave `run.json` unfinished, and a retry must publish.
+    #[test]
+    fn failed_trace_sync_keeps_finished_marker_unpublished() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
+            capability_policy_path: None,
+            data_flow_policy_path: None,
+            program_arguments: &[],
+            allow: &[],
+            what_if_fingerprint: None,
+            working_directory: directory.path(),
+        })
+        .unwrap();
+        let summary = RunSummary {
+            ok: true,
+            exit_status: Some(0),
+            error: None,
+            output: Vec::new(),
+        };
+
+        super::INJECT_TRACE_SYNC_FAILURE.with(|flag| flag.set(true));
+        let error = recorder.finish(&summary).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("injected trace sync failure"),
+            "{error:#}"
+        );
+        assert_ne!(run_document(&directory)["finished"], json!(true));
+
+        recorder.finish(&summary).unwrap();
+        assert_eq!(run_document(&directory)["finished"], json!(true));
+        let record = StoredRecord::open(directory.path()).unwrap();
+        assert!(!record.trace_count_mismatch);
     }
 
     #[test]

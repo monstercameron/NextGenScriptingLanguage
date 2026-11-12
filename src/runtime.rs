@@ -33,6 +33,9 @@ mod control;
 mod control_flow;
 pub mod execution_result;
 pub(crate) mod handoff;
+// Not wired into the runtime yet (issue 347 follow-up), so nothing else calls it.
+#[allow(dead_code)]
+mod inhibit;
 pub mod invocation_io;
 mod jobs;
 pub(crate) mod live;

@@ -2498,6 +2498,209 @@ pub(crate) fn fuzz_normalize_model_response(data: &[u8]) {
     }
 }
 
+/// Deepest label tree the router walks (issue #379). Level 1 is the root's children.
+pub const LABEL_TREE_MAX_DEPTH: usize = 6;
+/// Largest number of children one tree level may hold.
+pub const LABEL_TREE_MAX_WIDTH: usize = MAX_LIST_ITEMS;
+/// Explicit escape label offered to the classifier at every level.
+pub const LABEL_TREE_NONE: &str = "none";
+
+/// One classifier answer for one level: a closed-set label and a percent confidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LevelAnswer {
+    pub label: String,
+    pub confidence: u8,
+}
+
+/// Why routing stopped before reaching a leaf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteStop {
+    /// The classifier chose the explicit `none` label at the failed level.
+    None,
+    /// The classifier chose a child, but its confidence is under the level minimum.
+    BelowThreshold,
+}
+
+/// Result of walking a label tree. `path` holds the accepted ids, root-most first.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteOutcome {
+    pub path: Vec<String>,
+    /// Id of the reached leaf, only when `accepted`.
+    pub leaf: Option<String>,
+    /// True only when every level was accepted and a leaf was reached.
+    pub accepted: bool,
+    /// One-based level at which routing stopped, when it did not reach a leaf.
+    pub failed_level: Option<usize>,
+    pub stop: Option<RouteStop>,
+    /// Percent confidence of every evaluated level, accepted or not.
+    pub confidences: Vec<u8>,
+    /// Product of the accepted level confidences, as a heuristic (not calibrated).
+    pub leaf_confidence: Option<f64>,
+}
+
+/// A parsed label-tree node. Parsing enforces the depth and width limits up front.
+struct LabelNode {
+    id: String,
+    description: String,
+    children: Vec<LabelNode>,
+}
+
+/// Parse the children of a node into labels that sit at `level` (1-based).
+fn parse_label_children(node: &Value, level: usize) -> Result<Vec<LabelNode>> {
+    let Some(children) = node.get("children") else {
+        return Ok(Vec::new());
+    };
+    let children = children
+        .as_array()
+        .ok_or_else(|| anyhow!("label tree children must be an array"))?;
+    if children.is_empty() {
+        return Ok(Vec::new());
+    }
+    if level > LABEL_TREE_MAX_DEPTH {
+        bail!("label tree is deeper than {LABEL_TREE_MAX_DEPTH} levels");
+    }
+    if children.len() > LABEL_TREE_MAX_WIDTH {
+        bail!(
+            "level {level} has {} children; the limit is {LABEL_TREE_MAX_WIDTH}",
+            children.len()
+        );
+    }
+    let mut seen = BTreeSet::new();
+    let mut parsed = Vec::with_capacity(children.len());
+    for child in children {
+        let id = child
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("every label needs a string id"))?;
+        validate_label(id)?;
+        if id == LABEL_TREE_NONE {
+            bail!("level {level} uses the reserved label id {LABEL_TREE_NONE}");
+        }
+        if !seen.insert(id) {
+            bail!("level {level} repeats a label id");
+        }
+        let description = child
+            .get("description")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty() && !text.contains('\0'))
+            .ok_or_else(|| anyhow!("level {level} label descriptions must be nonempty text"))?;
+        parsed.push(LabelNode {
+            id: id.to_owned(),
+            description: description.to_owned(),
+            children: parse_label_children(child, level + 1)?,
+        });
+    }
+    Ok(parsed)
+}
+
+/// Number of levels in a parsed label tree (at most `LABEL_TREE_MAX_DEPTH`).
+fn label_depth(nodes: &[LabelNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| 1 + label_depth(&node.children))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Minimum percent confidence for `level`. One value applies to every level;
+/// otherwise the list must give one value per level.
+fn level_minimum(minimums: &[u8], level: usize) -> Result<u8> {
+    if let [only] = minimums {
+        return Ok(*only);
+    }
+    minimums
+        .get(level.saturating_sub(1))
+        .copied()
+        .ok_or_else(|| anyhow!("no minimum confidence is given for level {level}"))
+}
+
+/// Route an input through a label tree, one closed-set classify call per level.
+///
+/// `tree` is a JSON node whose `children` are the top-level labels; each label
+/// has a string `id`, a nonempty `description` and optional `children`. The tree
+/// may be at most `LABEL_TREE_MAX_DEPTH` levels deep and each level at most
+/// `LABEL_TREE_MAX_WIDTH` children; both are checked before any call is made.
+///
+/// At each level `classify` receives the child ids plus `none`, and a criteria
+/// map of their descriptions. Routing stops at the first level that answers
+/// `none` (`RouteStop::None`) or a child below that level's minimum
+/// (`RouteStop::BelowThreshold`). The function itself makes no model call.
+pub fn route_label_tree<F>(tree: &Value, minimums: &[u8], mut classify: F) -> Result<RouteOutcome>
+where
+    F: FnMut(usize, &[String], &BTreeMap<String, String>) -> Result<LevelAnswer>,
+{
+    if minimums.is_empty() || minimums.iter().any(|minimum| *minimum > 100) {
+        bail!("per-level minimum confidence must be between 0 and 100");
+    }
+    let top = parse_label_children(tree, 1)?;
+    if top.is_empty() {
+        bail!("label tree has no labels");
+    }
+    let depth = label_depth(&top);
+    if minimums.len() != 1 && minimums.len() < depth {
+        bail!(
+            "per-level minimum confidence has {} entries but the tree has {depth} levels",
+            minimums.len()
+        );
+    }
+    let mut outcome = RouteOutcome {
+        path: Vec::new(),
+        leaf: None,
+        accepted: false,
+        failed_level: None,
+        stop: None,
+        confidences: Vec::new(),
+        leaf_confidence: None,
+    };
+    let mut children: &[LabelNode] = &top;
+    let mut level = 1usize;
+    let mut product = 1.0f64;
+    loop {
+        let minimum = level_minimum(minimums, level)?;
+        let mut labels: Vec<String> = children.iter().map(|child| child.id.clone()).collect();
+        labels.push(LABEL_TREE_NONE.to_owned());
+        let mut criteria: BTreeMap<String, String> = children
+            .iter()
+            .map(|child| (child.id.clone(), child.description.clone()))
+            .collect();
+        criteria.insert(
+            LABEL_TREE_NONE.to_owned(),
+            "none of the labels above fits the input".to_owned(),
+        );
+        let answer = classify(level, &labels, &criteria)?;
+        if !labels.contains(&answer.label) {
+            bail!("classifier answered outside the closed label set at level {level}");
+        }
+        if answer.confidence > 100 {
+            bail!("classifier confidence must be between 0 and 100 at level {level}");
+        }
+        outcome.confidences.push(answer.confidence);
+        if answer.label == LABEL_TREE_NONE {
+            outcome.failed_level = Some(level);
+            outcome.stop = Some(RouteStop::None);
+            return Ok(outcome);
+        }
+        if answer.confidence < minimum {
+            outcome.failed_level = Some(level);
+            outcome.stop = Some(RouteStop::BelowThreshold);
+            return Ok(outcome);
+        }
+        let Some(node) = children.iter().find(|child| child.id == answer.label) else {
+            bail!("classifier answered outside the closed label set at level {level}");
+        };
+        outcome.path.push(node.id.clone());
+        product *= f64::from(answer.confidence) / 100.0;
+        if node.children.is_empty() {
+            outcome.accepted = true;
+            outcome.leaf = Some(node.id.clone());
+            outcome.leaf_confidence = Some(product);
+            return Ok(outcome);
+        }
+        children = &node.children;
+        level += 1;
+    }
+}
+
 #[cfg(test)]
 mod unit_tests {
     use super::*;

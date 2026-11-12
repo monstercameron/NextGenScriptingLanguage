@@ -152,6 +152,10 @@ impl Outcome {
     }
 }
 
+/// Closes the write half of the stream after the request is sent, when the peer needs
+/// end of input to reply.
+pub type ShutdownWrite<'a, S> = &'a mut dyn FnMut(&mut S) -> io::Result<()>;
+
 /// Runs one request/reply exchange on an already connected stream.
 ///
 /// The whole `request` is written, handling short writes and `Interrupted`. Then
@@ -167,7 +171,7 @@ pub fn exchange<S: Read + Write>(
     framing: &Framing,
     timeout_ms: u64,
     now_ms: &mut dyn FnMut() -> u64,
-    shutdown_write: Option<&mut dyn FnMut(&mut S) -> io::Result<()>>,
+    shutdown_write: Option<ShutdownWrite<'_, S>>,
 ) -> Outcome {
     let start = now_ms();
     let mut deadline = Deadline {

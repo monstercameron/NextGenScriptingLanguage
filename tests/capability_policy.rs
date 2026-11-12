@@ -1673,6 +1673,9 @@ fn model_path_params_are_generic_not_name_locked() {
     .unwrap();
 }
 
+// The granted case resolves the bundled model helper, which only a build with the model
+// feature produces.
+#[cfg(feature = "model")]
 #[test]
 fn model_preflight_refuses_fixture_outside_grant_and_final_link_fails_closed() {
     use flow::ast::Value;

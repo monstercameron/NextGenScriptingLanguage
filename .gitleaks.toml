@@ -40,6 +40,21 @@ condition = "AND"
 commits = ["9abc45ec140d326a3ba2244d5d42e8d6d409d9a2"]
 paths = ['''^src/redact\.rs$''']
 
+# These two immutable commits add synthetic fixtures to the tests of the redaction engine and
+# of the redact.text applet (a near-miss PEM header, a token-shaped value and a provider-shaped
+# key). Later versions build the same strings in pieces, so the source no longer contains them.
+[[allowlists]]
+description = "Synthetic fixtures in the redaction engine unit tests, second commit"
+condition = "AND"
+commits = ["0cddc29df5b0bb385310cfa8c4f2374e5fac0eaf"]
+paths = ['''^src/redact\.rs$''']
+
+[[allowlists]]
+description = "Synthetic provider-shaped key in the redact.text applet unit test"
+condition = "AND"
+commits = ["959ed553598799f0bab71a4e86dacca40d722613"]
+paths = ['''^src/applets/mod\.rs$''']
+
 [[rules]]
 id = "generic-api-key"
 

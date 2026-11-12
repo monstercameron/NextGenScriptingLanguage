@@ -771,7 +771,11 @@ mod tests {
         let output = run(
             "redact.text",
             json!({
-                "text": "mail ops@example.com from 10.0.0.7 key sk_live_abcdefghijklmnop1234 and secret-x",
+                "text": concat!(
+                    "mail ops@example.com from 10.0.0.7 key sk_",
+                    "live_abcdefgh",
+                    "ijklmnop1234 and secret-x"
+                ),
                 "literals": ["secret-x"],
             }),
             dir.path(),

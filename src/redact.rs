@@ -1088,7 +1088,11 @@ mod tests {
     fn pem_near_misses_are_left_alone() {
         for text in [
             concat!("-----BEGIN PR", "IVATE KEY"),
-            "-----BEGIN rsa private key-----\nA\n-----END rsa private key-----",
+            concat!(
+                "-----BEGIN rsa priv",
+                "ate key-----\nA\n-----END rsa priv",
+                "ate key-----"
+            ),
             concat!("BEGIN PR", "IVATE KEY-----"),
         ] {
             let r = redact(text);
@@ -1255,7 +1259,7 @@ mod tests {
             &[]
         ));
         assert!(!require_clean(
-            concat!("token gh", "p_0123456789abcdef0123"),
+            concat!("token gh", "p_0123", "456789", "abcdef", "0123"),
             &[]
         ));
         assert!(!require_clean("hunter2 here", &["hunter2"]));

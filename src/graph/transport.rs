@@ -7,7 +7,7 @@ use super::plan::{
 };
 use crate::ast::{Invocation, ListenSource, StepKind, Value};
 use crate::contracts::{OutcomeKind, OutputEncoding, OutputType, PortDelivery, Sensitivity};
-use crate::manifest::Registry;
+use crate::manifest::{Manifest, Registry};
 use crate::runtime::{self, AppletInvocationResult, RunOptions};
 use crate::security::SensitivitySet;
 use crate::tasks::{CancellationToken, TaskHandle, TaskScope};
@@ -1993,6 +1993,15 @@ fn next_sequence(sequence: &AtomicU64) -> Result<u64> {
     }
 }
 
+/// Values one node activation needs for every event it handles: the call's
+/// manifest and the canonical working directory. Each is filled on first use,
+/// so a resolution error still surfaces at the same event as before.
+#[derive(Default)]
+struct ActivationCache<'a> {
+    manifest: Option<&'a Manifest>,
+    working_directory: Option<PathBuf>,
+}
+
 /// Default backend-neutral executor for applet, timer, listener, and native
 /// stream nodes. Renderer nodes are supplied by desktop/remote adapters.
 pub struct RuntimeGraphExecutor {
@@ -2071,9 +2080,10 @@ impl RuntimeGraphExecutor {
             }
         }
         if streams.is_empty() {
+            let mut activation = ActivationCache::default();
             let (input_sensitivities, invocation_sensitivities) =
-                self.invocation_sensitivity_sets(node, call, io)?;
-            self.authorize_remote_input(call, &input_sensitivities)?;
+                self.invocation_sensitivity_sets(node, call, io, &mut activation)?;
+            self.authorize_remote_input(call, &input_sensitivities, &mut activation)?;
             io.mark_effects_started()?;
             let options = self.invocation_options(context)?;
             let result = account_invocation_processes(
@@ -2096,6 +2106,7 @@ impl RuntimeGraphExecutor {
         }
         let mut emitted = BTreeMap::<String, usize>::new();
         let mut received = 0usize;
+        let mut activation = ActivationCache::default();
         loop {
             let Some(event) = io.recv_any()? else {
                 break;
@@ -2110,8 +2121,8 @@ impl RuntimeGraphExecutor {
             apply_input(&mut parameters, &mut stdin, &input, schema, event.payload)?;
             received = received.saturating_add(1);
             let (input_sensitivities, invocation_sensitivities) =
-                self.invocation_sensitivity_sets(node, call, io)?;
-            self.authorize_remote_input(call, &input_sensitivities)?;
+                self.invocation_sensitivity_sets(node, call, io, &mut activation)?;
+            self.authorize_remote_input(call, &input_sensitivities, &mut activation)?;
             io.mark_effects_started()?;
             let options = self.invocation_options(context)?;
             let result = account_invocation_processes(
@@ -2222,9 +2233,10 @@ impl RuntimeGraphExecutor {
             }
         }
 
+        let mut activation = ActivationCache::default();
         let (input_sensitivities, invocation_sensitivities) =
-            self.invocation_sensitivity_sets(node, call, io)?;
-        self.authorize_remote_input(call, &input_sensitivities)?;
+            self.invocation_sensitivity_sets(node, call, io, &mut activation)?;
+        self.authorize_remote_input(call, &input_sensitivities, &mut activation)?;
         let mut options = self.invocation_options(context)?;
         options.inputs = parameters;
         let output_status = manifest.success_status().unwrap_or(0);
@@ -2301,13 +2313,42 @@ impl RuntimeGraphExecutor {
         Ok(())
     }
 
-    fn invocation_sensitivity_sets(
+    /// The call's manifest, resolved once per activation.
+    fn activation_manifest<'a>(
+        &'a self,
+        call: &Invocation,
+        cache: &mut ActivationCache<'a>,
+    ) -> Result<&'a Manifest> {
+        if let Some(manifest) = cache.manifest {
+            return Ok(manifest);
+        }
+        let manifest = self.registry.resolve_call(call)?;
+        cache.manifest = Some(manifest);
+        Ok(manifest)
+    }
+
+    /// The canonical working directory, canonicalized once per activation.
+    fn activation_working_directory<'c, 'a>(
         &self,
+        cache: &'c mut ActivationCache<'a>,
+    ) -> Result<&'c Path> {
+        if cache.working_directory.is_none() {
+            cache.working_directory = Some(std::fs::canonicalize(&self.options.working_directory)?);
+        }
+        cache
+            .working_directory
+            .as_deref()
+            .ok_or_else(|| anyhow!("canonical working directory was not cached"))
+    }
+
+    fn invocation_sensitivity_sets<'a>(
+        &'a self,
         node: &GraphNode,
         call: &Invocation,
         io: &mut NodeIo,
+        cache: &mut ActivationCache<'a>,
     ) -> Result<(SensitivitySet, SensitivitySet)> {
-        let manifest = self.registry.resolve_call(call)?;
+        let manifest = self.activation_manifest(call, cache)?;
         let ports = manifest
             .execution_contract()
             .and_then(|contract| contract.ports.as_ref());
@@ -2321,7 +2362,7 @@ impl RuntimeGraphExecutor {
         // metadata's retained labels in both the invocation floor and the
         // NodeIo provenance before dispatch, so downstream graph edges and
         // remote authorization see the same history as the worker request.
-        let cwd = std::fs::canonicalize(&self.options.working_directory)?;
+        let cwd = self.activation_working_directory(cache)?;
         let worker_history = crate::runtime::worker_sensitivity_history_for_call(
             call,
             manifest,
@@ -2365,12 +2406,13 @@ impl RuntimeGraphExecutor {
         Ok((input_sensitivities, invocation_sensitivities))
     }
 
-    fn authorize_remote_input(
-        &self,
+    fn authorize_remote_input<'a>(
+        &'a self,
         call: &Invocation,
         sensitivities: &SensitivitySet,
+        cache: &mut ActivationCache<'a>,
     ) -> Result<()> {
-        let manifest = self.registry.resolve_call(call)?;
+        let manifest = self.activation_manifest(call, cache)?;
         let Some(remote) = manifest
             .execution_contract()
             .and_then(|contract| contract.remote.as_ref())
@@ -2425,7 +2467,8 @@ impl RuntimeGraphExecutor {
         // the stream, including applet-scoped secret environment inputs.
         let mut sensitivity_floor = SensitivitySet::empty();
         for call in node.invocations() {
-            let (_, sensitivities) = self.invocation_sensitivity_sets(node, call, io)?;
+            let (_, sensitivities) =
+                self.invocation_sensitivity_sets(node, call, io, &mut ActivationCache::default())?;
             sensitivity_floor.extend(&sensitivities);
             io.include_sensitivity_provenance(&sensitivities);
         }
@@ -4765,5 +4808,40 @@ mod terminal_order_tests {
         assert_eq!(event.port.port, "b");
         assert_eq!(event.sequence, 2);
         assert!(next_terminal_event(&terminals, 1, 1).unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod activation_cache_tests {
+    use super::*;
+
+    #[test]
+    fn working_directory_is_canonicalized_once_per_activation() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = RuntimeGraphExecutor::new(
+            Registry::default(),
+            RunOptions::new(directory.path().to_path_buf()),
+        );
+        let mut activation = ActivationCache::default();
+        let first = executor
+            .activation_working_directory(&mut activation)
+            .unwrap()
+            .to_path_buf();
+        assert!(first.is_absolute());
+
+        // Once the directory is gone, canonicalizing it again would fail. Every
+        // later event of the same activation must reuse the first result.
+        drop(directory);
+        for _ in 0..1_000 {
+            let again = executor
+                .activation_working_directory(&mut activation)
+                .unwrap()
+                .to_path_buf();
+            assert_eq!(again, first);
+        }
+
+        // A fresh activation canonicalizes again and therefore sees the deletion.
+        let mut fresh = ActivationCache::default();
+        assert!(executor.activation_working_directory(&mut fresh).is_err());
     }
 }

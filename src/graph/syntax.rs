@@ -830,12 +830,19 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
                         .collect()
                 })
                 .unwrap_or_default();
+            let additional_properties = match value.get("additionalProperties") {
+                None | Some(serde_json::Value::Bool(false)) => None,
+                Some(serde_json::Value::Bool(true)) => {
+                    Some(Box::new(leaf_schema(OutputType::Json)))
+                }
+                Some(additional) => Some(Box::new(value_schema_from_json_schema(additional)?)),
+            };
             let enum_values = parse_string_enum(value)?;
             let minimum = parse_numeric_minimum(value)?;
             return Ok(ValueSchema {
                 min_items: None,
                 scalar_only: false,
-                additional_properties: None,
+                additional_properties,
                 min_properties: None,
                 max_properties: None,
                 nonempty: false,
@@ -1162,5 +1169,131 @@ mod tests {
         .unwrap_err();
         let error = format!("{error:#}");
         assert!(error.contains("edge policy"), "{error}");
+    }
+
+    /// A `json.merge`-shaped applet. `parameter` and `port` give the
+    /// additional-property schema of the record parameters and of the declared
+    /// input ports; `None` means the record is closed.
+    fn open_record_registry(
+        parameter: Option<serde_json::Value>,
+        port: Option<serde_json::Value>,
+    ) -> Result<Registry> {
+        let record_port = |port: &Option<serde_json::Value>| {
+            let mut schema = serde_json::json!({ "type": "record", "fields": {} });
+            if let Some(additional) = port {
+                schema["additionalProperties"] = additional.clone();
+            }
+            serde_json::json!({ "schema": schema, "delivery": "single" })
+        };
+        let record_parameter = || {
+            let mut spec = serde_json::json!({ "type": "record", "required": true, "fields": {} });
+            if let Some(additional) = &parameter {
+                spec["additional_properties"] = additional.clone();
+            }
+            spec
+        };
+        let descriptor = serde_json::json!({
+            "name": "json.merge",
+            "binary": "@execute-applet",
+            "accepts_stdin": false,
+            "arguments": [],
+            "parameters": {
+                "left": record_parameter(),
+                "right": record_parameter()
+            },
+            "contract": {
+                "version": 1,
+                "backend": "in_process",
+                "lifecycle": { "kind": "oneshot" },
+                "output": { "encoding": "json", "type": "json" },
+                "ports": {
+                    "inputs": {
+                        "left": record_port(&port),
+                        "right": record_port(&port)
+                    },
+                    "outputs": {
+                        "value": { "delivery": "single", "schema": { "type": "json" } }
+                    }
+                }
+            }
+        });
+        Registry::from_sources(&[serde_json::to_string(&descriptor).unwrap()])
+    }
+
+    /// Registry load or graph admission must reject the pair. The manifest
+    /// loader and graph admission both compare port and parameter schemas.
+    fn rejected(parameter: Option<serde_json::Value>, port: Option<serde_json::Value>) -> String {
+        let error = match open_record_registry(parameter, port) {
+            Err(error) => error,
+            Ok(registry) => parse(JSON_MERGE_GRAPH, &registry).unwrap_err(),
+        };
+        format!("{error:#}")
+    }
+
+    const JSON_MERGE_GRAPH: &str = "graph merge\n  run json.merge with left {\"a\": 1} and right {\"b\": 2} as merged\nend graph\n";
+
+    #[test]
+    fn open_record_parameters_accept_nonempty_records_for_untyped_json_values() {
+        let json = serde_json::json!({ "type": "json" });
+        let registry = open_record_registry(Some(json.clone()), Some(json)).unwrap();
+        parse(JSON_MERGE_GRAPH, &registry).unwrap();
+    }
+
+    #[test]
+    fn open_record_parameters_accept_records_matching_typed_additional_properties() {
+        let integer = serde_json::json!({ "type": "integer" });
+        let registry = open_record_registry(Some(integer.clone()), Some(integer)).unwrap();
+        parse(JSON_MERGE_GRAPH, &registry).unwrap();
+    }
+
+    #[test]
+    fn open_record_parameters_reject_incompatible_property_types() {
+        let error = rejected(
+            Some(serde_json::json!({ "type": "integer" })),
+            Some(serde_json::json!({ "type": "text" })),
+        );
+        assert!(error.contains("does not match"), "{error}");
+    }
+
+    #[test]
+    fn closed_record_parameters_still_reject_open_record_inputs() {
+        let error = rejected(None, Some(serde_json::json!({ "type": "json" })));
+        assert!(error.contains("does not match"), "{error}");
+    }
+
+    #[test]
+    fn parameter_schema_preserves_additional_properties_only_when_declared() {
+        let open = value_schema_from_json_schema(&serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": { "type": "integer" }
+        }))
+        .unwrap();
+        assert_eq!(
+            open.additional_properties
+                .as_deref()
+                .map(|value| value.kind),
+            Some(OutputType::Integer)
+        );
+        let closed = value_schema_from_json_schema(&serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .unwrap();
+        assert!(closed.additional_properties.is_none());
+        let unrestricted = value_schema_from_json_schema(&serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+        }))
+        .unwrap();
+        assert_eq!(
+            unrestricted
+                .additional_properties
+                .as_deref()
+                .map(|value| value.kind),
+            Some(OutputType::Json)
+        );
     }
 }

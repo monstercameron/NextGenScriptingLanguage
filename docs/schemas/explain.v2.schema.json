@@ -426,6 +426,25 @@
           },
           "condition": {
             "$ref": "#/$defs/condition"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "parent": {
+            "type": "string"
+          },
+          "iterates": {
+            "$ref": "#/$defs/iterates"
+          },
+          "binds": {
+            "type": "string"
+          },
+          "reads_bindings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       }
@@ -566,6 +585,40 @@
           "additionalProperties": {
             "$ref": "#/$defs/condition_operand"
           }
+        },
+        "unrendered": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "iterates": {
+      "type": "object",
+      "required": [
+        "variable",
+        "source"
+      ],
+      "properties": {
+        "variable": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/iterate_source"
+        }
+      },
+      "additionalProperties": false
+    },
+    "iterate_source": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "literal_list": {
+          "type": "integer",
+          "minimum": 0
         },
         "unrendered": {
           "const": true

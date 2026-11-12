@@ -126,8 +126,18 @@ struct Row {
     program_stdout: Option<&'static str>,
     binding: Option<String>,
     status_binding: Option<String>,
-    /// The guard of an `if` row. Set only in structure mode; see `explain_json_with_structure`.
+    /// The guard of an `if` or `while` row. Set only in structure mode; see `explain_json_with_structure`.
     condition: Option<Json>,
+    /// Nesting depth, 0 at top level. Set only in structure mode.
+    depth: Option<usize>,
+    /// Id of the enclosing block row. Absent at top level. Set only in structure mode.
+    parent: Option<String>,
+    /// The source of a `for each` row, or of each `parallel for each` task row.
+    iterates: Option<Json>,
+    /// The name of the binding the step introduces. Set only in structure mode.
+    binds: Option<String>,
+    /// Bindings the step's operands reference, in first-use order. Structure mode only.
+    reads_bindings: Vec<String>,
 }
 
 impl Row {
@@ -193,6 +203,21 @@ impl Row {
         if let Some(condition) = &self.condition {
             row["condition"] = condition.clone();
         }
+        if let Some(depth) = self.depth {
+            row["depth"] = json!(depth);
+        }
+        if let Some(parent) = &self.parent {
+            row["parent"] = json!(parent);
+        }
+        if let Some(iterates) = &self.iterates {
+            row["iterates"] = iterates.clone();
+        }
+        if let Some(binds) = &self.binds {
+            row["binds"] = json!(binds);
+        }
+        if !self.reads_bindings.is_empty() {
+            row["reads_bindings"] = json!(self.reads_bindings);
+        }
         row
     }
 }
@@ -239,9 +264,14 @@ pub fn explain_json_with_inputs(
 /// `if` row carries a `condition` object. Its operands are `{"ref": NAME}` for a
 /// binding or input (never its value), `{"literal": VALUE}` for a literal, and
 /// `{"list": [...]}` or `{"record": {...}}` for compound values. `op` is
-/// `equals` or `contains`, and `negated` is true for `is not`. Other rows are
-/// unchanged, so the published schema needs a `condition` property before a
-/// caller emits this output.
+/// `equals` or `contains`, and `negated` is true for `is not`. `while` rows carry
+/// the same `condition`. Every row carries `depth` (0 at top level), and a nested
+/// row carries `parent`, the id of its enclosing block. A `for each` row, and each
+/// `parallel for each` task row, carries `iterates`: the loop variable and its
+/// source (`{"ref": NAME}` or `{"literal_list": LENGTH}`, never a value). A step
+/// that introduces a binding carries `binds`, and `reads_bindings` lists the
+/// bindings its operands refer to. Absent keys mean the row does not have that
+/// property. The published shape has none of these keys.
 pub fn explain_json_with_structure(
     program: &Program,
     registry: &Registry,
@@ -368,6 +398,7 @@ fn explain_json_version(
         )),
         path_hmac_key,
         structure,
+        blocks: Vec::new(),
     };
     if let Some(crate::ast::Trigger::Listen {
         source: crate::ast::ListenSource::Applet(call),
@@ -378,6 +409,12 @@ fn explain_json_version(
         walker.invocation(*line, "listen_source", call, None, true);
     }
     walker.steps(&program.steps, None);
+    if structure {
+        // The trigger row is walked before the steps, outside any block.
+        for row in &mut walker.rows {
+            row.depth.get_or_insert(0);
+        }
+    }
     let mut plan = summary_object(program_path, &walker.rows, legacy);
     plan["inputs"] = program.inputs.iter().map(input_summary).collect();
     plan["flags"] = program.inputs.iter().filter_map(flag_entry).collect();
@@ -445,8 +482,12 @@ struct Walker<'a> {
     /// The calling program's directory. Called files are shown relative to it.
     program_directory: Option<std::path::PathBuf>,
     path_hmac_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
-    /// Emit control-flow structure (`condition` on `if` rows). Off for the published shape.
+    /// Emit control-flow structure (`condition`, `depth`, `parent`, `iterates`, `binds`,
+    /// `reads_bindings`). Off for the published shape.
     structure: bool,
+    /// Ids of the open block rows, innermost last. Block rows are `if`, `while`,
+    /// `for each`, `repeat`, `try`, temporary scopes and called program bodies.
+    blocks: Vec<String>,
 }
 
 impl Walker<'_> {
@@ -653,15 +694,52 @@ impl Walker<'_> {
                 _ => "none",
             };
             let id = ids[index].clone();
+            // A block's opener, its clause markers (`otherwise`, `catch`, `finally`) and its
+            // closer sit at the block's own level, so they take the depth and parent outside it.
+            let clause = matches!(
+                &step.kind,
+                StepKind::Otherwise { .. } | StepKind::Catch { .. } | StepKind::Finally
+            );
+            let closer = matches!(
+                &step.kind,
+                StepKind::EndIf
+                    | StepKind::EndLoop { .. }
+                    | StepKind::EndTry
+                    | StepKind::EndTempScope { .. }
+            );
+            let popped = if clause || closer {
+                self.blocks.pop()
+            } else {
+                None
+            };
+            let depth = self.blocks.len();
+            let parent = self.blocks.last().cloned();
+            let opens_block = match &step.kind {
+                StepKind::If { .. }
+                | StepKind::IfCommand { .. }
+                | StepKind::Loop { .. }
+                | StepKind::Try { .. }
+                | StepKind::TempScope { .. } => true,
+                StepKind::CallProgram { .. } => target.is_some(),
+                _ => false,
+            };
+            let outer_blocks = self.blocks.len();
+            if opens_block {
+                self.blocks.push(id.clone());
+            }
             match (&step.kind, target) {
                 (StepKind::CallProgram { call, .. }, Some(target)) => {
                     self.call_program(step.line, call, scope);
+                    self.blocks.truncate(outer_blocks);
                     index = target;
                 }
                 _ => {
                     self.step(step.line, &step.kind, scope);
                     index += 1;
                 }
+            }
+            if let (true, Some(block)) = (clause, popped) {
+                self.blocks.push(block);
             }
             // Any runtime binding may shadow an input. Stop substituting inputs
             // after such a step rather than claiming a stale value in the plan.
@@ -708,9 +786,30 @@ impl Walker<'_> {
                 }
             }
             // Rows from a nested body already carry their own ids; this step's rows take its id.
+            // The structure fields follow the same rule: only rows without an id are this step's.
+            let structure = self.structure;
+            let reads: Vec<String> = if structure {
+                step_operand_references(&step.kind)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut binds = if structure {
+                step_binds(&step.kind).map(str::to_owned)
+            } else {
+                None
+            };
             for row in &mut self.rows[before..] {
                 if row.program_stdout.is_none() {
                     row.program_stdout = Some(stdout);
+                }
+                if structure && row.id.is_none() {
+                    row.depth = Some(depth);
+                    row.parent = parent.clone();
+                    row.reads_bindings = reads.clone();
+                    row.binds = binds.take();
                 }
                 row.id.get_or_insert_with(|| id.clone());
             }
@@ -744,9 +843,19 @@ impl Walker<'_> {
                 self.file_write(line, kind, None, scope);
             }
             StepKind::EndTempScope { .. } => self.push_plain(line, "end_temporary", scope),
-            StepKind::TaskGroup { tasks, .. } => {
+            StepKind::TaskGroup { tasks, each, .. } => {
+                let before = self.rows.len();
                 for call in tasks {
                     self.invocation(line, "task_group", call, scope, true);
+                }
+                // A `parallel for each` task row is the loop body, so it names the loop source.
+                if self.structure {
+                    if let Some(each) = each {
+                        let source = iterates_json(&each.binding, &each.values);
+                        for row in &mut self.rows[before..] {
+                            row.iterates = Some(source.clone());
+                        }
+                    }
                 }
             }
             StepKind::SpawnJob { stages, .. } => {
@@ -762,8 +871,20 @@ impl Walker<'_> {
                     self.invocation(line, "while_command", call, scope, true);
                 }
                 LoopKind::Repeat { .. } => self.push_plain(line, "loop_repeat", scope),
-                LoopKind::ForEach { .. } => self.push_plain(line, "loop_for_each", scope),
-                LoopKind::While { .. } => self.push_plain(line, "loop_while", scope),
+                LoopKind::ForEach { binding, values } => {
+                    let mut row = Row::plain(line, "loop_for_each", scope);
+                    if self.structure {
+                        row.iterates = Some(iterates_json(binding, values));
+                    }
+                    self.rows.push(row);
+                }
+                LoopKind::While { condition } => {
+                    let mut row = Row::plain(line, "loop_while", scope);
+                    if self.structure {
+                        row.condition = Some(condition_json(condition));
+                    }
+                    self.rows.push(row);
+                }
             },
             StepKind::EndLoop { .. } => self.push_plain(line, "end_loop", scope),
             StepKind::If { condition, .. } => {
@@ -1461,6 +1582,154 @@ fn operand_json(value: &Value) -> Json {
             Ok(shown) => json!({"literal": shown}),
             Err(_) => json!({"unrendered": true}),
         },
+    }
+}
+
+/// The `iterates` object of a loop row: the loop variable and its source. A reference
+/// shows its name and a literal list shows its length. No value is shown.
+fn iterates_json(variable: &str, values: &Value) -> Json {
+    let source = match values {
+        Value::Reference(name) => json!({"ref": name}),
+        Value::List(items) => json!({"literal_list": items.len()}),
+        _ => json!({"unrendered": true}),
+    };
+    json!({"variable": variable, "source": source})
+}
+
+/// The name of the binding a step introduces. A call names its result, else its
+/// status. A spawned job's name is a handle rather than a binding, so it is not listed.
+fn step_binds(kind: &StepKind) -> Option<&str> {
+    match kind {
+        StepKind::Invoke { call, .. }
+        | StepKind::IfCommand { call, .. }
+        | StepKind::CallProgram { call, .. }
+        | StepKind::Loop {
+            kind: LoopKind::WhileCommand { call, .. },
+            ..
+        } => call
+            .binding
+            .as_deref()
+            .or(call.result_binding.as_deref())
+            .or(call.status_binding.as_deref()),
+        StepKind::TaskGroup { binding, .. }
+        | StepKind::InspectJob { binding, .. }
+        | StepKind::CaptureBytes { binding }
+        | StepKind::ParseJson { binding }
+        | StepKind::BindValue { binding, .. }
+        | StepKind::TakeJson { binding, .. }
+        | StepKind::TakeJsonDynamic { binding, .. }
+        | StepKind::TempScope { binding, .. }
+        | StepKind::Catch { binding, .. } => Some(binding.as_str()),
+        StepKind::AwaitJob {
+            status_binding,
+            result_binding,
+            ..
+        } => status_binding.as_deref().or(result_binding.as_deref()),
+        StepKind::Read { binding, .. }
+        | StepKind::ReadStdin { binding }
+        | StepKind::ReadCallInput { binding } => binding.as_deref(),
+        _ => None,
+    }
+}
+
+/// The bindings a step's operands refer to, in order of first use. A call's
+/// parameters are taken in name order, which is how the call stores them. Only
+/// names are returned, never values.
+fn step_operand_references(kind: &StepKind) -> Vec<&str> {
+    let mut names = Vec::new();
+    match kind {
+        StepKind::Invoke { call, .. }
+        | StepKind::IfCommand { call, .. }
+        | StepKind::CallProgram { call, .. }
+        | StepKind::Loop {
+            kind: LoopKind::WhileCommand { call, .. },
+            ..
+        } => call_references(call, &mut names),
+        StepKind::TaskGroup { tasks, each, .. } => {
+            if let Some(each) = each {
+                value_references(&each.values, &mut names);
+            }
+            for call in tasks {
+                call_references(call, &mut names);
+            }
+        }
+        StepKind::SpawnJob { stages, .. } => {
+            for stage in stages {
+                call_references(&stage.call, &mut names);
+            }
+        }
+        StepKind::If { condition, .. } => condition_references(condition, &mut names),
+        StepKind::Loop { kind, .. } => match kind {
+            LoopKind::Repeat { count } => value_references(count, &mut names),
+            LoopKind::ForEach { values, .. } => value_references(values, &mut names),
+            LoopKind::While { condition } => condition_references(condition, &mut names),
+            LoopKind::WhileCommand { .. } => {}
+        },
+        StepKind::Exit { status } => value_references(status, &mut names),
+        StepKind::Fail { message, status } => {
+            value_references(message, &mut names);
+            if let Some(status) = status {
+                value_references(status, &mut names);
+            }
+        }
+        StepKind::UseFolder { path } | StepKind::Read { path, .. } => {
+            value_references(path, &mut names)
+        }
+        StepKind::UseValue { source }
+        | StepKind::BindValue { source, .. }
+        | StepKind::EncodeJson { source }
+        | StepKind::TakeJson { source, .. } => value_references(source, &mut names),
+        StepKind::TakeJsonDynamic {
+            pointer, source, ..
+        } => {
+            value_references(pointer, &mut names);
+            value_references(source, &mut names);
+        }
+        StepKind::Save { path, .. } | StepKind::Append { path } => {
+            value_references(path, &mut names)
+        }
+        StepKind::Environment { set, .. } => {
+            for value in set.values() {
+                value_references(value, &mut names);
+            }
+        }
+        StepKind::Redirect {
+            path: Some(path), ..
+        }
+        | StepKind::LaunchDetached { output: Some(path) } => value_references(path, &mut names),
+        StepKind::UseBytes { binding } => names.push(binding.as_str()),
+        _ => {}
+    }
+    let mut seen = BTreeSet::new();
+    names.retain(|name| seen.insert(*name));
+    names
+}
+
+fn call_references<'a>(call: &'a Invocation, names: &mut Vec<&'a str>) {
+    for value in call.parameters.values() {
+        value_references(value, names);
+    }
+}
+
+fn condition_references<'a>(condition: &'a Condition, names: &mut Vec<&'a str>) {
+    value_references(&condition.left, names);
+    value_references(&condition.right, names);
+}
+
+fn value_references<'a>(value: &'a Value, names: &mut Vec<&'a str>) {
+    match value {
+        Value::Reference(name) => names.push(name.as_str()),
+        Value::List(items) => {
+            for item in items {
+                value_references(item, names);
+            }
+        }
+        Value::Record(fields) => {
+            for field in fields.values() {
+                value_references(field, names);
+            }
+        }
+        _ => {}
     }
 }
 

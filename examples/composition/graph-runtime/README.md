@@ -16,8 +16,14 @@
 Run the architecture proof with:
 
 ```sh
-cargo test --test graph_composition_acceptance -- --test-threads=1
+cargo test --test graph_composition_acceptance --features remote -- --test-threads=1
 ```
+
+The remote composition test is compiled only with the `remote` feature
+(`#[cfg(feature = "remote")]` in `tests/graph_composition_acceptance.rs`).
+Without `--features remote`, the command does not compile or run it. The native
+stream applet runs the literal path `/bin/echo`, so run the proof on a
+Unix-like host.
 
 The test creates temporary manifests for the loopback endpoint and worker
 marker files. Its native stream invokes `/bin/echo` once, emits one JSON record,

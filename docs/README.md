@@ -31,12 +31,13 @@ Each entry answers one practical question.
 
 | Document | Purpose |
 | --- | --- |
+| [Migrating from Bash](migrating-from-bash.md) | Common Bash idioms mapped to their Execute form or applet, with a status for each. |
 | [Install a release](releases.md) | Platform packages, checksums, provenance and immutable releases. |
 | [Run on native Windows](windows.md) | Executable lookup, Job Objects, Unicode, named pipes and platform differences. |
 | [Run in the browser](playground.md) | Browser applets, virtual files, memory limits and local builds. |
 | [Build and preview the site](site.md) | Building, previewing and deploying the GitHub Pages showcase. |
 | [Use the VS Code extension](../editors/vscode/README.md) | Install highlighting, snippets and editor support. |
-| [Run the desktop and server recipes](recipes/) | Short, runnable `.program` files for common jobs, each with its run line and the Bash it replaces. The desktop recipes need Omarchy, Hyprland or Arch tools. |
+| Run the desktop and server recipes: [desktop-focus-window](recipes/desktop-focus-window.program), [desktop-notify-message](recipes/desktop-notify-message.program), [desktop-pacman-query](recipes/desktop-pacman-query.program), [desktop-volume-osd](recipes/desktop-volume-osd.program), [server-backup-archive](recipes/server-backup-archive.program), [server-check-package](recipes/server-check-package.program), [server-disk-usage](recipes/server-disk-usage.program), [server-http-health](recipes/server-http-health.program), [server-journal-errors](recipes/server-journal-errors.program), [server-large-files](recipes/server-large-files.program), [server-rotate-logs](recipes/server-rotate-logs.program) | Short, runnable `.program` files for common jobs, each with its run line and the Bash it replaces. The desktop recipes need Omarchy, Hyprland or Arch tools. |
 | [CPU monitor](top-cpu.md) | A complete single-file terminal app that uses `ps` and `jq`. |
 | [GitHub star tracker](github-stars.md) | A complete single-file terminal app that uses authenticated `gh` and keeps a session history graph. |
 | [Utility workflows](../examples/ladder/README.md) | 150 utility workflows with data contracts, local fixtures and exact outputs. |

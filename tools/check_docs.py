@@ -23,6 +23,7 @@ MAINTAINED = [
     "DESIGN.md",
     "docs/README.md",
     "docs/guide.md",
+    "docs/migrating-from-bash.md",
     "docs/omarchy-quickstart.md",
     "docs/language.md",
     "docs/runtime-reference.md",

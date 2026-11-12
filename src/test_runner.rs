@@ -9,8 +9,9 @@
 //!
 //! Each test runs `execute` in a fresh temporary working directory. A `fixtures/bin`
 //! directory next to the test is prepended to `PATH`, so fake tools live beside the
-//! tests. `EXECUTE_TEST_FIXTURES` names the `fixtures` directory. `stdout` is an exact
-//! byte comparison; `files` maps paths relative to the working directory to their exact
+//! tests. `EXECUTE_TEST_FIXTURES` names the `fixtures` directory. `stdout` and `stderr`
+//! are exact byte comparisons; `stderr_contains` lists substrings that stderr must each
+//! contain. `files` maps paths relative to the working directory to their exact
 //! contents. `now` pins the injectable clock the tested program reads through
 //! `time.now` to a fixed Unix epoch second; `execute test --now EPOCH` pins every
 //! test that sets no `now` of its own. Output is TAP 13 by default, and `--json`
@@ -46,6 +47,12 @@ pub struct Expect {
     pub status: i32,
     #[serde(default)]
     pub stdout: Option<String>,
+    /// Exact stderr, compared the same way as `stdout`.
+    #[serde(default)]
+    pub stderr: Option<String>,
+    /// Substrings that stderr must each contain.
+    #[serde(default)]
+    pub stderr_contains: Vec<String>,
     #[serde(default)]
     pub files: BTreeMap<String, String>,
 }
@@ -316,11 +323,18 @@ fn run_in(
                 .to_string())
         ));
     }
-    if let Some(expected) = &sidecar.expect.stdout {
-        if &stdout != expected {
-            failures.push(format!("stdout {stdout:?} but expected {expected:?}"));
-        }
-    }
+    failures.extend(stream_failures(
+        "stdout",
+        &stdout,
+        sidecar.expect.stdout.as_deref(),
+        &[],
+    ));
+    failures.extend(stream_failures(
+        "stderr",
+        &stderr,
+        sidecar.expect.stderr.as_deref(),
+        &sidecar.expect.stderr_contains,
+    ));
     for (relative, expected) in &sidecar.expect.files {
         let path = work.join(relative);
         match fs::read_to_string(&path) {
@@ -332,6 +346,29 @@ fn run_in(
         }
     }
     Ok((exit, stdout, stderr, failures))
+}
+
+/// Checks one captured stream against its expectations and returns one message per failed
+/// check. `exact`, when set, must equal `actual` byte for byte; each entry of `contains`
+/// must occur somewhere in `actual`. Pure, so it is tested without starting a program.
+fn stream_failures(
+    label: &str,
+    actual: &str,
+    exact: Option<&str>,
+    contains: &[String],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if let Some(expected) = exact {
+        if actual != expected {
+            failures.push(format!("{label} {actual:?} but expected {expected:?}"));
+        }
+    }
+    for needle in contains {
+        if !actual.contains(needle.as_str()) {
+            failures.push(format!("{label} {actual:?} does not contain {needle:?}"));
+        }
+    }
+    failures
 }
 
 /// A private working directory for one test. Its name carries 16 random bytes, and it is
@@ -518,6 +555,50 @@ mod tests {
         assert_eq!(parsed.inputs["a"], "b");
         assert!(serde_json::from_str::<Sidecar>(r#"{"expected": 1}"#).is_err());
         assert!(serde_json::from_str::<Sidecar>(r#"{"expect": {"stdot": "x"}}"#).is_err());
+    }
+
+    #[test]
+    fn sidecar_accepts_stderr_expectations_and_rejects_near_misses() {
+        let parsed: Sidecar = serde_json::from_str(
+            r#"{"expect": {"stderr": "warn\n", "stderr_contains": ["disk", "full"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.expect.stderr.as_deref(), Some("warn\n"));
+        assert_eq!(parsed.expect.stderr_contains, vec!["disk", "full"]);
+        let misspelt = r#"{"expect": {"stderr_contain": ["x"]}}"#;
+        assert!(serde_json::from_str::<Sidecar>(misspelt).is_err());
+        let wrong_type = r#"{"expect": {"stderr": ["x"]}}"#;
+        assert!(serde_json::from_str::<Sidecar>(wrong_type).is_err());
+    }
+
+    #[test]
+    fn stderr_exact_match_is_byte_for_byte() {
+        assert!(stream_failures("stderr", "warn\n", Some("warn\n"), &[]).is_empty());
+        assert_eq!(
+            stream_failures("stderr", "warn\n", Some("warn"), &[]),
+            vec![r#"stderr "warn\n" but expected "warn""#.to_string()]
+        );
+        assert_eq!(
+            stream_failures("stderr", "", Some("warn\n"), &[]),
+            vec![r#"stderr "" but expected "warn\n""#.to_string()]
+        );
+    }
+
+    #[test]
+    fn stderr_contains_checks_each_substring() {
+        let needles = vec!["disk".to_string(), "full".to_string()];
+        assert!(stream_failures("stderr", "disk is full", None, &needles).is_empty());
+        assert_eq!(
+            stream_failures("stderr", "disk is low", None, &needles),
+            vec![r#"stderr "disk is low" does not contain "full""#.to_string()]
+        );
+        // Both substrings missing gives two messages, one per failed check.
+        assert_eq!(stream_failures("stderr", "", None, &needles).len(), 2);
+    }
+
+    #[test]
+    fn stream_checks_are_skipped_when_nothing_is_expected() {
+        assert!(stream_failures("stdout", "anything", None, &[]).is_empty());
     }
 
     #[test]

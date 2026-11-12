@@ -10,6 +10,10 @@ alone through the same staged copy. Passing `--manifest-dir` adds a second set
 of rows that run the given binary with that explicit directory (the
 file-loaded registry path). The script prints median and 95th-percentile wall
 time and, on Linux with GNU time, each child's peak resident set size.
+With --ratio-baseline and --ratio-candidate, the tool instead compares two
+stored tools/bash_compare.py reports and exits without timing anything: it
+fails when any scenario's Execute/Bash ratio worsens by more than 10% over
+the stored baseline.
 Python 3.9+, standard library only.
 """
 import argparse
@@ -26,6 +30,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+RATIO_MAX_REGRESSION = 0.10  # same limit as check_bash_ratio_regression.MAX_REGRESSION
 
 ONE_LINE = 'run printf with message "one"\n'
 TEN_STEPS = "".join(f'run printf with message "step {n}"\n' for n in range(1, 11))
@@ -175,10 +181,49 @@ def budget_limit(budget, key, metric):
     return limit
 
 
+def run_ratio_gate(baseline_path, candidate_path, max_regression=RATIO_MAX_REGRESSION):
+    """Compare stored bash_compare reports. Return 0 when every Execute/Bash ratio
+    stays within max_regression of the baseline, 1 on regression, 2 when a report
+    is missing, unreadable, or not comparable."""
+    # Imported here so loading this module by file path (as the tests do) needs no tools/ on sys.path.
+    from check_bash_ratio_regression import evaluate as evaluate_ratios
+
+    for path in (baseline_path, candidate_path):
+        if not path.is_file():
+            print(f"error: ratio report {path} does not exist", file=sys.stderr)
+            return 2
+    try:
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+        comparisons, failures = evaluate_ratios(baseline, candidate, max_regression)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    for key, before, after, regression in comparisons:
+        print(f"{key}: Execute/Bash ratio {before:.3f}x -> {after:.3f}x ({regression:+.1%})")
+    if failures:
+        print(
+            f"error: Execute/Bash ratio regressed by more than {max_regression:.0%} in: "
+            + ", ".join(failures),
+            file=sys.stderr,
+        )
+        return 1
+    print(f"all Execute/Bash ratios remain within {max_regression:.0%} of the stored baseline")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("binary", type=Path)
     parser.add_argument("budget", type=Path)
+    parser.add_argument("--ratio-baseline", type=Path, help="stored bash_compare report for the ratio gate")
+    parser.add_argument("--ratio-candidate", type=Path, help="current bash_compare report for the ratio gate")
+    parser.add_argument(
+        "--ratio-max-regression-percent",
+        type=float,
+        default=RATIO_MAX_REGRESSION * 100,
+        help="maximum allowed Execute/Bash ratio regression (default: 10)",
+    )
     parser.add_argument("--manifest-dir", type=Path, help="also select an explicit manifest directory")
     parser.add_argument(
         "--require-rss",
@@ -190,6 +235,14 @@ def main(argv=None):
     parser.add_argument("--json-out", type=Path, help="retain per-workload samples for budget regeneration")
     parser.add_argument("--run-id", default=None, help="retained sample run id (defaults to GITHUB_RUN_ID or 'local')")
     args = parser.parse_args(argv)
+
+    if args.ratio_baseline or args.ratio_candidate:
+        if not (args.ratio_baseline and args.ratio_candidate):
+            print("error: --ratio-baseline and --ratio-candidate must be given together", file=sys.stderr)
+            return 2
+        return run_ratio_gate(
+            args.ratio_baseline, args.ratio_candidate, args.ratio_max_regression_percent / 100
+        )
 
     if not args.binary.is_file():
         print(f"error: {args.binary} is not a built executable", file=sys.stderr)

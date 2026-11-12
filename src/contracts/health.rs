@@ -581,6 +581,54 @@ fn rank_candidates<'a>(
     candidates
 }
 
+/// A declared probe that did not pass, with the evidence a doctor report shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProbeFailure {
+    /// The probe's declared name.
+    pub name: String,
+    /// Why it did not pass, for example `/state is "down", expected "up"`.
+    pub evidence: String,
+}
+
+impl ProbeExpectation {
+    /// Check a typed probe result against this expectation. The error is the evidence.
+    fn check(&self, result: &Value) -> std::result::Result<(), String> {
+        match self {
+            Self::Equals { pointer, value } => match result.pointer(pointer) {
+                Some(found) if found == value => Ok(()),
+                Some(found) => Err(format!("{pointer} is {found}, expected {value}")),
+                None => Err(format!("{pointer} is missing")),
+            },
+            Self::Present { pointer } => match result.pointer(pointer) {
+                Some(_) => Ok(()),
+                None => Err(format!("{pointer} is missing")),
+            },
+        }
+    }
+}
+
+/// Check each declared probe against its supplied typed result and return the
+/// probes that did not pass, in declaration order. A probe with no result in
+/// `results` fails with evidence saying so. Nothing here runs a probe.
+pub fn failing_probes(
+    probes: &[HealthProbe],
+    results: &BTreeMap<String, Value>,
+) -> Vec<ProbeFailure> {
+    probes
+        .iter()
+        .filter_map(|probe| {
+            let evidence = match results.get(&probe.name) {
+                Some(result) => probe.expect.check(result).err()?,
+                None => "no result was supplied".to_owned(),
+            };
+            Some(ProbeFailure {
+                name: probe.name.clone(),
+                evidence,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1301,5 +1349,40 @@ mod tests {
         bad["rollback"] = json!("sys.undo");
         let result: Result<HealthProbe, _> = serde_json::from_value(bad);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn the_doctor_report_names_only_the_failing_probe_with_its_evidence() {
+        let probes: Vec<HealthProbe> = vec![
+            serde_json::from_value(probe("db_up")).unwrap(),
+            serde_json::from_value(json!({
+                "name": "queue_up",
+                "applet": "sys.probe",
+                "expect": {"present": {"pointer": "/depth"}},
+                "timeout_ms": 5000,
+                "interval_ms": 30000
+            }))
+            .unwrap(),
+        ];
+        let results = BTreeMap::from([
+            ("db_up".to_owned(), json!({"state": "down"})),
+            ("queue_up".to_owned(), json!({"depth": 3})),
+        ]);
+        assert_eq!(
+            failing_probes(&probes, &results),
+            vec![ProbeFailure {
+                name: "db_up".to_owned(),
+                evidence: "/state is \"down\", expected \"up\"".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_probe_with_no_supplied_result_is_reported_as_failing() {
+        let probes: Vec<HealthProbe> = vec![serde_json::from_value(probe("db_up")).unwrap()];
+        let failures = failing_probes(&probes, &BTreeMap::new());
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].name, "db_up");
+        assert_eq!(failures[0].evidence, "no result was supplied");
     }
 }

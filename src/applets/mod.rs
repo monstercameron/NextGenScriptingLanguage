@@ -360,7 +360,7 @@ pub fn execute_with_context(
         | "decode.hex" | "encode.url" | "decode.url" | "encode.form" => {
             hash::run(operation, args, input, context)
         }
-        "time.now" | "time.format" | "time.parse" | "time.add" | "time.diff" => {
+        "time.now" | "time.format" | "time.parse" | "time.parts" | "time.add" | "time.diff" => {
             time::run(operation, args, context)
         }
         "time.sleep" | "wait.until" => wait::run(operation, args, cwd, context),

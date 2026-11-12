@@ -11,8 +11,10 @@
 //! directory next to the test is prepended to `PATH`, so fake tools live beside the
 //! tests. `EXECUTE_TEST_FIXTURES` names the `fixtures` directory. `stdout` is an exact
 //! byte comparison; `files` maps paths relative to the working directory to their exact
-//! contents. Output is TAP 13 by default, and `--json` prints one document for agents.
-//! The exit status is 0 only when every test passes.
+//! contents. `now` pins the injectable clock the tested program reads through
+//! `time.now` to a fixed Unix epoch second; `execute test --now EPOCH` pins every
+//! test that sets no `now` of its own. Output is TAP 13 by default, and `--json`
+//! prints one document for agents. The exit status is 0 only when every test passes.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
@@ -31,6 +33,9 @@ const MAX_DISCOVERY_DEPTH: usize = 32;
 pub struct Sidecar {
     pub inputs: BTreeMap<String, String>,
     pub arguments: Vec<String>,
+    /// Fixed Unix epoch second for the injectable clock this test's program
+    /// reads through `time.now`. Overrides `execute test --now` for this test.
+    pub now: Option<i64>,
     pub expect: Expect,
 }
 
@@ -65,11 +70,26 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     let mut policy = crate::execution_policy_options::ExecutionPolicyOptions::default();
     let mut json = false;
     let mut manifest_dir: Option<PathBuf> = None;
+    let mut now: Option<i64> = None;
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--json" => json = true,
+            "--now" => {
+                if now.is_some() {
+                    bail!("--now may be specified only once");
+                }
+                index += 1;
+                let value = arguments
+                    .get(index)
+                    .context("--now requires a Unix epoch second")?;
+                now = Some(
+                    value
+                        .parse::<i64>()
+                        .map_err(|_| anyhow!("--now must be a Unix epoch second"))?,
+                );
+            }
             "--manifest-dir" => {
                 index += 1;
                 manifest_dir = Some(PathBuf::from(
@@ -101,7 +121,7 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     let executable = std::env::current_exe().context("locating the execute executable")?;
     let mut outcomes = Vec::new();
     for file in &files {
-        let outcome = match run_one(&executable, file, manifest_dir.as_deref(), &policy) {
+        let outcome = match run_one(&executable, file, manifest_dir.as_deref(), &policy, now) {
             Ok(outcome) => outcome,
             Err(error) => Outcome {
                 name: test_name(file),
@@ -214,6 +234,7 @@ fn run_one(
     file: &Path,
     manifest_dir: Option<&Path>,
     policy: &crate::execution_policy_options::ExecutionPolicyOptions,
+    now: Option<i64>,
 ) -> Result<Outcome> {
     let sidecar = load_sidecar(file)?;
     let program = fs::canonicalize(file)?;
@@ -230,6 +251,7 @@ fn run_one(
         &fixtures,
         manifest_dir,
         policy,
+        now,
         work.path(),
     )?;
     Ok(Outcome {
@@ -251,10 +273,16 @@ fn run_in(
     fixtures: &Path,
     manifest_dir: Option<&Path>,
     policy: &crate::execution_policy_options::ExecutionPolicyOptions,
+    now: Option<i64>,
     work: &Path,
 ) -> Result<RunResult> {
     let mut command = Command::new(executable);
     command.current_dir(work).arg(program);
+    // A per-test `now` wins over the run-wide `--now`; either pins the
+    // injectable clock the program reads through `time.now`.
+    if let Some(pinned) = sidecar.now.or(now) {
+        command.env("EXECUTE_NOW", pinned.to_string());
+    }
     if let Some(manifest_dir) = manifest_dir {
         command.arg("--manifest-dir").arg(manifest_dir);
     }

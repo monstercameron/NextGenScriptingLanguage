@@ -42,6 +42,10 @@ pub(crate) struct Args {
     /// `resume --from-record DIR`: replay the record's completed prefix.
     pub(crate) from_record_dir: Option<PathBuf>,
     pub(crate) retry_uncertain: bool,
+    /// `run --now EPOCH` / `resume --now EPOCH`: pin the injectable clock
+    /// that `time.now` reads to a fixed Unix epoch second. Overrides
+    /// `EXECUTE_NOW` for this process.
+    pub(crate) now: Option<i64>,
     pub(crate) once: bool,
     pub(crate) trace: bool,
     pub(crate) headless: bool,

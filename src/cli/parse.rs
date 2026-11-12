@@ -57,6 +57,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut from_record_dir = None;
     let mut record_dir = None;
     let mut retry_uncertain = false;
+    let mut now: Option<i64> = None;
     let mut once = false;
     let mut trace = false;
     let mut headless = false;
@@ -342,6 +343,18 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                 }
                 retry_uncertain = true;
             }
+            "--now" if matches!(command, "run" | "resume") => {
+                if now.is_some() {
+                    bail!("--now may be specified only once");
+                }
+                let value =
+                    take_option_value(arguments, &mut index, "--now", "a Unix epoch second")?;
+                now = Some(
+                    value
+                        .parse::<i64>()
+                        .map_err(|_| anyhow!("--now must be a Unix epoch second"))?,
+                );
+            }
             "--once" if command == "run" => {
                 if once {
                     bail!("--once may be specified only once");
@@ -607,6 +620,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         checkpoint_dir,
         from_record_dir,
         retry_uncertain,
+        now,
         once,
         trace,
         headless,

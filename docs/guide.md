@@ -438,8 +438,8 @@ manifest; neither requires a new Rust implementation.
 
 ## Testing programs
 
-`execute test [--json] [--manifest-dir DIR] [PATH...]` runs every `*.test.program`
-under each PATH. With no PATH it uses `tests/` when that directory exists, and
+`execute test [--json] [--manifest-dir DIR] [--now EPOCH] [PATH...]` runs every
+`*.test.program` under each PATH. With no PATH it uses `tests/` when that directory exists, and
 otherwise the current directory. Each test runs in its own `execute` process.
 
 ```text
@@ -457,12 +457,16 @@ rejected. Every field is optional.
 {
   "inputs": { "name": "world" },
   "arguments": [],
+  "now": 1791970860,
   "expect": { "status": 0, "stdout": "hello world", "files": { "out.txt": "hi" } }
 }
 ```
 
 - `inputs` become `--input NAME=VALUE` arguments.
 - `arguments` are passed after `--`.
+- `now` pins the injectable clock the test's program reads through `time.now`
+  to a fixed Unix epoch second; it wins over `execute test --now EPOCH`, which
+  pins every test that sets no `now` of its own.
 - `expect.status` defaults to 0.
 - `expect.stdout` is an exact byte comparison.
 - `expect.files` maps paths relative to the test's working directory to their exact
@@ -547,6 +551,13 @@ execute replay .runs/deploy --as-test tests/deploy-recorded   # then: execute te
 `--as-test DIR` writes `NAME.test.program` and `NAME.test.json` with the recorded
 inputs, exit status, and terminal stdout. The fixture runs the real program, so it
 needs the tools the program calls.
+
+Time is injectable: `time.now` reads the system clock unless `EXECUTE_NOW` names
+a fixed Unix epoch second, and `execute run --now EPOCH` (or `resume --now`)
+pins it for one run, winning over the ambient variable. A record stores the
+value the clock read, so replaying it returns the recorded time even after the
+clock moves on, and `explain` shows the `clock.read` effect as a retry-safe
+read.
 
 A failed recorded run can be repaired without a checkpoint: the failure names
 the loop. `repair --from-record` edits only the failed suffix — the first

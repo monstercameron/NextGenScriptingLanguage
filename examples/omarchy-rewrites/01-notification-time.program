@@ -1,12 +1,16 @@
 # Upstream: omacom/omarchy bin/omarchy-notification-time
 # Revision: c668141e9c42b13c80c9ca4ea108e11708c5e8a5
 # Inputs: upstream ignores every positional argument; preserve that interface.
-# Environment: no direct reads. date inherits locale/TZ; native commands inherit
-# PATH, HOME and OMARCHY_PATH exactly as in the original command environment.
-# Mapping: capture date even on ordinary failure, remove command-substitution
-# trailing LF bytes using jq, then pass the one literal summary argument.
-# jq performs only text normalization; notification control remains here.
+# Environment: no direct reads. The clock is read in process through the
+# injectable time applets, so TZ still selects the local zone exactly as the
+# native date did; native commands inherit PATH, HOME and OMARCHY_PATH exactly
+# as in the original command environment.
+# Mapping: read the injectable clock with time.now, then render the upstream
+# format with time.format. time.format emits text with no trailing newline, so
+# the jq newline strip is gone too. EXECUTE_NOW or `execute ... --now EPOCH`
+# pins the clock for tests and replay.
 accept ignored_arguments as list of text from arguments # execute-allow: lint.unused_input intentional compatibility input; this wrapper accepts but ignores extra arguments
-run "date" with arguments ["+%A %H:%M  ·  %d %B %Y  ·  Week %V"] and keep status as date_status
-then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as summary
+run time.now as now
+take integer at "/epoch_s" from now as epoch
+run time.format with epoch epoch and format "%A %H:%M  ·  %d %B %Y  ·  Week %V" and zone "local" as summary
 run "omarchy-notification-send" with arguments ["-g", "", "-u", "low", summary]

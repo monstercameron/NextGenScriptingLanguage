@@ -1,0 +1,92 @@
+{
+  "name": "time.parts",
+  "description": "Splits a Unix epoch second into calendar fields (year, month, day, weekday, ISO week, ...) in UTC, local time, or a fixed signed offset.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "epoch": {
+      "type": "integer",
+      "required": true,
+      "description": "Unix timestamp in whole seconds to split into fields."
+    },
+    "zone": {
+      "type": "string",
+      "required": false,
+      "description": "Time zone: `utc`, `local`, or a signed UTC offset in seconds; defaults to `utc`."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "time.parts"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "capabilities": [
+      "clock.read"
+    ],
+    "effects": [
+      "clock.read"
+    ],
+    "ports": {
+      "inputs": {
+        "epoch": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "zone": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "time parts"
+  ],
+  "examples": [
+    {
+      "program": "run time.parts with epoch 0 as value",
+      "expected_output": {
+        "year": 1970,
+        "month": 1,
+        "day": 1,
+        "hour": 0,
+        "minute": 0,
+        "second": 0,
+        "weekday": 4,
+        "weekday_name": "Thursday",
+        "yearday": 1,
+        "iso_year": 1970,
+        "iso_week": 1,
+        "offset": 0
+      }
+    }
+  ]
+}

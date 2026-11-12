@@ -446,7 +446,7 @@ fn help() -> &'static str {
      list.flatten, list.last, list.range, list.rest, list.reverse, list.slice, list.zip,\n\
      hash.sha256, hash.sha512, encode.base64, encode.form, encode.hex, encode.url,\n\
      decode.base64, decode.hex, decode.url, time.add, time.diff, time.format, time.now,\n\
-     time.parse, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
+     time.parse, time.parts, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
      ini.parse, ini.stringify, env.load, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
      fs.ensure_symlink, fs.ensure_dir,\n\
      fs.read, fs.snapshot,\n\

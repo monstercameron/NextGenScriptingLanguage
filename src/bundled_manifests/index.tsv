@@ -162,47 +162,48 @@ core.time_diff.json	2122	time.diff	time diff	95786	657
 core.time_format.json	1941	time.format	time format	96443	666
 core.time_now.json	1487	time.now	time now	97109	584
 core.time_parse.json	1665	time.parse	time parse	97693	627
-core.time_sleep.json	2590	time.sleep	time sleep	98320	720
-core.toml_parse.json	1526	toml.parse	toml parse	99040	580
-core.toml_stringify.json	1574	toml.stringify	toml stringify	99620	596
-core.wait_until.json	5786	wait.until	wait until	100216	1132
-core.yaml_parse.json	1562	yaml.parse	yaml parseparse yamlread yaml	101348	591
-core.yaml_stringify.json	1342	yaml.stringify	yaml stringify	101939	536
-count.lines.json	533	count.lines	count lines	102475	282
-cut.json	769	cut		102757	317
-desktop.clock_format.json	1458	desktop.clock_format		103074	497
-desktop.clock_local.json	1191	desktop.clock_local		103571	450
-desktop.clock_remote.json	1219	desktop.clock_remote		104021	449
-desktop.fixture_sync.json	1807	desktop.fixture_sync		104470	551
-desktop.quickshell.json	621	desktop.quickshell		105021	293
-false.json	469	false	fail	105314	254
-gh.repo.json	1040	gh.repo		105568	461
-git.commit.json	1571	git.commit	commit changes	106029	640
-grep.json	924	grep		106669	402
-head.json	613	head		107071	299
-jev.ask.json	2373	jev.ask		107370	676
-jev.classify.json	5198	jev.classify		108046	1151
-jev.judge.json	3977	jev.judge		109197	940
-jev.score.json	4161	jev.score		110137	984
-join.json	876	join		111121	367
-jq.json	990	jq		111488	451
-jq.ps.json	1335	jq.ps		111939	645
-llm.ask.json	4674	llm.ask		112584	895
-llm.extract.json	4852	llm.extract		113479	931
-ls.json	902	ls		114410	360
-mkdir.json	874	mkdir		114770	362
-omarchy.browser-refresh.json	1067	omarchy.browser-refresh		115132	433
-omarchy.editor-install.json	1107	omarchy.editor-install		115565	411
-omarchy.editor-list.json	1083	omarchy.editor-list		115976	443
-paste.json	867	paste		116419	360
-printf.json	613	printf	print	116779	299
-ps.json	718	ps		117078	352
-pwd.json	437	pwd		117430	249
-sed.json	1579	sed		117679	668
-sort.json	847	sort		118347	373
-tail.follow.json	825	tail.follow	follow file	118720	357
-tail.json	968	tail		119077	396
-tr.json	928	tr		119473	374
-uniq.json	874	uniq		119847	393
-upper.json	579	upper	uppercase	120240	292
-wc.json	801	wc		120532	377
+core.time_parts.json	1885	time.parts	time parts	98320	673
+core.time_sleep.json	2590	time.sleep	time sleep	98993	720
+core.toml_parse.json	1526	toml.parse	toml parse	99713	580
+core.toml_stringify.json	1574	toml.stringify	toml stringify	100293	596
+core.wait_until.json	5786	wait.until	wait until	100889	1132
+core.yaml_parse.json	1562	yaml.parse	yaml parseparse yamlread yaml	102021	591
+core.yaml_stringify.json	1342	yaml.stringify	yaml stringify	102612	536
+count.lines.json	533	count.lines	count lines	103148	282
+cut.json	769	cut		103430	317
+desktop.clock_format.json	1458	desktop.clock_format		103747	497
+desktop.clock_local.json	1191	desktop.clock_local		104244	450
+desktop.clock_remote.json	1219	desktop.clock_remote		104694	449
+desktop.fixture_sync.json	1807	desktop.fixture_sync		105143	551
+desktop.quickshell.json	621	desktop.quickshell		105694	293
+false.json	469	false	fail	105987	254
+gh.repo.json	1040	gh.repo		106241	461
+git.commit.json	1571	git.commit	commit changes	106702	640
+grep.json	924	grep		107342	402
+head.json	613	head		107744	299
+jev.ask.json	2373	jev.ask		108043	676
+jev.classify.json	5198	jev.classify		108719	1151
+jev.judge.json	3977	jev.judge		109870	940
+jev.score.json	4161	jev.score		110810	984
+join.json	876	join		111794	367
+jq.json	990	jq		112161	451
+jq.ps.json	1335	jq.ps		112612	645
+llm.ask.json	4674	llm.ask		113257	895
+llm.extract.json	4852	llm.extract		114152	931
+ls.json	902	ls		115083	360
+mkdir.json	874	mkdir		115443	362
+omarchy.browser-refresh.json	1067	omarchy.browser-refresh		115805	433
+omarchy.editor-install.json	1107	omarchy.editor-install		116238	411
+omarchy.editor-list.json	1083	omarchy.editor-list		116649	443
+paste.json	867	paste		117092	360
+printf.json	613	printf	print	117452	299
+ps.json	718	ps		117751	352
+pwd.json	437	pwd		118103	249
+sed.json	1579	sed		118352	668
+sort.json	847	sort		119020	373
+tail.follow.json	825	tail.follow	follow file	119393	357
+tail.json	968	tail		119750	396
+tr.json	928	tr		120146	374
+uniq.json	874	uniq		120520	393
+upper.json	579	upper	uppercase	120913	292
+wc.json	801	wc		121205	377

@@ -16,6 +16,7 @@ fn declarations(count: usize) -> Vec<InputDeclaration> {
             line: n + 1,
             description: None,
             choices: None,
+            schema_path: None,
         })
         .collect()
 }

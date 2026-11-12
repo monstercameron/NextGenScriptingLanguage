@@ -1904,6 +1904,22 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
             "input type must be text, integer, boolean, list of text, list of integer, list of json, or json"
         )
     };
+    let schema_path = if word_is(tokens.get(cursor), "matching") {
+        if kind != InputType::Json {
+            bail!("`matching` applies only to json inputs");
+        }
+        cursor += 1;
+        let Some(Token::String(path)) = tokens.get(cursor) else {
+            bail!("`matching` must be followed by a quoted schema path");
+        };
+        if path.is_empty() || path.contains('\0') {
+            bail!("the schema path must be nonempty and contain no NUL bytes");
+        }
+        cursor += 1;
+        Some(path.clone().into_owned())
+    } else {
+        None
+    };
     let choices = if word_is(tokens.get(cursor), "one") && word_is(tokens.get(cursor + 1), "of") {
         if kind != InputType::Text {
             bail!("`one of` applies only to text inputs");
@@ -2061,6 +2077,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         line,
         description,
         choices,
+        schema_path,
     })
 }
 

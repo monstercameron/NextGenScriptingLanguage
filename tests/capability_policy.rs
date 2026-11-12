@@ -1176,6 +1176,7 @@ fn environment_entry_inputs_are_denied_by_the_shared_policy_preflight() {
         line: 1,
         description: None,
         choices: None,
+        schema_path: None,
     };
     let error =
         flow::capabilities::authorize_environment_inputs(&[declaration], &registry).unwrap_err();

@@ -381,6 +381,7 @@ pub(crate) fn take<'a>(
         line,
         description: None,
         choices: None,
+        schema_path: None,
     }
     .validate_value(selected)?;
     Ok(selected)

@@ -1027,6 +1027,7 @@ mod tests {
             line: 1,
             description: None,
             choices: None,
+            schema_path: None,
         }
     }
 

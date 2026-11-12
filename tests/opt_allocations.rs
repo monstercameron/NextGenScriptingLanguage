@@ -321,6 +321,7 @@ fn report_release_allocation_counts() {
                 line: n + 1,
                 description: None,
                 choices: None,
+                schema_path: None,
             })
             .collect();
         let supplied: BTreeMap<_, _> = declarations

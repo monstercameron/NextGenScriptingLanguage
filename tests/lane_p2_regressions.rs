@@ -47,6 +47,7 @@ fn input_name_null_and_wrong_type_are_rejected_clearly() {
         line: 1,
         description: None,
         choices: None,
+        schema_path: None,
     };
     assert!(validate(&[input])
         .unwrap_err()
@@ -61,6 +62,7 @@ fn input_name_null_and_wrong_type_are_rejected_clearly() {
         line: 1,
         description: None,
         choices: None,
+        schema_path: None,
     };
     assert!(input
         .validate_value(&Value::Integer(5))

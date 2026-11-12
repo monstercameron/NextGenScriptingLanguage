@@ -765,6 +765,9 @@ pub struct InputDeclaration {
     /// Allowed values from `one of [...]` on a text input, in declaration order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<String>>,
+    /// Schema path from `matching "PATH"` on `accept NAME as json`, as written in the program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

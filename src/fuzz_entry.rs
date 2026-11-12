@@ -93,6 +93,7 @@ fn input_values(data: &[u8]) {
         line: index + 1,
         description: None,
         choices: None,
+        schema_path: None,
     })
     .collect();
     let mut supplied = BTreeMap::new();

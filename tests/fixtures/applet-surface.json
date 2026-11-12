@@ -1,0 +1,1013 @@
+{
+  "awk": {
+    "delimiter": "string",
+    "program": "string"
+  },
+  "cat": {
+    "files": "list<string>",
+    "path": "string"
+  },
+  "cd": {
+    "path": "string"
+  },
+  "color.parse_rgb": {
+    "default_hex": "string",
+    "text": "string"
+  },
+  "color.parse_rgb.result": {
+    "default_hex": "string",
+    "text": "string"
+  },
+  "color.rgb_to_hex": {
+    "blue": "integer",
+    "green": "integer",
+    "red": "integer",
+    "uppercase": "boolean"
+  },
+  "comm": {
+    "files": "list<string>",
+    "flags": "list<string>"
+  },
+  "conf.ensure_block": {
+    "comment": "string",
+    "content": "string",
+    "id": "string",
+    "path": "path"
+  },
+  "conf.ensure_line_near": {
+    "anchor": "string",
+    "line": "string",
+    "path": "path",
+    "position": "string"
+  },
+  "conf.remove_block": {
+    "comment": "string",
+    "id": "string",
+    "path": "path"
+  },
+  "conf.remove_matching": {
+    "line": "string",
+    "match": "string",
+    "path": "path"
+  },
+  "conf.set": {
+    "comment": "string",
+    "key": "string",
+    "path": "path",
+    "separator": "string",
+    "spaced": "boolean",
+    "uncomment": "boolean",
+    "value": "string"
+  },
+  "count.lines": {},
+  "csv.parse": {
+    "has_headers": "boolean",
+    "text": "string"
+  },
+  "csv.stringify": {
+    "table": "json"
+  },
+  "cut": {
+    "delimiter": "string",
+    "fields": "string"
+  },
+  "dbus.monitor_system": {
+    "match": "string"
+  },
+  "dbus.monitor_user": {
+    "match": "string"
+  },
+  "decode.base64": {
+    "padding": "boolean",
+    "text": "string",
+    "url_safe": "boolean"
+  },
+  "decode.hex": {
+    "text": "string"
+  },
+  "decode.url": {
+    "form": "boolean",
+    "text": "string"
+  },
+  "desktop.clock_format": {
+    "seconds": "integer"
+  },
+  "desktop.clock_local": {
+    "pulse": "integer"
+  },
+  "desktop.clock_remote": {
+    "pulse": "integer"
+  },
+  "desktop.entry_get": {
+    "group": "string",
+    "key": "string",
+    "locale": "string",
+    "text": "string"
+  },
+  "desktop.entry_set": {
+    "key": "string",
+    "text": "string",
+    "value": "string"
+  },
+  "desktop.exec_argv": {
+    "files": "list<string>",
+    "text": "string",
+    "urls": "list<string>"
+  },
+  "desktop.fixture_sync": {
+    "click": "record"
+  },
+  "desktop.quickshell": {
+    "config": "path"
+  },
+  "encode.base64": {
+    "padding": "boolean",
+    "text": "string",
+    "url_safe": "boolean"
+  },
+  "encode.form": {
+    "value": "record"
+  },
+  "encode.hex": {
+    "text": "string"
+  },
+  "encode.url": {
+    "form": "boolean",
+    "text": "string"
+  },
+  "env.load": {
+    "secret": "json",
+    "text": "string"
+  },
+  "exec.which": {
+    "name": "string",
+    "names": "list<string>",
+    "path": "string"
+  },
+  "false": {},
+  "fs.copy": {
+    "follow": "boolean",
+    "from": "path",
+    "overwrite": "boolean",
+    "to": "path"
+  },
+  "fs.ensure_dir": {
+    "mode": "string",
+    "path": "path"
+  },
+  "fs.ensure_file": {
+    "content": "string",
+    "mode": "string",
+    "path": "path"
+  },
+  "fs.ensure_line": {
+    "line": "string",
+    "path": "path",
+    "state": "string"
+  },
+  "fs.ensure_symlink": {
+    "path": "path",
+    "target": "path"
+  },
+  "fs.glob": {
+    "include_hidden": "boolean",
+    "pattern": "string"
+  },
+  "fs.move": {
+    "from": "path",
+    "overwrite": "boolean",
+    "to": "path"
+  },
+  "fs.read": {
+    "path": "path"
+  },
+  "fs.realpath": {
+    "path": "path"
+  },
+  "fs.snapshot": {
+    "path": "path"
+  },
+  "fs.stat": {
+    "follow": "boolean",
+    "path": "path"
+  },
+  "fs.test": {
+    "kind": "string",
+    "path": "path"
+  },
+  "fs.transaction": {
+    "journal": "path",
+    "lock_timeout_ms": "integer",
+    "operations": "json"
+  },
+  "fs.transaction.recover": {
+    "decision": "string",
+    "journal": "path",
+    "lock_timeout_ms": "integer"
+  },
+  "fs.unlink_checked": {
+    "expected_snapshot": "string",
+    "lock": "path",
+    "lock_timeout_ms": "integer",
+    "path": "path"
+  },
+  "fs.write_atomic": {
+    "content": "string",
+    "expected_content_hash": "string",
+    "lock": "path",
+    "lock_timeout_ms": "integer",
+    "mode": "integer",
+    "path": "path",
+    "permissions_policy": "string",
+    "symlink_policy": "string"
+  },
+  "gh.repo": {
+    "repository": "string"
+  },
+  "git.commit": {
+    "files": "list<string>",
+    "message": "string"
+  },
+  "grep": {
+    "flags": "list<string>",
+    "pattern": "string"
+  },
+  "hash.sha256": {
+    "text": "string"
+  },
+  "hash.sha512": {
+    "text": "string"
+  },
+  "head": {
+    "lines": "integer"
+  },
+  "hypr.activewindow": {},
+  "hypr.clients": {},
+  "hypr.dispatch": {
+    "arguments": "list<string>"
+  },
+  "hypr.dispatch_exec": {
+    "arguments": "list<string>"
+  },
+  "hypr.monitors": {},
+  "hypr.socket2": {
+    "socket_path": "path"
+  },
+  "hypr.workspaces": {},
+  "i18n.t": {
+    "catalog_dir": "path",
+    "context": "string",
+    "count": "integer",
+    "key": "string",
+    "language": "string",
+    "plural_key": "string",
+    "values": "record"
+  },
+  "ini.parse": {
+    "text": "string"
+  },
+  "ini.stringify": {
+    "value": "record"
+  },
+  "jev.ask": {
+    "env_file": "path",
+    "fixture": "path",
+    "max_bytes": "integer",
+    "model": "string",
+    "questions": "record",
+    "timeout_ms": "integer"
+  },
+  "jev.classify": {
+    "act_on": "list<string>",
+    "criteria": "record",
+    "env_file": "path",
+    "fixture": "path",
+    "labels": "list<string>",
+    "max_bytes": "integer",
+    "minimum": "integer",
+    "model": "string",
+    "question": "string",
+    "timeout_ms": "integer"
+  },
+  "jev.judge": {
+    "act_on": "list<string>",
+    "env_file": "path",
+    "fixture": "path",
+    "max_bytes": "integer",
+    "minimum": "integer",
+    "model": "string",
+    "question": "string",
+    "timeout_ms": "integer"
+  },
+  "jev.score": {
+    "act_on": "list<string>",
+    "env_file": "path",
+    "fixture": "path",
+    "levels": "list<string>",
+    "max_bytes": "integer",
+    "minimum": "integer",
+    "model": "string",
+    "question": "string",
+    "timeout_ms": "integer"
+  },
+  "join": {
+    "files": "list<string>",
+    "flags": "list<string>"
+  },
+  "jq": {
+    "filter": "string",
+    "flags": "list<string>"
+  },
+  "jq.ps": {
+    "limit": "integer"
+  },
+  "json.concat": {
+    "left": "json",
+    "right": "json"
+  },
+  "json.delete": {
+    "document": "json",
+    "path": "string"
+  },
+  "json.entries": {
+    "document": "json",
+    "pointer": "string"
+  },
+  "json.filter": {
+    "document": "json",
+    "pointer": "string",
+    "where": "json"
+  },
+  "json.first": {
+    "document": "json",
+    "pointer": "string"
+  },
+  "json.get": {
+    "default": "json",
+    "document": "json",
+    "pointer": "string",
+    "pointers": "list<string>"
+  },
+  "json.group_by": {
+    "document": "list<json>",
+    "pointer": "string"
+  },
+  "json.has": {
+    "document": "json",
+    "path": "string"
+  },
+  "json.keys": {
+    "document": "json",
+    "pointer": "string"
+  },
+  "json.last": {
+    "document": "json",
+    "pointer": "string"
+  },
+  "json.length": {
+    "document": "json",
+    "pointer": "string"
+  },
+  "json.map": {
+    "default": "json",
+    "document": "json",
+    "pointer": "string",
+    "select": "string"
+  },
+  "json.merge": {
+    "left": "record",
+    "right": "record"
+  },
+  "json.omit": {
+    "document": "record",
+    "keys": "list<string>"
+  },
+  "json.parse": {
+    "text": "string"
+  },
+  "json.pick": {
+    "document": "record",
+    "keys": "list<string>"
+  },
+  "json.rename_keys": {
+    "document": "record",
+    "renames": "record"
+  },
+  "json.set": {
+    "document": "json",
+    "pointer": "string",
+    "value": "json"
+  },
+  "json.sort_by": {
+    "document": "list<json>",
+    "numeric": "boolean",
+    "pointer": "string"
+  },
+  "json.stringify": {
+    "value": "json"
+  },
+  "json.sum": {
+    "document": "list<json>"
+  },
+  "json.unique_by": {
+    "document": "list<json>",
+    "pointer": "string"
+  },
+  "json.values": {
+    "document": "json",
+    "pointer": "string"
+  },
+  "jsonc.edit_content": {
+    "action": "string",
+    "content": "string",
+    "key": "string",
+    "value": "json"
+  },
+  "jsonc.remove": {
+    "expected_content_hash": "string",
+    "key": "string",
+    "lock": "path",
+    "lock_timeout_ms": "integer",
+    "path": "path",
+    "permissions_policy": "string",
+    "symlink_policy": "string"
+  },
+  "jsonc.set": {
+    "expected_content_hash": "string",
+    "key": "string",
+    "lock": "path",
+    "lock_timeout_ms": "integer",
+    "path": "path",
+    "permissions_policy": "string",
+    "symlink_policy": "string",
+    "value": "json"
+  },
+  "list.append": {
+    "item": "json",
+    "items": "json",
+    "list": "json"
+  },
+  "list.chunk": {
+    "items": "json",
+    "size": "unsigned_integer"
+  },
+  "list.concat": {
+    "items": "json"
+  },
+  "list.count": {
+    "collect": "boolean",
+    "delimiter": "string",
+    "field": "integer",
+    "items": "list<json>",
+    "key": "string",
+    "n": "integer"
+  },
+  "list.enumerate": {
+    "items": "json"
+  },
+  "list.first": {
+    "items": "json"
+  },
+  "list.flatten": {
+    "depth": "integer",
+    "items": "json"
+  },
+  "list.group": {
+    "collect": "boolean",
+    "items": "list<json>",
+    "key": "string",
+    "n": "integer"
+  },
+  "list.last": {
+    "items": "json"
+  },
+  "list.make": {
+    "items": "json"
+  },
+  "list.max": {
+    "collect": "boolean",
+    "delimiter": "string",
+    "field": "integer",
+    "items": "list<json>",
+    "key": "string",
+    "n": "integer"
+  },
+  "list.min": {
+    "collect": "boolean",
+    "delimiter": "string",
+    "field": "integer",
+    "items": "list<json>",
+    "key": "string",
+    "n": "integer"
+  },
+  "list.range": {
+    "start": "integer",
+    "step": "integer",
+    "stop": "integer"
+  },
+  "list.rest": {
+    "items": "json"
+  },
+  "list.reverse": {
+    "items": "json"
+  },
+  "list.slice": {
+    "items": "json",
+    "length": "integer",
+    "offset": "integer"
+  },
+  "list.sort": {
+    "collect": "boolean",
+    "items": "list<json>",
+    "key": "string",
+    "n": "integer"
+  },
+  "list.sum": {
+    "collect": "boolean",
+    "delimiter": "string",
+    "field": "integer",
+    "items": "list<json>",
+    "key": "string",
+    "n": "integer"
+  },
+  "list.top": {
+    "collect": "boolean",
+    "items": "list<json>",
+    "key": "string",
+    "n": "unsigned_integer"
+  },
+  "list.unique": {
+    "collect": "boolean",
+    "delimiter": "string",
+    "field": "integer",
+    "items": "list<json>",
+    "key": "string",
+    "n": "integer"
+  },
+  "list.zip": {
+    "left": "json",
+    "right": "json"
+  },
+  "llm.ask": {
+    "api": "string",
+    "api_key_env": "string",
+    "effort": "string",
+    "endpoint": "string",
+    "env_file": "path",
+    "fixture": "path",
+    "instruction": "string",
+    "max_bytes": "integer",
+    "max_tokens": "integer",
+    "model": "string",
+    "temperature": "number",
+    "timeout_ms": "integer"
+  },
+  "llm.extract": {
+    "api": "string",
+    "api_key_env": "string",
+    "effort": "string",
+    "endpoint": "string",
+    "env_file": "path",
+    "fixture": "path",
+    "instruction": "string",
+    "max_bytes": "integer",
+    "max_tokens": "integer",
+    "model": "string",
+    "schema": "string",
+    "temperature": "number",
+    "timeout_ms": "integer"
+  },
+  "ls": {
+    "flags": "list<string>",
+    "path": "string"
+  },
+  "lua.decode": {
+    "text": "string"
+  },
+  "lua.encode": {
+    "value": "json"
+  },
+  "menu.fuzzel": {
+    "flags": "list<string>",
+    "prompt": "string"
+  },
+  "menu.gum_choose": {
+    "flags": "list<string>",
+    "header": "string",
+    "items": "list<string>"
+  },
+  "menu.gum_confirm": {
+    "flags": "list<string>",
+    "prompt": "string"
+  },
+  "menu.gum_input": {
+    "flags": "list<string>",
+    "placeholder": "string",
+    "prompt": "string",
+    "value": "string"
+  },
+  "menu.walker": {
+    "flags": "list<string>"
+  },
+  "mkdir": {
+    "flags": "list<string>",
+    "paths": "list<string>"
+  },
+  "notify.dismiss": {
+    "flags": "list<string>",
+    "notification": "integer"
+  },
+  "notify.restore": {},
+  "notify.send": {
+    "action_1": "string",
+    "action_2": "string",
+    "action_3": "string",
+    "app_name": "string",
+    "body": "string",
+    "expire_ms": "integer",
+    "flags": "list<string>",
+    "icon": "string",
+    "replace_id": "integer",
+    "summary": "string",
+    "urgency": "string"
+  },
+  "number.abs": {
+    "value": "json"
+  },
+  "number.add": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.ceil": {
+    "value": "json"
+  },
+  "number.clamp": {
+    "max": "json",
+    "min": "json",
+    "value": "json"
+  },
+  "number.compare": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.divide": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.divmod": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.floor": {
+    "value": "json"
+  },
+  "number.format": {
+    "grouping": "boolean",
+    "percent": "boolean",
+    "precision": "integer",
+    "value": "json"
+  },
+  "number.format_size": {
+    "precision": "integer",
+    "system": "string",
+    "value": "json"
+  },
+  "number.int_divide": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.max": {
+    "values": "list<number>"
+  },
+  "number.min": {
+    "values": "list<number>"
+  },
+  "number.modulo": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.multiply": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.parse_integer": {
+    "base": "integer",
+    "text": "string",
+    "trim_ascii_whitespace": "boolean"
+  },
+  "number.parse_integer.result": {
+    "base": "integer",
+    "text": "string",
+    "trim_ascii_whitespace": "boolean"
+  },
+  "number.round": {
+    "digits": "integer",
+    "value": "json"
+  },
+  "number.sign": {
+    "value": "json"
+  },
+  "number.subtract": {
+    "left": "json",
+    "right": "json"
+  },
+  "number.to_text": {
+    "value": "json"
+  },
+  "number.trunc": {
+    "value": "json"
+  },
+  "omarchy.browser-refresh": {
+    "command": "string"
+  },
+  "omarchy.editor-install": {
+    "command": "string",
+    "extension": "string"
+  },
+  "omarchy.editor-list": {
+    "command": "string"
+  },
+  "osd.brightness": {
+    "action": "string"
+  },
+  "osd.caps": {},
+  "osd.volume": {
+    "action": "string"
+  },
+  "package.check_updates": {},
+  "package.install": {
+    "packages": "list<string>"
+  },
+  "package.install_aur": {
+    "packages": "list<string>"
+  },
+  "package.query": {
+    "package": "string"
+  },
+  "paste": {
+    "files": "list<string>",
+    "flags": "list<string>"
+  },
+  "path.basename": {
+    "path": "path",
+    "suffix": "string"
+  },
+  "path.dirname": {
+    "path": "path"
+  },
+  "path.join": {
+    "parts": "list<string>"
+  },
+  "path.remove_suffix": {
+    "path": "string",
+    "suffix": "string"
+  },
+  "printf": {
+    "message": "string"
+  },
+  "ps": {
+    "flags": "list<string>"
+  },
+  "pwd": {},
+  "record.make": {
+    "fields": "json"
+  },
+  "record.set": {
+    "key": "string",
+    "record": "json",
+    "value": "json"
+  },
+  "redact.text": {
+    "literals": "list<string>",
+    "text": "string"
+  },
+  "sed": {
+    "flags": "list<string>",
+    "program": "string"
+  },
+  "sort": {
+    "flags": "list<string>"
+  },
+  "state.debounce": {
+    "name": "string",
+    "window_ms": "integer"
+  },
+  "state.flag_clear": {
+    "name": "string"
+  },
+  "state.flag_is_set": {
+    "name": "string"
+  },
+  "state.flag_set": {
+    "name": "string"
+  },
+  "state.toggle": {
+    "name": "string"
+  },
+  "state.value_load": {
+    "name": "string"
+  },
+  "state.value_store": {
+    "name": "string",
+    "value": "string"
+  },
+  "sys.facts": {
+    "root": "path"
+  },
+  "system.restart_required": {
+    "root": "path"
+  },
+  "systemd.user.disable": {
+    "unit": "string"
+  },
+  "systemd.user.enable": {
+    "unit": "string"
+  },
+  "systemd.user.is_active": {
+    "unit": "string"
+  },
+  "systemd.user.restart": {
+    "unit": "string"
+  },
+  "systemd.user.start": {
+    "unit": "string"
+  },
+  "systemd.user.stop": {
+    "unit": "string"
+  },
+  "tail": {
+    "flags": "list<string>",
+    "path": "string"
+  },
+  "tail.follow": {
+    "path": "string"
+  },
+  "terminal.info": {},
+  "text.concat": {
+    "parts": "list<string>",
+    "separator": "string"
+  },
+  "text.contains_any": {
+    "needles": "list<string>",
+    "text": "string"
+  },
+  "text.count_lines_by": {
+    "delimiter": "string",
+    "field": "integer"
+  },
+  "text.default_if_empty": {
+    "default": "string",
+    "text": "string"
+  },
+  "text.ends_with": {
+    "suffix": "string",
+    "text": "string"
+  },
+  "text.format": {
+    "escape": "string",
+    "template": "string",
+    "values": "record"
+  },
+  "text.join": {
+    "parts": "list<string>",
+    "separator": "string"
+  },
+  "text.length": {
+    "text": "string",
+    "unit": "string"
+  },
+  "text.lines": {
+    "text": "string"
+  },
+  "text.lower": {
+    "text": "string"
+  },
+  "text.matches": {
+    "needle": "string",
+    "text": "string"
+  },
+  "text.pad": {
+    "display_width": "boolean",
+    "fill": "string",
+    "side": "string",
+    "text": "string",
+    "width": "unsigned_integer"
+  },
+  "text.render": {
+    "template": "string",
+    "template_path": "path",
+    "values": "record"
+  },
+  "text.repeat": {
+    "count": "unsigned_integer",
+    "text": "string"
+  },
+  "text.replace": {
+    "new": "string",
+    "old": "string",
+    "text": "string"
+  },
+  "text.split": {
+    "nul": "boolean",
+    "separator": "string",
+    "text": "string"
+  },
+  "text.starts_with": {
+    "prefix": "string",
+    "text": "string"
+  },
+  "text.strip_prefix": {
+    "prefix": "string",
+    "text": "string"
+  },
+  "text.strip_suffix": {
+    "suffix": "string",
+    "text": "string"
+  },
+  "text.substring": {
+    "length": "integer",
+    "start": "integer",
+    "text": "string",
+    "unit": "string"
+  },
+  "text.trim": {
+    "chars": "string",
+    "mode": "string",
+    "text": "string"
+  },
+  "text.trim_final_lf": {
+    "text": "string"
+  },
+  "text.truncate": {
+    "ellipsis": "string",
+    "text": "string",
+    "width": "unsigned_integer"
+  },
+  "text.upper": {
+    "text": "string"
+  },
+  "time.add": {
+    "amount": "integer",
+    "epoch": "integer",
+    "unit": "string"
+  },
+  "time.diff": {
+    "left": "integer",
+    "right": "integer",
+    "unit": "string"
+  },
+  "time.format": {
+    "epoch": "integer",
+    "format": "string",
+    "zone": "string"
+  },
+  "time.now": {
+    "epoch_s": "integer"
+  },
+  "time.parse": {
+    "format": "string",
+    "text": "string"
+  },
+  "time.parts": {
+    "epoch": "integer",
+    "zone": "string"
+  },
+  "time.sleep": {
+    "deadline_ms": "integer",
+    "milliseconds": "integer",
+    "seconds": "json"
+  },
+  "toml.parse": {
+    "text": "string"
+  },
+  "toml.stringify": {
+    "value": "record"
+  },
+  "tr": {
+    "flags": "list<string>",
+    "from": "string",
+    "to": "string"
+  },
+  "uniq": {
+    "flags": "list<string>"
+  },
+  "upper": {},
+  "wait.until": {
+    "deadline_ms": "integer",
+    "host": "string",
+    "interval_ms": "integer",
+    "path": "string",
+    "port": "integer",
+    "probe": "string",
+    "timeout_ms": "integer"
+  },
+  "wc": {
+    "flags": "list<string>"
+  },
+  "yaml.parse": {
+    "text": "string"
+  },
+  "yaml.stringify": {
+    "value": "json"
+  }
+}

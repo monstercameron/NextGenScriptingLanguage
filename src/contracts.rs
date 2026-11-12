@@ -13,6 +13,8 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod reconcile;
+
 const NONEMPTY_TEXT_WHITESPACE_PATTERN: &str =
     r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$";
 /// A small set of explicit string refinements supported by applet contracts.
@@ -2848,6 +2850,67 @@ pub fn compensation_plan(steps: &[AppliedStep<'_>]) -> CompensationPlan {
     plan
 }
 
+/// Desired-state reconciler declaration. The runtime calls `observe`, computes
+/// the difference from the desired state, calls `apply` only when that
+/// difference is non-empty, and then checks the result with `verify`. Each
+/// operation is the name of an applet. `diff` and `verify` are optional: without
+/// `diff` the engine's structural diff is used, and without `verify` the engine
+/// observes again and diffs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReconcilerContract {
+    pub observe: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub diff: Option<String>,
+    pub apply: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub verify: Option<String>,
+    /// Schema of the observed and desired state. Reuses the output schema type.
+    pub state: OutputSchema,
+}
+
+impl ReconcilerContract {
+    /// Validate the declaration independent of the applet that carries it.
+    /// `effects` is the contract's declared effect list.
+    fn validate(&self, effects: &[Effect]) -> Result<()> {
+        let operations = [
+            ("observe", Some(self.observe.as_str())),
+            ("diff", self.diff.as_deref()),
+            ("apply", Some(self.apply.as_str())),
+            ("verify", self.verify.as_deref()),
+        ];
+        for (role, name) in operations {
+            if let Some(name) = name {
+                if !valid_capability_id(name) {
+                    bail!("reconciler {role} must be a namespaced applet name");
+                }
+            }
+        }
+        if effects.is_empty() {
+            bail!("reconciler must declare at least one effect because apply changes state");
+        }
+        self.state.validate()
+    }
+
+    /// Refuse a reconciler whose `observe` names the applet itself. The
+    /// contract does not know its own name, so the loader calls this with the
+    /// applet name it loaded the contract under.
+    pub fn validate_not_self_referential(&self, applet: &str) -> Result<()> {
+        if self.observe == applet {
+            bail!("reconciler observe must not name the applet itself ({applet:?})");
+        }
+        Ok(())
+    }
+}
+
 /// Version 1 applet execution contract. A missing output schema means bytes;
 /// missing outcomes use the conventional status-zero success rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2907,6 +2970,13 @@ pub struct AppletContract {
     /// no entry is undeclared.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reversibility: BTreeMap<String, EffectReversibility>,
+    /// Desired-state reconciler operations. Absent for ordinary applets.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reconciler: Option<ReconcilerContract>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -3032,6 +3102,9 @@ impl AppletContract {
                 bail!("reversibility entry {effect:?} must name an effect the contract declares");
             }
             reversibility.validate(effect)?;
+        }
+        if let Some(reconciler) = &self.reconciler {
+            reconciler.validate(&self.effects)?;
         }
         if self.result_envelope
             && self
@@ -4288,5 +4361,131 @@ mod effect_reversibility_tests {
     fn plan_for_no_steps_is_empty() {
         let plan = compensation_plan(&[]);
         assert_eq!(plan, CompensationPlan::default());
+    }
+}
+
+#[cfg(test)]
+mod reconciler_contract_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn reconciler_source(effects: &[&str], reconciler: Value) -> Value {
+        json!({
+            "version": 1,
+            "capabilities": effects,
+            "effects": effects,
+            "output": {
+                "type": "record",
+                "encoding": "json",
+                "fields": {"mode": {"type": "text"}},
+                "required": ["mode"]
+            },
+            "reconciler": reconciler,
+        })
+    }
+
+    fn parse(effects: &[&str], reconciler: Value) -> Result<AppletContract> {
+        let contract: AppletContract =
+            serde_json::from_value(reconciler_source(effects, reconciler))?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    fn rejected(effects: &[&str], reconciler: Value) -> String {
+        match parse(effects, reconciler) {
+            Ok(_) => panic!("reconciler contract should have been refused"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    fn state_only() -> Value {
+        json!({"observe": "sys.observe", "apply": "sys.apply"})
+    }
+
+    #[test]
+    fn reconciler_is_absent_by_default_and_not_serialized() {
+        let contract: AppletContract = serde_json::from_value(json!({"version": 1})).unwrap();
+        contract.validate().unwrap();
+        assert!(contract.reconciler.is_none());
+        let serialized = serde_json::to_value(&contract).unwrap();
+        assert!(serialized.get("reconciler").is_none());
+    }
+
+    #[test]
+    fn reconciler_round_trips_with_optional_operations_omitted() {
+        let mut reconciler = state_only();
+        reconciler["state"] = json!({"type": "record", "encoding": "json",
+            "fields": {"mode": {"type": "text"}}, "required": ["mode"]});
+        let contract = parse(&["sys.apply"], reconciler).unwrap();
+        let declared = contract.reconciler.as_ref().unwrap();
+        assert_eq!(declared.observe, "sys.observe");
+        assert_eq!(declared.apply, "sys.apply");
+        assert_eq!(declared.diff, None);
+        assert_eq!(declared.verify, None);
+        let serialized = serde_json::to_value(&contract).unwrap();
+        assert!(serialized["reconciler"].get("diff").is_none());
+        assert!(serialized["reconciler"].get("verify").is_none());
+        let reparsed: AppletContract = serde_json::from_value(serialized).unwrap();
+        assert_eq!(reparsed, contract);
+    }
+
+    #[test]
+    fn observe_and_apply_are_required() {
+        let without_observe: Result<AppletContract, _> = serde_json::from_value(reconciler_source(
+            &["sys.apply"],
+            json!({"apply": "sys.apply", "state": {"type": "text", "encoding": "raw"}}),
+        ));
+        assert!(without_observe.is_err());
+        let without_apply: Result<AppletContract, _> = serde_json::from_value(reconciler_source(
+            &["sys.apply"],
+            json!({"observe": "sys.observe", "state": {"type": "text", "encoding": "raw"}}),
+        ));
+        assert!(without_apply.is_err());
+    }
+
+    #[test]
+    fn operation_names_must_be_namespaced_applet_names() {
+        let mut reconciler = state_only();
+        reconciler["observe"] = json!("observe");
+        reconciler["state"] = json!({"type": "text", "encoding": "raw"});
+        let message = rejected(&["sys.apply"], reconciler);
+        assert!(message.contains("namespaced applet name"), "{message}");
+    }
+
+    #[test]
+    fn a_reconciler_must_declare_an_effect() {
+        let mut reconciler = state_only();
+        reconciler["state"] = json!({"type": "text", "encoding": "raw"});
+        let message = rejected(&[], reconciler);
+        assert!(message.contains("at least one effect"), "{message}");
+    }
+
+    #[test]
+    fn observe_cannot_name_the_applet_itself() {
+        let mut reconciler = state_only();
+        reconciler["state"] = json!({"type": "text", "encoding": "raw"});
+        let contract = parse(&["sys.apply"], reconciler).unwrap();
+        let declared = contract.reconciler.as_ref().unwrap();
+        declared.validate_not_self_referential("sys.apply").unwrap();
+        let error = declared
+            .validate_not_self_referential("sys.observe")
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("must not name the applet itself"));
+    }
+
+    #[test]
+    fn reconciler_refuses_unknown_keys() {
+        let result: Result<AppletContract, _> = serde_json::from_value(reconciler_source(
+            &["sys.apply"],
+            json!({
+                "observe": "sys.observe",
+                "apply": "sys.apply",
+                "state": {"type": "text", "encoding": "raw"},
+                "rollback": "sys.undo"
+            }),
+        ));
+        assert!(result.is_err());
     }
 }

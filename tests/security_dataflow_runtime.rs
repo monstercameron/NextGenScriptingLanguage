@@ -101,6 +101,7 @@ fn remote_manifest(
         deprecated: false,
         replaced_by: None,
         reversibility: Default::default(),
+        reconciler: None,
         ports: Some(AppletPorts {
             inputs: BTreeMap::from([("message".into(), text_port(input_sensitivity))]),
             outputs: BTreeMap::from([("value".into(), text_port(input_sensitivity))]),

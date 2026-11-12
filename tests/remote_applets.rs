@@ -241,6 +241,7 @@ fn contract() -> AppletContract {
         deprecated: false,
         replaced_by: None,
         reversibility: Default::default(),
+        reconciler: None,
         ports: Some(AppletPorts {
             inputs: BTreeMap::from([
                 (

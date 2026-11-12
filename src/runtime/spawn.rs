@@ -285,7 +285,7 @@ pub(super) fn resolved_call_stdio(
     manifest: &Manifest,
     signals: &Signals,
 ) -> invocation_io::ResolvedStdio {
-    let capture_inherited = observe::captures_inherited_stdio();
+    let capture_inherited = observe::captures_inherited_stdio(signals);
     // Under Actions hardening every terminal-bound child stream is captured
     // and re-emitted through the sanitizing writers, including manifest
     // `inherit` dispositions and the interactive handoff. Raw fd inheritance
@@ -743,6 +743,7 @@ pub(super) fn execute_group_with_sink(
         job_run_context: Arc::clone(&signals.job_run_context),
         output_writers: Arc::clone(&signals.output_writers),
         fs_timeout: signals.fs_timeout,
+        observer: signals.observer.clone(),
         kill_grace: options.kill_grace,
         #[cfg(test)]
         job_panic_before_ack: signals.job_panic_before_ack.clone(),

@@ -3,14 +3,18 @@
 //! An observer sees each applet group a finite run executes, in order, with its
 //! captured stdout, stderr and status. A recorder keeps those results. A replayer
 //! returns recorded results instead of running the group, and suppresses file
-//! writes. Observers are process-global so worker threads share one view, and
-//! nothing is observed unless one is installed with [`install`].
+//! writes. An observer is installed for the thread that starts the runs it should see
+//! ([`install`]). Each such run copies it into its own `Signals`, and every lookup reads
+//! that run's copy, so the run's worker threads share one view while unrelated runs on
+//! other threads are never observed.
 
 use super::execution_result::{StageResult, StageState};
 use super::*;
 use crate::agent::what_if_key::{hmac_sha256, load_existing, load_or_create, KEY_BYTES};
 use crate::contracts::Outcome;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::cell::RefCell;
+use std::marker::PhantomData;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// An applet group about to run, or one that has just finished.
@@ -237,78 +241,92 @@ pub trait Observer: Send + Sync {
 }
 
 /// Whether streamed output at this line must not be written again.
-pub(super) fn suppresses_terminal_output(line: usize) -> bool {
-    current().is_some_and(|observer| observer.suppresses_terminal_output(line))
+pub(super) fn suppresses_terminal_output(signals: &Signals, line: usize) -> bool {
+    current(signals).is_some_and(|observer| observer.suppresses_terminal_output(line))
 }
 
 /// Report bytes the run is writing to the terminal as streamed output.
-pub(super) fn note_terminal_output(bytes: &[u8]) {
-    if let Some(observer) = current() {
+pub(super) fn note_terminal_output(signals: &Signals, bytes: &[u8]) {
+    if let Some(observer) = current(signals) {
         observer.terminal_output(bytes);
     }
 }
 
 /// Report the final implicit program output to an active observer.
-pub(super) fn note_program_output(bytes: &[u8], line: Option<usize>) {
-    if let Some(observer) = current() {
+pub(super) fn note_program_output(signals: &Signals, bytes: &[u8], line: Option<usize>) {
+    if let Some(observer) = current(signals) {
         observer.program_output(bytes, line);
     }
 }
 
 /// Whether streamed output should reach the process stdout.
-pub(super) fn writes_streamed_stdout() -> bool {
-    current().is_none_or(|observer| observer.writes_streamed_stdout())
+pub(super) fn writes_streamed_stdout(signals: &Signals) -> bool {
+    current(signals).is_none_or(|observer| observer.writes_streamed_stdout())
 }
 
 /// Whether an observer requires inherited native streams to be captured.
-pub(super) fn captures_inherited_stdio() -> bool {
-    current().is_some_and(|observer| observer.captures_inherited_stdio())
+pub(super) fn captures_inherited_stdio(signals: &Signals) -> bool {
+    current(signals).is_some_and(|observer| observer.captures_inherited_stdio())
 }
 
-static OBSERVER: Mutex<Option<Arc<dyn Observer>>> = Mutex::new(None);
+thread_local! {
+    /// The observer that runs started on this thread take as their own. [`install`]
+    /// sets it. A run copies it into its `Signals` when the run starts, and no lookup
+    /// reads this slot afterwards, so it only hands the observer to the run.
+    static INSTALLED: RefCell<Option<Arc<dyn Observer>>> = const { RefCell::new(None) };
+}
 
-/// Keeps an observer installed. Dropping it removes the observer.
-pub struct ObserverGuard;
+/// Keeps an observer installed for this thread. Dropping it removes the observer.
+pub struct ObserverGuard {
+    /// The guard clears the slot of the thread that installed it, so it stays on that thread.
+    _thread_bound: PhantomData<*const ()>,
+}
 
 impl Drop for ObserverGuard {
     fn drop(&mut self) {
-        *OBSERVER.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        INSTALLED.with(|slot| *slot.borrow_mut() = None);
     }
 }
 
-/// Install the process-wide observer. Only one may be active at a time.
+/// Install the observer for runs started on this thread, until the guard is dropped.
+/// Runs on other threads, including unrelated runs in the same process, are not observed.
+/// Only one observer may be installed per thread.
 pub fn install(observer: Arc<dyn Observer>) -> Result<ObserverGuard> {
-    let mut slot = OBSERVER.lock().unwrap_or_else(PoisonError::into_inner);
-    if slot.is_some() {
-        bail!("another run observer is already installed");
-    }
-    *slot = Some(observer);
-    Ok(ObserverGuard)
+    INSTALLED.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() {
+            bail!("another run observer is already installed");
+        }
+        *slot = Some(observer);
+        Ok(ObserverGuard {
+            _thread_bound: PhantomData,
+        })
+    })
 }
 
-/// Whether a run observer (recording or replay) is installed.
-pub(super) fn is_installed() -> bool {
-    OBSERVER
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .is_some()
+/// The observer a run starting on this thread takes as its own, if one is installed.
+pub(super) fn observer_for_new_run() -> Option<Arc<dyn Observer>> {
+    INSTALLED.with(|slot| slot.borrow().clone())
 }
 
-fn current() -> Option<Arc<dyn Observer>> {
-    OBSERVER
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+/// Whether a run observer (recording or replay) is installed for this run.
+pub(super) fn is_installed(signals: &Signals) -> bool {
+    signals.observer.is_some()
+}
+
+/// The observer of the run that owns `signals`.
+fn current(signals: &Signals) -> Option<&Arc<dyn Observer>> {
+    signals.observer.as_ref()
 }
 
 /// Whether file writes for this step must be skipped. Used by the write steps.
-pub(super) fn suppresses_writes(line: usize) -> bool {
-    current().is_some_and(|observer| observer.suppresses_writes(line))
+pub(super) fn suppresses_writes(signals: &Signals, line: usize) -> bool {
+    current(signals).is_some_and(|observer| observer.suppresses_writes(line))
 }
 
 /// Whether a streamed command must have its stdout captured.
-pub(super) fn captures_streamed_stdout() -> bool {
-    current().is_some_and(|observer| observer.captures_streamed_stdout())
+pub(super) fn captures_streamed_stdout(signals: &Signals) -> bool {
+    current(signals).is_some_and(|observer| observer.captures_streamed_stdout())
 }
 
 fn request_for(
@@ -350,7 +368,7 @@ pub(super) fn execute_call_group(group: GroupRequest<'_>) -> Result<GroupOutput>
         launched,
         signals,
     } = group;
-    let Some(observer) = current() else {
+    let Some(observer) = current(signals) else {
         return super::execute_call_group_unobserved(GroupRequest {
             registry,
             calls,

@@ -413,7 +413,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // declarations. Validate their known loop inputs before earlier effects.
     let preflight_context =
         !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
-    let step_ids = StepIdScope::enter(&program.steps, options.trace || observe::is_installed());
+    let step_ids = StepIdScope::enter(
+        &program.steps,
+        options.trace || observe::is_installed(signals),
+    );
     let mut bindings = initial_bindings;
     let mut task_group_presentations: BTreeMap<String, (Value, Value)> = BTreeMap::new();
     // Raw captures from `then capture bytes as NAME`, kept apart from text bindings.
@@ -2211,7 +2214,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         && !crate::ast::has_stdout_consumer(&program.steps, index + 1)
                     {
                         if let Input::Bytes(bytes) = std::mem::replace(&mut data, Input::Empty) {
-                            if !observe::suppresses_terminal_output(step.line) {
+                            if !observe::suppresses_terminal_output(signals, step.line) {
                                 write_streamed_stdout_owned(bytes, signals)?;
                             }
                         }
@@ -2264,7 +2267,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 // A replayed run leaves files alone; the pipeline value still flows.
                 StepKind::Append { .. } | StepKind::Save { .. } | StepKind::Redirect { .. }
-                    if observe::suppresses_writes(step.line) => {}
+                    if observe::suppresses_writes(signals, step.line) => {}
                 StepKind::Append { path } => {
                     let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                         options.max_output_bytes,
@@ -2857,7 +2860,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             // fast path with exact bytes (H17).
                             let _inherit = InheritTerminalStdout::enter(
                                 streamed
-                                    && !observe::captures_streamed_stdout()
+                                    && !observe::captures_streamed_stdout(signals)
                                     && !crate::terminal_text::stdout_is_terminal(),
                             );
                             let _handoff = terminal::Scope::enter(handoff);
@@ -3348,7 +3351,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         if streamed {
                             // Nothing consumes this value, so it is written now
                             // and the pipeline value becomes empty.
-                            if !observe::suppresses_terminal_output(step.line) {
+                            if !observe::suppresses_terminal_output(signals, step.line) {
                                 write_streamed_stdout_owned(bytes, signals)?;
                             }
                             data = Input::Empty;
@@ -3735,7 +3738,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     if !program_stdout {
         result.output.clear();
     } else {
-        observe::note_program_output(&result.output, last_program_stdout_line);
+        observe::note_program_output(signals, &result.output, last_program_stdout_line);
     }
     result.executions = execution_history.executions;
     result.dropped_executions = execution_history.dropped_executions;

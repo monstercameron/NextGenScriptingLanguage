@@ -975,6 +975,10 @@ pub(crate) struct Signals {
     /// cancellation or timeout (issue #525). Copied from `RunOptions` for
     /// the run and its bounded group scopes.
     pub(crate) kill_grace: Duration,
+    /// The record or replay observer of this run: the one installed on the thread that
+    /// started it. Derived scopes and nested invocations copy it, so the run and its
+    /// workers observe it and no unrelated run does.
+    observer: Option<Arc<dyn observe::Observer>>,
     #[cfg(test)]
     job_panic_before_ack: Option<Arc<JobAckPanicProbe>>,
 }
@@ -1032,6 +1036,8 @@ pub(crate) struct AppletInvocationContext {
     /// A task group's shared stdout budget and its limit: native output is charged
     /// against it as it arrives, so the group stops at its aggregate limit.
     pub(crate) group_output_budget: Option<(Arc<AtomicUsize>, usize)>,
+    /// The observer of the enclosing run, inherited by its nested invocations.
+    pub(crate) observer: Option<Arc<dyn observe::Observer>>,
 }
 
 impl AppletInvocationContext {
@@ -1051,6 +1057,7 @@ impl AppletInvocationContext {
             unnotified_cancellation: false,
             deadline: None,
             group_output_budget: None,
+            observer: None,
         }
     }
 
@@ -1067,6 +1074,7 @@ impl AppletInvocationContext {
             unnotified_cancellation: signals.unnotified_cancellation,
             deadline: signals.deadline,
             group_output_budget: None,
+            observer: signals.observer.clone(),
         })
     }
 }
@@ -1131,6 +1139,7 @@ impl Signals {
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
             kill_grace: DEFAULT_KILL_GRACE,
+            observer: observe::observer_for_new_run(),
             #[cfg(test)]
             job_panic_before_ack: None,
         };
@@ -1250,6 +1259,7 @@ impl Signals {
             job_run_context: Arc::new(Mutex::new(None)),
             output_writers: Arc::new(stdio::OutputWriterPool::new()),
             kill_grace: DEFAULT_KILL_GRACE,
+            observer: observe::observer_for_new_run(),
             #[cfg(test)]
             job_panic_before_ack: None,
         })
@@ -1296,6 +1306,7 @@ impl Signals {
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
             kill_grace: self.kill_grace,
+            observer: self.observer.clone(),
             #[cfg(test)]
             job_panic_before_ack: None,
         }
@@ -1350,6 +1361,7 @@ impl Signals {
             job_run_context: Arc::clone(&self.job_run_context),
             output_writers: Arc::clone(&self.output_writers),
             kill_grace: self.kill_grace,
+            observer: self.observer.clone(),
             #[cfg(test)]
             job_panic_before_ack: self.job_panic_before_ack.clone(),
         })
@@ -1361,6 +1373,9 @@ impl Signals {
     ) -> Result<()> {
         self.set_program_module_session(Arc::clone(&context.module_session))?;
         self.set_sensitivity_floor(context.sensitivity_floor.clone());
+        if let Some(observer) = &context.observer {
+            self.observer = Some(Arc::clone(observer));
+        }
         self.worker_pool = context.worker_pool.clone();
         self.job_run_context = Arc::clone(&context.job_run_context);
         self.background_jobs_allowed = context.background_jobs_allowed;
@@ -2968,8 +2983,8 @@ fn write_streamed_stdout_owned(bytes: Vec<u8>, signals: &Signals) -> Result<()> 
     if bytes.is_empty() {
         return Ok(());
     }
-    observe::note_terminal_output(&bytes);
-    if observe::writes_streamed_stdout() {
+    observe::note_terminal_output(signals, &bytes);
+    if observe::writes_streamed_stdout(signals) {
         let bytes = crate::terminal_text::encode_pipeline_for_stdout(
             &bytes,
             crate::terminal_text::stdout_is_terminal(),

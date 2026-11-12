@@ -500,6 +500,14 @@ impl ExecutionRecord {
         fields.insert("status".into(), optional_integer(self.status));
         fields.insert("signal".into(), optional_integer(self.signal));
         fields.insert(
+            "code".into(),
+            optional_text(self.status.and_then(exit_status_code)),
+        );
+        fields.insert(
+            "signal_name".into(),
+            optional_text(self.signal.and_then(signal_name)),
+        );
+        fields.insert(
             "effect_certainty".into(),
             Value::String(self.effect_certainty.as_str().into()),
         );
@@ -681,6 +689,14 @@ impl ExecutionResult {
         fields.insert("outcome".into(), optional_text(self.outcome.as_deref()));
         fields.insert("status".into(), optional_integer(self.status));
         fields.insert("signal".into(), optional_integer(self.signal));
+        fields.insert(
+            "code".into(),
+            optional_text(self.status.and_then(exit_status_code)),
+        );
+        fields.insert(
+            "signal_name".into(),
+            optional_text(self.signal.and_then(signal_name)),
+        );
         fields.insert(
             "stdout".into(),
             self.stdout
@@ -1315,6 +1331,116 @@ fn bytes_value(bytes: &[u8]) -> Value {
     )
 }
 
+/// Symbolic failure code for a process exit status: the sysexits names plus
+/// the shell's 126, 127 and 130 conventions. Every other status has no code;
+/// an unlisted status is never guessed.
+pub(crate) const fn exit_status_code(status: i32) -> Option<&'static str> {
+    match status {
+        64 => Some("usage"),
+        65 => Some("data_error"),
+        66 => Some("no_input"),
+        69 => Some("unavailable"),
+        70 => Some("software"),
+        75 => Some("temp_fail"),
+        77 => Some("no_permission"),
+        78 => Some("config"),
+        126 => Some("not_executable"),
+        127 => Some("not_found"),
+        130 => Some("interrupted"),
+        _ => None,
+    }
+}
+
+/// POSIX signal name for a signal number of the platform this build runs on.
+/// The numbers come from the libc constants, so they differ correctly between
+/// Linux and macOS (SIGBUS, SIGUSR1, SIGCHLD and others). Windows has no
+/// signals, so every number is unnamed there.
+#[cfg(unix)]
+pub(crate) fn signal_name(signal: i32) -> Option<&'static str> {
+    const NAMES: &[(i32, &str)] = &[
+        (libc::SIGHUP, "SIGHUP"),
+        (libc::SIGINT, "SIGINT"),
+        (libc::SIGQUIT, "SIGQUIT"),
+        (libc::SIGILL, "SIGILL"),
+        (libc::SIGTRAP, "SIGTRAP"),
+        (libc::SIGABRT, "SIGABRT"),
+        (libc::SIGBUS, "SIGBUS"),
+        (libc::SIGFPE, "SIGFPE"),
+        (libc::SIGKILL, "SIGKILL"),
+        (libc::SIGUSR1, "SIGUSR1"),
+        (libc::SIGSEGV, "SIGSEGV"),
+        (libc::SIGUSR2, "SIGUSR2"),
+        (libc::SIGPIPE, "SIGPIPE"),
+        (libc::SIGALRM, "SIGALRM"),
+        (libc::SIGTERM, "SIGTERM"),
+        (libc::SIGCHLD, "SIGCHLD"),
+        (libc::SIGCONT, "SIGCONT"),
+        (libc::SIGSTOP, "SIGSTOP"),
+        (libc::SIGTSTP, "SIGTSTP"),
+        (libc::SIGTTIN, "SIGTTIN"),
+        (libc::SIGTTOU, "SIGTTOU"),
+        (libc::SIGURG, "SIGURG"),
+        (libc::SIGXCPU, "SIGXCPU"),
+        (libc::SIGXFSZ, "SIGXFSZ"),
+        (libc::SIGVTALRM, "SIGVTALRM"),
+        (libc::SIGPROF, "SIGPROF"),
+        (libc::SIGWINCH, "SIGWINCH"),
+        (libc::SIGSYS, "SIGSYS"),
+    ];
+    NAMES
+        .iter()
+        .find(|(number, _)| *number == signal)
+        .map(|(_, name)| *name)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn signal_name(_signal: i32) -> Option<&'static str> {
+    None
+}
+
+/// Errno name for an I/O error kind, only where the kind identifies exactly
+/// one errno. Ambiguous kinds (`WouldBlock`, `InvalidInput`, `Unsupported`,
+/// `Other`, and anything new) have no name. std maps Windows error codes to
+/// these kinds, so the names match across platforms.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "wired by NEEDS: the io::Error branch of result_for_error"
+    )
+)]
+pub(crate) fn errno_name_for_kind(kind: std::io::ErrorKind) -> Option<&'static str> {
+    use std::io::ErrorKind;
+    Some(match kind {
+        ErrorKind::NotFound => "ENOENT",
+        ErrorKind::PermissionDenied => "EACCES",
+        ErrorKind::AlreadyExists => "EEXIST",
+        ErrorKind::ConnectionRefused => "ECONNREFUSED",
+        ErrorKind::ConnectionReset => "ECONNRESET",
+        ErrorKind::ConnectionAborted => "ECONNABORTED",
+        ErrorKind::NotConnected => "ENOTCONN",
+        ErrorKind::AddrInUse => "EADDRINUSE",
+        ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL",
+        ErrorKind::BrokenPipe => "EPIPE",
+        ErrorKind::TimedOut => "ETIMEDOUT",
+        ErrorKind::Interrupted => "EINTR",
+        ErrorKind::OutOfMemory => "ENOMEM",
+        ErrorKind::StorageFull => "ENOSPC",
+        ErrorKind::ResourceBusy => "EBUSY",
+        ErrorKind::ExecutableFileBusy => "ETXTBSY",
+        ErrorKind::IsADirectory => "EISDIR",
+        ErrorKind::NotADirectory => "ENOTDIR",
+        ErrorKind::DirectoryNotEmpty => "ENOTEMPTY",
+        ErrorKind::ReadOnlyFilesystem => "EROFS",
+        ErrorKind::CrossesDevices => "EXDEV",
+        ErrorKind::FileTooLarge => "EFBIG",
+        ErrorKind::ArgumentListTooLong => "E2BIG",
+        ErrorKind::TooManyLinks => "EMLINK",
+        ErrorKind::Deadlock => "EDEADLK",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1925,5 +2051,189 @@ mod tests {
             result.get("effect_certainty"),
             Some(&Value::String("uncertain".into()))
         );
+    }
+
+    #[test]
+    fn exit_statuses_map_to_sysexits_and_shell_codes_only() {
+        let named = [
+            (64, "usage"),
+            (65, "data_error"),
+            (66, "no_input"),
+            (69, "unavailable"),
+            (70, "software"),
+            (75, "temp_fail"),
+            (77, "no_permission"),
+            (78, "config"),
+            (126, "not_executable"),
+            (127, "not_found"),
+            (130, "interrupted"),
+        ];
+        for (status, code) in named {
+            assert_eq!(exit_status_code(status), Some(code), "status {status}");
+        }
+        // Statuses without a standard meaning are never guessed.
+        for status in [0, 1, 2, 3, 63, 71, 76, 125, 128, 129, 131, 255, -1] {
+            assert_eq!(exit_status_code(status), None, "status {status}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_names_use_the_platform_signal_numbers() {
+        let named = [
+            (libc::SIGHUP, "SIGHUP"),
+            (libc::SIGINT, "SIGINT"),
+            (libc::SIGQUIT, "SIGQUIT"),
+            (libc::SIGILL, "SIGILL"),
+            (libc::SIGTRAP, "SIGTRAP"),
+            (libc::SIGABRT, "SIGABRT"),
+            (libc::SIGBUS, "SIGBUS"),
+            (libc::SIGFPE, "SIGFPE"),
+            (libc::SIGKILL, "SIGKILL"),
+            (libc::SIGUSR1, "SIGUSR1"),
+            (libc::SIGSEGV, "SIGSEGV"),
+            (libc::SIGUSR2, "SIGUSR2"),
+            (libc::SIGPIPE, "SIGPIPE"),
+            (libc::SIGALRM, "SIGALRM"),
+            (libc::SIGTERM, "SIGTERM"),
+            (libc::SIGCHLD, "SIGCHLD"),
+            (libc::SIGCONT, "SIGCONT"),
+            (libc::SIGSTOP, "SIGSTOP"),
+            (libc::SIGTSTP, "SIGTSTP"),
+            (libc::SIGTTIN, "SIGTTIN"),
+            (libc::SIGTTOU, "SIGTTOU"),
+            (libc::SIGURG, "SIGURG"),
+            (libc::SIGXCPU, "SIGXCPU"),
+            (libc::SIGXFSZ, "SIGXFSZ"),
+            (libc::SIGVTALRM, "SIGVTALRM"),
+            (libc::SIGPROF, "SIGPROF"),
+            (libc::SIGWINCH, "SIGWINCH"),
+            (libc::SIGSYS, "SIGSYS"),
+        ];
+        for (number, name) in named {
+            assert_eq!(signal_name(number), Some(name), "signal {number}");
+        }
+        assert_eq!(signal_name(0), None);
+        assert_eq!(signal_name(999), None);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn windows_has_no_signal_names() {
+        for signal in [1, 2, 9, 15] {
+            assert_eq!(signal_name(signal), None);
+        }
+    }
+
+    #[test]
+    fn errno_names_come_only_from_unambiguous_error_kinds() {
+        use std::io::ErrorKind;
+
+        assert_eq!(errno_name_for_kind(ErrorKind::NotFound), Some("ENOENT"));
+        assert_eq!(
+            errno_name_for_kind(ErrorKind::PermissionDenied),
+            Some("EACCES")
+        );
+        assert_eq!(
+            errno_name_for_kind(ErrorKind::AlreadyExists),
+            Some("EEXIST")
+        );
+        assert_eq!(errno_name_for_kind(ErrorKind::StorageFull), Some("ENOSPC"));
+        for kind in [
+            ErrorKind::WouldBlock,
+            ErrorKind::InvalidInput,
+            ErrorKind::InvalidData,
+            ErrorKind::Unsupported,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::Other,
+        ] {
+            assert_eq!(errno_name_for_kind(kind), None, "{kind:?}");
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn caught_command_failure_record_exposes_the_not_found_code() {
+        let error = super::super::CommandFailed {
+            line: 2,
+            operation: "missing-tool".into(),
+            status: exit_status(127),
+            outcome: None,
+            diagnostic: "missing-tool: command not found".into(),
+            stderr: None,
+            stdout: None,
+            stages: Vec::new(),
+        };
+        let result = fields(error_value(&anyhow::Error::new(error)));
+
+        assert_eq!(result.get("status"), Some(&Value::Integer(127)));
+        assert_eq!(result.get("code"), Some(&Value::String("not_found".into())));
+        assert_eq!(result.get("signal_name"), Some(&Value::Null));
+        // The existing fields keep their names and meaning.
+        assert_eq!(result.get("kind"), Some(&Value::String("failure".into())));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn unlisted_exit_status_record_has_null_code() {
+        let error = super::super::CommandFailed {
+            line: 2,
+            operation: "tool".into(),
+            status: exit_status(2),
+            outcome: None,
+            diagnostic: "tool failed".into(),
+            stderr: None,
+            stdout: None,
+            stages: Vec::new(),
+        };
+        let result = fields(error_value(&anyhow::Error::new(error)));
+
+        assert_eq!(result.get("status"), Some(&Value::Integer(2)));
+        assert_eq!(result.get("code"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn kept_status_record_carries_the_same_code_field() {
+        let outcome = Outcome {
+            status: 75,
+            name: "busy".into(),
+            kind: OutcomeKind::Retryable,
+            effect_certainty: EffectCertainty::NotStarted,
+        };
+        let result = ExecutionResult::from_outcome(outcome, None, None, None, Vec::new());
+        let record = fields(result.to_source_value(3, "tool"));
+
+        assert_eq!(record.get("code"), Some(&Value::String("temp_fail".into())));
+        assert_eq!(record.get("status"), Some(&Value::Integer(75)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn caught_signal_record_names_the_signal_next_to_its_number() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let status = std::process::ExitStatus::from_raw(libc::SIGPIPE);
+        let error = super::super::CommandFailed {
+            line: 4,
+            operation: "producer".into(),
+            status,
+            outcome: None,
+            diagnostic: "stopped".into(),
+            stderr: None,
+            stdout: None,
+            stages: vec![StageResult::signaled(
+                4,
+                "producer",
+                Some(libc::SIGPIPE),
+                None,
+            )],
+        };
+        let result = fields(error_value(&anyhow::Error::new(error)));
+
+        assert_eq!(
+            result.get("signal_name"),
+            Some(&Value::String("SIGPIPE".into()))
+        );
+        assert_eq!(result.get("code"), Some(&Value::Null));
     }
 }

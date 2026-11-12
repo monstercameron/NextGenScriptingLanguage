@@ -559,6 +559,11 @@ output must be retained.
 nonempty body. A caught error is a JSON record. Its fields include `kind`,
 `outcome`, observed `status` and `signal`, captured stdout/stderr/value with
 separate capture flags, per-stage results, `message`, and `effect_certainty`.
+`code` is a symbolic name for a conventional exit status (`usage` 64, `data_error`
+65, `no_input` 66, `unavailable` 69, `software` 70, `temp_fail` 75,
+`no_permission` 77, `config` 78, `not_executable` 126, `not_found` 127,
+`interrupted` 130) and null for any other status; `signal_name` names the
+signal, such as `SIGTERM`, and is null when there is none.
 For a failed native command whose stdout is captured, `stdout` holds what it
 printed before it failed, up to `--max-output-bytes`, as with `keep result`;
 stderr is included when it is captured.

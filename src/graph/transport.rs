@@ -2824,6 +2824,7 @@ fn invoke_for_graph(
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     let session = match context.module_session {
         Some(session) => Arc::clone(session),

@@ -876,6 +876,13 @@ this flag does not shut them down after one interval. UI native pipelines defaul
 to 30 seconds; the option overrides that default. Very small limits may expire
 during process startup.
 
+A program can also bound one group with `and timeout N UNIT` (milliseconds,
+seconds, minutes, or hours), placed before any `and keep status` or `and retry`
+suffix. The smaller of the per-command bound and `--command-timeout-ms` wins.
+An expired per-command bound kills and reaps the same owned process group and
+reports the same typed `timeout` outcome, including the same uncertain
+checkpoint marker, as the flag.
+
 The runtime also keeps buffered stdin writers inside that
 deadline/cancellation contract. Their private pipe uses cancellable writes,
 and error cleanup tells the writer to stop without blocking on a join. This

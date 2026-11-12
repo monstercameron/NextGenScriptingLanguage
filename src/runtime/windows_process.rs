@@ -408,8 +408,18 @@ fn execute_group_with_sink(
         job_panic_before_ack: signals.job_panic_before_ack.clone(),
         fs_timeout: signals.fs_timeout,
         deadline: {
+            // A declared `and timeout` bounds this pipeline group; the
+            // smaller of it and `--command-timeout-ms` wins (issue #310).
+            let per_command = calls
+                .iter()
+                .filter_map(|(call, _, _)| call.timeout_ms)
+                .min()
+                .map(std::time::Duration::from_millis);
             let command_deadline = options
                 .command_timeout
+                .into_iter()
+                .chain(per_command)
+                .min()
                 .map(|d| {
                     started
                         .checked_add(d)

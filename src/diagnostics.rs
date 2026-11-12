@@ -156,7 +156,7 @@ pub const CODES: &[CodeInfo] = &[
         family: "parse",
         meaning: "invocation suffixes are out of canonical order",
         example: "run \"ls\" and keep status as s as out",
-        typical_fix: "Reorder the suffixes to `as`, `and discard stderr`, `and keep status as`, `and keep result as`, `and keep secret`, `and cache`, `and retry`.",
+        typical_fix: "Reorder the suffixes to `as`, `and discard stderr`, `and timeout`, `and keep status as`, `and keep result as`, `and keep secret`, `and cache`, `and retry`.",
         severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
@@ -3591,7 +3591,7 @@ fn suffix_order_repair(
     );
     let mut diagnostic = Diagnostic::error(
         "parse.suffix_order",
-        "suffixes are out of order; expected `as NAME` before `and discard stderr` before `and keep status as NAME` before `and keep result as NAME` before `and keep secret` before `and cache` before `and retry ...`; reordering preserves meaning",
+        "suffixes are out of order; expected `as NAME` before `and discard stderr` before `and timeout ...` before `and keep status as NAME` before `and keep result as NAME` before `and keep secret` before `and cache` before `and retry ...`; reordering preserves meaning",
         span.clone(),
     );
     diagnostic.fixes.push(SuggestedFix::replace(

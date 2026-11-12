@@ -67,7 +67,7 @@ fn fixture() -> tempfile::TempDir {
         dir.path().join("manifests/cat.json"),
     )
     .unwrap();
-    fs::write(dir.path().join("worker"), "#!/usr/bin/env python3\nimport os, sys, time\nopen('pid', 'w').write(str(os.getpid()))\nopen('effect', 'a').write('started\\n')\nif sys.argv[1] == 'closed':\n os.close(1)\n time.sleep(30)\nelse:\n while True:\n  os.write(1, b'x' * 1000)\n  time.sleep(.01)\n").unwrap();
+    fs::write(dir.path().join("worker"), "#!/usr/bin/env python3\nimport os, sys, time\nopen('pid', 'w').write(str(os.getpid()))\nopen('effect', 'a').write('started\\n')\nif sys.argv[1] == 'closed':\n os.close(1)\n time.sleep(30)\nelif sys.argv[1] == 'grandchild':\n import subprocess\n child = subprocess.Popen(['sleep', '30'])\n open('grandchild_pid', 'w').write(str(child.pid))\n time.sleep(30)\nelse:\n while True:\n  os.write(1, b'x' * 1000)\n  time.sleep(.01)\n").unwrap();
     #[cfg(unix)]
     fs::set_permissions(dir.path().join("worker"), fs::Permissions::from_mode(0o700)).unwrap();
     // The worker runs through the pinned interpreter on Windows; direct
@@ -218,6 +218,251 @@ fn timed_out_effect_is_uncertain_and_requires_explicit_retry_even_after_repair()
         "repair replayed the timed-out effect"
     );
 }
+#[test]
+fn per_command_timeout_kills_owned_worker_without_global_flag() {
+    // Issue #310: one flaky call carries its own bound, with no CLI flag.
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"closed\" and timeout 1 seconds\n",
+    )
+    .unwrap();
+    let started = Instant::now();
+    let result = invoke(dir.path(), &["case.program", "--trace"]);
+    let elapsed = started.elapsed();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    // The 1 s bound fired instead of the worker's 30 s sleep.
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "per-command timeout did not bound the run: {elapsed:?}"
+    );
+    assert!(elapsed >= Duration::from_millis(800), "{elapsed:?}");
+    assert_observed_children_reaped(&result);
+}
+
+#[test]
+fn smaller_bound_wins_between_per_command_and_global_timeout() {
+    // A 30 s global flag must not extend a 1 s declared bound.
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"closed\" and timeout 1 seconds\n",
+    )
+    .unwrap();
+    let result = invoke(
+        dir.path(),
+        &["case.program", "--command-timeout-ms", "30000"],
+    );
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    // A 1 s global flag still bounds a 30 s declared bound.
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"closed\" and timeout 30 seconds\n",
+    )
+    .unwrap();
+    let result = invoke(
+        dir.path(),
+        &["case.program", "--command-timeout-ms", "1000"],
+    );
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn per_command_timeout_reports_typed_timeout_in_catch() {
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "try\n  run worker with mode \"closed\" and timeout 1 seconds\ncatch failure\n  then encode failure as json\n",
+    )
+    .unwrap();
+    let result = invoke(dir.path(), &["case.program"]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let caught: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(caught["kind"], "timeout", "{caught}");
+}
+
+#[test]
+fn per_command_timeout_is_retried_only_with_the_opt_in() {
+    // Without `even if uncertain` a timed-out effect refuses to run again.
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"closed\" and timeout 1 seconds and retry up to 1 times\n",
+    )
+    .unwrap();
+    let refused = invoke(dir.path(), &["case.program"]);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("retry refused"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert_eq!(observed_effect(dir.path()).unwrap(), b"started\n");
+
+    // With the opt-in the timeout runs again, then exhausts.
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"closed\" and timeout 1 seconds and retry up to 1 times even if uncertain\n",
+    )
+    .unwrap();
+    let exhausted = invoke(dir.path(), &["case.program"]);
+    assert!(!exhausted.status.success());
+    assert!(
+        String::from_utf8_lossy(&exhausted.stderr).contains("retry exhausted after 2 attempts"),
+        "{}",
+        String::from_utf8_lossy(&exhausted.stderr)
+    );
+    assert_eq!(observed_effect(dir.path()).unwrap(), b"started\nstarted\n");
+}
+
+#[test]
+fn timed_out_per_command_effect_is_uncertain_and_requires_explicit_retry() {
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"closed\" and timeout 1 seconds\n",
+    )
+    .unwrap();
+    let first = invoke(
+        dir.path(),
+        &["case.program", "--checkpoint", "journal", "--trace"],
+    );
+    assert!(!first.status.success());
+    assert_observed_children_reaped(&first);
+    let before = observed_effect(dir.path());
+    assert!(before.is_some());
+    fs::write(
+        dir.path().join("case.program"),
+        "run printf with message \"repaired\"\n",
+    )
+    .unwrap();
+    let refused = invoke(
+        dir.path(),
+        &["resume", "case.program", "--checkpoint", "journal"],
+    );
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--retry-uncertain"));
+    let repaired = invoke(
+        dir.path(),
+        &[
+            "resume",
+            "case.program",
+            "--checkpoint",
+            "journal",
+            "--retry-uncertain",
+        ],
+    );
+    assert!(
+        repaired.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repaired.stderr)
+    );
+    assert_eq!(repaired.stdout, b"repaired\n");
+    assert_eq!(
+        observed_effect(dir.path()),
+        before,
+        "repair replayed the timed-out effect"
+    );
+}
+
+#[test]
+fn per_command_timeout_appears_in_explain_json_with_ms() {
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"closed\" and timeout 2 seconds\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(dir.path())
+        .args(["explain", "case.program", "--json"])
+        .args(["--manifest-dir", "manifests"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let step = &plan["steps"][0];
+    assert_eq!(step["timeout_ms"], 2000, "{step}");
+}
+
+// Unix-only: `sleep` is absent on stock Windows, and the grandchild probe
+// below needs `kill(2)`. The portable worker tests above cover this host.
+#[cfg(unix)]
+#[test]
+fn acceptance_shape_times_out_sleep_with_keep_status() {
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "run \"sleep\" with arguments [5] and timeout 1 seconds and keep status as st\n",
+    )
+    .unwrap();
+    let started = Instant::now();
+    let result = invoke(dir.path(), &["case.program"]);
+    let elapsed = started.elapsed();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "the 1 s bound did not stop sleep 5 promptly: {elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn per_command_timeout_kills_the_whole_process_group() {
+    let dir = fixture();
+    fs::write(
+        dir.path().join("case.program"),
+        "run worker with mode \"grandchild\" and timeout 1 seconds\n",
+    )
+    .unwrap();
+    let result = invoke(dir.path(), &["case.program"]);
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("timed out"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let pid: i32 = fs::read_to_string(dir.path().join("grandchild_pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 probes only; the pid comes from the owned fixture.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "grandchild {pid} leaked");
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
 #[test]
 fn invalid_command_timeout_is_rejected_before_any_effect() {
     for options in [

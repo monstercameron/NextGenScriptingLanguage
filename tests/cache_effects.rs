@@ -64,6 +64,7 @@ fn graph_replay_requires_a_declared_read_only_contract() {
         status_binding: None,
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     let node = GraphNode::applet("node", call, BTreeMap::new(), BTreeMap::new());
     let plan = GraphPlan::new("test");

@@ -989,6 +989,31 @@ the delay. The execution record keeps every failed attempt's outcome. `execute
 explain --json` shows the policy on the command's step as `retry`, with `attempts`,
 `backoff_ms`, `doubling`, `even_if_uncertain`, and `idempotent`.
 
+### Timeout for a command
+
+`and timeout N UNIT` bounds one native pipeline group, so a hung tool cannot
+hang the whole run. The unit is milliseconds, seconds, minutes, or hours, as with
+`and retry ... with backoff`. The bound applies to the whole group the suffix is
+on, including startup, pipe draining, and trace writes, and the smaller of this
+bound and `--command-timeout-ms` wins.
+
+```program
+run "pactl" with arguments ["get-sink-volume", "@DEFAULT_SINK@"] and timeout 2 seconds
+```
+
+```text
+run "./sync-mirror" with arguments ["--quick"] and timeout 2 seconds and keep status as code
+```
+
+An expired bound kills the process group, reaps it, and reports a typed `timeout`
+outcome: the run fails, and the `catch` record carries `kind "timeout"`. A timeout
+is retryable only when the step declares `and retry`, under the same uncertain
+rules as any other failure. A timed-out effectful step is recorded as uncertain
+in a durable checkpoint, so resuming it needs `--retry-uncertain`, exactly like
+the global timeout. `execute explain --json` shows the bound on the command's
+step as `timeout_ms`, and `run --what-if` covers it in the fingerprint.
+`and timeout` cannot be combined with `and cache`.
+
 ### Direct executable calls
 
 A quoted command name is an executable. A bare name is resolved through the

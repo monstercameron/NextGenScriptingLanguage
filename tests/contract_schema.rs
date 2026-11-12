@@ -252,6 +252,7 @@ fn manifest_check_accepts_dynamic_scalar_maps_and_rejects_wrong_roots() {
         status_binding: None,
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     let valid = Value::Record(BTreeMap::from([
         ("arbitrary key".into(), Value::String("hello".into())),
@@ -486,6 +487,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         })
         .is_err());
     assert!(manifest
@@ -500,6 +502,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         })
         .is_ok());
     let implicit_bytes = load(base(json!({"version":1})));
@@ -515,6 +518,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         })
         .is_err());
 
@@ -843,6 +847,7 @@ fn number_ports_refine_json_parameters_before_invocation_and_dispatch() {
         status_binding: None,
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     assert!(manifest
         .validate(&invocation(
@@ -981,6 +986,7 @@ fn manifest_single_line_ports_check_literals_but_defer_references() {
         status_binding: None,
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
 
     assert!(manifest

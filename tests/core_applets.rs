@@ -252,6 +252,7 @@ fn arithmetic_contracts_refine_json_parameters_to_number() {
             status_binding: None,
             result_binding: None,
             retry: None,
+            timeout_ms: None,
         };
         let decimal = AstValue::Number(serde_json::Number::from_f64(2.5).unwrap());
         manifest
@@ -290,6 +291,7 @@ fn arithmetic_contracts_refine_json_parameters_to_number() {
         status_binding: None,
         result_binding: None,
         retry: None,
+        timeout_ms: None,
     };
     formatter.validate(&valid).unwrap();
     for invalid in [

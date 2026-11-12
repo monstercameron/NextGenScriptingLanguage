@@ -120,6 +120,9 @@ struct Row {
     undeclared: bool,
     /// The declared `and retry` policy, shown on the command it applies to.
     retry: Option<Json>,
+    /// The declared `and timeout` bound in milliseconds, shown on the
+    /// command it applies to. `None` renders as JSON null.
+    timeout_ms: Option<u64>,
     program_stdout: Option<&'static str>,
     binding: Option<String>,
     status_binding: Option<String>,
@@ -170,6 +173,7 @@ impl Row {
             "undeclared": self.undeclared,
             "privileged": row_privileged(self),
             "retry": self.retry,
+            "timeout_ms": self.timeout_ms,
             "program_stdout": self.program_stdout.unwrap_or("none"),
             "binding": self.binding,
             "status_binding": self.status_binding,
@@ -1071,6 +1075,7 @@ impl Walker<'_> {
         };
         // A declared retry is shown whether or not the command resolves. `idempotent`
         // reflects the manifest-level retry-safety rule used for replay.
+        row.timeout_ms = call.timeout_ms;
         row.retry = call.retry.map(|policy| {
             let idempotent = !call.direct
                 && self

@@ -563,6 +563,10 @@ pub(super) struct Journal {
     listener_stream_offset: Option<u64>,
     /// The element log replayed at open, held until the runtime takes it.
     element_replay: Option<ElementReplay>,
+    /// The cwd the element log last recorded. A commit line whose cwd equals it omits
+    /// the field, and the reader restores it (#542). Set by the reader and by each
+    /// written commit, and cleared with the log.
+    element_cwd_reference: Option<EncodedPath>,
     /// Reused for element and binding JSON; erased after every write, including errors.
     element_buffer: Vec<u8>,
     _lock: DirectoryLock,
@@ -850,6 +854,7 @@ impl Journal {
                 element_state_cache: None,
                 element_replay: None,
                 element_buffer: Vec::new(),
+                element_cwd_reference: None,
                 listener_stream_offset: None,
                 _lock: lock,
             };
@@ -983,6 +988,7 @@ impl Journal {
                 element_state_cache: None,
                 element_replay: None,
                 element_buffer: Vec::new(),
+                element_cwd_reference: None,
                 listener_stream_offset: None,
                 _lock: lock,
             };

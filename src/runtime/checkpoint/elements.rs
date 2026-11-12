@@ -320,9 +320,77 @@ enum ElementLine {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ElementStateDisk {
-    cwd: EncodedPath,
+    /// Absent when the cwd equals the one this log last recorded; the reader restores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<ElementCwd>,
     output: String,
     bindings: BTreeMap<String, BlobRef>,
+}
+
+/// The working directory on a sequential commit line. A path whose bytes are text is
+/// written as a JSON string. Any other path keeps the byte-array form that earlier
+/// builds wrote, so old lines still read, and both forms decode to the same bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ElementCwd(EncodedPath);
+
+impl ElementCwd {
+    /// The path as text when its bytes are text: UTF-8 on Unix, UTF-16 on Windows.
+    /// A Windows path with an unpaired surrogate is not text and keeps the array form.
+    fn text(&self) -> Option<String> {
+        #[cfg(unix)]
+        {
+            std::str::from_utf8(&self.0 .0).ok().map(str::to_owned)
+        }
+        #[cfg(windows)]
+        {
+            let units: Vec<u16> = self
+                .0
+                 .0
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|v| u16::from_le_bytes([v[0], v[1]]))
+                .collect();
+            String::from_utf16(&units).ok()
+        }
+    }
+
+    fn from_text(text: &str) -> Self {
+        #[cfg(unix)]
+        let bytes = text.as_bytes().to_vec();
+        #[cfg(windows)]
+        let bytes: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        Self(EncodedPath(bytes))
+    }
+}
+
+impl Serialize for ElementCwd {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self.text() {
+            Some(text) => serializer.serialize_str(&text),
+            None => self.0 .0.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ElementCwd {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Text(String),
+            Bytes(EncodedPath),
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Text(text) => Self::from_text(&text),
+            Wire::Bytes(path) => Self(path),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1117,12 +1185,14 @@ impl Journal {
         self.elements_synced_at = std::time::Instant::now();
         self.element_state_cache = None;
         self.element_replay = None;
+        self.element_cwd_reference = None;
         Ok(())
     }
 
     /// Replay the element log of the in-flight node. A torn final line from an
     /// interrupted append is not committed and is dropped by the next append.
     pub(super) fn load_elements(&mut self) -> Result<()> {
+        self.element_cwd_reference = None;
         let Some(node) = self.data.in_flight.clone() else {
             self.element_replay = None;
             return Ok(());
@@ -1145,6 +1215,8 @@ impl Journal {
         let anchor_lines = anchor.as_ref().map_or(0, |anchor| anchor.lines);
         let mut anchor_seen = anchor_lines == 0;
         let mut lines = 0usize;
+        // The last cwd the log records, which an omitted cwd refers to (#542).
+        let mut last_cwd: Option<EncodedPath> = None;
         let mut replay = ElementReplay {
             commits: Vec::new(),
             pending: Vec::new(),
@@ -1205,10 +1277,20 @@ impl Journal {
                     ElementLine::Commit {
                         index,
                         fingerprint,
-                        state,
+                        mut state,
                         result,
                     } => {
                         replay.pending.retain(|element| element.index != index);
+                        if let Some(disk) = state.as_mut() {
+                            if let Some(cwd) = disk.cwd.as_ref() {
+                                last_cwd = Some(cwd.0.clone());
+                            } else {
+                                let restored = last_cwd.clone().context(
+                                    "checkpoint element log omits a working directory before any commit records one",
+                                )?;
+                                disk.cwd = Some(ElementCwd(restored));
+                            }
+                        }
                         let outcome = match result {
                             Some(disk) => Some(self.load_element_outcome(&disk)?),
                             None => None,
@@ -1227,6 +1309,7 @@ impl Journal {
         if !anchor_seen {
             bail!("checkpoint element log is shorter than its journal anchor; it was truncated");
         }
+        self.element_cwd_reference = last_cwd;
         self.elements_lines = lines;
         if let Some(last) = replay.commits.last_mut() {
             if let Some(disk) = last.state_ref.clone() {
@@ -1269,8 +1352,12 @@ impl Journal {
             }
             bindings.insert(name.clone(), value);
         }
+        let cwd = disk
+            .cwd
+            .as_ref()
+            .context("checkpoint element state names no working directory")?;
         Ok(ExecutionState {
-            cwd: disk.cwd.to_path(),
+            cwd: cwd.0.to_path(),
             output,
             bindings,
         })
@@ -1508,16 +1595,23 @@ impl Journal {
             self.persistence_failed = true;
             return Err(error.into());
         }
+        // A cwd equal to the one this log last recorded is omitted. The reference moves
+        // only after the line is written, so a failed write leaves it unchanged.
+        let cwd_bytes = EncodedPath::from_path(cwd);
+        let cwd_field = (self.element_cwd_reference.as_ref() != Some(&cwd_bytes))
+            .then(|| ElementCwd(cwd_bytes.clone()));
         self.append_element_buffered(&ElementLine::Commit {
             index,
             fingerprint,
             state: Some(ElementStateDisk {
-                cwd: EncodedPath::from_path(cwd),
+                cwd: cwd_field,
                 output: hex_encode(output),
                 bindings,
             }),
             result: None,
-        })
+        })?;
+        self.element_cwd_reference = Some(cwd_bytes);
+        Ok(())
     }
 
     /// Commit a parallel element: its recorded result, output and stderr inline.
@@ -2160,5 +2254,279 @@ mod tests {
             &public_floor,
             true
         ));
+    }
+}
+
+#[cfg(test)]
+mod cwd_compact_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// A cwd whose bytes are not text: an invalid UTF-8 byte on Unix, a lone surrogate on Windows.
+    #[cfg(unix)]
+    const NON_TEXT_CWD: &[u8] = b"/tmp/\xff-work";
+    #[cfg(windows)]
+    const NON_TEXT_CWD: &[u8] = &[0x00, 0xd8, 0x2f, 0x00];
+
+    /// Commit lines as the writer before #542 serialized them: the same field order,
+    /// with the working directory as a byte array.
+    #[derive(Serialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum LegacyLine {
+        Commit {
+            index: usize,
+            fingerprint: String,
+            state: LegacyState,
+        },
+    }
+
+    #[derive(Serialize)]
+    struct LegacyState {
+        cwd: EncodedPath,
+        output: String,
+        bindings: BTreeMap<String, BlobRef>,
+    }
+
+    fn legacy_line(index: usize, cwd: &EncodedPath, output: &[u8]) -> String {
+        serde_json::to_string(&LegacyLine::Commit {
+            index,
+            fingerprint: format!("fp-{index}"),
+            state: LegacyState {
+                cwd: cwd.clone(),
+                output: hex_encode(output),
+                bindings: BTreeMap::new(),
+            },
+        })
+        .unwrap()
+    }
+
+    /// A log exactly as the previous build wrote it, with a cwd on every commit line.
+    const PREVIOUS_BUILD_LOG: &str = concat!(
+        r#"{"kind":"begin","index":0,"fingerprint":"fp-0","uncertain":false}"#,
+        "\n",
+        r#"{"kind":"commit","index":0,"fingerprint":"fp-0","state":{"cwd":[97,98],"output":"","bindings":{}}}"#,
+        "\n",
+        r#"{"kind":"begin","index":1,"fingerprint":"fp-1","uncertain":false}"#,
+        "\n",
+        r#"{"kind":"commit","index":1,"fingerprint":"fp-1","state":{"cwd":[97,98],"output":"4930","bindings":{}}}"#,
+        "\n",
+    );
+
+    fn setup() -> (tempfile::TempDir, CheckpointOptions, PathBuf) {
+        let temp = tempdir().unwrap();
+        let program_path = temp.path().join("flow.txt");
+        fs::write(&program_path, "workflow").unwrap();
+        let options = CheckpointOptions {
+            directory: temp.path().join("checkpoint"),
+            program_path,
+            resume: false,
+            retry_uncertain: false,
+        };
+        let cwd = temp.path().join("work");
+        fs::create_dir(&cwd).unwrap();
+        (temp, options, cwd)
+    }
+
+    fn open(options: &CheckpointOptions, cwd: &Path) -> Journal {
+        Journal::open_with_inputs(options, cwd, "finite", 1024, None).unwrap()
+    }
+
+    fn resuming(options: &CheckpointOptions) -> CheckpointOptions {
+        CheckpointOptions {
+            resume: true,
+            ..options.clone()
+        }
+    }
+
+    /// Reopen the journal and return each commit's cwd bytes and output hex, as restored.
+    fn read_replay(options: &CheckpointOptions, cwd: &Path) -> Vec<(usize, Vec<u8>, String)> {
+        let mut journal = open(&resuming(options), cwd);
+        let replay = journal.take_element_replay().unwrap();
+        replay
+            .commits
+            .iter()
+            .filter_map(|commit| {
+                let state = commit.state_ref.as_ref()?;
+                Some((
+                    commit.index,
+                    state.cwd.as_ref()?.0 .0.clone(),
+                    state.output.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Write `bytes` as the element log of an in-flight node, then replay it.
+    fn replay_log(
+        options: &CheckpointOptions,
+        cwd: &Path,
+        bytes: &[u8],
+    ) -> Vec<(usize, Vec<u8>, String)> {
+        let mut journal = open(options, cwd);
+        journal.begin_node("loop-node", 0, 2, 1, cwd, true).unwrap();
+        fs::write(journal.directory.join(ELEMENT_LOG), bytes).unwrap();
+        drop(journal);
+        read_replay(options, cwd)
+    }
+
+    fn records() -> Vec<(usize, PathBuf, Vec<u8>)> {
+        let text = PathBuf::from("C:/work/text-é");
+        let raw = EncodedPath(NON_TEXT_CWD.to_vec()).to_path();
+        vec![
+            (0, text.clone(), b"I0".to_vec()),
+            (1, text.clone(), Vec::new()),
+            (2, raw.clone(), Vec::new()),
+            (3, raw, b"ok".to_vec()),
+            (4, text, b"x".to_vec()),
+        ]
+    }
+
+    fn expected(records: &[(usize, PathBuf, Vec<u8>)]) -> Vec<(usize, Vec<u8>, String)> {
+        records
+            .iter()
+            .map(|(index, cwd, output)| (*index, EncodedPath::from_path(cwd).0, hex_encode(output)))
+            .collect()
+    }
+
+    #[test]
+    fn previous_build_commit_lines_are_pinned_and_still_replay() {
+        let cwd = EncodedPath(b"ab".to_vec());
+        assert_eq!(
+            legacy_line(0, &cwd, b""),
+            r#"{"kind":"commit","index":0,"fingerprint":"fp-0","state":{"cwd":[97,98],"output":"","bindings":{}}}"#
+        );
+        assert_eq!(
+            legacy_line(1, &cwd, b"I0"),
+            r#"{"kind":"commit","index":1,"fingerprint":"fp-1","state":{"cwd":[97,98],"output":"4930","bindings":{}}}"#
+        );
+        let (_temp, options, cwd) = setup();
+        let commits = replay_log(&options, &cwd, PREVIOUS_BUILD_LOG.as_bytes());
+        assert_eq!(
+            commits,
+            vec![
+                (0, b"ab".to_vec(), String::new()),
+                (1, b"ab".to_vec(), "4930".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn new_and_previous_shapes_round_trip_to_equal_records() {
+        let (_temp, options, cwd) = setup();
+        let records = records();
+        // Phase one: a fresh node writes the first three records, then the journal reopens.
+        let mut journal = open(&options, &cwd);
+        journal
+            .begin_node("loop-node", 0, 2, 1, &cwd, true)
+            .unwrap();
+        for (index, path, output) in &records[..3] {
+            journal
+                .commit_state(
+                    *index,
+                    format!("fp-{index}"),
+                    path,
+                    output,
+                    &BTreeMap::new(),
+                )
+                .unwrap();
+        }
+        journal.sync_elements().unwrap();
+        drop(journal);
+        // Phase two: after the reopen, record 3 repeats record 2's cwd and must still omit it.
+        let mut journal = open(&resuming(&options), &cwd);
+        for (index, path, output) in &records[3..] {
+            journal
+                .commit_state(
+                    *index,
+                    format!("fp-{index}"),
+                    path,
+                    output,
+                    &BTreeMap::new(),
+                )
+                .unwrap();
+        }
+        journal.sync_elements().unwrap();
+        let log = fs::read_to_string(journal.directory.join(ELEMENT_LOG)).unwrap();
+        drop(journal);
+
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines.len(), 5);
+        assert!(
+            lines[0].contains(r#""cwd":"C:/work/text-é""#),
+            "{}",
+            lines[0]
+        );
+        assert!(!lines[1].contains("\"cwd\""), "{}", lines[1]);
+        assert!(lines[2].contains(r#""cwd":["#), "{}", lines[2]);
+        assert!(!lines[3].contains("\"cwd\""), "{}", lines[3]);
+        assert!(
+            lines[4].contains(r#""cwd":"C:/work/text-é""#),
+            "{}",
+            lines[4]
+        );
+        assert_eq!(read_replay(&options, &cwd), expected(&records));
+    }
+
+    #[test]
+    fn previous_shape_of_the_same_records_reads_equal() {
+        let (_temp, options, cwd) = setup();
+        let records = records();
+        let mut journal = open(&options, &cwd);
+        journal
+            .begin_node("loop-node", 0, 2, 1, &cwd, true)
+            .unwrap();
+        let body: String = records
+            .iter()
+            .map(|(index, path, output)| {
+                legacy_line(*index, &EncodedPath::from_path(path), output) + "\n"
+            })
+            .collect();
+        fs::write(journal.directory.join(ELEMENT_LOG), body).unwrap();
+        drop(journal);
+        assert_eq!(read_replay(&options, &cwd), expected(&records));
+    }
+
+    #[test]
+    fn omitted_cwd_before_any_recorded_cwd_is_refused() {
+        let (_temp, options, cwd) = setup();
+        let mut journal = open(&options, &cwd);
+        journal
+            .begin_node("loop-node", 0, 2, 1, &cwd, true)
+            .unwrap();
+        fs::write(
+            journal.directory.join(ELEMENT_LOG),
+            concat!(
+                r#"{"kind":"commit","index":0,"fingerprint":"fp-0","state":{"output":"","bindings":{}}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        assert!(journal.load_elements().is_err());
+    }
+
+    #[test]
+    fn commit_lines_stay_far_below_the_byte_array_form() {
+        let (_temp, options, cwd) = setup();
+        let long = PathBuf::from(format!("C:/{}", "long-directory-name/".repeat(12)));
+        let long_bytes = EncodedPath::from_path(&long);
+        let mut journal = open(&options, &cwd);
+        journal
+            .begin_node("loop-node", 0, 2, 1, &cwd, true)
+            .unwrap();
+        let mut previous_bytes = 0usize;
+        for index in 0..2000 {
+            previous_bytes += legacy_line(index, &long_bytes, b"I0").len() + 1;
+            journal
+                .commit_state(index, format!("fp-{index}"), &long, b"I0", &BTreeMap::new())
+                .unwrap();
+        }
+        journal.sync_elements().unwrap();
+        let written = fs::metadata(journal.directory.join(ELEMENT_LOG))
+            .unwrap()
+            .len();
+        assert!(
+            written * 5 < previous_bytes as u64,
+            "written {written} bytes, previous shape {previous_bytes} bytes"
+        );
     }
 }

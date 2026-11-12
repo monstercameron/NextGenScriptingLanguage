@@ -10,9 +10,10 @@
       "enum": [
         "file_exists",
         "file_readable",
+        "socket_exists",
         "tcp_port_open"
       ],
-      "description": "Readiness check: file_exists, file_readable, or tcp_port_open."
+      "description": "Readiness check: file_exists, file_readable, socket_exists (a Unix domain socket at path; unsupported off Unix), or tcp_port_open."
     },
     "host": {
       "type": "string",
@@ -22,7 +23,7 @@
     "path": {
       "type": "string",
       "required": false,
-      "description": "Path checked by file_exists or file_readable, resolved relative to the program working directory."
+      "description": "Path checked by file_exists, file_readable or socket_exists, resolved relative to the program working directory."
     },
     "interval_ms": {
       "type": "integer",
@@ -36,8 +37,13 @@
     },
     "timeout_ms": {
       "type": "integer",
-      "required": true,
-      "description": "Maximum wait in milliseconds, from 0 through 86,400,000."
+      "required": false,
+      "description": "Maximum wait in milliseconds, from 0 through 86,400,000. Required unless deadline_ms is given; not allowed with deadline_ms."
+    },
+    "deadline_ms": {
+      "type": "integer",
+      "required": false,
+      "description": "Optional absolute deadline in Unix epoch milliseconds on the time.now clock; the wait becomes the time remaining, or zero when the deadline has passed. Not allowed with timeout_ms."
     }
   },
   "arguments": [
@@ -76,6 +82,7 @@
             "enum": [
               "file_exists",
               "file_readable",
+              "socket_exists",
               "tcp_port_open"
             ]
           },
@@ -110,6 +117,12 @@
             "type": "integer"
           },
           "delivery": "single"
+        },
+        "deadline_ms": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
         }
       },
       "outputs": {
@@ -127,8 +140,48 @@
   ],
   "parameter_alternatives": [
     {
+      "message": "timeout_ms or deadline_ms is required",
+      "any_of": [
+        [
+          {
+            "test": "present",
+            "parameter": "timeout_ms"
+          }
+        ],
+        [
+          {
+            "test": "present",
+            "parameter": "deadline_ms"
+          }
+        ]
+      ]
+    },
+    {
+      "message": "provide either timeout_ms or deadline_ms, not both",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "deadline_ms"
+          }
+        ],
+        [
+          {
+            "test": "absent",
+            "parameter": "timeout_ms"
+          }
+        ]
+      ]
+    },
+    {
       "message": "timeout_ms must be an integer from 0 through 86400000",
       "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "timeout_ms"
+          }
+        ],
         [
           {
             "test": "number_range",
@@ -184,6 +237,24 @@
             "test": "string_not_equals",
             "parameter": "probe",
             "value": "file_readable"
+          }
+        ],
+        [
+          {
+            "test": "present",
+            "parameter": "path"
+          }
+        ]
+      ]
+    },
+    {
+      "message": "path is required when probe is socket_exists",
+      "any_of": [
+        [
+          {
+            "test": "string_not_equals",
+            "parameter": "probe",
+            "value": "socket_exists"
           }
         ],
         [

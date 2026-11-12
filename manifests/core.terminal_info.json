@@ -1,0 +1,117 @@
+{
+  "name": "terminal.info",
+  "description": "Reports whether stdin, stdout and stderr are terminals, the terminal columns and rows when the OS reports them, whether NO_COLOR is set to a non-empty value, and the TERM value, as one record. Takes no arguments and reads only the process's standard streams and environment.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {},
+  "arguments": [
+    {
+      "literal": "terminal.info"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "stdin_tty": {
+          "type": "boolean"
+        },
+        "stdout_tty": {
+          "type": "boolean"
+        },
+        "stderr_tty": {
+          "type": "boolean"
+        },
+        "columns": {
+          "type": "integer",
+          "nullable": true
+        },
+        "rows": {
+          "type": "integer",
+          "nullable": true
+        },
+        "no_color": {
+          "type": "boolean"
+        },
+        "term": {
+          "type": "text",
+          "nullable": true
+        }
+      },
+      "required": [
+        "stdin_tty",
+        "stdout_tty",
+        "stderr_tty",
+        "columns",
+        "rows",
+        "no_color",
+        "term"
+      ]
+    },
+    "capabilities": [
+      "terminal.inspect"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {},
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "stdin_tty": {
+                "type": "boolean"
+              },
+              "stdout_tty": {
+                "type": "boolean"
+              },
+              "stderr_tty": {
+                "type": "boolean"
+              },
+              "columns": {
+                "type": "integer",
+                "nullable": true
+              },
+              "rows": {
+                "type": "integer",
+                "nullable": true
+              },
+              "no_color": {
+                "type": "boolean"
+              },
+              "term": {
+                "type": "text",
+                "nullable": true
+              }
+            },
+            "required": [
+              "stdin_tty",
+              "stdout_tty",
+              "stderr_tty",
+              "columns",
+              "rows",
+              "no_color",
+              "term"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "terminal info"
+  ]
+}

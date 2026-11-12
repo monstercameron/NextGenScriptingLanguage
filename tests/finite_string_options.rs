@@ -100,7 +100,7 @@ fn check_accepts_every_declared_finite_string_option() {
             "run jsonc.edit_content with content \"{}\" and action ",
             &["set", "remove"],
         ),
-        ("run wait.until with probe ", &["file_exists", "file_readable", "tcp_port_open"]),
+        ("run wait.until with probe ", &["file_exists", "file_readable", "socket_exists", "tcp_port_open"]),
         ("run fs.write_atomic with path \"/tmp/not-written\" and expected_content_hash \"0000000000000000000000000000000000000000000000000000000000000000\" and symlink_policy ", &["preserve", "reject", "replace"]),
         ("run fs.write_atomic with path \"/tmp/not-written\" and expected_content_hash \"0000000000000000000000000000000000000000000000000000000000000000\" and symlink_policy \"preserve\" and permissions_policy ", &["preserve", "private", "exact"]),
         ("run fs.transaction.recover with journal \"journal.json\" and decision ", &["complete", "rollback"]),

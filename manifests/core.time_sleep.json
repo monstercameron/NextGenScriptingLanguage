@@ -13,6 +13,11 @@
       "type": "json",
       "required": false,
       "description": "Optional nonnegative numeric delay in seconds, rounded up to a millisecond and bounded to 24 hours."
+    },
+    "deadline_ms": {
+      "type": "integer",
+      "required": false,
+      "description": "Optional absolute deadline in Unix epoch milliseconds on the time.now clock; the wait becomes the time remaining, or zero when the deadline has passed. Not allowed with milliseconds or seconds."
     }
   },
   "arguments": [
@@ -53,6 +58,12 @@
         "seconds": {
           "schema": {
             "type": "number"
+          },
+          "delivery": "single"
+        },
+        "deadline_ms": {
+          "schema": {
+            "type": "integer"
           },
           "delivery": "single"
         }
@@ -104,6 +115,41 @@
             "parameter": "seconds",
             "minimum": 0,
             "maximum": 86400
+          }
+        ],
+        [
+          {
+            "test": "present",
+            "parameter": "deadline_ms"
+          },
+          {
+            "test": "absent",
+            "parameter": "milliseconds"
+          },
+          {
+            "test": "absent",
+            "parameter": "seconds"
+          }
+        ]
+      ]
+    },
+    {
+      "message": "provide either deadline_ms or a milliseconds/seconds delay, not both",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "deadline_ms"
+          }
+        ],
+        [
+          {
+            "test": "absent",
+            "parameter": "milliseconds"
+          },
+          {
+            "test": "absent",
+            "parameter": "seconds"
           }
         ]
       ]

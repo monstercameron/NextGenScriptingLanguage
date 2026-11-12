@@ -113,6 +113,10 @@ fn literal_probe_requires_its_specific_inputs_and_dynamic_probes_are_deferred() 
             "path is required when probe is file_readable",
         ),
         (
+            "run wait.until with probe \"socket_exists\" and timeout_ms 0\n",
+            "path is required when probe is socket_exists",
+        ),
+        (
             "run wait.until with probe \"tcp_port_open\" and timeout_ms 0\n",
             "host is required when probe is tcp_port_open",
         ),
@@ -151,6 +155,10 @@ fn literal_probe_requires_its_specific_inputs_and_dynamic_probes_are_deferred() 
             (
                 "file_readable",
                 "path is required when probe is file_readable",
+            ),
+            (
+                "socket_exists",
+                "path is required when probe is socket_exists",
             ),
             (
                 "tcp_port_open",

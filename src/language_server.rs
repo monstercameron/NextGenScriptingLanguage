@@ -90,6 +90,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
     let mut diagnostic_targets = BTreeMap::<String, BTreeSet<String>>::new();
     let mut workspace = Workspace::default();
     let mut watch_dynamic_registration = false;
+    let mut inlay_hints_enabled = false;
     while let Some(message) = read_message(&mut reader)? {
         let message = match message {
             Ok(message) => message,
@@ -110,6 +111,10 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                     .pointer("/capabilities/workspace/didChangeWatchedFiles/dynamicRegistration")
                     .and_then(JsonValue::as_bool)
                     == Some(true);
+                inlay_hints_enabled = params
+                    .pointer("/initializationOptions/inlayHints")
+                    .and_then(JsonValue::as_bool)
+                    == Some(true);
                 Some(json!({
                     "capabilities": {
                         "textDocumentSync": { "openClose": true, "change": 2, "save": { "includeText": false } },
@@ -122,6 +127,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                         "codeActionProvider": { "codeActionKinds": ["quickfix"] },
                         "documentSymbolProvider": true,
                         "foldingRangeProvider": true,
+                        "inlayHintProvider": true,
                     "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } }
                     },
                     "serverInfo": { "name": "execute-language-server", "version": env!("CARGO_PKG_VERSION") }
@@ -317,6 +323,11 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             "textDocument/codeAction" => Some(code_actions(&params, &documents, &registry)),
             "textDocument/documentSymbol" => Some(document_symbols(&params, &documents)),
             "textDocument/foldingRange" => Some(folding_ranges(&params, &documents)),
+            "textDocument/inlayHint" => Some(if inlay_hints_enabled {
+                inlay_hints(&params, &documents)
+            } else {
+                json!([])
+            }),
             _ if id.is_some() => {
                 write_error(
                     &mut writer,
@@ -3878,6 +3889,77 @@ fn folding_ranges_in(source: &str) -> Vec<JsonValue> {
         }
     }
     ranges
+}
+
+/// Inlay hints for the request's range. Only the client's opt-in (see `run_with_io`)
+/// enables them; this function answers the hints for a document.
+fn inlay_hints(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
+    let Some(uri) = params
+        .pointer("/textDocument/uri")
+        .and_then(JsonValue::as_str)
+    else {
+        return json!([]);
+    };
+    let Some(document) = documents.get(uri) else {
+        return json!([]);
+    };
+    let first = params
+        .pointer("/range/start/line")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(0);
+    let last = params
+        .pointer("/range/end/line")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(u64::MAX);
+    let hints = inlay_hints_in(&document.text)
+        .into_iter()
+        .filter(|(line, _)| (first..=last).contains(&(*line as u64)))
+        .map(|(_, hint)| hint)
+        .collect::<Vec<_>>();
+    json!(hints)
+}
+
+/// One type hint after each `keep status as NAME`, labelled with the static type of
+/// the name: the exit status is always an integer. Returns the 0-based line of each
+/// hint with its LSP `InlayHint`. A document that does not parse gets no hints. Other
+/// step results have no type here: the checker that infers them is not exposed to
+/// the server yet, so they get no hint rather than a guessed one.
+fn inlay_hints_in(source: &str) -> Vec<(usize, JsonValue)> {
+    let Ok(program) = crate::parser::parse(source) else {
+        return Vec::new();
+    };
+    let words = lexical_words(source);
+    let positions = SourcePositions::new(source);
+    let mut hints = Vec::new();
+    for introduction in crate::diagnostics::binding_introductions(&program) {
+        if introduction.kind != "status" {
+            continue;
+        }
+        let Some(index) = (3..words.len()).find(|&index| {
+            words[index].line == introduction.line
+                && !words[index].quoted
+                && source[words[index].text_start..words[index].text_end] == introduction.name
+                && word_eq(source, &words, index - 1, "as")
+                && word_eq(source, &words, index - 2, "status")
+                && word_eq(source, &words, index - 3, "keep")
+        }) else {
+            continue;
+        };
+        let Some(line) = introduction.line.checked_sub(1) else {
+            continue;
+        };
+        let position = positions.position(source, words[index].text_end);
+        hints.push((
+            line,
+            json!({
+                "position": position_json(position),
+                "label": "integer",
+                "kind": 1,
+                "paddingLeft": true,
+            }),
+        ));
+    }
+    hints
 }
 
 fn labelled_step_symbols(source: &str, steps: &[crate::ast::Step]) -> Vec<(usize, JsonValue)> {

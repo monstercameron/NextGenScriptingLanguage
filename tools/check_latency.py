@@ -281,6 +281,11 @@ def main(argv=None):
             hot_loop_rss = results["hot_loop"]["max_rss_kb"]
             relationship = "differs from" if version_rss != hot_loop_rss else "matches"
             print(f"process-floor RSS {relationship} hot-loop RSS: {version_rss:.0f} vs {hot_loop_rss:.0f} KiB")
+            if version_rss == hot_loop_rss:
+                # Identical peaks mean the rows still share one high-water mark (the old wait4 parent peak).
+                failures.append(
+                    f"process-floor RSS equals hot-loop RSS ({version_rss:.0f} KiB); per-child RSS is not separated"
+                )
     labels = dict(LABELS)
     for key in results:
         if key.endswith("_manifest_dir"):

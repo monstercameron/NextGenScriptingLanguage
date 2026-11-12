@@ -63,6 +63,11 @@ def load_sample(path):
             raise ValueError(f"sample {path} metadata is missing {field!r}")
     if not _SHA256_RE.fullmatch(metadata["binary_sha256"]):
         raise ValueError(f"sample {path} metadata has an invalid binary_sha256 digest")
+    if metadata.get("staged_installed_layout") is not True:
+        raise ValueError(
+            f"sample {path} was not timed through the staged installed layout, so its default rows "
+            "do not measure an installed binary; re-run tools/check_latency.py to retain it again"
+        )
     manifest_dir = metadata.get("manifest_dir")
     if manifest_dir is not None and not isinstance(manifest_dir, str):
         raise ValueError(f"sample {path} metadata has an invalid manifest_dir")

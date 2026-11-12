@@ -62,6 +62,7 @@ def sample(run_id, medians, rss=None, machine="x86_64", platform="Linux-6.11.0")
             "binary_sha256": DIGEST,
             "python": "3.11.0",
             "manifest_dir": None,
+            "staged_installed_layout": True,
         },
         "results": results,
     }
@@ -196,6 +197,16 @@ class RegenerationGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source_revision"):
                 regenerate.load_sample(path)
 
+    def test_rejects_sample_not_timed_through_staged_install(self):
+        with tempfile.TemporaryDirectory(prefix="execute-regenerate-") as directory:
+            root = Path(directory)
+            document = sample("111", {"one_line": 10.0})
+            del document["metadata"]["staged_installed_layout"]
+            path = root / "unstaged.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "staged installed layout"):
+                regenerate.load_sample(path)
+
     def test_rejects_sample_with_bad_digest(self):
         with tempfile.TemporaryDirectory(prefix="execute-regenerate-") as directory:
             root = Path(directory)
@@ -268,6 +279,39 @@ class RegenerationGuardTests(unittest.TestCase):
             self.assertEqual(regenerate.main([str(path) for path in first] + ["--output", str(budget_path)]), 0)
             # Same ceilings from different runs must still match: only the note differs.
             self.assertEqual(regenerate.main([str(path) for path in second] + ["--check", str(budget_path)]), 0)
+
+
+class RssRowDifferenceTests(unittest.TestCase):
+    """--require-rss must fail when the process floor and hot loop share one peak."""
+
+    def run_require_rss(self, version_rss, hot_loop_rss):
+        import contextlib
+        import io
+        from unittest import mock
+
+        def fake_time_program(binary, arguments, runs, warmup, label):
+            return [1.0], (version_rss if label == "version" else hot_loop_rss)
+
+        with tempfile.TemporaryDirectory(prefix="execute-rss-rows-") as directory:
+            root = Path(directory)
+            binary = root / "execute"
+            binary.write_bytes(b"synthetic")
+            budget = root / "budget.json"
+            budget.write_text("{}", encoding="utf-8")
+            output = io.StringIO()
+            with mock.patch.object(check_latency, "time_program", side_effect=fake_time_program), \
+                 mock.patch.object(check_latency, "stage_installed_binary",
+                                   side_effect=lambda _binary: contextlib.nullcontext(binary)), \
+                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                return check_latency.main(
+                    [str(binary), str(budget), "--require-rss", "--runs", "1", "--warmup", "0"]
+                )
+
+    def test_identical_floor_and_hot_loop_rss_fails(self):
+        self.assertEqual(self.run_require_rss(5568.0, 5568.0), 1)
+
+    def test_distinct_floor_and_hot_loop_rss_passes(self):
+        self.assertEqual(self.run_require_rss(5568.0, 9216.0), 0)
 
 
 class RetainedSampleFormatTests(unittest.TestCase):

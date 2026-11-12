@@ -6,6 +6,7 @@
   "fs_deadlines.rs": "POSIX mkfifo utility plus unix file-type assertions",
   "issue_524_terminal_stop.rs": "PTY with a background process group stopped by SIGTTIN/SIGTTOU; no Windows equivalent of job-control stops",
   "issue_729_retry_backoff.rs": "real SIGINT delivery to drive the interrupt drain during a retry backoff",
+  "issue_729_retry_backoff_cancel.rs": "real SIGINT delivery to cancel a run during a retry backoff",
   "issue_757_recorded_drain.rs": "real SIGINT delivery to exercise the drain timeout of a recorded run",
   "issue_761_signal_and_stage_replay.rs": "real signal delivery (a step killed by a signal) and sh pipelines whose stage statuses are recorded",
   "issue_89_slow_pipe_diagnostic.rs": "Unix write_diagnostic path with a slowly drained stderr pipe (nonblocking descriptor writes)",

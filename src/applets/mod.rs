@@ -21,6 +21,7 @@ mod journal;
 mod jsonc;
 mod list;
 mod path;
+mod redact;
 mod shared;
 mod structured;
 mod template;
@@ -306,8 +307,10 @@ pub fn execute_with_context(
         "text.join" => text::concat(args, context),
         "text.render" => template::render(args, cwd, context),
         "text.format" => template::format(args, context),
+        "redact.text" => redact::text(args),
         "fs.ensure_file" => ensure::ensure_file(args, cwd, context),
         "fs.ensure_line" => ensure::ensure_line(args, cwd, context),
+        "conf.set" => ensure::conf_set(args, cwd, context),
         "fs.ensure_symlink" => ensure::ensure_symlink(args, cwd, context),
         "fs.ensure_dir" => ensure::ensure_dir(args, cwd, context),
         "yaml.parse" => yaml::parse(args, input, context),
@@ -372,6 +375,8 @@ pub fn execute_with_context(
         "fs.transaction" => transaction::apply(args, cwd, context),
         "fs.transaction.recover" => transaction::recover(args, cwd, context),
         "fs.read" | "fs.snapshot" => filesystem::read(args, cwd, context),
+        "fs.stat" => filesystem::stat(args, cwd, context),
+        "fs.realpath" => filesystem::realpath(args, cwd, context),
         "fs.write_atomic" => filesystem::write_atomic(args, input, cwd, context),
         "fs.unlink_checked" => filesystem::unlink_checked(args, cwd, context),
         "jsonc.set" => jsonc::set(args, cwd, context),
@@ -569,4 +574,167 @@ pub(crate) fn failed(code: &'static str, message: impl Into<String>) -> AppletEr
 
 pub(crate) fn absence(code: &'static str, message: impl Into<String>) -> AppletError {
     AppletError::absence(code, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execute_in_cwd;
+    use serde_json::{json, Map, Value};
+    use std::fs;
+    use std::path::Path;
+
+    fn run(operation: &str, args: Value, cwd: &Path) -> Result<Value, super::AppletError> {
+        let map: Map<String, Value> = args.as_object().cloned().unwrap_or_default();
+        execute_in_cwd(operation, &map, b"", cwd)
+    }
+
+    #[test]
+    fn redact_text_replaces_literals_tokens_emails_and_ipv4() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run(
+            "redact.text",
+            json!({
+                "text": "mail ops@example.com from 10.0.0.7 key sk_live_abcdefghijklmnop1234 and secret-x",
+                "literals": ["secret-x"],
+            }),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            output["text"],
+            "mail <email-1> from <ipv4-1> key <token-1> and <literal-1>"
+        );
+        assert_eq!(
+            output["counts"],
+            json!({"literal": 1, "token": 1, "email": 1, "ipv4": 1})
+        );
+    }
+
+    #[test]
+    fn redact_text_without_literals_passes_plain_text_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run("redact.text", json!({"text": "nothing here"}), dir.path()).unwrap();
+        assert_eq!(output["text"], "nothing here");
+        assert_eq!(
+            output["counts"],
+            json!({"literal": 0, "token": 0, "email": 0, "ipv4": 0})
+        );
+    }
+
+    #[test]
+    fn redact_text_refuses_non_string_literals() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run(
+            "redact.text",
+            json!({"text": "x", "literals": [1]}),
+            dir.path()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn fs_stat_answers_absent_for_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run("fs.stat", json!({"path": "missing.txt"}), dir.path()).unwrap();
+        assert_eq!(
+            output,
+            json!({"type": "absent", "size": null, "mode": null, "read_only": null, "mtime_ns": null})
+        );
+    }
+
+    #[test]
+    fn fs_stat_reports_file_size_and_directory_type() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"abc").unwrap();
+        let file = run("fs.stat", json!({"path": "a.txt"}), dir.path()).unwrap();
+        assert_eq!(file["type"], "file");
+        assert_eq!(file["size"], 3);
+        let folder = run("fs.stat", json!({"path": "."}), dir.path()).unwrap();
+        assert_eq!(folder["type"], "directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_stat_describes_a_link_itself_unless_follow_is_set() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("target.txt"), b"abc").unwrap();
+        std::os::unix::fs::symlink("target.txt", dir.path().join("link")).unwrap();
+        let link = run("fs.stat", json!({"path": "link"}), dir.path()).unwrap();
+        assert_eq!(link["type"], "symlink");
+        let followed = run(
+            "fs.stat",
+            json!({"path": "link", "follow": true}),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(followed["type"], "file");
+        assert_eq!(followed["size"], 3);
+    }
+
+    #[test]
+    fn fs_realpath_returns_the_canonical_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"abc").unwrap();
+        let output = run("fs.realpath", json!({"path": "a.txt"}), dir.path()).unwrap();
+        let resolved = output["realpath"].as_str().unwrap();
+        assert!(Path::new(resolved).is_absolute());
+        assert!(resolved.ends_with("a.txt"));
+        assert!(Path::new(resolved).is_file());
+    }
+
+    #[test]
+    fn fs_realpath_refuses_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run("fs.realpath", json!({"path": "missing.txt"}), dir.path()).is_err());
+    }
+
+    #[test]
+    fn conf_set_edits_only_the_key_line_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = "# top comment\nname = demo\nport=80\n";
+        fs::write(dir.path().join("app.conf"), original).unwrap();
+        let args = json!({"path": "app.conf", "key": "port", "value": "8080"});
+        let first = run("conf.set", args.clone(), dir.path()).unwrap();
+        assert_eq!(first, json!({"changed": true, "path": "app.conf"}));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            "# top comment\nname = demo\nport=8080\n"
+        );
+        let second = run("conf.set", args, dir.path()).unwrap();
+        assert_eq!(second["changed"], false);
+    }
+
+    #[test]
+    fn conf_set_creates_a_missing_file_with_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run(
+            "conf.set",
+            json!({"path": "new.conf", "key": "port", "value": "8080", "separator": ":", "spaced": true}),
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(output["changed"], true);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("new.conf")).unwrap(),
+            "port: 8080\n"
+        );
+    }
+
+    #[test]
+    fn conf_set_refuses_unknown_style_values() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run(
+            "conf.set",
+            json!({"path": "x.conf", "key": "k", "value": "v", "separator": "=="}),
+            dir.path(),
+        )
+        .is_err());
+        assert!(run(
+            "conf.set",
+            json!({"path": "x.conf", "key": "k", "value": "v", "comment": "%"}),
+            dir.path(),
+        )
+        .is_err());
+        assert!(!dir.path().join("x.conf").exists());
+    }
 }

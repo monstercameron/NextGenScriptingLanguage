@@ -1,0 +1,184 @@
+{
+  "name": "conf.set",
+  "description": "Sets one key to a value in a key/value config file, editing only that key's line so comments, other lines and line endings stay byte-identical, and changing the file only when the key does not already hold the value.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Config file path to update; relative paths resolve from the program working directory. A missing file is created."
+    },
+    "key": {
+      "type": "string",
+      "required": true,
+      "description": "Key to set. It must be nonempty and contain no blank, NUL, \"=\", \":\", \"#\", \";\" or the comment marker."
+    },
+    "value": {
+      "type": "string",
+      "required": true,
+      "description": "Value to set, on one line without carriage returns, line feeds or NUL. It replaces everything after the separator on the key's line."
+    },
+    "separator": {
+      "type": "string",
+      "enum": [
+        "=",
+        ":",
+        " "
+      ],
+      "description": "Separator between key and value: \"=\", \":\" or \" \" (one or more blanks). Omitted means \"=\"."
+    },
+    "comment": {
+      "type": "string",
+      "enum": [
+        "#",
+        ";",
+        "//",
+        "--"
+      ],
+      "description": "Line comment marker: \"#\", \";\", \"//\" or \"--\". A commented key line does not count as setting the key. Omitted means \"#\"."
+    },
+    "spaced": {
+      "type": "boolean",
+      "description": "When a new key line is appended with \"=\" or \":\", write spaces around the separator (key = value). Omitted or false writes key=value. Ignored for a blank separator."
+    },
+    "uncomment": {
+      "type": "boolean",
+      "description": "When no live key line exists, rewrite the first commented key line in place instead of appending a new line. Omitted or false appends."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "conf.set"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "path"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "key": {
+          "schema": {
+            "type": "text",
+            "single_line": true
+          },
+          "delivery": "single"
+        },
+        "value": {
+          "schema": {
+            "type": "text",
+            "single_line": true
+          },
+          "delivery": "single"
+        },
+        "separator": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "=",
+              ":",
+              " "
+            ]
+          },
+          "delivery": "single"
+        },
+        "comment": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "#",
+              ";",
+              "//",
+              "--"
+            ]
+          },
+          "delivery": "single"
+        },
+        "spaced": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "uncomment": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "path"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "conf set"
+  ],
+  "examples": [
+    {
+      "program": "run conf.set with path \"catalog-example.conf\" and key \"enabled\" and value \"true\" as result",
+      "expected_output": {
+        "changed": true,
+        "path": "catalog-example.conf"
+      }
+    }
+  ]
+}

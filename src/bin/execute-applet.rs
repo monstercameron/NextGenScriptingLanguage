@@ -442,14 +442,14 @@ fn help() -> &'static str {
      json.values, csv.parse, csv.stringify, jsonc.edit_content,\n\
      text.lines, text.split, text.default_if_empty, text.replace,\n\
      text.strip_prefix, text.strip_suffix, text.lower, text.upper, text.join,\n\
-     path.join, text.render, list.chunk, list.concat, list.enumerate, list.first,\n\
+     path.join, text.render, redact.text, list.chunk, list.concat, list.enumerate, list.first,\n\
      list.flatten, list.last, list.range, list.rest, list.reverse, list.slice, list.zip,\n\
      hash.sha256, hash.sha512, encode.base64, encode.form, encode.hex, encode.url,\n\
      decode.base64, decode.hex, decode.url, time.add, time.diff, time.format, time.now,\n\
      time.parse, time.parts, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
      ini.parse, ini.stringify, env.load, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
      fs.ensure_symlink, fs.ensure_dir,\n\
-     fs.read, fs.snapshot,\n\
+     fs.read, fs.snapshot, fs.stat, fs.realpath, conf.set,\n\
      fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\
      jsonc.set,\n\
      jsonc.remove.\n\

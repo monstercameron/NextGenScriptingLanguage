@@ -648,6 +648,8 @@ helper executable.
 | `json.has`, `json.delete` | Test a JSON Pointer or remove its target. `json.has` defaults an omitted path to the root. `json.delete` requires a path and refuses the root. |
 | `json.sort_by`, `json.unique_by`, `json.group_by` | Sort, deduplicate, or group array items by a JSON Pointer key. An omitted `pointer` defaults to the empty pointer, selecting each item itself; explicit non-string or malformed pointers fail. |
 | `fs.read`, `fs.snapshot` | Read a regular UTF-8 file up to 16 MiB and return `{content,content_hash,snapshot,symlink,mode}`. The content hash is SHA-256 of file bytes; the snapshot also binds path, link/target identity and metadata. Missing files have the explicit absence outcome. |
+| `fs.stat` | Describe `path` as `{type,size,mode,read_only,mtime_ns}`. `type` is `absent`, `file`, `directory`, `symlink` or `other`; a trailing link is described itself unless `follow` is true. An absent path answers `type` `absent` with null fields rather than an error. |
+| `fs.realpath` | Return `{realpath}`, the canonical absolute form of an existing path with symbolic links resolved. An absent path is the explicit absence outcome. |
 | `fs.write_atomic` | Require the expected SHA-256 or `"missing"`, then atomically replace one file. It requires explicit `preserve`, `reject` or `replace` symlink policy and `preserve`, `private` or `exact` permission policy; an optional stable advisory lock path has a 30-second default and 300-second maximum timeout. |
 | `fs.transaction` | Apply a bounded journaled batch of expected-hash writes or removals to existing regular files. It is a command applet with explicit recovery, not a multi-file atomic-visibility guarantee. |
 | `fs.transaction.recover` | Complete or roll back a retained transaction journal if every target still matches its recorded before or after state, including a requested absent state. A third state is a manual-recovery conflict. |
@@ -1052,6 +1054,14 @@ conflict rather than losing that edit.
   `state` of `"present"` (the default) or `"absent"`. Matching ignores a trailing
   CR, and other bytes are kept exactly. A missing file is created only for
   `present`. It returns `changed` and `path`.
+- `conf.set` takes `path`, `key`, `value` (one line, no CR, LF or NUL) and the
+  optional style fields `separator` (`"="` by default, `":"` or `" "`), `comment`
+  (`"#"` by default, `";"`, `"//"` or `"--"`), `spaced` (write `key = value` when
+  appending; default false) and `uncomment` (rewrite a commented `key` line in place
+  when no live line exists; default false). Only the line for `key` changes; comments,
+  other lines and line endings keep their bytes, and an absent file is created. It
+  returns `changed` and `path`, and it follows the same locking and conflict rules as
+  `fs.ensure_line`.
 - `fs.ensure_symlink` takes `path` (the link) and `target`. It creates the link,
   keeps it when it already points at `target`, and replaces an existing link. It
   refuses to replace a regular file or directory, and it takes no advisory lock.
@@ -1146,7 +1156,10 @@ the switch proceeds; the example does not count matches.
 
 Typed editing of hyprlang, TOML and INI configuration files is intentionally out of
 scope for applets. Templates are rendered as text, and the program writes them. No
-applet parses or rewrites those formats in place.
+applet parses or rewrites those formats in place. The one line-oriented exception is
+`conf.set`, which sets a single `key` in a key/value file and leaves every other
+line byte-identical. It does not understand sections, quoting or nested syntax, so it
+does not make those formats typed.
 
 Coverage: `tests/lane_a_theme.rs`. The portable test checks the program. The Unix
 tests create real links and a fake `hyprctl`.

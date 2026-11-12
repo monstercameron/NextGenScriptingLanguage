@@ -237,9 +237,6 @@ pub(super) fn unlink_checked(
 /// bits and `read_only` is the Windows attribute; each is null elsewhere.
 /// `mtime_ns` is nanoseconds since the Unix epoch, null when the platform
 /// does not report it.
-// The dispatch arm (`"fs.stat" => filesystem::stat(...)`) lives in applets/mod.rs,
-// which this lane does not own; the attribute goes once that arm lands.
-#[allow(dead_code)]
 pub(super) fn stat(
     args: &Map<String, Value>,
     cwd: &Path,
@@ -293,13 +290,11 @@ pub(super) fn stat(
 
 /// Windows read-only attribute; `None` on other platforms, where `mode` is the
 /// meaningful permission report.
-#[allow(dead_code)]
 #[cfg(windows)]
 fn read_only_flag(metadata: &fs::Metadata) -> Option<bool> {
     Some(metadata.permissions().readonly())
 }
 
-#[allow(dead_code)]
 #[cfg(not(windows))]
 fn read_only_flag(metadata: &fs::Metadata) -> Option<bool> {
     let _ = metadata;
@@ -309,7 +304,6 @@ fn read_only_flag(metadata: &fs::Metadata) -> Option<bool> {
 /// Modification time as signed nanoseconds since the Unix epoch. Times before
 /// the epoch are negative. `None` when the platform reports no time or the
 /// value does not fit in 64 bits.
-#[allow(dead_code)]
 fn modified_ns(metadata: &fs::Metadata) -> Option<i64> {
     let modified = metadata.modified().ok()?;
     match modified.duration_since(std::time::UNIX_EPOCH) {
@@ -323,9 +317,6 @@ fn modified_ns(metadata: &fs::Metadata) -> Option<i64> {
 /// `fs.realpath`: the canonical form of an existing `path`, with every symbolic
 /// link resolved. An absent path is refused with the `not_found` absence error
 /// rather than answered, because it has no canonical name.
-// Dispatch arm `"fs.realpath" => filesystem::realpath(...)` is pending in
-// applets/mod.rs (not owned by this lane).
-#[allow(dead_code)]
 pub(super) fn realpath(
     args: &Map<String, Value>,
     cwd: &Path,

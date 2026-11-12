@@ -1,0 +1,152 @@
+{
+  "name": "redact.text",
+  "description": "Replaces credential-shaped tokens, email addresses, IPv4 addresses and caller-supplied literal values in text with numbered placeholders such as <email-1>, and returns the redacted text with a count per category. Reads and writes nothing; matched values are never returned.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Text to redact."
+    },
+    "literals": {
+      "type": "list",
+      "items": "string",
+      "description": "Exact values to redact wherever they occur, such as a known password or account name. Empty values are ignored. At most 256 literals of up to 65536 bytes each."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "redact.text"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "text": {
+          "type": "text"
+        },
+        "counts": {
+          "type": "record",
+          "fields": {
+            "literal": {
+              "type": "integer"
+            },
+            "token": {
+              "type": "integer"
+            },
+            "email": {
+              "type": "integer"
+            },
+            "ipv4": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "literal",
+            "token",
+            "email",
+            "ipv4"
+          ]
+        }
+      },
+      "required": [
+        "text",
+        "counts"
+      ]
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "literals": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "text": {
+                "type": "text"
+              },
+              "counts": {
+                "type": "record",
+                "fields": {
+                  "literal": {
+                    "type": "integer"
+                  },
+                  "token": {
+                    "type": "integer"
+                  },
+                  "email": {
+                    "type": "integer"
+                  },
+                  "ipv4": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "literal",
+                  "token",
+                  "email",
+                  "ipv4"
+                ]
+              }
+            },
+            "required": [
+              "text",
+              "counts"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "redact text"
+  ],
+  "examples": [
+    {
+      "program": "run redact.text with text \"mail ops@example.com from 10.0.0.7\" as result",
+      "expected_output": {
+        "text": "mail <email-1> from <ipv4-1>",
+        "counts": {
+          "literal": 0,
+          "token": 0,
+          "email": 1,
+          "ipv4": 1
+        }
+      }
+    }
+  ]
+}

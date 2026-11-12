@@ -1,0 +1,79 @@
+{
+  "name": "fs.realpath",
+  "description": "Returns the canonical absolute form of an existing path with every symbolic link resolved. An absent path is an error, because it has no canonical name.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Existing path to resolve; relative paths resolve from the program working directory."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.realpath"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "realpath": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "realpath"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "realpath": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "realpath"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "fs realpath"
+  ],
+  "examples": []
+}

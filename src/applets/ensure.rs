@@ -23,7 +23,10 @@ use super::filesystem::{
     atomic_replace_locked, default_lock_path, hash, resolve_path, with_path_lock,
 };
 use super::transaction::WriteJournal;
-use super::{invalid, io_error, required_string, AppletError, ExecutionContext};
+use super::{
+    invalid, io_error, optional_bool, optional_string, required_string, AppletError,
+    ExecutionContext,
+};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::{ErrorKind, Read};
@@ -135,6 +138,63 @@ pub(super) fn ensure_line(
         write_locked(&path, content.as_bytes(), &expected, None, None, context)?;
     }
     Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
+/// `conf.set`: set one `key` to `value` in a key/value config file, changing the
+/// file only when that line must change. Reads and writes exactly as
+/// `fs.ensure_line` does, so an absent file is created and a concurrent edit
+/// fails with a conflict.
+pub(super) fn conf_set(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let text = nonempty_path(args)?;
+    let path = resolve_path(text, cwd);
+    let key = required_string(args, "key")?;
+    let value = required_string(args, "value")?;
+    let style = conf_style(args)?;
+    let current = read_current(&path, context)?;
+    let existing = match &current {
+        Some(current) => std::str::from_utf8(&current.bytes)
+            .map_err(|error| invalid(format!("file is not UTF-8 text: {error}")))?,
+        None => "",
+    };
+    let updated = set_key_text(existing, key, value, style).map_err(invalid)?;
+    if let Some(content) = &updated {
+        let expected = expected_hash(current.as_ref());
+        write_locked(&path, content.as_bytes(), &expected, None, None, context)?;
+    }
+    Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
+/// Read the optional `conf.set` style fields. The text forms map onto the
+/// static strings that [`ConfStyle`] holds, so any other value is refused here.
+fn conf_style(args: &Map<String, Value>) -> Result<ConfStyle, AppletError> {
+    let separator = match optional_string(args, "separator", "=")? {
+        "=" => "=",
+        ":" => ":",
+        " " => " ",
+        _ => return Err(invalid("args.separator must be \"=\", \":\" or \" \"")),
+    };
+    let comment = match optional_string(args, "comment", "#")? {
+        "#" => "#",
+        ";" => ";",
+        "//" => "//",
+        "--" => "--",
+        _ => {
+            return Err(invalid(
+                "args.comment must be \"#\", \";\", \"//\" or \"--\"",
+            ))
+        }
+    };
+    Ok(ConfStyle {
+        separator,
+        comment,
+        spaced: optional_bool(args, "spaced", false)?,
+        uncomment: optional_bool(args, "uncomment", false)?,
+    })
 }
 
 pub(super) fn ensure_symlink(
@@ -560,7 +620,6 @@ fn create_symlink(_target: &str, _at: &Path, _link: &Path) -> std::io::Result<()
 }
 
 /// Dialect of a line-oriented config file for [`set_key_text`].
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 struct ConfStyle {
     /// `"="`, `":"` or `" "` (one or more blanks).
@@ -586,7 +645,6 @@ struct ConfStyle {
 /// Only a live line counts as setting `key`: a commented `# key = ...` line never
 /// matches unless `uncomment` asks for it. Appends go to the end of the text, so
 /// the function does not know about sections.
-#[allow(dead_code)]
 fn set_key_text(
     text: &str,
     key: &str,

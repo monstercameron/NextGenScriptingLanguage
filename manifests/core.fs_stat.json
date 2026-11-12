@@ -1,0 +1,140 @@
+{
+  "name": "fs.stat",
+  "description": "Returns one record describing a path: its type (absent, file, directory, symlink or other), size in bytes, Unix mode bits, Windows read-only flag and modification time in nanoseconds since the Unix epoch. An absent path answers type absent with null fields.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Path to describe; relative paths resolve from the program working directory."
+    },
+    "follow": {
+      "type": "boolean",
+      "description": "Set true to follow a trailing symbolic link and describe its target; omitted or false describes the link itself as type symlink."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.stat"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "type": {
+          "type": "text"
+        },
+        "size": {
+          "type": "integer",
+          "nullable": true
+        },
+        "mode": {
+          "type": "integer",
+          "nullable": true
+        },
+        "read_only": {
+          "type": "boolean",
+          "nullable": true
+        },
+        "mtime_ns": {
+          "type": "integer",
+          "nullable": true
+        }
+      },
+      "required": [
+        "type",
+        "size",
+        "mode",
+        "read_only",
+        "mtime_ns"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [
+      "filesystem.read"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "follow": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "type": {
+                "type": "text"
+              },
+              "size": {
+                "type": "integer",
+                "nullable": true
+              },
+              "mode": {
+                "type": "integer",
+                "nullable": true
+              },
+              "read_only": {
+                "type": "boolean",
+                "nullable": true
+              },
+              "mtime_ns": {
+                "type": "integer",
+                "nullable": true
+              }
+            },
+            "required": [
+              "type",
+              "size",
+              "mode",
+              "read_only",
+              "mtime_ns"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "fs stat"
+  ],
+  "examples": [
+    {
+      "program": "run fs.stat with path \"catalog-example-missing-494\" as info",
+      "expected_output": {
+        "type": "absent",
+        "size": null,
+        "mode": null,
+        "read_only": null,
+        "mtime_ns": null
+      }
+    }
+  ]
+}

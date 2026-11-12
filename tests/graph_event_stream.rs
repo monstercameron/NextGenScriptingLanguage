@@ -52,6 +52,7 @@ fn sample_envelope() -> EventEnvelope {
         sensitivity: SensitivitySet::empty(),
         remote: None,
         payload: PortValue::Value(Value::Integer(42)),
+        encoded_bytes: None,
     }
 }
 
@@ -181,6 +182,7 @@ fn bytes_envelope(bytes: Vec<u8>) -> EventEnvelope {
         sensitivity: SensitivitySet::empty(),
         remote: None,
         payload: PortValue::Bytes(bytes),
+        encoded_bytes: None,
     }
 }
 
@@ -527,6 +529,7 @@ fn value_envelope(payload: Value) -> EventEnvelope {
         sensitivity: SensitivitySet::empty(),
         remote: None,
         payload: PortValue::Value(payload),
+        encoded_bytes: None,
     }
 }
 

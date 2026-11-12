@@ -195,6 +195,10 @@ pub enum GraphNodeKind {
     Renderer {
         backend: String,
     },
+    /// Built-in combinator executed in process, with no applet call. The nth
+    /// record arriving on `left` is paired with the nth record arriving on
+    /// `right`, and each pair is emitted on `pairs` as a two-element list.
+    Zip,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -661,6 +665,10 @@ impl GraphPlan {
             .collect::<BTreeMap<_, _>>();
         let sensitivity_labels = self.effective_sensitivity_labels(registry)?;
         for node in &self.nodes {
+            if matches!(&node.kind, GraphNodeKind::Zip) {
+                validate_zip_node(node, &self.edges)?;
+                continue;
+            }
             if matches!(&node.kind, GraphNodeKind::NativeStream { .. })
                 && node
                     .invocations()
@@ -1471,6 +1479,7 @@ impl GraphPlan {
                 GraphNodeKind::Listener { .. } => Some("a listener"),
                 GraphNodeKind::NativeStream { .. } => Some("a native stream"),
                 GraphNodeKind::Renderer { .. } => Some("a renderer"),
+                GraphNodeKind::Zip => Some("a zip combinator"),
             };
             if let Some(source) = source {
                 bail!(
@@ -1742,6 +1751,7 @@ fn node_kind_name(kind: &GraphNodeKind) -> &'static str {
         GraphNodeKind::Listener { .. } => "listener/persistent",
         GraphNodeKind::NativeStream { .. } => "native-stream/persistent",
         GraphNodeKind::Renderer { .. } => "renderer/persistent",
+        GraphNodeKind::Zip => "zip/in-process",
     }
 }
 
@@ -2017,6 +2027,41 @@ fn validate_input_references(
 
     for (parameter, value) in &call.parameters {
         visit(value, parameter, input_types, node)?;
+    }
+    Ok(())
+}
+
+/// A zip node declares exactly the inputs `left` and `right` and the output
+/// `pairs`, all records, and each input has exactly one edge. More than one edge
+/// into an input would merge its records out of pairing order, so it is refused.
+fn validate_zip_node(node: &GraphNode, edges: &[EdgeSpec]) -> Result<()> {
+    let inputs = node.inputs.keys().map(String::as_str).collect::<Vec<_>>();
+    let outputs = node.outputs.keys().map(String::as_str).collect::<Vec<_>>();
+    if inputs != ["left", "right"] || outputs != ["pairs"] || !node.events.is_empty() {
+        bail!(
+            "graph zip node {:?} must declare inputs left and right, output pairs, and no events",
+            node.id
+        );
+    }
+    if node
+        .inputs
+        .values()
+        .chain(node.outputs.values())
+        .any(|port| port.delivery != PortDelivery::Records)
+    {
+        bail!("graph zip node {:?} must use records ports", node.id);
+    }
+    for name in ["left", "right"] {
+        let bound = edges
+            .iter()
+            .filter(|edge| edge.to.node == node.id && edge.to.port == name)
+            .count();
+        if bound != 1 {
+            bail!(
+                "graph zip node {:?} input {name:?} must be fed by exactly one edge, found {bound}",
+                node.id
+            );
+        }
     }
     Ok(())
 }

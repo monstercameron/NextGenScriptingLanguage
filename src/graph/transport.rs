@@ -3309,8 +3309,39 @@ impl GraphExecutor for RuntimeGraphExecutor {
             GraphNodeKind::Renderer { backend } => {
                 bail!("renderer backend {backend:?} is not installed in this executor")
             }
+            GraphNodeKind::Zip => run_zip(io),
         }
     }
+}
+
+/// Pairs the nth record arriving on `left` with the nth record arriving on
+/// `right`, in arrival order. A record waits in its own queue until its partner
+/// arrives, so an unequal stream leaves its surplus unpaired and never emits it.
+fn run_zip(io: &mut NodeIo) -> Result<()> {
+    let mut left = VecDeque::new();
+    let mut right = VecDeque::new();
+    while let Some(event) = io.recv_any()? {
+        let port = event
+            .input
+            .as_ref()
+            .map(|input| input.port.clone())
+            .ok_or_else(|| anyhow!("zip node {:?} received an unrouted event", io.node))?;
+        let PortValue::Value(value) = event.payload else {
+            bail!("zip node {:?} pairs record values, not bytes", io.node);
+        };
+        match port.as_str() {
+            "left" => left.push_back(value),
+            "right" => right.push_back(value),
+            other => bail!("zip node {:?} has no input {other:?}", io.node),
+        }
+        while let (Some(l), Some(r)) = (left.front(), right.front()) {
+            let pair = Value::List(vec![l.clone(), r.clone()]);
+            left.pop_front();
+            right.pop_front();
+            io.emit("pairs", PortValue::Value(pair))?;
+        }
+    }
+    Ok(())
 }
 
 fn apply_input(
@@ -4338,6 +4369,57 @@ mod input_cursor_tests {
         assert!(
             queue.try_recv().unwrap().is_none(),
             "buffered items for a detached consumer are discarded"
+        );
+    }
+
+    #[test]
+    fn zip_pairs_nth_records_in_order_and_holds_the_surplus() {
+        let task_scope = TaskScope::new(1, None).unwrap();
+        let token = task_scope.cancellation_token();
+        let left = BoundedQueue::new(8, BufferPolicy::Lossless);
+        let right = BoundedQueue::new(8, BufferPolicy::Lossless);
+        for sequence in 0..3 {
+            enqueue(&left, "timer".into(), "left", sequence, &token);
+        }
+        for sequence in 0..2 {
+            enqueue(&right, "listener".into(), "right", 10 + sequence, &token);
+        }
+        left.close();
+        right.close();
+        let out = BoundedQueue::new(8, BufferPolicy::Lossless);
+        let mut io = node_io(
+            BTreeMap::from([
+                ("left".into(), vec![Arc::clone(&left)]),
+                ("right".into(), vec![Arc::clone(&right)]),
+            ]),
+            token.clone(),
+        );
+        let list_schema: crate::contracts::ValueSchema = serde_json::from_value(
+            serde_json::json!({ "type": "list", "items": { "type": "json" } }),
+        )
+        .unwrap();
+        io.output_sinks = BTreeMap::from([(
+            "pairs".into(),
+            vec![QueueSink {
+                queue: Arc::clone(&out),
+                input: Some(PortRef::new("sink", "pairs")),
+            }],
+        )]);
+        io.schemas = BTreeMap::from([("pairs".into(), PortSchema::records(list_schema))]);
+
+        run_zip(&mut io).unwrap();
+
+        let mut pairs = Vec::new();
+        while let Some(event) = out.try_recv().unwrap() {
+            pairs.push(event.payload);
+        }
+        assert_eq!(
+            pairs,
+            vec![
+                PortValue::Value(Value::List(vec![Value::Integer(0), Value::Integer(10)])),
+                PortValue::Value(Value::List(vec![Value::Integer(1), Value::Integer(11)])),
+            ],
+            "the third left record has no partner and must not be emitted"
         );
     }
 

@@ -114,6 +114,55 @@ built an artifact or signed the checksum file). They do not replace OS code sign
 study. Signing certificates, Apple notarization and Flatpak repository GPG keys
 are not configured.
 
+## Uninstall and per-user state
+
+Packages install program files only: the DEB and RPM place binaries and
+manifests under `/usr/bin` and `/usr/share/execute`, and an archive or Windows
+zip is a directory you extract. Execute also writes per-user state outside those
+files, so removing the program does not remove that state. A clean uninstall
+needs both steps.
+
+Remove the program:
+
+```sh
+sudo apt remove execute      # Debian / Ubuntu DEB
+sudo dnf remove execute      # Fedora / RHEL family RPM
+flatpak uninstall --user io.github.monstercameron.Execute
+```
+
+For the archive or Windows zip, delete the extracted directory. Flatpak keeps
+the application's home data under `~/.var/app`; that location belongs to
+Flatpak, not to Execute.
+
+Per-user state paths, as the code defines them:
+
+| Path | Contents | Where the path is defined |
+| --- | --- | --- |
+| `$XDG_STATE_HOME/execute/` (absolute), otherwise `~/.local/state/execute/`; Windows `%LOCALAPPDATA%\execute\` | `what-if.key`: the 32-byte HMAC key for the what-if digest, created on first use. Named state in `flags/`, `values/` and `debounce/`. | `key_path` in `src/agent/what_if_key.rs`; `state_dir` in `src/applets/state.rs`; subdirectories in `src/named_state.rs` |
+| `$XDG_RUNTIME_DIR/execute-<uid>/daemon.sock` (falls back to the temporary directory when `XDG_RUNTIME_DIR` is unset or empty) | Socket of `execute daemon serve`. | `default_socket` in `src/agent/daemon.rs` |
+| `$XDG_RUNTIME_DIR/execute-locks-<uid>/` (falls back to the temporary directory when `XDG_RUNTIME_DIR` is not an absolute path) | Named lock files. | `named_lock_directory` in `src/agent/instance.rs` |
+| Cache directory | None by default. `--cache-dir` names one for each run, so remove only a directory you created for that purpose. | `cache_dir` in `src/cli/parse.rs`; `src/doctor.rs` module notes |
+| Checkpoint directories | None by default. The directory is the one you name when you run a program with a checkpoint or inspect it with `execute checkpoint status DIR`. Remove one only when no run is using it. | `src/agent/checkpoint.rs` |
+
+The what-if key is the only key in the program. A checkpoint that records keyed
+inputs cannot resume without it, and the resume path refuses to create a
+replacement. Back up the key with the checkpoints it protects, and do not
+delete it while any such checkpoint is still needed.
+
+Upgrades and compatibility:
+
+- Installing a new package replaces program files. The state paths above are not
+  part of any package, so an upgrade leaves them in place.
+- Checkpoint journals are versioned. This build writes journal version 6 and
+  reads versions 1 through 6; it migrates older journals when it loads them.
+  A build that meets a version it does not know refuses the checkpoint. A
+  checkpoint written by a newer build therefore cannot be resumed after a
+  downgrade. Finish or resolve such checkpoints before downgrading.
+- The what-if key carries no version number. Keep the same key file across
+  versions.
+- No upgrade or downgrade test runs in CI yet. The version rules above come from
+  the source; they have not been exercised across published packages.
+
 ## Maintainer workflow
 
 `Cargo.toml` is the canonical runtime version; root `Cargo.lock` and the

@@ -293,6 +293,16 @@ pub struct ProgramModule {
         skip_serializing_if = "Option::is_none"
     )]
     pub package_lock: Option<PathBuf>,
+    /// SHA-256 of the package lock file bytes. When present (package mode
+    /// only), the loader verifies the lock bytes on every run before trusting
+    /// the lock, anchoring the whole pinned package graph in the applet
+    /// manifest instead of only in the writable module root.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub package_lock_sha256: Option<String>,
 }
 
 impl ProgramModule {
@@ -320,6 +330,14 @@ impl ProgramModule {
             if pin.len() != 64 || !pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 bail!("program module source_sha256 must be a 64-character SHA-256 hex digest");
             }
+        }
+        if let Some(pin) = &self.package_lock_sha256 {
+            if pin.len() != 64 || !pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                bail!("program module package_lock_sha256 must be a 64-character SHA-256 hex digest");
+            }
+        }
+        if self.package_lock_sha256.is_some() && self.package_manifest.is_none() {
+            bail!("program module package_lock_sha256 requires package_manifest and package_lock");
         }
         if self.allow_unpinned && self.source_sha256.is_some() {
             bail!("program module allow_unpinned cannot be combined with source_sha256");

@@ -223,6 +223,7 @@ fn source_direct_applet(root: &Path, source: &str) -> (ProgramModule, PathBuf) {
             allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
+            package_lock_sha256: None,
         },
         manifest,
     )
@@ -329,6 +330,7 @@ fn v2_listener_export_uses_the_persistent_service_root_and_typed_contract() {
         allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../package/program.modules.json")),
         package_lock: Some(PathBuf::from("../package/program.modules.lock.json")),
+        package_lock_sha256: None,
     };
     fs::write(
         root.path().join("package/program.modules.lock.json"),
@@ -373,6 +375,7 @@ fn listener_trigger_applet_is_retained_in_the_verified_package_scope() {
         allow_unpinned: false,
         package_manifest: Some(PathBuf::from("package/program.modules.json")),
         package_lock: Some(PathBuf::from("package/program.modules.lock.json")),
+        package_lock_sha256: None,
     };
     let export = package.export("poll").unwrap();
     let applet = json!({
@@ -610,6 +613,7 @@ fn service_event_uses_the_canonical_decoded_result_envelope_schema() {
         allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
+        package_lock_sha256: None,
     };
     let contract: AppletContract =
         serde_json::from_value(contract_json(&reference, &export)).unwrap();
@@ -680,6 +684,7 @@ fn interface_lifecycle_pairing_is_explicit_and_package_ports_match_contract_exac
         allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../package/program.modules.json")),
         package_lock: None,
+        package_lock_sha256: None,
     };
     // Package descriptors require a manifest and lock together, so write the
     // exact verified lock snapshot before loading the descriptor.
@@ -739,6 +744,7 @@ fn interface_lifecycle_pairing_is_explicit_and_package_ports_match_contract_exac
         allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../package/program.modules.json")),
         package_lock: Some(PathBuf::from("../package/program.modules.lock.json")),
+        package_lock_sha256: None,
     };
     let finite = load_program_module(&finite_reference, &finite_manifest, root.path()).unwrap();
     let finite_export = finite.export.as_ref().unwrap();
@@ -764,6 +770,7 @@ fn scheduled_modules_are_rejected_from_finite_program_calls_during_preflight() {
         allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
+        package_lock_sha256: None,
     };
     let export = service_package(source).exports.get("poll").unwrap().clone();
     let applet_manifest = json!({

@@ -171,6 +171,7 @@ fn versioned_module_exports_typed_record_and_resolves_source_from_manifest_origi
             allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
+            package_lock_sha256: None,
         },
         &applet_manifest,
         &root,
@@ -364,6 +365,7 @@ fn package_descriptor_uses_manifest_origin_lock_and_transitive_checkpoint_identi
         allow_unpinned: false,
         package_manifest: Some(PathBuf::from("../main/program.modules.json")),
         package_lock: Some(PathBuf::from("../main/program.modules.lock.json")),
+        package_lock_sha256: None,
     };
     let first = load_program_module(&reference, &applet_manifest_path, &root).unwrap();
     assert_eq!(first.transitive_fingerprints.len(), 2);

@@ -835,6 +835,7 @@ fn build_dependency_scope(
                 allow_unpinned: false,
                 package_manifest: None,
                 package_lock: None,
+                package_lock_sha256: None,
             };
             reference.validate()?;
             let identity = format!("{alias}.{export_name}");
@@ -1152,6 +1153,7 @@ impl LoadedProgramModulePackage {
                 allow_unpinned: false,
                 package_manifest: None,
                 package_lock: None,
+                package_lock_sha256: None,
             },
             package_name: self.manifest.name.clone(),
             package_version: self.manifest.version.clone(),
@@ -1220,6 +1222,7 @@ pub fn load_program_module_package(
     allowed_root: &Path,
     lock_path: Option<&Path>,
 ) -> Result<LoadedProgramModulePackage> {
+    reject_overly_broad_module_root(allowed_root)?;
     let root = canonical_directory(allowed_root, "module root")?;
     let mut state = LoadState {
         root: root.clone(),
@@ -1246,6 +1249,7 @@ pub fn load_program_module(
     allowed_root: &Path,
 ) -> Result<LoadedProgramSource> {
     reference.validate()?;
+    reject_overly_broad_module_root(allowed_root)?;
     let root = canonical_directory(allowed_root, "module root")?;
     let applet_manifest_path = resolve_inside_root(applet_manifest_path, &root, "applet manifest")?;
     let source_path = resolve_relative_file(
@@ -1340,6 +1344,20 @@ pub fn load_program_module(
                     &root,
                     "program module package lock",
                 )?;
+                if let Some(pinned) = &reference.package_lock_sha256 {
+                    let lock_bytes = read_limited(
+                        &package_lock_path,
+                        MAX_MODULE_MANIFEST_BYTES,
+                        "program module package lock",
+                    )?;
+                    let actual = sha256_hex(&lock_bytes);
+                    if !pinned.eq_ignore_ascii_case(&actual) {
+                        bail!(
+                            "program module package lock {} hash mismatch: pinned package_lock_sha256 {pinned} does not match actual {actual}",
+                            package_lock_path.display()
+                        );
+                    }
+                }
                 let package = load_program_module_package(
                     &package_manifest_path,
                     &root,
@@ -2255,6 +2273,38 @@ fn canonical_directory(path: &Path, what: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+/// Reject a module root that would silently trust the whole filesystem or the
+/// user's entire home directory. A catalog or single-file manifest selector
+/// placed there makes the selector file's parent directory the module root,
+/// so a module path could reach anywhere beneath it. Use a dedicated manifest
+/// directory so program module files stay confined. Unresolvable paths are
+/// left for the loader's canonicalization to report.
+fn reject_overly_broad_module_root(allowed_root: &Path) -> Result<()> {
+    let Ok(root) = fs::canonicalize(allowed_root) else {
+        return Ok(());
+    };
+    if root.parent().is_none() {
+        bail!(
+            "module root {} is the filesystem root; use a dedicated manifest directory so program module files stay confined",
+            root.display()
+        );
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from);
+    if let Some(home) = home {
+        let home = fs::canonicalize(&home).unwrap_or(home);
+        if root == home {
+            bail!(
+                "module root {} is the home directory; use a dedicated manifest directory so program module files stay confined",
+                root.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn read_json_file<T: for<'de> Deserialize<'de>>(
     path: &Path,
     maximum: usize,
@@ -2923,6 +2973,7 @@ mod tests {
             allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
+            package_lock_sha256: None,
         }
         .validate()
         .is_ok());
@@ -2934,6 +2985,7 @@ mod tests {
             allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
+            package_lock_sha256: None,
         }
         .validate()
         .is_err());
@@ -2945,6 +2997,7 @@ mod tests {
             allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
+            package_lock_sha256: None,
         }
         .validate()
         .is_ok());
@@ -2956,6 +3009,7 @@ mod tests {
             allow_unpinned: true,
             package_manifest: None,
             package_lock: None,
+            package_lock_sha256: None,
         }
         .validate()
         .is_err());
@@ -2980,6 +3034,7 @@ mod tests {
                 allow_unpinned: true,
                 package_manifest: None,
                 package_lock: None,
+                package_lock_sha256: None,
             },
             &applet_manifest_path,
             &root,
@@ -2996,6 +3051,7 @@ mod tests {
                 allow_unpinned: true,
                 package_manifest: None,
                 package_lock: None,
+                package_lock_sha256: None,
             },
             &applet_manifest_path,
             &root,
@@ -3024,6 +3080,7 @@ mod tests {
             allow_unpinned,
             package_manifest: None,
             package_lock: None,
+            package_lock_sha256: None,
         };
         let pin = sha256_hex(source.as_bytes());
 
@@ -3055,6 +3112,135 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("hash mismatch"), "{error}");
+    }
+
+    #[test]
+    fn package_lock_pin_anchors_the_lock_and_tampering_is_refused() {
+        // The applet manifest names the lock pin under its JSON key.
+        let pinned: ProgramModule = serde_json::from_value(serde_json::json!({
+            "source": "src/library.program",
+            "entry": "describe",
+            "interface_version": 1,
+            "package_manifest": "program.modules.json",
+            "package_lock": "program.modules.lock.json",
+            "package_lock_sha256": "1".repeat(64),
+        }))
+        .unwrap();
+        assert!(pinned.validate().is_ok());
+        // A lock pin on a direct-source descriptor is rejected.
+        let direct: ProgramModule = serde_json::from_value(serde_json::json!({
+            "source": "src/library.program",
+            "entry": "describe",
+            "interface_version": 1,
+            "package_lock_sha256": "1".repeat(64),
+        }))
+        .unwrap();
+        assert!(
+            format!("{:#}", direct.validate().unwrap_err()).contains("requires package_manifest"),
+            "direct-source lock pin"
+        );
+        // A malformed lock pin is rejected.
+        let malformed: ProgramModule = serde_json::from_value(serde_json::json!({
+            "source": "src/library.program",
+            "entry": "describe",
+            "interface_version": 1,
+            "package_manifest": "program.modules.json",
+            "package_lock": "program.modules.lock.json",
+            "package_lock_sha256": "not-a-digest",
+        }))
+        .unwrap();
+        assert!(
+            format!("{:#}", malformed.validate().unwrap_err())
+                .contains("package_lock_sha256 must be a 64-character"),
+            "malformed lock pin"
+        );
+
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("modules");
+        let package_dir = root.join("example");
+        let manifest_path = write_package(
+            &package_dir,
+            "define a program named describe\n  accept text as text\n  run \"true\"\n",
+        );
+        let loaded = load_program_module_package(&manifest_path, &root, None).unwrap();
+        let lock_path = root.join("program.modules.lock.json");
+        let lock_bytes =
+            serde_json::to_vec_pretty(&loaded.lock_snapshot(&root).unwrap()).unwrap();
+        fs::write(&lock_path, &lock_bytes).unwrap();
+        let applet_manifest_path = root.join("applet.json");
+        fs::write(&applet_manifest_path, "{}").unwrap();
+        let reference = |package_lock_sha256: Option<String>| ProgramModule {
+            source: PathBuf::from("example/src/library.program"),
+            entry: "describe".into(),
+            interface_version: 1,
+            source_sha256: Some(loaded.source_sha256.clone()),
+            allow_unpinned: false,
+            package_manifest: Some(PathBuf::from("example/program.modules.json")),
+            package_lock: Some(PathBuf::from("program.modules.lock.json")),
+            package_lock_sha256,
+        };
+
+        // A matching lock pin loads.
+        let first = load_program_module(
+            &reference(Some(sha256_hex(&lock_bytes))),
+            &applet_manifest_path,
+            &root,
+        )
+        .unwrap();
+        assert_eq!(first.source_sha256, loaded.source_sha256);
+
+        // Editing the lock file after pinning refuses the run.
+        fs::write(&lock_path, b"{}\n").unwrap();
+        let error = load_program_module(
+            &reference(Some(sha256_hex(&lock_bytes))),
+            &applet_manifest_path,
+            &root,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("package_lock_sha256"), "{error}");
+
+        // A wrong pin never matches the lock on disk.
+        fs::write(&lock_path, &lock_bytes).unwrap();
+        let error = load_program_module(
+            &reference(Some("0".repeat(64))),
+            &applet_manifest_path,
+            &root,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("hash mismatch"), "{error}");
+    }
+
+    #[test]
+    fn filesystem_root_and_home_directory_module_roots_are_rejected() {
+        // The filesystem root would trust every module path on the machine.
+        let error =
+            load_program_module_package(Path::new("/nonexistent.json"), Path::new("/"), None)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("filesystem root"), "{error}");
+
+        // A home directory root would trust all of $HOME, which is exactly
+        // what a catalog or single-file selector placed there would produce.
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from);
+        let Some(home) = home else {
+            return;
+        };
+        let error =
+            load_program_module_package(Path::new("nonexistent.json"), &home, None)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("home directory"), "{error}");
+
+        // A dedicated directory keeps loading.
+        let temp = tempdir().unwrap();
+        assert!(reject_overly_broad_module_root(temp.path()).is_ok());
+        assert!(reject_overly_broad_module_root(Path::new("/definitely-not-a-module-root"))
+            .is_ok());
     }
 
     #[cfg(windows)]

@@ -61,11 +61,18 @@ For a package export, also set both `package_manifest` and `package_lock` in
 `contract.program`. They use the same applet-manifest-relative path rule. The
 descriptor's `source` must resolve to the source selected by the named package
 export, and `entry` selects that package's public export name. The loader checks
-the explicit lock before execution. Direct source descriptors omit both package
+the explicit lock before execution. Set `package_lock_sha256` in
+`contract.program` to the SHA-256 of the lock file bytes to anchor that lock
+in the applet manifest; the loader verifies the lock bytes on every run before
+trusting the lock, so a lock edited in the writable module root is refused with
+a hash mismatch. Direct source descriptors omit both package
 paths and do not discover package dependencies implicitly; they rely on the
 inline `source_sha256` pin described above instead of a lock. `modules lock`
 writes its `--output` file atomically (temporary file plus rename) and refuses
-to write through a symbolic link.
+to write through a symbolic link. A module root that spans the filesystem root
+or the user's home directory is refused at load time: place a catalog or
+single-file manifest selector in a dedicated manifest directory so module
+paths stay confined.
 
 ## Package manifest
 

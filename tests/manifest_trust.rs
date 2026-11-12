@@ -425,6 +425,7 @@ fn socket_module_source_is_refused_as_non_regular() {
         allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
+        package_lock_sha256: None,
     };
 
     let error = format!(
@@ -456,6 +457,7 @@ fn world_writable_module_source_is_refused_with_the_source_named() {
         allow_unpinned: true,
         package_manifest: None,
         package_lock: None,
+        package_lock_sha256: None,
     };
 
     load_program_module(&reference, &applet_manifest, &root).unwrap();

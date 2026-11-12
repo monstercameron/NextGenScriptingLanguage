@@ -4661,7 +4661,8 @@ pub(crate) type ModelBudgetHold = Option<std::sync::Arc<crate::models::RunModelB
 
 /// Without the model feature no `@execute-model` stage exists, so nothing is held.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "model")))]
-pub(crate) type ModelBudgetHold = ();
+#[derive(Clone, Copy)]
+pub(crate) struct ModelBudgetHold;
 
 /// Take the run's model budget for a group whose stages include `@execute-model`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "model"))]
@@ -4675,7 +4676,9 @@ pub(crate) fn hold_model_budget(registry: &Registry, model_stage: bool) -> Model
 
 /// Without the model feature no budget exists.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "model")))]
-pub(crate) fn hold_model_budget(_registry: &Registry, _model_stage: bool) -> ModelBudgetHold {}
+pub(crate) fn hold_model_budget(_registry: &Registry, _model_stage: bool) -> ModelBudgetHold {
+    ModelBudgetHold
+}
 
 /// One `@execute-model` spawn's hold on the run budget. It is reserved before
 /// the child starts, released when the spawn fails (no call was made), and

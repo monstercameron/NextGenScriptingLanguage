@@ -31,6 +31,9 @@ pub(crate) struct Args {
     /// `run|resume --model-fixtures DIR`: replay model calls from DIR. Wins over
     /// `EXECUTE_MODEL_FIXTURES`.
     pub(crate) model_fixtures: Option<String>,
+    /// `run|resume --model-budget calls=N,tokens=N,seconds=N`: a limit on the run's model
+    /// calls. Wins over `EXECUTE_MODEL_BUDGET`.
+    pub(crate) model_budget: Option<String>,
     /// `explain --json --policy-header`: merge the program's `# execute-policy:`
     /// header into the gate's approved categories.
     pub(crate) policy_header: bool,

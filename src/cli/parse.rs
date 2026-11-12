@@ -44,6 +44,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut confirm = None;
     let mut confirm_report: Option<PathBuf> = None;
     let mut model_fixtures: Option<String> = None;
+    let mut model_budget: Option<String> = None;
     let mut policy_header = false;
     let mut single_instance = None;
     let mut github = false;
@@ -208,6 +209,17 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     "--confirm-report",
                     "a what-if report file",
                 )?));
+            }
+            "--model-budget" if matches!(command, "run" | "resume") => {
+                if model_budget.is_some() {
+                    bail!("--model-budget may be specified only once");
+                }
+                model_budget = Some(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--model-budget",
+                    "a budget such as calls=50,tokens=200000,seconds=120",
+                )?);
             }
             "--model-fixtures" if matches!(command, "run" | "resume") => {
                 if model_fixtures.is_some() {
@@ -660,6 +672,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         confirm,
         confirm_report,
         model_fixtures,
+        model_budget,
         policy_header,
         single_instance,
         github,

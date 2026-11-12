@@ -430,7 +430,7 @@ pub struct SourceSpan {
     pub path_bytes: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Diagnostic {
     pub severity: DiagnosticSeverity,
     pub code: String,
@@ -442,6 +442,54 @@ pub struct Diagnostic {
     pub fixes: Vec<SuggestedFix>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<RelatedInformation>,
+}
+
+/// The JSON shape of a [`Diagnostic`]. Its message drops a leading `line N: ` that repeats
+/// the span's own line; the in-memory message, which human output prints, keeps it.
+#[derive(Serialize)]
+struct DiagnosticJson<'a> {
+    severity: DiagnosticSeverity,
+    code: &'a str,
+    message: &'a str,
+    span: &'a SourceSpan,
+    #[serde(skip_serializing_if = "no_items")]
+    fixes: &'a [SuggestedFix],
+    #[serde(skip_serializing_if = "no_items")]
+    related: &'a [RelatedInformation],
+}
+
+fn no_items<T>(items: &&[T]) -> bool {
+    items.is_empty()
+}
+
+impl Serialize for Diagnostic {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        DiagnosticJson {
+            severity: self.severity,
+            code: &self.code,
+            message: message_without_span_line(&self.message, self.span.line),
+            span: &self.span,
+            fixes: &self.fixes,
+            related: &self.related,
+        }
+        .serialize(serializer)
+    }
+}
+
+/// Returns `message` without a leading `line N: ` when N is `line`, the line the span
+/// already names. A prefix with another number, or a message that would be empty, is kept.
+fn message_without_span_line(message: &str, line: usize) -> &str {
+    let Some(rest) = message.strip_prefix("line ") else {
+        return message;
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || rest[..digits].parse::<usize>().ok() != Some(line) {
+        return message;
+    }
+    match rest[digits..].strip_prefix(": ") {
+        Some(text) if !text.is_empty() => text,
+        _ => message,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

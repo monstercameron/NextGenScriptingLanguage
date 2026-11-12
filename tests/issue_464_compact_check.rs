@@ -224,3 +224,35 @@ fn omission_keeps_required_keys_and_drops_empty_optional_ones() {
     assert_eq!(diagnostic["code"], json!("x.y"));
     assert_eq!(diagnostic["span"]["precision"], json!("token"));
 }
+
+/// A message that starts with the span's own `line N: ` is written to JSON without it,
+/// while the in-memory message (which human output prints) keeps it.
+#[test]
+fn json_message_drops_the_span_line_prefix_and_the_human_message_keeps_it() {
+    let registry = fixture_registry();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("prefix.program");
+    let source = "run \"true\"\nbreak\n";
+    std::fs::write(&path, source).unwrap();
+    let diagnostics = analyze_source_at(source, Some(&path), &registry);
+    let prefixed: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .message
+                .starts_with(&format!("line {}: ", diagnostic.span.line))
+        })
+        .collect();
+    assert!(
+        !prefixed.is_empty(),
+        "no prefixed message in {diagnostics:?}"
+    );
+    for diagnostic in prefixed {
+        let json = serde_json::to_value(diagnostic).unwrap();
+        let message = json["message"].as_str().unwrap();
+        assert!(!message.starts_with("line "), "{message}");
+        assert!(!message.is_empty(), "{diagnostic:?}");
+        assert!(diagnostic.message.ends_with(message), "{diagnostic:?}");
+        assert_eq!(json["span"]["line"], json!(diagnostic.span.line));
+    }
+}

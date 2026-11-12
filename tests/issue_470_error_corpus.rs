@@ -10,7 +10,7 @@ const SLOTS: usize = 6;
 const LINE_LOCAL_STATEMENTS: [&str; 2] =
     ["run \"true\" |", "rnu \"printf\" with arguments [\"x\"]"];
 
-/// An unterminated quote. Also a statement-level error, but see the ignored test below.
+/// An unterminated quote. Also a statement-level error, recovered like the others; see the test below.
 const UNTERMINATED_STATEMENT: &str = "run \"printf\" with arguments [\"unterminated]";
 
 /// Small deterministic generator (xorshift64) so the corpus needs no extra crate.
@@ -80,11 +80,9 @@ fn k_independent_seeded_errors_report_exactly_k_diagnostics_at_their_lines() {
     }
 }
 
-/// Known defect: an unterminated quote on one line makes `parse_collecting_errors` stop at
-/// that error, so the other independent errors in the program are not reported. The statement
-/// should be recovered line-locally like the others. Remove the `#[ignore]` once fixed.
+/// An unterminated quote on one line must not stop `parse_collecting_errors`: the statement is
+/// recovered line-locally like the others, so the other independent errors are still reported.
 #[test]
-#[ignore = "known defect: unterminated quoted string hides later independent statement errors"]
 fn unterminated_quote_does_not_hide_other_independent_errors() {
     let mut statements = LINE_LOCAL_STATEMENTS.to_vec();
     statements.push(UNTERMINATED_STATEMENT);

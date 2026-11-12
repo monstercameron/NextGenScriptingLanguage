@@ -1070,6 +1070,16 @@ pub(crate) struct LogicalLine {
 /// block up to a line holding only `"""`; the block becomes one quoted string with
 /// no escape processing, so embedded programs need no backslash escaping.
 pub(crate) fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
+    logical_lines_with(source, None)
+}
+
+/// `logical_lines`. With a `recovery` sink, a statement whose first piece does not tokenize
+/// is recorded there, and it and the lines indented under it are skipped. The quote is the
+/// only thing that can fail there, since a quoted string never spans physical lines.
+fn logical_lines_with(
+    source: &str,
+    mut recovery: Option<&mut Recovery>,
+) -> Result<Vec<LogicalLine>> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let physical: Vec<&str> = source.lines().collect();
     let mut statements = Vec::new();
@@ -1090,6 +1100,16 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
             }
         }
         let mut text = take_piece(first.trim_start_matches(' '), number, &physical, &mut index)?;
+        let failure = if recovery.is_some() {
+            first_piece_error(&text, number)
+        } else {
+            None
+        };
+        if let (Some(recovery), Some(error)) = (recovery.as_deref_mut(), failure) {
+            recovery.record(&error, number);
+            skip_indented_block(&physical, &mut index);
+            continue;
+        }
         let mut depth = if text.contains(['[', ']', '{', '}']) {
             bracket_delta(&text, number)?
         } else {
@@ -1119,6 +1139,30 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
         });
     }
     Ok(statements)
+}
+
+/// The error `logical_lines` and `parse_raw_with` would give for a statement's first piece
+/// when it does not tokenize, with the same text as they produce.
+fn first_piece_error(text: &str, number: usize) -> Option<anyhow::Error> {
+    if text.contains(['[', ']', '{', '}']) {
+        bracket_delta(text, number).err()
+    } else {
+        let mut tokens = Vec::new();
+        tokenize_into(text, &mut tokens)
+            .with_context(|| format!("line {number}"))
+            .err()
+    }
+}
+
+/// Moves `index` past the non-blank physical lines indented under a skipped statement.
+fn skip_indented_block(physical: &[&str], index: &mut usize) {
+    while let Some(next) = physical.get(*index) {
+        let next = strip_comment(next);
+        if !next.trim().is_empty() && !next.starts_with(' ') {
+            break;
+        }
+        *index += 1;
+    }
 }
 
 /// Returns one piece of a statement, with a raw block replaced by its quoted text.
@@ -1456,8 +1500,8 @@ fn next_top_level(lines: &[SourceLine], start: usize) -> usize {
 pub struct ParseReport {
     /// The program. Present only when `errors` is empty.
     pub program: Option<Program>,
-    /// Every syntax error found, in source order. The first one is the error `parse`
-    /// returns for the same source.
+    /// Every syntax error found, in source order. When a source has no unterminated quote,
+    /// the first one is the error `parse` returns for it.
     pub errors: Vec<ParseError>,
     /// True when more errors were found than `MAX_COLLECTED_ERRORS`, and the rest were dropped.
     pub truncated: bool,
@@ -1489,6 +1533,8 @@ pub fn parse_collecting_errors(source: &str) -> ParseReport {
             None
         }
     };
+    // Line-splitting errors are recorded before statement errors; report them in source order.
+    errors.sort_by_key(|error| error.line.unwrap_or(usize::MAX));
     ParseReport {
         program,
         errors,
@@ -1505,7 +1551,7 @@ pub(crate) fn parse_raw(source: &str) -> Result<RawProgram> {
 /// top-level statement is recorded there and skipped. The caller must then discard
 /// the returned program whenever the sink holds errors.
 fn parse_raw_with(source: &str, mut recovery: Option<&mut Recovery>) -> Result<RawProgram> {
-    let mut statements = logical_lines(source)?;
+    let mut statements = logical_lines_with(source, recovery.as_deref_mut())?;
     take_language_version(&mut statements)?;
     let mut definitions = BTreeMap::new();
     let mut inputs = Vec::new();

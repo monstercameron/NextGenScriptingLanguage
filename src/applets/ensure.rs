@@ -550,3 +550,438 @@ fn create_symlink(_target: &str, _at: &Path, _link: &Path) -> std::io::Result<()
         "symbolic links are not supported on this platform",
     ))
 }
+
+/// Dialect of a line-oriented config file for [`set_key_text`].
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+struct ConfStyle {
+    /// `"="`, `":"` or `" "` (one or more blanks).
+    separator: &'static str,
+    /// Line comment marker: `"#"`, `";"`, `"//"` or `"--"`.
+    comment: &'static str,
+    /// Append `key = value` rather than `key=value`. Ignored for `" "`.
+    spaced: bool,
+    /// When no live `key` line exists, rewrite the first commented `key` line in
+    /// place instead of appending a new line.
+    uncomment: bool,
+}
+
+/// Set `key` to `value` in `text`, touching only the line that must change.
+///
+/// Returns `Ok(None)` when the text already sets `key` to `value`, so the caller
+/// writes nothing. Otherwise returns the new text, in which every line other than
+/// the edited one (comments and blank lines included) keeps its exact bytes. The
+/// edited line keeps its indentation, key, separator spacing, line ending and a
+/// leading byte order mark. Its value runs to the end of the line, so an inline
+/// comment after the value on that same line is replaced with it.
+///
+/// Only a live line counts as setting `key`: a commented `# key = ...` line never
+/// matches unless `uncomment` asks for it. Appends go to the end of the text, so
+/// the function does not know about sections.
+#[allow(dead_code)]
+fn set_key_text(
+    text: &str,
+    key: &str,
+    value: &str,
+    style: ConfStyle,
+) -> Result<Option<String>, String> {
+    check_style(style)?;
+    check_key_and_value(key, value, style)?;
+    let pieces: Vec<&str> = text.split_inclusive('\n').collect();
+
+    for (index, piece) in pieces.iter().enumerate() {
+        let (bom, body, eol) = split_piece(piece);
+        if let Some(found) = assignment(body, key, style) {
+            if found.value == value {
+                return Ok(None);
+            }
+            let line = format!("{bom}{}{value}{eol}", found.head);
+            return Ok(Some(replace_piece(&pieces, index, &line)));
+        }
+    }
+
+    if style.uncomment {
+        for (index, piece) in pieces.iter().enumerate() {
+            let (bom, body, eol) = split_piece(piece);
+            let Some((indent, rest)) = commented(body, style) else {
+                continue;
+            };
+            if let Some(found) = assignment(rest, key, style) {
+                let line = format!("{bom}{indent}{}{value}{eol}", found.head.trim_start());
+                return Ok(Some(replace_piece(&pieces, index, &line)));
+            }
+        }
+    }
+
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(text.len() + key.len() + value.len() + 8);
+    out.push_str(text);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push_str(eol);
+    }
+    out.push_str(key);
+    if style.separator == " " {
+        out.push(' ');
+    } else if style.separator == "=" && style.spaced {
+        out.push_str(" = ");
+    } else {
+        out.push_str(style.separator);
+        if style.spaced {
+            out.push(' ');
+        }
+    }
+    out.push_str(value);
+    out.push_str(eol);
+    Ok(Some(out))
+}
+
+fn check_style(style: ConfStyle) -> Result<(), String> {
+    if !matches!(style.separator, "=" | ":" | " ") {
+        return Err(format!(
+            "separator {:?} must be \"=\", \":\" or \" \"",
+            style.separator
+        ));
+    }
+    if !matches!(style.comment, "#" | ";" | "//" | "--") {
+        return Err(format!(
+            "comment {:?} must be \"#\", \";\", \"//\" or \"--\"",
+            style.comment
+        ));
+    }
+    Ok(())
+}
+
+fn check_key_and_value(key: &str, value: &str, style: ConfStyle) -> Result<(), String> {
+    if key.is_empty()
+        || key.contains(|c: char| c.is_whitespace() || c == '\0' || "=:#;".contains(c))
+        || key.contains(style.comment)
+    {
+        return Err(format!(
+            "key {key:?} must be nonempty and contain no blank, NUL, \"=\", \":\", \"#\", \";\" \
+             or the comment marker"
+        ));
+    }
+    if value.contains(['\r', '\n', '\0']) {
+        return Err("value must be a single line without CR, LF or NUL".to_owned());
+    }
+    Ok(())
+}
+
+/// Split one line (with its line terminator, if any) into its byte order mark,
+/// its body and its line ending.
+fn split_piece(piece: &str) -> (&'static str, &str, &'static str) {
+    let (body, eol) = if let Some(rest) = piece.strip_suffix("\r\n") {
+        (rest, "\r\n")
+    } else if let Some(rest) = piece.strip_suffix('\n') {
+        (rest, "\n")
+    } else {
+        (piece, "")
+    };
+    match body.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest, eol),
+        None => ("", body, eol),
+    }
+}
+
+/// A `key SEP value` line. `head` is the text up to the value (indentation, key,
+/// separator and its spacing); `value` is the value without trailing blanks.
+struct Assignment<'a> {
+    head: &'a str,
+    value: &'a str,
+}
+
+fn assignment<'a>(body: &'a str, key: &str, style: ConfStyle) -> Option<Assignment<'a>> {
+    let blank = [' ', '\t'];
+    let after_indent = body.trim_start_matches(blank);
+    let after_key = after_indent.strip_prefix(key)?;
+    let after_gap = after_key.trim_start_matches(blank);
+    let after_sep = if style.separator == " " {
+        // A whitespace separator must be present, or `font-size` would match `font`.
+        if after_gap.len() == after_key.len() {
+            return None;
+        }
+        after_gap
+    } else {
+        after_gap.strip_prefix(style.separator)?
+    };
+    let value_start = after_sep.trim_start_matches(blank);
+    let head = &body[..body.len() - value_start.len()];
+    Some(Assignment {
+        head,
+        value: value_start.trim_end_matches(blank),
+    })
+}
+
+/// A commented line: the indentation before its comment marker, and the text
+/// after the marker.
+fn commented<'a>(body: &'a str, style: ConfStyle) -> Option<(&'a str, &'a str)> {
+    let after_indent = body.trim_start_matches([' ', '\t']);
+    let rest = after_indent.strip_prefix(style.comment)?;
+    Some((&body[..body.len() - after_indent.len()], rest))
+}
+
+fn replace_piece(pieces: &[&str], index: usize, line: &str) -> String {
+    let mut out = String::new();
+    for (position, piece) in pieces.iter().enumerate() {
+        out.push_str(if position == index { line } else { *piece });
+    }
+    out
+}
+
+#[cfg(test)]
+mod set_key_tests {
+    use super::{set_key_text, ConfStyle};
+
+    const EQ: ConfStyle = ConfStyle {
+        separator: "=",
+        comment: "#",
+        spaced: true,
+        uncomment: false,
+    };
+    const EQ_UNCOMMENT: ConfStyle = ConfStyle {
+        uncomment: true,
+        ..EQ
+    };
+    const EQ_TIGHT: ConfStyle = ConfStyle {
+        spaced: false,
+        ..EQ
+    };
+    const COLON: ConfStyle = ConfStyle {
+        separator: ":",
+        comment: "#",
+        spaced: true,
+        uncomment: false,
+    };
+    const SPACE: ConfStyle = ConfStyle {
+        separator: " ",
+        comment: "#",
+        spaced: false,
+        uncomment: false,
+    };
+
+    fn set(text: &str, key: &str, value: &str, style: ConfStyle) -> Option<String> {
+        set_key_text(text, key, value, style).expect("valid arguments")
+    }
+
+    #[test]
+    fn replaces_value_in_place_and_keeps_every_other_line() {
+        let text = "# font size\n\n  size   =  10\nother = x # keep\n";
+        assert_eq!(
+            set(text, "size", "12", EQ).as_deref(),
+            Some("# font size\n\n  size   =  12\nother = x # keep\n")
+        );
+    }
+
+    #[test]
+    fn reports_unchanged_when_value_already_set() {
+        assert_eq!(set("size = 12\n", "size", "12", EQ), None);
+        // Trailing blanks on the live line do not count as part of the value.
+        assert_eq!(set("size = 12   \n", "size", "12", EQ), None);
+        assert_eq!(set("x = 1\nsize=12\n", "size", "12", EQ_TIGHT), None);
+    }
+
+    #[test]
+    fn second_run_is_unchanged() {
+        let once = set("a = 1\n", "size", "12", EQ).expect("first run changes");
+        assert_eq!(once, "a = 1\nsize = 12\n");
+        assert_eq!(set(&once, "size", "12", EQ), None);
+    }
+
+    #[test]
+    fn crlf_file_keeps_crlf_when_replacing() {
+        let text = "a = 1\r\nsize = 10\r\nb = 2\r\n";
+        assert_eq!(
+            set(text, "size", "12", EQ).as_deref(),
+            Some("a = 1\r\nsize = 12\r\nb = 2\r\n")
+        );
+        assert_eq!(set("size = 12\r\n", "size", "12", EQ), None);
+    }
+
+    #[test]
+    fn crlf_file_keeps_crlf_when_appending() {
+        assert_eq!(
+            set("a = 1\r\n", "size", "12", EQ).as_deref(),
+            Some("a = 1\r\nsize = 12\r\n")
+        );
+        // A CRLF file that lacks a final newline gets one with its own line ending.
+        assert_eq!(
+            set("a = 1\r\nb = 2", "size", "12", EQ).as_deref(),
+            Some("a = 1\r\nb = 2\r\nsize = 12\r\n")
+        );
+    }
+
+    #[test]
+    fn missing_final_newline_is_not_added_on_replace() {
+        assert_eq!(
+            set("a = 1\nsize = 10", "size", "12", EQ).as_deref(),
+            Some("a = 1\nsize = 12")
+        );
+    }
+
+    #[test]
+    fn key_inside_a_comment_is_not_a_live_match() {
+        assert_eq!(
+            set("# size = 10\n", "size", "12", EQ).as_deref(),
+            Some("# size = 10\nsize = 12\n")
+        );
+        assert_eq!(
+            set(
+                "; size = 10\n",
+                "size",
+                "12",
+                ConfStyle { comment: ";", ..EQ }
+            )
+            .as_deref(),
+            Some("; size = 10\nsize = 12\n")
+        );
+    }
+
+    #[test]
+    fn uncomment_rewrites_the_commented_default_in_place() {
+        assert_eq!(
+            set("x = 1\n# size = 10\ny = 2\n", "size", "12", EQ_UNCOMMENT).as_deref(),
+            Some("x = 1\nsize = 12\ny = 2\n")
+        );
+        assert_eq!(
+            set(
+                "    #size=10\n",
+                "size",
+                "12",
+                ConfStyle {
+                    spaced: false,
+                    ..EQ_UNCOMMENT
+                }
+            )
+            .as_deref(),
+            Some("    size=12\n")
+        );
+    }
+
+    #[test]
+    fn live_line_wins_over_a_commented_default() {
+        assert_eq!(
+            set("# size = 10\nsize = 11\n", "size", "12", EQ_UNCOMMENT).as_deref(),
+            Some("# size = 10\nsize = 12\n")
+        );
+    }
+
+    #[test]
+    fn prefix_of_another_key_does_not_match() {
+        assert_eq!(
+            set("font-size = 9\n", "font", "x", EQ).as_deref(),
+            Some("font-size = 9\nfont = x\n")
+        );
+        assert_eq!(
+            set("font-size = 9\n", "font", "x", SPACE).as_deref(),
+            Some("font-size = 9\nfont x\n")
+        );
+    }
+
+    #[test]
+    fn only_the_first_live_match_is_replaced() {
+        assert_eq!(
+            set("size = 1\nsize = 2\n", "size", "9", EQ).as_deref(),
+            Some("size = 9\nsize = 2\n")
+        );
+    }
+
+    #[test]
+    fn colon_separator_is_preserved_and_appended_with_a_space() {
+        assert_eq!(
+            set("timeout: 5\nquiet: no\n", "timeout", "1", COLON).as_deref(),
+            Some("timeout: 1\nquiet: no\n")
+        );
+        assert_eq!(
+            set("", "quiet", "yes", COLON).as_deref(),
+            Some("quiet: yes\n")
+        );
+    }
+
+    #[test]
+    fn whitespace_separator_needs_a_blank_after_the_key() {
+        assert_eq!(
+            set("LANG C\n", "LANG", "en", SPACE).as_deref(),
+            Some("LANG en\n")
+        );
+        assert_eq!(
+            set("LA C\n", "LANG", "en", SPACE).as_deref(),
+            Some("LA C\nLANG en\n")
+        );
+        assert_eq!(set("LANG en\n", "LANG", "en", SPACE), None);
+    }
+
+    #[test]
+    fn unspaced_separator_is_used_when_appending() {
+        assert_eq!(
+            set("A=b\n", "ENABLED", "yes", EQ_TIGHT).as_deref(),
+            Some("A=b\nENABLED=yes\n")
+        );
+        assert_eq!(
+            set("ENABLED=no\n", "ENABLED", "yes", EQ_TIGHT).as_deref(),
+            Some("ENABLED=yes\n")
+        );
+    }
+
+    #[test]
+    fn byte_order_mark_is_kept() {
+        assert_eq!(
+            set("\u{feff}size = 10\nb = 1\n", "size", "12", EQ).as_deref(),
+            Some("\u{feff}size = 12\nb = 1\n")
+        );
+        assert_eq!(set("\u{feff}size = 12\n", "size", "12", EQ), None);
+    }
+
+    #[test]
+    fn empty_text_gets_the_new_line() {
+        assert_eq!(set("", "size", "12", EQ).as_deref(), Some("size = 12\n"));
+    }
+
+    #[test]
+    fn empty_value_is_written_as_is() {
+        assert_eq!(
+            set("size = 1\n", "size", "", EQ).as_deref(),
+            Some("size = \n")
+        );
+    }
+
+    #[test]
+    fn rejects_bad_key_value_and_style() {
+        for key in ["", "a b", "a=b", "a:b", "#a", "a;b", "a\tb"] {
+            assert!(set_key_text("", key, "1", EQ).is_err(), "key {key:?}");
+        }
+        assert!(set_key_text(
+            "",
+            "a--b",
+            "1",
+            ConfStyle {
+                comment: "--",
+                ..EQ
+            }
+        )
+        .is_err());
+        assert!(set_key_text("", "size", "1\n2", EQ).is_err());
+        assert!(set_key_text("", "size", "1\r", EQ).is_err());
+        assert!(set_key_text("", "size", "1\0", EQ).is_err());
+        assert!(set_key_text(
+            "",
+            "size",
+            "1",
+            ConfStyle {
+                separator: "==",
+                ..EQ
+            }
+        )
+        .is_err());
+        assert!(set_key_text(
+            "",
+            "size",
+            "1",
+            ConfStyle {
+                separator: "",
+                ..EQ
+            }
+        )
+        .is_err());
+        assert!(set_key_text("", "size", "1", ConfStyle { comment: "%", ..EQ }).is_err());
+    }
+}

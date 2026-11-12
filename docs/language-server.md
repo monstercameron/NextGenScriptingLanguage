@@ -11,12 +11,16 @@ The process reads and writes LSP JSON-RPC frames on standard input and output.
 It implements incremental document synchronization, structured diagnostics,
 applet and parameter completion, applet and reusable-program hover, local
 reusable-program definition and references, binding definition (the nearest
-earlier line that introduces the name), and reusable-program rename. Rename
-returns a workspace edit only when the proposed identifier is valid, does not
-collide with another reusable program in the file, and the edited document still
-parses. Navigation and rename are limited to local `define a program named`,
-`run program`, `then program`, and `pipe to program` symbols in the open file;
-the server does not rename applet names or arbitrary variables.
+earlier line that introduces the name), binding references and hover (the
+binding's kind and introducing line, and a declared input's type and description),
+and rename for reusable programs and bindings. Rename returns a workspace edit
+only when the proposed identifier is valid, does not collide with another
+reusable program in the file, and the edited document still parses. A binding
+rename also refuses a name that is already introduced anywhere in the file (bindings
+share one flat scope), a declared input, the literals `true`, `false` and `null`, and any document with a
+parse error. Navigation and rename are limited to local `define a program named`,
+`run program`, `then program`, and `pipe to program` symbols and to bindings in the
+open file; the server does not rename applet names.
 
 `execute lsp` is part of the `full` build (the `lsp` feature); a lean build refuses it
 with a message that says to use the full build. The server never searches the working

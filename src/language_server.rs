@@ -303,7 +303,16 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             "textDocument/definition" => Some(definition(&params, &documents)),
             "textDocument/references" => Some(references(&params, &documents)),
             "textDocument/prepareRename" => Some(prepare_rename(&params, &documents)),
-            "textDocument/rename" => Some(rename(&params, &documents)),
+            "textDocument/rename" => match binding_rename(&params, &documents) {
+                Ok(Some(edit)) => Some(edit),
+                Ok(None) => Some(rename(&params, &documents)),
+                Err(message) => {
+                    if let Some(id) = id.as_ref() {
+                        write_error(&mut writer, id, -32803, &message)?;
+                    }
+                    None
+                }
+            },
             "textDocument/codeAction" => Some(code_actions(&params, &documents, &registry)),
             "textDocument/documentSymbol" => Some(document_symbols(&params, &documents)),
             _ if id.is_some() => {
@@ -3540,6 +3549,8 @@ struct BindingSite {
     declaration: SymbolLocation,
     /// The line of the next introduction of the same name after `line`, if any.
     next_line: Option<usize>,
+    /// The word at the position that was resolved.
+    word: SymbolLocation,
 }
 
 /// The binding named by the word at `offset`, resolved as `binding_definition_at`
@@ -3566,13 +3577,33 @@ fn binding_site_at(source: &str, offset: usize) -> Option<BindingSite> {
         kind: introduction.kind,
         declaration,
         next_line,
+        word: SymbolLocation {
+            start: word.text_start,
+            end: word.text_end,
+            line: word.line,
+        },
         name,
     })
 }
 
-/// The references of the binding at `offset`: each whole-word, unquoted occurrence
+/// The byte spans of the binding's words: each whole-word, unquoted occurrence
 /// of its name from its introduction's line up to, not including, the next
-/// introduction of the same name. Quoted text and comments are never words here.
+/// introduction of the same name, in source order. The introduction itself is
+/// the first span. Quoted text and comments are never words here.
+fn binding_word_spans(source: &str, site: &BindingSite) -> Vec<(usize, usize)> {
+    lexical_words(source)
+        .into_iter()
+        .filter(|word| {
+            !word.quoted
+                && word.line >= site.line
+                && site.next_line.is_none_or(|next| word.line < next)
+                && source[word.text_start..word.text_end] == site.name
+        })
+        .map(|word| (word.text_start, word.text_end))
+        .collect()
+}
+
+/// The references of the binding at `offset`, from `binding_word_spans`.
 fn binding_references(
     uri: &str,
     source: &str,
@@ -3582,18 +3613,105 @@ fn binding_references(
     let Some(site) = binding_site_at(source, offset) else {
         return JsonValue::Null;
     };
-    let locations = lexical_words(source)
+    let locations = binding_word_spans(source, &site)
         .into_iter()
-        .filter(|word| {
-            !word.quoted
-                && word.line >= site.line
-                && site.next_line.is_none_or(|next| word.line < next)
-                && source[word.text_start..word.text_end] == site.name
-                && (include_declaration || word.text_start != site.declaration.start)
-        })
-        .map(|word| json!({ "uri": uri, "range": range_from_offsets(source, word.text_start, word.text_end) }))
+        .filter(|(start, _)| include_declaration || *start != site.declaration.start)
+        .map(|(start, end)| json!({ "uri": uri, "range": range_from_offsets(source, start, end) }))
         .collect::<Vec<_>>();
     json!(locations)
+}
+
+/// The rename of the binding at `offset`. `Ok(None)` leaves the request to `rename`:
+/// a program symbol keeps its own rename, and any position that is not a binding
+/// name gets what `rename` returns. `Err` refuses the rename with a message.
+/// A document with a parse error has no bindings to resolve, so it gets no edit.
+///
+/// The new name must be a binding name as the parser reads one
+/// (`parser::parse_binding_identifier`: `parser::is_identifier`, not `true`, `false`
+/// or `null`). Bindings share one flat scope in the validator, so the name is refused
+/// when any introduction in the document already uses it, which also covers a
+/// declared input; it is refused when it names a program in the file.
+fn binding_rename(
+    params: &JsonValue,
+    documents: &BTreeMap<String, Document>,
+) -> std::result::Result<Option<JsonValue>, String> {
+    let Some((uri, position)) = text_document_position(params) else {
+        return Ok(None);
+    };
+    let Some(document) = documents.get(uri) else {
+        return Ok(None);
+    };
+    let Some(new_name) = params.get("newName").and_then(JsonValue::as_str) else {
+        return Ok(None);
+    };
+    let Some(offset) = position_to_byte(&document.text, position) else {
+        return Ok(None);
+    };
+    let source = document.text.as_str();
+    if program_symbol_at(source, offset).is_some() {
+        return Ok(None);
+    }
+    let Some(site) = binding_site_at(source, offset) else {
+        return Ok(None);
+    };
+    if !is_completion_binding_word(new_name) {
+        return Err(format!(
+            "`{new_name}` is not a valid binding name: it must start with a letter or underscore, use only letters, digits and underscores, and cannot be true, false or null"
+        ));
+    }
+    if new_name == site.name {
+        return Ok(Some(json!({ "changes": {} })));
+    }
+    if program_symbols(source)
+        .iter()
+        .any(|symbol| symbol.name == new_name)
+    {
+        return Err(format!(
+            "`{new_name}` names a program in this file, so it cannot name a binding"
+        ));
+    }
+    let Ok(program) = crate::parser::parse(source) else {
+        return Ok(None);
+    };
+    let introductions = crate::diagnostics::binding_introductions(&program);
+    if introductions
+        .iter()
+        .any(|introduction| introduction.name == new_name && introduction.kind == "input")
+    {
+        return Err(format!(
+            "`{new_name}` is a declared input, so it cannot name a binding"
+        ));
+    }
+    if introductions
+        .iter()
+        .any(|introduction| introduction.name == new_name)
+    {
+        return Err(format!(
+            "`{new_name}` is already introduced in this document; bindings share one flat scope, so renaming to it would merge two bindings"
+        ));
+    }
+    let spans = binding_word_spans(source, &site);
+    if spans.len() > MAX_RENAME_EDITS {
+        return Err("the binding has too many occurrences to rename at once".to_owned());
+    }
+    let mut replaced = source.to_owned();
+    for (start, end) in spans.iter().rev() {
+        replaced.replace_range(*start..*end, new_name);
+    }
+    if crate::parser::parse(&replaced).is_err() {
+        return Err(format!(
+            "renaming to `{new_name}` would leave the document unparseable"
+        ));
+    }
+    let edits = spans
+        .iter()
+        .map(|(start, end)| {
+            json!({ "range": range_from_offsets(source, *start, *end), "newText": new_name })
+        })
+        .collect::<Vec<_>>();
+    let mut changes = serde_json::Map::new();
+    changes.insert(uri.to_owned(), json!(edits));
+    Ok(Some(json!({ "changes": changes })))
 }
 
 fn references(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
@@ -3738,7 +3856,9 @@ fn prepare_rename(params: &JsonValue, documents: &BTreeMap<String, Document>) ->
     let Some(offset) = position_to_byte(&document.text, position) else {
         return JsonValue::Null;
     };
-    let Some((name, symbol)) = program_word_at(&document.text, offset) else {
+    let Some((name, symbol)) = program_word_at(&document.text, offset)
+        .or_else(|| binding_site_at(&document.text, offset).map(|site| (site.name, site.word)))
+    else {
         return JsonValue::Null;
     };
     json!({ "range": range_from_offsets(&document.text, symbol.start, symbol.end), "placeholder": name })
@@ -5901,6 +6021,196 @@ mod tests {
         let result = binding_request("textDocument/hover", program, 2, 12, true);
         assert_eq!(
             result["contents"]["value"], "Reusable program `emit` defined at line 1.",
+            "{result}"
+        );
+    }
+
+    fn binding_rename_message(
+        method: &str,
+        source: &str,
+        line: u64,
+        character: u64,
+        new_name: &str,
+    ) -> JsonValue {
+        let uri = "file:///tmp/binding-rename.program";
+        let mut input = frame(request(1, "initialize", JsonValue::Null));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "version": 1, "text": source } }
+        })));
+        input.extend(frame(request(
+            2,
+            method,
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "newName": new_name
+            }),
+        )));
+        input.extend(frame(request(3, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({ "jsonrpc": "2.0", "method": "exit" })));
+
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        decode_frames(&output)
+            .into_iter()
+            .find(|message| message["id"] == 2)
+            .unwrap()
+    }
+
+    #[test]
+    fn binding_rename_changes_a_step_result_and_its_later_uses_only() {
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\nrun fixture.use with text raw\n";
+        let result = binding_rename_message("textDocument/rename", source, 1, 26, "answer");
+        let edits = &result["result"]["changes"]["file:///tmp/binding-rename.program"];
+        assert_eq!(
+            reference_spans(edits),
+            [(0, 21, 24), (1, 26, 29), (2, 26, 29)],
+            "{result}"
+        );
+        assert!(
+            edits
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|edit| edit["newText"] == "answer"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn binding_rename_touches_only_the_chosen_binding_when_a_name_is_introduced_twice() {
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\nrun fixture.second as raw\nrun fixture.use with text raw\n";
+        let second = binding_rename_message("textDocument/rename", source, 2, 22, "answer");
+        assert_eq!(
+            reference_spans(&second["result"]["changes"]["file:///tmp/binding-rename.program"]),
+            [(2, 22, 25), (3, 26, 29)],
+            "{second}"
+        );
+        let first = binding_rename_message("textDocument/rename", source, 1, 26, "answer");
+        assert_eq!(
+            reference_spans(&first["result"]["changes"]["file:///tmp/binding-rename.program"]),
+            [(0, 21, 24), (1, 26, 29)],
+            "{first}"
+        );
+    }
+
+    #[test]
+    fn binding_rename_refuses_a_name_already_introduced_or_declared() {
+        let other_binding = "run fixture.first as raw\nrun fixture.second as answer\nrun fixture.use with text raw\n";
+        let result = binding_rename_message("textDocument/rename", other_binding, 2, 26, "answer");
+        assert!(result["result"].is_null(), "{result}");
+        assert!(
+            result["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("already introduced"),
+            "{result}"
+        );
+        let input =
+            "accept shout as text\nrun fixture.first as raw\nrun fixture.use with text raw\n";
+        let result = binding_rename_message("textDocument/rename", input, 2, 26, "shout");
+        assert!(result["result"].is_null(), "{result}");
+        assert!(
+            result["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("declared input"),
+            "{result}"
+        );
+        let program = "define a program named emit\n  run printf\nrun fixture.first as raw\nrun fixture.use with text raw\n";
+        let result = binding_rename_message("textDocument/rename", program, 3, 26, "emit");
+        assert!(
+            result["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("names a program"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn binding_rename_refuses_a_reserved_or_malformed_name() {
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\n";
+        for name in ["null", "true", "false", "1answer", "with-dash", ""] {
+            let result = binding_rename_message("textDocument/rename", source, 1, 26, name);
+            assert!(result["result"].is_null(), "{name}: {result}");
+            assert!(
+                result["error"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("not a valid binding name"),
+                "{name}: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn binding_rename_leaves_names_inside_quotes_and_comments_alone() {
+        let source = "run fixture.first as raw\nrun fixture.use with text \"raw\" # raw here\nrun fixture.use with text raw\n";
+        let result = binding_rename_message("textDocument/rename", source, 0, 21, "answer");
+        assert_eq!(
+            reference_spans(&result["result"]["changes"]["file:///tmp/binding-rename.program"]),
+            [(0, 21, 24), (2, 26, 29)],
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn binding_rename_covers_a_loop_variable_inside_its_loop() {
+        let source = "run fixture.paths as paths\nfor each path in paths\n  run fixture.text with text path\n  run fixture.text with text path\n";
+        let result = binding_rename_message("textDocument/rename", source, 2, 29, "item");
+        assert_eq!(
+            reference_spans(&result["result"]["changes"]["file:///tmp/binding-rename.program"]),
+            [(1, 9, 13), (2, 29, 33), (3, 29, 33)],
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn binding_rename_is_refused_with_no_edit_while_the_document_has_a_parse_error() {
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\nrun\n";
+        let result = binding_rename_message("textDocument/rename", source, 1, 26, "answer");
+        assert!(result["error"].is_null(), "{result}");
+        assert!(result["result"].is_null(), "{result}");
+    }
+
+    #[test]
+    fn binding_prepare_rename_returns_the_name_range_on_introduction_and_use_only() {
+        let source = "run fixture.first as raw\nrun fixture.use with text raw\n";
+        let on_use = binding_rename_message("textDocument/prepareRename", source, 1, 26, "");
+        assert_eq!(on_use["result"]["placeholder"], "raw", "{on_use}");
+        assert_eq!(
+            on_use["result"]["range"]["start"]["character"], 26,
+            "{on_use}"
+        );
+        assert_eq!(
+            on_use["result"]["range"]["end"]["character"], 29,
+            "{on_use}"
+        );
+        let on_introduction =
+            binding_rename_message("textDocument/prepareRename", source, 0, 21, "");
+        assert_eq!(
+            on_introduction["result"]["range"]["start"]["character"], 21,
+            "{on_introduction}"
+        );
+        let on_keyword = binding_rename_message("textDocument/prepareRename", source, 1, 0, "");
+        assert!(on_keyword["result"].is_null(), "{on_keyword}");
+    }
+
+    #[test]
+    fn program_symbol_rename_still_works_beside_bindings() {
+        let source =
+            "accept shout as text\ndefine a program named emit\n  run printf\nrun program emit\n";
+        let result = binding_rename_message("textDocument/rename", source, 3, 12, "emit_text");
+        let edits = &result["result"]["changes"]["file:///tmp/binding-rename.program"];
+        assert_eq!(edits.as_array().unwrap().len(), 2, "{result}");
+        assert!(
+            edits
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|edit| edit["newText"] == "emit_text"),
             "{result}"
         );
     }

@@ -2492,12 +2492,23 @@ fn retry_delay(policy: RetryPolicy, retry_number: u32) -> std::time::Duration {
 }
 
 /// Sleep before a retry, in short slices so cancellation and the deadline still apply.
-fn wait_before_retry(signals: &Signals, delay: std::time::Duration) -> Result<()> {
+/// A first interrupt drain (`drain_ends_wait`) ends the wait early: the run then
+/// stops at the next statement boundary, which starts the drain.
+fn wait_before_retry(
+    signals: &Signals,
+    delay: std::time::Duration,
+    drain_ends_wait: bool,
+) -> Result<()> {
     let until = std::time::Instant::now() + delay;
     loop {
         check_deadline(signals.deadline)?;
         if signals.cancelled.load(Ordering::Relaxed) {
             bail!("workflow cancelled by signal");
+        }
+        if drain_ends_wait
+            && signals.drain.load(Ordering::SeqCst) == crate::platform::DRAIN_REQUESTED
+        {
+            return Ok(());
         }
         let now = std::time::Instant::now();
         if now >= until {

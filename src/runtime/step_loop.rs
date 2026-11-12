@@ -3440,9 +3440,16 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 "delay_ms": u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
                             })
                         })?;
-                        wait_before_retry(signals, delay)?;
-                        index = restart;
-                        continue;
+                        // A cancel or deadline during the backoff is this statement's
+                        // failure: it takes the same cleanup path as a failed attempt,
+                        // rather than returning past the `finally` and `on exit` frames.
+                        match wait_before_retry(signals, delay, !control_state.cleanup_active()) {
+                            Ok(()) => {
+                                index = restart;
+                                continue;
+                            }
+                            Err(wait_error) => Err(wait_error),
+                        }
                     }
                 }
             }

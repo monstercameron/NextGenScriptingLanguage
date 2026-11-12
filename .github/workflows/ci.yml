@@ -116,6 +116,20 @@ jobs:
         run: python3 tools/replacement_gates.py
       - name: Test replacement gate summary generator
         run: python3 -m unittest tools/test_replacement_gates.py
+      - name: Test the repository tools and their checked-in outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # test_aur_tag.py is left out: it reads git tags, which this checkout does not fetch.
+          for name in ai_gauntlet_baseline applet_docs check_large_files check_latency_ratio example_lint migration_tags model_eval_report omarchy_port_features omarchy_port_report omarchy_sample omarchy_upstream_map package_deps repair_bench token_cost ubuntu_inventory workers_sdk; do
+            echo "::group::tools/test_$name.py"
+            python3 -m unittest "tools/test_$name.py"
+            echo "::endgroup::"
+          done
+          # Generated or ratcheted files must match what the tools produce today.
+          python3 tools/applet_docs.py --check
+          python3 tools/omarchy_sample.py --check
+          python3 tools/example_lint.py
       - name: Clippy every feature combination
         shell: bash
         run: |

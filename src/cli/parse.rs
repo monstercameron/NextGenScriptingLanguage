@@ -41,6 +41,8 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let allow = Vec::new();
     let mut what_if = false;
     let mut confirm = None;
+    let mut confirm_report: Option<PathBuf> = None;
+    let mut model_fixtures: Option<String> = None;
     let mut policy_header = false;
     let mut single_instance = None;
     let mut github = false;
@@ -186,6 +188,28 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     &mut index,
                     "--confirm",
                     "a plan fingerprint",
+                )?);
+            }
+            "--confirm-report" if command == "run" => {
+                if confirm_report.is_some() {
+                    bail!("--confirm-report may be specified only once");
+                }
+                confirm_report = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--confirm-report",
+                    "a what-if report file",
+                )?));
+            }
+            "--model-fixtures" if matches!(command, "run" | "resume") => {
+                if model_fixtures.is_some() {
+                    bail!("--model-fixtures may be specified only once");
+                }
+                model_fixtures = Some(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--model-fixtures",
+                    "a directory",
                 )?);
             }
             "--allow" if command == "explain" => {
@@ -605,6 +629,9 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     {
         bail!("--explain-version requires explain --json, run --what-if, or run --confirm");
     }
+    if confirm_report.is_some() && confirm.is_none() {
+        bail!("--confirm-report requires --confirm");
+    }
     Ok(Some(Args {
         inputs,
         answers,
@@ -619,6 +646,8 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         allow,
         what_if,
         confirm,
+        confirm_report,
+        model_fixtures,
         policy_header,
         single_instance,
         github,

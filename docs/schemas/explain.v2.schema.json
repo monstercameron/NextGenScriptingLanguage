@@ -423,6 +423,9 @@
               "null"
             ],
             "minimum": 1
+          },
+          "condition": {
+            "$ref": "#/$defs/condition"
           }
         }
       }
@@ -516,6 +519,60 @@
     }
   },
   "$defs": {
+    "condition": {
+      "type": "object",
+      "required": [
+        "left",
+        "op",
+        "negated",
+        "right"
+      ],
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/condition_operand"
+        },
+        "op": {
+          "enum": [
+            "equals",
+            "contains"
+          ]
+        },
+        "negated": {
+          "type": "boolean"
+        },
+        "right": {
+          "$ref": "#/$defs/condition_operand"
+        }
+      },
+      "additionalProperties": false
+    },
+    "condition_operand": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "literal": {},
+        "list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/condition_operand"
+          }
+        },
+        "record": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/condition_operand"
+          }
+        },
+        "unrendered": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
     "value": {
       "anyOf": [
         {

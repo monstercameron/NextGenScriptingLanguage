@@ -23,6 +23,12 @@ pub(crate) struct Args {
     pub(crate) what_if: bool,
     /// `run --confirm FINGERPRINT`: run only if the plan still has this fingerprint.
     pub(crate) confirm: Option<String>,
+    /// `run --confirm-report FILE`: a saved what-if report. When `--confirm` does not
+    /// match, its plan is compared with the current one and the differences are printed.
+    pub(crate) confirm_report: Option<PathBuf>,
+    /// `run|resume --model-fixtures DIR`: replay model calls from DIR. Wins over
+    /// `EXECUTE_MODEL_FIXTURES`.
+    pub(crate) model_fixtures: Option<String>,
     /// `explain --json --policy-header`: merge the program's `# execute-policy:`
     /// header into the gate's approved categories.
     pub(crate) policy_header: bool,

@@ -778,6 +778,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "grammar") {
         return grammar_cli(&arguments[1..]);
     }
+    if arguments.first().is_some_and(|a| a == "doctor") {
+        return doctor_cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
     }
@@ -1070,6 +1073,99 @@ fn grammar_cli(arguments: &[String]) -> Result<()> {
     }
 }
 
+/// `execute doctor [--json]`: the installation and desktop-session checks. Exits 1 when a
+/// check failed, so a script can gate on it.
+fn doctor_cli(arguments: &[String]) -> Result<()> {
+    let json = match arguments {
+        [] => false,
+        [flag] if flag == "--json" => true,
+        _ => bail!("usage: execute doctor [--json]"),
+    };
+    let environment = flow::doctor::SystemEnvironment;
+    let checks = flow::doctor::run_checks(&environment);
+    if json {
+        write_json(&flow::doctor::render_json(
+            &checks,
+            env!("CARGO_PKG_VERSION"),
+        ))?;
+    } else {
+        io::stdout().write_all(flow::doctor::render_text(&checks).as_bytes())?;
+    }
+    if flow::doctor::has_failures(&checks) {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// The run's model fixture directory: `--model-fixtures DIR`, or else the
+/// `EXECUTE_MODEL_FIXTURES` variable when the option is absent. Set before any step runs.
+/// Only `run` and `resume` read it; an empty value is an error.
+fn apply_model_fixtures(
+    command: &str,
+    model_fixtures: Option<&str>,
+    registry: &Registry,
+) -> Result<()> {
+    if !matches!(command, "run" | "resume") {
+        return Ok(());
+    }
+    if let Some(dir) = model_fixtures {
+        if dir.is_empty() {
+            bail!("--model-fixtures requires a directory");
+        }
+        return flow::capabilities::set_run_model_fixture_dir(registry, Some(dir));
+    }
+    match env::var_os("EXECUTE_MODEL_FIXTURES") {
+        None => Ok(()),
+        Some(value) => {
+            let value = value
+                .into_string()
+                .map_err(|_| anyhow!("EXECUTE_MODEL_FIXTURES must be valid UTF-8"))?;
+            if value.is_empty() {
+                bail!("EXECUTE_MODEL_FIXTURES is set but empty; unset it or name a directory");
+            }
+            flow::capabilities::set_run_model_fixture_dir(registry, Some(&value))
+        }
+    }
+}
+
+/// The largest saved what-if report `--confirm-report` will read.
+const MAX_CONFIRM_REPORT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Load a what-if report that the user saved for `--confirm-report`. A file that is too
+/// large, does not parse, or is not a what-if report is an error that names it.
+fn load_confirm_report(path: &Path) -> Result<serde_json::Value> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("could not open --confirm-report {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIRM_REPORT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("could not read --confirm-report {}", path.display()))?;
+    if bytes.len() as u64 > MAX_CONFIRM_REPORT_BYTES {
+        bail!(
+            "--confirm-report {} is larger than {MAX_CONFIRM_REPORT_BYTES} bytes",
+            path.display()
+        );
+    }
+    let report: serde_json::Value = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "--confirm-report {} is not a JSON what-if report",
+            path.display()
+        )
+    })?;
+    let is_report = report["protocol"]
+        .as_str()
+        .is_some_and(|protocol| protocol.starts_with("execute.what_if/"))
+        && report["plan"].is_object()
+        && report["settings"].is_object();
+    if !is_report {
+        bail!(
+            "--confirm-report {} is not a what-if report (run FILE --what-if --json writes one)",
+            path.display()
+        );
+    }
+    Ok(report)
+}
+
 fn is_help_subcommand(name: &str) -> bool {
     matches!(
         name,
@@ -1278,6 +1374,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         if args.execution_mode.is_some() {
             registry.set_host_state(args.execution_mode);
         }
+        apply_model_fixtures(args.command, args.model_fixtures.as_deref(), &registry)?;
         let parsed_graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
         if args.checkpoint_dir.is_some()
             && parsed_graph
@@ -1555,6 +1652,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         if args.execution_mode.is_some() {
             registry.set_host_state(args.execution_mode);
         }
+        apply_model_fixtures(args.command, args.model_fixtures.as_deref(), &registry)?;
         flow::ui::syntax::validate(&screen, &registry)?;
         if capability_policy.is_some() {
             let policy_program = flow::ast::Program {
@@ -1705,6 +1803,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             data_flow_policy.as_ref(),
         )?;
         let cwd = env::current_dir()?;
+        apply_model_fixtures(args.command, args.model_fixtures.as_deref(), &registry)?;
         if capability_policy.is_some() {
             if args.execution_mode.is_some() {
                 registry.set_host_state(args.execution_mode);
@@ -1850,6 +1949,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     if args.execution_mode.is_some() {
         registry.set_host_state(args.execution_mode);
     }
+    apply_model_fixtures(args.command, args.model_fixtures.as_deref(), &registry)?;
     // The registry carries the capability policy, which authorizes the reads of any
     // program file the program calls, so it is loaded before the program is parsed.
     let cwd = env::current_dir()?;
@@ -2040,9 +2140,31 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         if let Some(expected) = &args.confirm {
             if *expected != fingerprint {
-                bail!(
+                let mut message = format!(
                     "plan changed since --what-if: confirmed {expected}, current {fingerprint}; review again with --what-if"
                 );
+                if let Some(report_path) = &args.confirm_report {
+                    let confirmed = load_confirm_report(report_path)?;
+                    let current = flow::agent::what_if::report(
+                        &path,
+                        &fingerprint,
+                        plan.clone(),
+                        settings.clone(),
+                    );
+                    let changes = flow::agent::what_if::describe_changes(
+                        &flow::agent::what_if::diff_reports(&confirmed, &current),
+                    );
+                    if changes.is_empty() {
+                        message.push_str(
+                            "\n  no difference in the plan or settings the saved report records",
+                        );
+                    }
+                    for change in changes {
+                        message.push_str("\n  ");
+                        message.push_str(&change);
+                    }
+                }
+                bail!("{message}");
             }
             // Bind the reviewed bytes to the bytes each spawn launches: every
             // native launch re-hashes against this map before its command is
@@ -2105,7 +2227,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             let mut plan = if args.explain_version == Some(1) {
                 flow::agent::explain::explain_json_v1(&program, &registry, &path)?
             } else {
-                flow::agent::explain::explain_json_with_inputs(&program, &registry, &path, &inputs)?
+                // Version 2 adds the `condition` of each `if` row (#463).
+                flow::agent::explain::explain_json_with_structure(
+                    &program, &registry, &path, &inputs,
+                )?
             };
             flow::capabilities::annotate_enforcement(&mut plan, &registry);
             if args.allow.is_empty() && !args.policy_header {
@@ -3853,8 +3978,8 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
-  --now EPOCH             Pin the injectable clock time.now reads (run/resume; wins over EXECUTE_NOW)\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --from-record DIR       Replay a record's completed prefix (resume)\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CATEGORY        Approve an effect category in explain --json review only; not a runtime capability grant\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --agent-policy FILE     Require this agent policy on the --control endpoint\n  --allow-unauthenticated Allow unauthenticated mutating --control operations\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --fs-timeout-ms N  Maximum filesystem open/read wait (run/resume)\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run (default 10000 ms; expiry cancels)\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute doctor [--json]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
+  --now EPOCH             Pin the injectable clock time.now reads (run/resume; wins over EXECUTE_NOW)\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --from-record DIR       Replay a record's completed prefix (resume)\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --confirm-report FILE  Saved what-if report to diff when --confirm does not match (run)\n  --model-fixtures DIR    Replay model calls from DIR (run/resume; wins over EXECUTE_MODEL_FIXTURES)\n  --allow CATEGORY        Approve an effect category in explain --json review only; not a runtime capability grant\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --agent-policy FILE     Require this agent policy on the --control endpoint\n  --allow-unauthenticated Allow unauthenticated mutating --control operations\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --fs-timeout-ms N  Maximum filesystem open/read wait (run/resume)\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run (default 10000 ms; expiry cancels)\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume)"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

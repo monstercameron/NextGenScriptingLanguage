@@ -493,6 +493,107 @@ fn apply_missed_interval_policy(
     }
 }
 
+/// How a supervised listener producer or graph node stopped.
+// Not called by the service loop yet (#555 wiring is a later slice).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SupervisedExit {
+    /// A non-zero or signal status, or a handler or node error.
+    Failure,
+    /// An exit whose outcome the manifest classifies as success.
+    CleanExit,
+}
+
+/// Restart budget and backoff for one supervised listener producer or graph node.
+/// Where these values come from (CLI flag or generated unit) is decided by the caller.
+// Not called by the service loop yet (#555 wiring is a later slice).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RestartPolicy {
+    /// Restarts allowed for consecutive failing runs before the component is given up.
+    pub(crate) max_restarts: u32,
+    /// A run lasting at least this long counts as healthy and resets the budget and backoff.
+    pub(crate) window: Duration,
+    /// Delay before the first restart. It doubles for each consecutive restart.
+    pub(crate) initial_backoff: Duration,
+    /// Upper bound on the backoff delay.
+    pub(crate) max_backoff: Duration,
+    /// Whether a clean exit is restarted as well as a failure.
+    pub(crate) restart_clean_exit: bool,
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        Self {
+            max_restarts: 20,
+            window: Duration::from_secs(600),
+            initial_backoff: Duration::from_secs(1),
+            max_backoff: Duration::from_secs(60),
+            restart_clean_exit: false,
+        }
+    }
+}
+
+impl RestartPolicy {
+    /// Reject policies that would make `restart_decision` meaningless.
+    // Not called by the service loop yet (#555 wiring is a later slice).
+    #[allow(dead_code)]
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.window.is_zero() {
+            bail!("restart window must be greater than zero");
+        }
+        if self.initial_backoff > self.max_backoff {
+            bail!("restart initial backoff must not exceed the maximum backoff");
+        }
+        Ok(())
+    }
+}
+
+/// The supervisor's answer for one stopped component.
+// Not called by the service loop yet (#555 wiring is a later slice).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RestartDecision {
+    /// Start the component again after this delay.
+    RestartAfter(Duration),
+    /// The budget is spent or the exit is not restartable. Escalate to stopping the service.
+    GiveUp,
+}
+
+/// Decide whether a stopped component is restarted, and after how long.
+///
+/// `attempts` is the number of restarts already made since the last healthy run.
+/// `since_last_start` is how long the most recent run lived. A run that reached
+/// `policy.window` is healthy, so the budget and backoff start over. Otherwise the
+/// delay is `initial_backoff * 2^attempts`, capped at `max_backoff`. The function is
+/// pure: the caller supplies the observations, so it never reads a clock.
+// Not called by the service loop yet (#555 wiring is a later slice).
+#[allow(dead_code)]
+pub(crate) fn restart_decision(
+    policy: &RestartPolicy,
+    exit: SupervisedExit,
+    attempts: u32,
+    since_last_start: Duration,
+) -> RestartDecision {
+    if exit == SupervisedExit::CleanExit && !policy.restart_clean_exit {
+        return RestartDecision::GiveUp;
+    }
+    let attempts = if since_last_start >= policy.window {
+        0
+    } else {
+        attempts
+    };
+    if attempts >= policy.max_restarts {
+        return RestartDecision::GiveUp;
+    }
+    let multiplier = 1u32.checked_shl(attempts).unwrap_or(u32::MAX);
+    let backoff = policy
+        .initial_backoff
+        .checked_mul(multiplier)
+        .unwrap_or(policy.max_backoff);
+    RestartDecision::RestartAfter(backoff.min(policy.max_backoff))
+}
+
 /// Run a foreground service. No OS cron, launchd or systemd configuration is changed.
 pub fn run_service(
     program: &Program,
@@ -1389,5 +1490,101 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(LOCAL_MINUTE_DEDUP_CAPACITY <= CRON_CATCH_UP_LOOKBACK_MINUTES as usize);
+    }
+
+    fn supervision_policy() -> RestartPolicy {
+        RestartPolicy {
+            max_restarts: 4,
+            window: Duration::from_secs(60),
+            initial_backoff: Duration::from_secs(1),
+            max_backoff: Duration::from_secs(5),
+            restart_clean_exit: false,
+        }
+    }
+
+    #[test]
+    fn restart_backoff_doubles_caps_and_then_gives_up() {
+        let policy = supervision_policy();
+        let two_seconds = Duration::from_secs(2);
+        let delays: Vec<_> = (0..4)
+            .map(|attempts| {
+                restart_decision(&policy, SupervisedExit::Failure, attempts, two_seconds)
+            })
+            .collect();
+        assert_eq!(
+            delays,
+            vec![
+                RestartDecision::RestartAfter(Duration::from_secs(1)),
+                RestartDecision::RestartAfter(Duration::from_secs(2)),
+                RestartDecision::RestartAfter(Duration::from_secs(4)),
+                RestartDecision::RestartAfter(Duration::from_secs(5)),
+            ]
+        );
+        assert_eq!(
+            restart_decision(&policy, SupervisedExit::Failure, 4, two_seconds),
+            RestartDecision::GiveUp
+        );
+    }
+
+    #[test]
+    fn restart_healthy_run_resets_budget_and_backoff() {
+        let policy = supervision_policy();
+        let healthy = Duration::from_secs(60);
+        assert_eq!(
+            restart_decision(&policy, SupervisedExit::Failure, 4, healthy),
+            RestartDecision::RestartAfter(Duration::from_secs(1))
+        );
+        assert_eq!(
+            restart_decision(&policy, SupervisedExit::Failure, 3, Duration::from_secs(59)),
+            RestartDecision::RestartAfter(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn restart_clean_exit_follows_policy_flag() {
+        let mut policy = supervision_policy();
+        let two_seconds = Duration::from_secs(2);
+        assert_eq!(
+            restart_decision(&policy, SupervisedExit::CleanExit, 0, two_seconds),
+            RestartDecision::GiveUp
+        );
+        policy.restart_clean_exit = true;
+        assert_eq!(
+            restart_decision(&policy, SupervisedExit::CleanExit, 0, two_seconds),
+            RestartDecision::RestartAfter(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn restart_huge_attempt_counts_saturate_without_panicking() {
+        let policy = RestartPolicy {
+            max_restarts: u32::MAX,
+            ..supervision_policy()
+        };
+        assert_eq!(
+            restart_decision(
+                &policy,
+                SupervisedExit::Failure,
+                u32::MAX - 1,
+                Duration::ZERO
+            ),
+            RestartDecision::RestartAfter(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn restart_policy_validation_rejects_unusable_bounds() {
+        assert!(RestartPolicy::default().validate().is_ok());
+        assert!(!RestartPolicy::default().restart_clean_exit);
+        let zero_window = RestartPolicy {
+            window: Duration::ZERO,
+            ..supervision_policy()
+        };
+        assert!(zero_window.validate().is_err());
+        let inverted = RestartPolicy {
+            initial_backoff: Duration::from_secs(10),
+            ..supervision_policy()
+        };
+        assert!(inverted.validate().is_err());
     }
 }

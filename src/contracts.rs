@@ -13,6 +13,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod health;
 pub mod reconcile;
 
 const NONEMPTY_TEXT_WHITESPACE_PATTERN: &str =
@@ -2977,6 +2978,18 @@ pub struct AppletContract {
         skip_serializing_if = "Option::is_none"
     )]
     pub reconciler: Option<ReconcilerContract>,
+    /// Typed health probes the runtime runs to classify this applet or service.
+    /// Empty for ordinary applets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub health: Vec<health::HealthProbe>,
+    /// Recovery rows for faults from this applet or service. Absent means no
+    /// automatic recovery is declared.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recovery: Option<health::RecoveryPolicy>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -3105,6 +3118,10 @@ impl AppletContract {
         }
         if let Some(reconciler) = &self.reconciler {
             reconciler.validate(&self.effects)?;
+        }
+        health::validate_probes(&self.health)?;
+        if let Some(recovery) = &self.recovery {
+            recovery.validate(&self.health, &self.effects)?;
         }
         if self.result_envelope
             && self

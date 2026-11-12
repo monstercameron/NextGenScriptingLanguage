@@ -102,6 +102,7 @@ fn listen(
                 &manifest.name,
                 &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
             )?;
+            super::bind_parent_death_signal(&mut command);
             let mut child = command
                 .current_dir(&options.working_directory)
                 .stdin(Stdio::null())

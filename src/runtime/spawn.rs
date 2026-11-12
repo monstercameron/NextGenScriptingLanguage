@@ -913,6 +913,8 @@ pub(super) fn execute_group_with_sink(
         if terminal_foreground.is_none() {
             command.process_group(0);
         }
+        #[cfg(unix)]
+        super::bind_parent_death_signal(&mut command);
         let mut bytes = None;
         let mut prefilled_input = None;
         let stdin = if index != 0 {

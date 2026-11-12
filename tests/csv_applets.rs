@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const MAX_CSV_BYTES: usize = 16 * 1024 * 1024;
-const MAX_CSV_ROWS: usize = 100_000;
+// The row bound is 10,000,000 (issue #250). Tests use this size instead of the bound:
+// reaching the exact bound would allocate gigabytes inside a test.
+const TEST_ROWS: usize = 150_000;
 const MAX_CSV_COLUMNS: usize = 16_384;
 const MAX_CSV_CELLS: usize = 1_000_000;
 
@@ -182,37 +184,22 @@ fn lf_records_canonicalize_to_crlf_while_unicode_and_multiline_bytes_roundtrip()
 }
 
 #[test]
-fn parser_enforces_exact_data_row_limit_with_and_without_headers() {
-    let no_header_input = "x\n".repeat(MAX_CSV_ROWS);
+fn parser_accepts_rows_past_the_old_cap_with_and_without_headers() {
+    let no_header_input = "x\n".repeat(TEST_ROWS);
     let no_header = run(
         "csv.parse",
         json!({"has_headers": false}),
         no_header_input.as_bytes(),
     )
     .unwrap();
-    assert_eq!(no_header["rows"].as_array().unwrap().len(), MAX_CSV_ROWS);
+    assert_eq!(no_header["rows"].as_array().unwrap().len(), TEST_ROWS);
     drop(no_header);
     drop(no_header_input);
 
-    let too_many_no_header = "x\n".repeat(MAX_CSV_ROWS + 1);
-    let error = run(
-        "csv.parse",
-        json!({"has_headers": false}),
-        too_many_no_header.as_bytes(),
-    )
-    .unwrap_err();
-    assert!(error.message.contains("100000-row table limit"));
-    drop(too_many_no_header);
-
     let mut header_input = String::from("header\n");
-    header_input.push_str(&"x\n".repeat(MAX_CSV_ROWS));
+    header_input.push_str(&"x\n".repeat(TEST_ROWS));
     let with_header = run("csv.parse", json!({}), header_input.as_bytes()).unwrap();
-    assert_eq!(with_header["rows"].as_array().unwrap().len(), MAX_CSV_ROWS);
-    drop(with_header);
-
-    header_input.push_str("x\n");
-    let error = run("csv.parse", json!({}), header_input.as_bytes()).unwrap_err();
-    assert!(error.message.contains("100000-row table limit"));
+    assert_eq!(with_header["rows"].as_array().unwrap().len(), TEST_ROWS);
 }
 
 #[test]
@@ -301,23 +288,11 @@ fn parser_and_stringifier_enforce_exact_cell_limit() {
 }
 
 #[test]
-fn stringifier_enforces_exact_data_row_limit() {
-    let rows = vec![json!(["x"]); MAX_CSV_ROWS];
+fn stringifier_accepts_rows_past_the_old_cap() {
+    let rows = vec![json!(["x"]); TEST_ROWS];
     let args = Map::from_iter([("table".to_owned(), json!({"headers": ["h"], "rows": rows}))]);
     let output = applets::execute("csv.stringify", &args, b"").unwrap();
-    assert_eq!(output.as_str().unwrap().len(), 3 * (MAX_CSV_ROWS + 1));
-
-    let mut oversized_args = args;
-    oversized_args
-        .get_mut("table")
-        .unwrap()
-        .get_mut("rows")
-        .unwrap()
-        .as_array_mut()
-        .unwrap()
-        .push(json!(["x"]));
-    let error = applets::execute("csv.stringify", &oversized_args, b"").unwrap_err();
-    assert!(error.message.contains("100000-row limit"));
+    assert_eq!(output.as_str().unwrap().len(), 3 * (TEST_ROWS + 1));
 }
 
 #[test]

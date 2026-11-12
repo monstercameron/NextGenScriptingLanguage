@@ -9,7 +9,7 @@
 //! Standalone: this file depends only on `serde_json` and `std`, so an integration
 //! test can compile it with `#[path]`. The limits below are copies of
 //! `applets::shared::{MAX_BYTES, MAX_DEPTH}` (16 MiB, 128 levels) and
-//! `applets::structured::MAX_JSON_ITEMS` (100,000 items). They are generous on purpose.
+//! `applets::list::ITEM_LIMIT` (10,000,000 items). They are generous on purpose.
 //! Wiring replaces them with the shared constants and maps `ConstructError` to
 //! `invalid(message)`.
 
@@ -19,7 +19,7 @@ use std::io::{self, Write};
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEPTH: usize = 128;
-const MAX_ITEMS: usize = 100_000;
+const MAX_ITEMS: usize = 10_000_000;
 
 /// Error returned by the construction applets. Every error is a bad request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,17 +410,27 @@ mod tests {
 
     #[test]
     fn item_limit_accepts_the_bound_and_refuses_one_more() {
-        let at_limit = Value::Array(vec![Value::Null; MAX_ITEMS]);
-        assert!(list_make(&args(serde_json::json!({ "items": at_limit }))).is_ok());
-        let over = Value::Array(vec![Value::Null; MAX_ITEMS + 1]);
-        let error = list_make(&args(serde_json::json!({ "items": over })))
-            .expect_err("over the item limit");
-        assert!(error.message.contains("100000-item limit"), "{error}");
+        // The count check is exercised directly: a real 10,000,000-item value would
+        // allocate hundreds of megabytes inside a test.
+        assert!(check_count(MAX_ITEMS).is_ok());
+        let error = check_count(MAX_ITEMS + 1).expect_err("over the item limit");
+        assert_eq!(
+            error.message,
+            format!("value exceeds the bounded {MAX_ITEMS}-item limit")
+        );
+    }
+
+    #[test]
+    fn item_limit_admits_150000_items_in_construction() {
+        let items: Vec<Value> = (0..150_000).map(Value::from).collect();
+        let made = list_make(&args(serde_json::json!({ "items": items.clone() })))
+            .expect("150000 items build");
+        assert_eq!(made.as_array().map(Vec::len), Some(150_000));
         let appended = list_append(&args(serde_json::json!({
-            "list": Value::Array(vec![Value::Null; MAX_ITEMS]), "item": 1
+            "list": items, "item": 1
         })))
-        .expect_err("append past the item limit");
-        assert!(appended.message.contains("item limit"), "{appended}");
+        .expect("150001 items append");
+        assert_eq!(appended.as_array().map(Vec::len), Some(150_001));
     }
 
     #[test]

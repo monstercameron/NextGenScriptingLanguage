@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 
 const MAX_CSV_BYTES: usize = super::shared::MAX_BYTES;
-const MAX_CSV_ROWS: usize = 100_000;
+const MAX_CSV_ROWS: usize = super::list::ITEM_LIMIT;
 const MAX_CSV_COLUMNS: usize = 16_384;
 const MAX_CSV_CELLS: usize = 1_000_000;
 const CHECK_INTERVAL: usize = 256;

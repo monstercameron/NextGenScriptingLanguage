@@ -1,7 +1,10 @@
 use super::{checkpoint_work, invalid, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
 
-const LIMIT: usize = 100_000;
+/// The item bound shared by the list, CSV, glob and JSON applets. It is generous on
+/// purpose: the output byte limit still applies, and the bound only stops hostile input
+/// from exhausting memory.
+pub(super) const ITEM_LIMIT: usize = 10_000_000;
 
 fn list<'a>(
     args: &'a Map<String, Value>,
@@ -12,8 +15,8 @@ fn list<'a>(
         .get(name)
         .and_then(Value::as_array)
         .ok_or_else(|| invalid(format!("args.{name} must be a list")))?;
-    if values.len() > LIMIT {
-        return Err(invalid(format!("list exceeds {LIMIT} items")));
+    if values.len() > ITEM_LIMIT {
+        return Err(invalid(format!("list exceeds {ITEM_LIMIT} items")));
     }
     super::shared::check_values(values, context)?;
     Ok(values)
@@ -80,8 +83,10 @@ pub(super) fn run(
             } else {
                 current > stop
             } {
-                if values.len() == LIMIT {
-                    return Err(invalid("list.range exceeds the 100000 item limit"));
+                if values.len() == ITEM_LIMIT {
+                    return Err(invalid(format!(
+                        "list.range exceeds the {ITEM_LIMIT} item limit"
+                    )));
                 }
                 checkpoint_work(context, values.len())?;
                 values.push(Value::from(current));
@@ -151,9 +156,11 @@ pub(super) fn run(
                 if out
                     .len()
                     .checked_add(sublist.len())
-                    .is_none_or(|size| size > LIMIT)
+                    .is_none_or(|size| size > ITEM_LIMIT)
                 {
-                    return Err(invalid("list.concat exceeds the 100000 item limit"));
+                    return Err(invalid(format!(
+                        "list.concat exceeds the {ITEM_LIMIT} item limit"
+                    )));
                 }
                 out.extend(sublist.iter().cloned());
             }
@@ -189,8 +196,10 @@ pub(super) fn run(
                     }
                     pending.extend(values.iter().rev().map(|item| (item, remaining - 1)));
                 } else {
-                    if out.len() == LIMIT {
-                        return Err(invalid("list.flatten exceeds the 100000 item limit"));
+                    if out.len() == ITEM_LIMIT {
+                        return Err(invalid(format!(
+                            "list.flatten exceeds the {ITEM_LIMIT} item limit"
+                        )));
                     }
                     out.push(value.clone());
                 }

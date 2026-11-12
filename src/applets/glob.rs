@@ -38,7 +38,7 @@ use std::path::{Component, Path, PathBuf, MAIN_SEPARATOR};
 
 const MAX_PATTERN_BYTES: usize = 4096;
 const MAX_PATTERN_COMPONENTS: usize = 256;
-const MAX_GLOB_RESULTS: usize = 100_000;
+const MAX_GLOB_RESULTS: usize = super::list::ITEM_LIMIT;
 const MAX_GLOB_ENTRIES: usize = 1_000_000;
 const MAX_GLOB_DEPTH: usize = 256;
 

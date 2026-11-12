@@ -17,7 +17,7 @@ use std::borrow::Cow;
 const MAX_JSON_BYTES: usize = super::shared::MAX_BYTES;
 const MAX_FILTER_CLAUSES: usize = 32;
 const MAX_DEPTH: usize = super::shared::MAX_DEPTH;
-const MAX_JSON_ITEMS: usize = 100_000;
+const MAX_JSON_ITEMS: usize = super::list::ITEM_LIMIT;
 
 pub(super) fn parse(
     args: &Map<String, Value>,
@@ -537,7 +537,9 @@ pub(super) fn keys(
     .and_then(Value::as_object)
     .ok_or_else(|| invalid("the selected JSON value must be an object"))?;
     if object.len() > MAX_JSON_ITEMS {
-        return Err(invalid("JSON object exceeds the 100000 item limit"));
+        return Err(invalid(format!(
+            "JSON object exceeds the {MAX_JSON_ITEMS} item limit"
+        )));
     }
     let mut keys = Vec::with_capacity(object.len());
     for (index, key) in object.keys().enumerate() {
@@ -560,7 +562,9 @@ pub(super) fn entries(
     .and_then(Value::as_object)
     .ok_or_else(|| invalid("the selected JSON value must be an object"))?;
     if object.len() > MAX_JSON_ITEMS {
-        return Err(invalid("JSON object exceeds the 100000 item limit"));
+        return Err(invalid(format!(
+            "JSON object exceeds the {MAX_JSON_ITEMS} item limit"
+        )));
     }
     let mut entries = Vec::with_capacity(object.len());
     for (index, (key, value)) in object.iter().enumerate() {
@@ -727,7 +731,9 @@ pub(super) fn values(
     .and_then(Value::as_object)
     .ok_or_else(|| invalid("the selected JSON value must be an object"))?;
     if object.len() > MAX_JSON_ITEMS {
-        return Err(invalid("JSON object exceeds the 100000 item limit"));
+        return Err(invalid(format!(
+            "JSON object exceeds the {MAX_JSON_ITEMS} item limit"
+        )));
     }
     let mut values = Vec::with_capacity(object.len());
     for (index, value) in object.values().enumerate() {
@@ -811,8 +817,10 @@ pub(super) fn concat(
         .get("right")
         .and_then(Value::as_array)
         .ok_or_else(|| invalid("args.right must be an array"))?;
-    if left.len().saturating_add(right.len()) > 100_000 {
-        return Err(invalid("concatenated array exceeds the 100000 item limit"));
+    if left.len().saturating_add(right.len()) > MAX_JSON_ITEMS {
+        return Err(invalid(format!(
+            "concatenated array exceeds the {MAX_JSON_ITEMS} item limit"
+        )));
     }
     let mut combined = Vec::with_capacity(left.len() + right.len());
     for (index, value) in left.iter().chain(right).enumerate() {
@@ -854,7 +862,9 @@ pub(super) fn group_by(
         .as_array()
         .ok_or_else(|| invalid("document must be an array"))?;
     if array.len() > MAX_JSON_ITEMS {
-        return Err(invalid("JSON array exceeds the 100000 item limit"));
+        return Err(invalid(format!(
+            "JSON array exceeds the {MAX_JSON_ITEMS} item limit"
+        )));
     }
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     // Keep the existing serialized-key group order using the first representative.
@@ -908,7 +918,9 @@ pub(super) fn unique_by(
         .as_array()
         .ok_or_else(|| invalid("document must be an array"))?;
     if array.len() > MAX_JSON_ITEMS {
-        return Err(invalid("JSON array exceeds the 100000 item limit"));
+        return Err(invalid(format!(
+            "JSON array exceeds the {MAX_JSON_ITEMS} item limit"
+        )));
     }
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let mut seen = std::collections::BTreeSet::new();
@@ -949,7 +961,9 @@ pub(super) fn sort_by(
         .as_array()
         .ok_or_else(|| invalid("document must be an array"))?;
     if array.len() > MAX_JSON_ITEMS {
-        return Err(invalid("JSON array exceeds the 100000 item limit"));
+        return Err(invalid(format!(
+            "JSON array exceeds the {MAX_JSON_ITEMS} item limit"
+        )));
     }
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let numeric = optional_bool(args, "numeric", false)?;

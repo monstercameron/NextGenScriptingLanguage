@@ -619,14 +619,10 @@ fn list_range_retains_validation_and_item_limit() {
     }
     let full = run("list.range", json!({"start": 0, "stop": 100000})).unwrap();
     assert_eq!(full.as_array().unwrap().len(), 100000);
-    for args in [
-        json!({"start": 0, "stop": 100001}),
-        json!({"start": 0, "stop": -100001}),
-    ] {
-        let error = run("list.range", args).unwrap_err();
-        assert_eq!(error.code, "invalid_request");
-        assert!(error.message.contains("100000 item limit"), "{error:?}");
-    }
+    // The shared bound is 10,000,000 items (issue #250). Its refusal path is not
+    // exercised here because reaching it needs a 10,000,000-item allocation.
+    let past_old_cap = run("list.range", json!({"start": 0, "stop": 150000})).unwrap();
+    assert_eq!(past_old_cap.as_array().unwrap().len(), 150000);
 }
 
 #[test]

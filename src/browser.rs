@@ -231,9 +231,7 @@ impl BrowserSession {
         )?;
         for step in &program.steps {
             let unsupported = match &step.kind {
-                StepKind::BreakLoop | StepKind::ContinueLoop | StepKind::Return => {
-                    Some("loop transfers and reusable-program return")
-                }
+                StepKind::Return => Some("reusable-program return"),
                 StepKind::Append { .. }
                 | StepKind::Redirect { .. }
                 | StepKind::Environment { .. } => Some("file redirection and append"),
@@ -356,9 +354,33 @@ impl BrowserSession {
                         bail!("byte captures are not supported in browser execution")
                     }
                     StepKind::EndIf => {}
-                    StepKind::BreakLoop
-                    | StepKind::ContinueLoop
-                    | StepKind::Return
+                    StepKind::BreakLoop | StepKind::ContinueLoop => {
+                        // Same target rules as native: the innermost loop whose body
+                        // contains this step. Break leaves it; continue reaches its EndLoop.
+                        let finish = program.steps[..index]
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .find_map(|(header, candidate)| match candidate.kind {
+                                StepKind::Loop { end, .. } if header + end > index => {
+                                    Some(header + end)
+                                }
+                                _ => None,
+                            })
+                            .context("loop transfer is only valid inside a loop")?;
+                        if matches!(step.kind, StepKind::BreakLoop) {
+                            let outer = loops
+                                .depth()
+                                .checked_sub(1)
+                                .context("break without an active loop")?;
+                            loops.unwind_to(outer, &mut bindings)?;
+                            jump = Some(finish);
+                        } else {
+                            // The innermost loop stays active; its EndLoop restores body locals.
+                            jump = Some(finish.saturating_sub(1));
+                        }
+                    }
+                    StepKind::Return
                     | StepKind::Try { .. }
                     | StepKind::Catch { .. }
                     | StepKind::Finally
@@ -790,3 +812,58 @@ fn command_words(source: &str) -> Result<Vec<String>> {
 mod applets;
 #[path = "browser/core.rs"]
 mod core;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Response {
+        BrowserSession::default().handle(Request {
+            action: "run".into(),
+            source: source.into(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn break_leaves_only_the_innermost_loop() {
+        let response = run(concat!(
+            "repeat 2 times\n",
+            "  repeat 3 times\n",
+            "    run \"printf\" with arguments [\"in\\n\"]\n",
+            "    break\n",
+            "  run \"printf\" with arguments [\"out\\n\"]\n",
+        ));
+        assert!(response.ok, "{}", response.error);
+        assert_eq!(response.stdout, "in\nout\nin\nout\n");
+    }
+
+    #[test]
+    fn continue_skips_to_the_next_iteration() {
+        let response = run(concat!(
+            "repeat 3 times\n",
+            "  run \"printf\" with arguments [\"skip\\n\"]\n",
+            "  continue\n",
+            "  run \"printf\" with arguments [\"never\\n\"]\n",
+            "run \"printf\" with arguments [\"end\\n\"]\n",
+        ));
+        assert!(response.ok, "{}", response.error);
+        assert_eq!(response.stdout, "skip\nskip\nskip\nend\n");
+    }
+
+    #[test]
+    fn check_accepts_break_and_continue() {
+        let response = BrowserSession::default().handle(Request {
+            action: "check".into(),
+            source: concat!(
+                "repeat 2 times\n",
+                "  break\n",
+                "repeat 2 times\n",
+                "  continue\n",
+            )
+            .into(),
+            ..Default::default()
+        });
+        assert!(response.ok, "{}", response.error);
+    }
+}

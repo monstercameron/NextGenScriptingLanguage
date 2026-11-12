@@ -9,6 +9,10 @@
 //! if the client disconnects. A program that takes the terminal is declined before it
 //! produces output, and the client runs it itself.
 //!
+//! A forked run dies with its daemon on Linux (`PR_SET_PDEATHSIG`, SIGKILL), so an abrupt
+//! daemon death does not leave the run untracked (#820). Other Unix platforms have no such
+//! hook here, and a run's own children are not contained on any platform.
+//!
 //! Every client path checks the socket directory and the socket before it connects, and
 //! checks the peer's uid after it connects.
 //!
@@ -1033,6 +1037,7 @@ mod imp {
                 run: self.run,
                 registry: self.registry.clone(),
                 request: run,
+                daemon_pid: std::process::id() as libc::pid_t,
             };
             trace_stage("daemon-fork-begin");
             // SAFETY: the parent is single-threaded, so the child is a copy of one thread
@@ -1250,6 +1255,30 @@ mod imp {
         run: RunCallback,
         registry: Registry,
         request: RunRequest,
+        daemon_pid: libc::pid_t,
+    }
+
+    /// Make a run die with the daemon that forked it (#820). On Linux this is
+    /// `PR_SET_PDEATHSIG`, which sends SIGKILL when the parent thread exits, whether it exits
+    /// normally or is killed. The daemon can die between fork and this call, so the parent
+    /// pid is checked after arming and a run whose daemon is already gone must not start.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn arm_parent_death_signal(daemon_pid: libc::pid_t) -> io::Result<()> {
+        // SAFETY: prctl with PR_SET_PDEATHSIG takes a signal number and no pointers.
+        if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: getppid has no preconditions and cannot fail.
+        if unsafe { libc::getppid() } != daemon_pid {
+            return Err(io::Error::from_raw_os_error(libc::ESRCH));
+        }
+        Ok(())
+    }
+
+    /// No parent-death hook on this Unix: a run outlives an abruptly killed daemon here.
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    fn arm_parent_death_signal(_daemon_pid: libc::pid_t) -> io::Result<()> {
+        Ok(())
     }
 
     /// The child of a fork. It becomes the run and exits with the run's status.
@@ -1263,7 +1292,11 @@ mod imp {
             run,
             registry,
             request,
+            daemon_pid,
         } = setup;
+        if let Err(error) = arm_parent_death_signal(daemon_pid) {
+            fail(&format!("cannot tie the run to its daemon: {error}"));
+        }
         // Move every descriptor the child keeps above 2 first, so that dup2 onto 0, 1 and 2
         // cannot overwrite one of them.
         let connection = match duplicate_high(inherited.as_raw_fd()) {
@@ -1824,6 +1857,113 @@ mod imp {
                 );
                 Forwarding::Ran(1)
             }
+        }
+    }
+
+    #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+    mod parent_death_tests {
+        use super::arm_parent_death_signal;
+        use std::io;
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        /// Whether `pid` is still running. A zombie that has not been reaped counts as gone.
+        fn alive(pid: libc::pid_t) -> bool {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit(')')
+                    .next()
+                    .is_some_and(|rest| !rest.trim_start().starts_with('Z'))
+            })
+        }
+
+        /// Stand-in for the daemon: forks a run that arms the parent-death signal and reports
+        /// its pid through `write_fd`, then the daemon exits at once without waiting for it.
+        /// Only raw system calls run after fork, because the test process has other threads.
+        fn spawn_daemon_with_run(write_fd: libc::c_int, read_fd: libc::c_int) -> libc::pid_t {
+            // SAFETY: fork; the child uses only async-signal-safe calls before _exit.
+            let daemon = unsafe { libc::fork() };
+            assert!(daemon >= 0, "fork failed");
+            if daemon == 0 {
+                // SAFETY: getpid has no preconditions.
+                let daemon_pid = unsafe { libc::getpid() };
+                // SAFETY: fork; the run child below uses only raw calls before pause.
+                let run = unsafe { libc::fork() };
+                if run == 0 {
+                    // SAFETY: closing and writing the test's own descriptors.
+                    unsafe { libc::close(read_fd) };
+                    if arm_parent_death_signal(daemon_pid).is_err() {
+                        // SAFETY: _exit ends the child without running test harness code.
+                        unsafe { libc::_exit(2) };
+                    }
+                    // SAFETY: getpid has no preconditions.
+                    let pid = unsafe { libc::getpid() };
+                    // SAFETY: write reads pid, which lives for the call.
+                    unsafe {
+                        libc::write(
+                            write_fd,
+                            (&pid as *const libc::pid_t).cast(),
+                            std::mem::size_of::<libc::pid_t>(),
+                        );
+                        libc::pause();
+                        libc::_exit(0);
+                    }
+                }
+                // SAFETY: _exit ends the stand-in daemon at once, as an abrupt death would.
+                unsafe { libc::_exit(0) };
+            }
+            daemon
+        }
+
+        #[test]
+        fn a_run_is_killed_when_its_daemon_dies_and_bystanders_are_not() {
+            let mut fds = [0 as libc::c_int; 2];
+            // SAFETY: pipe writes two descriptors into fds.
+            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+            let (read_fd, write_fd) = (fds[0], fds[1]);
+            let mut bystander = Command::new("sleep").arg("60").spawn().unwrap();
+            let daemon = spawn_daemon_with_run(write_fd, read_fd);
+            // SAFETY: the test keeps only the read end; the run holds the write end.
+            unsafe { libc::close(write_fd) };
+
+            let mut bytes = [0u8; std::mem::size_of::<libc::pid_t>()];
+            let mut filled = 0;
+            while filled < bytes.len() {
+                // SAFETY: the read targets the unfilled tail of bytes, which lives for the call.
+                let count = unsafe {
+                    libc::read(
+                        read_fd,
+                        bytes[filled..].as_mut_ptr().cast(),
+                        bytes.len() - filled,
+                    )
+                };
+                assert!(
+                    count > 0,
+                    "the run never reported its pid: {}",
+                    io::Error::last_os_error()
+                );
+                filled += count as usize;
+            }
+            // SAFETY: the test is done with the read end.
+            unsafe { libc::close(read_fd) };
+            let run_pid = libc::pid_t::from_ne_bytes(bytes);
+            let mut status = 0;
+            // SAFETY: reaps the stand-in daemon, which has exited.
+            unsafe { libc::waitpid(daemon, &mut status, 0) };
+
+            let started = Instant::now();
+            while alive(run_pid) && started.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let run_dead = !alive(run_pid);
+            if !run_dead {
+                // SAFETY: cleanup of the test's own child on failure, so it does not linger.
+                unsafe { libc::kill(run_pid, libc::SIGKILL) };
+            }
+            let bystander_alive = bystander.try_wait().unwrap().is_none();
+            let _ = bystander.kill();
+            let _ = bystander.wait();
+            assert!(run_dead, "the run outlived its daemon");
+            assert!(bystander_alive, "an unrelated process was signaled");
         }
     }
 

@@ -77,11 +77,24 @@ impl Reason {
     }
 }
 
+/// The single value a program branches on: the strongest action any reason calls for.
+/// `Reboot` outranks `Restart`, and `Restart` outranks `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    #[default]
+    None,
+    Restart,
+    Reboot,
+}
+
 /// The typed answer of [`assess`].
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Assessment {
     pub reboot_required: bool,
     pub restart_required: bool,
+    /// `reboot` when `reboot_required`, else `restart` when `restart_required`, else `none`.
+    pub outcome: Outcome,
     pub reasons: Vec<Reason>,
     /// True when the process scan stopped at a bound, so more replaced binaries may exist.
     pub truncated: bool,
@@ -112,9 +125,19 @@ fn assess_with(root: &Path, links: &dyn LinkSource) -> Assessment {
     reasons.extend(kernel_reason(root));
     let (binaries, truncated) = replaced_binaries(root, links);
     reasons.extend(binaries);
+    let reboot_required = reasons.iter().any(Reason::needs_reboot);
+    let restart_required = reasons.iter().any(Reason::needs_restart);
+    let outcome = if reboot_required {
+        Outcome::Reboot
+    } else if restart_required {
+        Outcome::Restart
+    } else {
+        Outcome::None
+    };
     Assessment {
-        reboot_required: reasons.iter().any(Reason::needs_reboot),
-        restart_required: reasons.iter().any(Reason::needs_restart),
+        reboot_required,
+        restart_required,
+        outcome,
         reasons,
         truncated,
     }
@@ -648,6 +671,39 @@ mod tests {
         assert!(matches!(a.reasons[0], Reason::RebootFlag { .. }));
         assert!(matches!(a.reasons[1], Reason::Kernel { .. }));
         assert!(matches!(a.reasons[2], Reason::ReplacedBinary { .. }));
+    }
+
+    #[test]
+    fn outcome_is_reboot_restart_or_none() {
+        // Clean root: no reasons, so the outcome is none.
+        let dir = tempfile::tempdir().unwrap();
+        let a = run(dir.path(), &HashMap::new());
+        assert_eq!(a.outcome, Outcome::None);
+
+        // A replaced binary alone calls for a restart.
+        let dir = tempfile::tempdir().unwrap();
+        let mut links = HashMap::new();
+        process(
+            dir.path(),
+            &mut links,
+            101,
+            "Hyprland\n",
+            Some("/usr/bin/Hyprland (deleted)"),
+            None,
+        );
+        assert_eq!(run(dir.path(), &links).outcome, Outcome::Restart);
+
+        // A reboot flag outranks the replaced binary in the same tree.
+        write(dir.path(), MARKER, "");
+        assert_eq!(run(dir.path(), &links).outcome, Outcome::Reboot);
+
+        // The running kernel tree removed calls for a reboot on its own.
+        let dir = tempfile::tempdir().unwrap();
+        kernel(dir.path(), "6.8.0-1-arch1", &["6.9.2-arch1"]);
+        assert_eq!(run(dir.path(), &HashMap::new()).outcome, Outcome::Reboot);
+
+        let value = serde_json::to_value(Outcome::Reboot).unwrap();
+        assert_eq!(value, serde_json::json!("reboot"));
     }
 
     #[test]

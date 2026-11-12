@@ -1,0 +1,132 @@
+{
+  "name": "conf.ensure_line_near",
+  "description": "Makes one whole line present exactly once in a config file. If the line already appears anywhere, nothing changes. Otherwise it is inserted immediately before or after the first line that equals the anchor exactly; the anchor is literal text, never a pattern. A missing anchor is an error and nothing is appended. Lines inside a managed block are never edited.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Config file path to update; relative paths resolve from the program working directory. A missing file has no anchor, so it is refused."
+    },
+    "line": {
+      "type": "string",
+      "required": true,
+      "description": "The whole line to ensure, without a line ending and without NUL."
+    },
+    "anchor": {
+      "type": "string",
+      "required": true,
+      "description": "The whole line to insert beside, compared literally."
+    },
+    "position": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "before",
+        "after"
+      ],
+      "description": "Insert the line before or after the first line equal to the anchor."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "conf.ensure_line_near"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "path"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "line": {
+          "schema": {
+            "type": "text",
+            "single_line": true
+          },
+          "delivery": "single"
+        },
+        "anchor": {
+          "schema": {
+            "type": "text",
+            "single_line": true
+          },
+          "delivery": "single"
+        },
+        "position": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "before",
+              "after"
+            ]
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "path"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "conf ensure line near"
+  ]
+}

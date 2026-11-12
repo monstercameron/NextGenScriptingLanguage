@@ -1,0 +1,91 @@
+{
+  "name": "record.set",
+  "description": "Returns a copy of a record with one field set to a value. Keys come back in sorted order; the input record is not changed.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "record": {
+      "type": "json",
+      "required": true,
+      "description": "Record to copy and edit."
+    },
+    "key": {
+      "type": "string",
+      "required": true,
+      "description": "Field name to set; an existing field is replaced."
+    },
+    "value": {
+      "type": "json",
+      "required": true,
+      "description": "JSON value stored unchanged under key."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "record.set"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "record": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "record field"
+  ],
+  "examples": [
+    {
+      "program": "run record.set with record {\"name\":\"Ada\"} and key \"count\" and value 2 as result",
+      "expected_output": {
+        "count": 2,
+        "name": "Ada"
+      }
+    }
+  ]
+}

@@ -435,7 +435,7 @@ fn help() -> &'static str {
      number.modulo, number.round, number.sign, number.trunc, number.add, number.subtract,\n\
      number.multiply, number.divide, number.compare, number.parse_integer,\n\
      number.parse_integer.result, number.to_text, color.rgb_to_hex, color.parse_rgb,\n\
-     color.parse_rgb.result, json.parse, json.stringify, json.get, json.set,\n\
+     color.parse_rgb.result, json.parse, json.stringify, json.get, json.set, record.make, record.set, list.make, list.append,\n\
      json.map, json.filter, json.concat, json.delete, json.entries, json.first,\n\
      json.group_by, json.has, json.keys, json.last, json.length, json.merge,\n\
      json.omit, json.pick, json.rename_keys, json.sort_by, json.sum, json.unique_by,\n\
@@ -449,8 +449,8 @@ fn help() -> &'static str {
      time.parse, time.parts, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
      ini.parse, ini.stringify, env.load, fs.test, fs.glob, exec.which, fs.ensure_file, fs.ensure_line,\n\
      fs.ensure_symlink, fs.ensure_dir,\n\
-     fs.read, fs.snapshot, fs.stat, fs.realpath, fs.copy, conf.set,\n\
-     conf.ensure_block, conf.remove_block, sys.facts,\n\
+     fs.read, fs.snapshot, fs.stat, fs.realpath, fs.copy, fs.move, conf.set,\n\
+     conf.ensure_block, conf.remove_block, conf.ensure_line_near, conf.remove_matching, sys.facts,\n\
      system.restart_required, state.flag_set, state.flag_clear, state.flag_is_set, state.toggle,\n\
      state.value_load, state.value_store, state.debounce,\n\
      fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\

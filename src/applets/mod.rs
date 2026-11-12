@@ -7,6 +7,7 @@
 mod aggregation;
 mod arithmetic;
 mod config;
+mod construct;
 mod csv;
 mod desktop_entry;
 mod ensure;
@@ -326,6 +327,8 @@ pub fn execute_with_context(
         "conf.set" => ensure::conf_set(args, cwd, context),
         "conf.ensure_block" => ensure::conf_ensure_block(args, cwd, context),
         "conf.remove_block" => ensure::conf_remove_block(args, cwd, context),
+        "conf.ensure_line_near" => ensure::conf_ensure_line_near(args, cwd, context),
+        "conf.remove_matching" => ensure::conf_remove_matching(args, cwd, context),
         "fs.ensure_symlink" => ensure::ensure_symlink(args, cwd, context),
         "fs.ensure_dir" => ensure::ensure_dir(args, cwd, context),
         "yaml.parse" => yaml::parse(args, input, context),
@@ -360,6 +363,10 @@ pub fn execute_with_context(
         "csv.stringify" => csv::stringify(args, context),
         "json.get" => structured::get(args, input, context),
         "json.set" => structured::set(args, input, context),
+        "record.make" => construct::record_make(args).map_err(construct_error),
+        "record.set" => construct::record_set(args).map_err(construct_error),
+        "list.make" => construct::list_make(args).map_err(construct_error),
+        "list.append" => construct::list_append(args).map_err(construct_error),
         "json.map" => structured::map(args, input, context),
         "json.filter" => structured::filter(args, input, context),
         "json.keys" => structured::keys(args, input, context),
@@ -394,6 +401,7 @@ pub fn execute_with_context(
         "fs.stat" => filesystem::stat(args, cwd, context),
         "fs.realpath" => filesystem::realpath(args, cwd, context),
         "fs.copy" => filesystem::copy(args, cwd, context),
+        "fs.move" => filesystem::move_file(args, cwd, context),
         "sys.facts" => sys_facts::facts(args, context),
         "system.restart_required" => system_restart::assess(args, context),
         "state.flag_set" | "state.flag_clear" | "state.flag_is_set" | "state.toggle"
@@ -433,24 +441,33 @@ pub(crate) fn secret_values(
 /// the converted argument map and passes the bound value to [`execute_with_typed_json`].
 pub(crate) fn typed_json_parameter(applet: &str) -> Option<&'static str> {
     match applet {
-        "json.get" => Some("document"),
+        "json.get" | "json.map" | "json.filter" => Some("document"),
         _ => None,
     }
 }
 
 /// Run an applet whose [`typed_json_parameter`] is supplied as an interpreter value.
+/// It runs the checks and the cooperative checkpoints that [`execute_with_context`] runs
+/// around the same applet, so a typed call reports cancellation and errors the same way.
 pub(crate) fn execute_with_typed_json(
     applet: &str,
     args: &serde_json::Map<String, serde_json::Value>,
     typed: &crate::ast::Value,
     context: &ExecutionContext<'_>,
 ) -> Result<serde_json::Value, AppletError> {
-    match applet {
+    context.checkpoint()?;
+    let result = match applet {
         "json.get" => structured::get_typed(args, typed, context),
+        "json.map" => structured::map_typed(args, typed, context),
+        "json.filter" => structured::filter_typed(args, typed, context),
         _ => Err(invalid(format!(
             "applet {applet:?} takes no typed JSON parameter"
         ))),
+    };
+    if result.is_ok() {
+        context.checkpoint()?;
     }
+    result
 }
 
 pub(crate) fn required_string<'a>(
@@ -597,6 +614,11 @@ pub(crate) fn failed(code: &'static str, message: impl Into<String>) -> AppletEr
 
 pub(crate) fn absence(code: &'static str, message: impl Into<String>) -> AppletError {
     AppletError::absence(code, message)
+}
+
+/// The construction functions are a standalone file with their own error type.
+fn construct_error(error: construct::ConstructError) -> AppletError {
+    AppletError::invalid(error.message)
 }
 
 #[cfg(test)]

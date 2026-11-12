@@ -1,0 +1,89 @@
+{
+  "name": "list.append",
+  "description": "Returns a copy of a list with one item, or every element of an items list, appended. Exactly one of item or items must be given.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "list": {
+      "type": "json",
+      "required": true,
+      "description": "List to copy and extend."
+    },
+    "item": {
+      "type": "json",
+      "description": "One value appended as a single element."
+    },
+    "items": {
+      "type": "json",
+      "description": "List whose elements are appended in order."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.append"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "list": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "item": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "items": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "list append"
+  ],
+  "examples": [
+    {
+      "program": "run list.append with list [1] and item 2 as result",
+      "expected_output": [
+        1,
+        2
+      ]
+    }
+  ]
+}

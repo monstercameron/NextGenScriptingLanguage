@@ -1,0 +1,135 @@
+{
+  "name": "fs.move",
+  "description": "Moves one regular file. Refuses a symbolic-link source, an existing destination unless overwrite is true, a directory or symbolic-link destination, and a destination that is the source. On one filesystem it is a single rename; across filesystems it copies to a temporary sibling, verifies size and SHA-256, and only then removes the source. Returns the bytes moved, whether a destination was replaced and the method used.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "from": {
+      "type": "path",
+      "required": true,
+      "description": "Source file; relative paths resolve from the program working directory."
+    },
+    "to": {
+      "type": "path",
+      "required": true,
+      "description": "Destination file path; its directory must exist."
+    },
+    "overwrite": {
+      "type": "boolean",
+      "description": "Replace an existing destination file. Omitted or false refuses an existing destination."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.move"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "from": {
+          "type": "text"
+        },
+        "to": {
+          "type": "text"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "replaced": {
+          "type": "boolean"
+        },
+        "method": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "bytes",
+        "replaced",
+        "method"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "from": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "to": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "overwrite": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "from": {
+                "type": "text"
+              },
+              "to": {
+                "type": "text"
+              },
+              "bytes": {
+                "type": "integer"
+              },
+              "replaced": {
+                "type": "boolean"
+              },
+              "method": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "bytes",
+              "replaced",
+              "method"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "relocate file"
+  ]
+}

@@ -28,7 +28,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -584,11 +584,353 @@ fn copy_locked(
     }))
 }
 
+/// `fs.move`: move one regular file from `from` to `to`. The source and
+/// destination rules are those of `fs.copy`, except that a symbolic-link source
+/// is always refused: this slice moves no links, so neither the link nor its
+/// target is moved, and `follow` is not accepted.
+///
+/// Within one filesystem the move is a single rename. With `overwrite` it is
+/// `std::fs::rename`, which replaces the destination in one step. Without it,
+/// the destination is created by a hard link, which fails if the destination
+/// exists, and the source name is then removed. That is race-free against a
+/// file that appears after the preflight, and it needs hard-link support
+/// (Unix and NTFS). Across filesystems the rename fails with a cross-device
+/// error and the file is copied instead (see `move_by_copy`).
+///
+/// The result is `{from, to, bytes, replaced, method}`, where `method` is
+/// `"rename"` or `"copy"`. A failure before the source is removed leaves the
+/// source untouched. A failed source removal after the destination is in place
+/// is `uncertain_effect`, because both files then exist.
+pub(super) fn move_file(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let from = resolve_path(required_string(args, "from")?, cwd);
+    let to = resolve_path(required_string(args, "to")?, cwd);
+    let _ = result_path(&from)?;
+    let _ = result_path(&to)?;
+    let overwrite = optional_bool(args, "overwrite", false)?;
+    // A missing source is left to the preflight, which reports it as absent.
+    if let Ok(link) = fs::symlink_metadata(&from) {
+        if link.file_type().is_symlink() {
+            return Err(invalid(format!(
+                "refusing to move symbolic link {}: fs.move moves regular files only",
+                from.display()
+            )));
+        }
+    }
+    // Refuse before the destination lock file is opened, since that lock file
+    // is created beside the destination. The check is repeated under the lock.
+    copy_preflight(&from, &to, false, overwrite, context)?;
+    let lock_path = lock_path(args, &to, cwd)?;
+    validate_lock_path(&lock_path, &to)?;
+    let lock_timeout = lock_timeout(args)?;
+
+    with_path_lock(&lock_path, lock_timeout, context, || {
+        move_locked(&from, &to, overwrite, &SystemSteps, context)
+    })
+}
+
+/// The filesystem steps `fs.move` takes. `SystemSteps` performs them for real;
+/// tests substitute an implementation that fails one step, which is how the
+/// cross-device fallback is exercised without a second filesystem.
+trait MoveSteps {
+    /// Rename `from` over `to`, replacing `to` if it exists.
+    fn rename_over(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::rename(from, to)
+    }
+    /// Make `to` name the file `from` names. Fails with `AlreadyExists` when
+    /// `to` exists.
+    fn link_new(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::hard_link(from, to)
+    }
+    /// Remove the source name once the destination has been verified.
+    fn unlink_source(&self, path: &Path) -> std::io::Result<()> {
+        fs::remove_file(path)
+    }
+    /// Stream the source bytes into the staged temporary file.
+    fn copy_bytes(
+        &self,
+        source: &mut File,
+        destination: &mut File,
+        destination_path: &Path,
+        context: &ExecutionContext<'_>,
+    ) -> Result<u64, AppletError> {
+        copy_chunked(source, destination, destination_path, context)
+    }
+}
+
+struct SystemSteps;
+
+impl MoveSteps for SystemSteps {}
+
+/// The move itself, run while the destination lock is held.
+fn move_locked(
+    from: &Path,
+    to: &Path,
+    overwrite: bool,
+    steps: &dyn MoveSteps,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let (open_path, replaced) = copy_preflight(from, to, false, overwrite, context)?;
+    let bytes = fs::metadata(&open_path)
+        .map_err(|error| io_error(error, format!("checking {}", from.display())))?
+        .len();
+    context.checkpoint()?;
+    let placed = if overwrite {
+        steps.rename_over(&open_path, to)
+    } else {
+        steps.link_new(&open_path, to)
+    };
+    match placed {
+        Ok(()) => {
+            if !overwrite {
+                steps
+                    .unlink_source(&open_path)
+                    .map_err(|error| both_exist(from, to, error))?;
+            }
+            sync_move_parents(from, to)?;
+            move_record(from, to, bytes, replaced, "rename")
+        }
+        Err(error) if is_cross_device(&error) => {
+            move_by_copy(from, &open_path, to, overwrite, replaced, steps, context)
+        }
+        Err(error) => Err(place_error(error, to)),
+    }
+}
+
+/// The cross-device fallback. The bytes go to a temporary sibling of `to`,
+/// which is synced and placed at `to` under the same no-clobber rule as the
+/// rename path. The destination is then read back and its size and SHA-256
+/// compared with the source, and only after that is the source name removed.
+/// Any failure before the removal leaves the source untouched and removes the
+/// unverified destination. With `overwrite`, that removal also discards the
+/// previous destination, which the rename replaced: it is not restored.
+fn move_by_copy(
+    from: &Path,
+    open_path: &Path,
+    to: &Path,
+    overwrite: bool,
+    replaced: bool,
+    steps: &dyn MoveSteps,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let mut source = super::open_regular_input(open_path, from, true, context)?;
+    let opened = source
+        .metadata()
+        .map_err(|error| io_error(error, format!("checking {}", from.display())))?;
+    // As in copy, only the permission bits are carried over.
+    let mode = file_mode(&opened).map(|mode| mode & 0o777);
+    let file_name = to
+        .file_name()
+        .ok_or_else(|| invalid(format!("path has no file name: {}", to.display())))?;
+    let (temp_path, mut temp) = create_temp(parent_dir(to), file_name)?;
+    // Removes the temporary name on every early return. It is disarmed after an
+    // overwrite rename, which consumes the name.
+    let mut cleanup = TempCleanup(Some(temp_path.clone()));
+    let copied = steps.copy_bytes(&mut source, &mut temp, &temp_path, context)?;
+    if copied != opened.len() {
+        return Err(failed(
+            "conflict",
+            format!("source changed while copying: {}", from.display()),
+        ));
+    }
+    if let Some(mode) = mode {
+        set_mode(&temp, mode).map_err(|error| {
+            io_error(
+                error,
+                format!("setting permissions on {}", temp_path.display()),
+            )
+        })?;
+    }
+    context.checkpoint()?;
+    temp.sync_all().map_err(|error| {
+        io_error(
+            error,
+            format!("syncing temporary file {}", temp_path.display()),
+        )
+    })?;
+    drop(temp);
+
+    // Digest the source from its start, so the destination is compared with the
+    // bytes it is supposed to hold, not with the copy's own count.
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| io_error(error, format!("rewinding {}", from.display())))?;
+    let (source_len, source_digest) = stream_digest(&mut source, context)?;
+    if source_len != copied {
+        return Err(failed(
+            "conflict",
+            format!("source changed while copying: {}", from.display()),
+        ));
+    }
+
+    context.checkpoint()?;
+    let placed = if overwrite {
+        steps.rename_over(&temp_path, to)
+    } else {
+        steps.link_new(&temp_path, to)
+    };
+    placed.map_err(|error| place_error(error, to))?;
+    if overwrite {
+        cleanup.0 = None;
+    }
+
+    let verified = super::open_regular_input(to, to, true, context)
+        .and_then(|mut placed| stream_digest(&mut placed, context));
+    let reason = match verified {
+        Ok((len, digest)) if len == copied && digest == source_digest => None,
+        Ok(_) => Some(failed(
+            "io_error",
+            format!(
+                "copy to {} does not match the source; the source is untouched",
+                to.display()
+            ),
+        )),
+        Err(error) => Some(error),
+    };
+    if let Some(reason) = reason {
+        return Err(discard_unverified(to, reason));
+    }
+
+    steps
+        .unlink_source(open_path)
+        .map_err(|error| both_exist(from, to, error))?;
+    sync_move_parents(from, to)?;
+    move_record(from, to, copied, replaced, "copy")
+}
+
+/// Remove a destination that failed verification. If the removal also fails,
+/// the unverified file may remain, and that is reported as such.
+fn discard_unverified(to: &Path, reason: AppletError) -> AppletError {
+    match fs::remove_file(to) {
+        Ok(()) => reason,
+        Err(error) => failed(
+            "uncertain_effect",
+            format!(
+                "{reason}; removing {} also failed, so the unverified file may remain: {error}",
+                to.display()
+            ),
+        ),
+    }
+}
+
+/// Whether a rename or hard link failed because its two paths are on different
+/// filesystems: by the stable `CrossesDevices` kind, or by the OS code.
+fn is_cross_device(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::CrossesDevices
+        || error.raw_os_error() == Some(CROSS_DEVICE_OS_CODE)
+}
+
+#[cfg(unix)]
+const CROSS_DEVICE_OS_CODE: i32 = libc::EXDEV;
+/// `ERROR_NOT_SAME_DEVICE`.
+#[cfg(windows)]
+const CROSS_DEVICE_OS_CODE: i32 = 17;
+#[cfg(not(any(unix, windows)))]
+const CROSS_DEVICE_OS_CODE: i32 = -1;
+
+/// Size and SHA-256 of everything `reader` yields, read in chunks with a budget
+/// check between them.
+fn stream_digest<R: Read>(
+    reader: &mut R,
+    context: &ExecutionContext<'_>,
+) -> Result<(u64, String), AppletError> {
+    let mut hasher = Sha256::new();
+    let mut chunk = vec![0u8; IO_CHUNK_BYTES];
+    let mut total = 0u64;
+    let mut work = 0usize;
+    loop {
+        context.checkpoint()?;
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|error| io_error(error, "reading file for digest"))?;
+        if read == 0 {
+            break;
+        }
+        let data = chunk
+            .get(..read)
+            .ok_or_else(|| failed("io_error", "read reported more bytes than the buffer holds"))?;
+        hasher.update(data);
+        total = total.saturating_add(read as u64);
+        work += 1;
+        checkpoint_work(context, work)?;
+    }
+    Ok((total, to_hex(hasher.finalize().as_slice())))
+}
+
+/// The directory that holds `path`, `.` for a bare name.
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+/// Map a failed placement at `to`. An existing `to` is a conflict, as in copy.
+fn place_error(error: std::io::Error, to: &Path) -> AppletError {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        failed(
+            "conflict",
+            format!("destination appeared before the move: {}", to.display()),
+        )
+    } else {
+        io_error(error, format!("placing {}", to.display()))
+    }
+}
+
+fn both_exist(from: &Path, to: &Path, error: std::io::Error) -> AppletError {
+    failed(
+        "uncertain_effect",
+        format!(
+            "moved to {} but removing {} failed, so both files exist: {error}",
+            to.display(),
+            from.display()
+        ),
+    )
+}
+
+/// Sync the directories holding both paths, so the entry changes are asked to
+/// reach the disk. A failure after the move is `uncertain_effect`.
+fn sync_move_parents(from: &Path, to: &Path) -> Result<(), AppletError> {
+    for parent in [parent_dir(from), parent_dir(to)] {
+        sync_directory(parent).map_err(|error| {
+            failed(
+                "uncertain_effect",
+                format!(
+                    "move of {} to {} completed but syncing {} failed: {error}",
+                    from.display(),
+                    to.display(),
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn move_record(
+    from: &Path,
+    to: &Path,
+    bytes: u64,
+    replaced: bool,
+    method: &str,
+) -> Result<Value, AppletError> {
+    Ok(serde_json::json!({
+        "from": result_path(from)?,
+        "to": result_path(to)?,
+        "bytes": bytes,
+        "replaced": replaced,
+        "method": method,
+    }))
+}
+
 /// Stream `source` into `destination` in `IO_CHUNK_BYTES` pieces, checking the
 /// execution budget before each read. Returns the number of bytes written.
-fn copy_chunked(
-    source: &mut File,
-    destination: &mut File,
+fn copy_chunked<R: Read, W: Write>(
+    source: &mut R,
+    destination: &mut W,
     destination_path: &Path,
     context: &ExecutionContext<'_>,
 ) -> Result<u64, AppletError> {
@@ -2408,5 +2750,455 @@ mod tests {
         .unwrap();
         let mode = fs::metadata(&destination).unwrap().permissions().mode();
         assert_eq!(mode & 0o7777, 0o755, "only the rwx bits may be carried");
+    }
+
+    fn move_args(from: &Path, to: &Path, extra: Value) -> Map<String, Value> {
+        copy_args(from, to, extra)
+    }
+
+    /// Fault injection for the move steps. Each field fails one step; every
+    /// other step is the real filesystem operation.
+    #[derive(Default)]
+    struct InjectedSteps {
+        /// The next rename or hard link fails with a cross-device error. Only
+        /// the first call fails, so the copy fallback's own placement succeeds.
+        cross_device: std::cell::Cell<bool>,
+        /// The copy stops after this many bytes with an error.
+        fail_copy_after: Option<u64>,
+        /// The copy writes the bytes with the first one altered.
+        corrupt_copy: bool,
+        /// The destination appears just before the no-clobber placement.
+        dest_appears_first: bool,
+        /// Removing the source name fails.
+        fail_unlink: bool,
+    }
+
+    impl MoveSteps for InjectedSteps {
+        fn rename_over(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if self.cross_device.replace(false) {
+                return Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices));
+            }
+            fs::rename(from, to)
+        }
+
+        fn link_new(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if self.cross_device.replace(false) {
+                return Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices));
+            }
+            if self.dest_appears_first {
+                fs::write(to, b"appeared late")?;
+            }
+            fs::hard_link(from, to)
+        }
+
+        fn unlink_source(&self, path: &Path) -> std::io::Result<()> {
+            if self.fail_unlink {
+                return Err(std::io::Error::other("injected unlink failure"));
+            }
+            fs::remove_file(path)
+        }
+
+        fn copy_bytes(
+            &self,
+            source: &mut File,
+            destination: &mut File,
+            destination_path: &Path,
+            context: &ExecutionContext<'_>,
+        ) -> Result<u64, AppletError> {
+            if let Some(limit) = self.fail_copy_after {
+                let mut partial = (&mut *source).take(limit);
+                copy_chunked(&mut partial, destination, destination_path, context)?;
+                return Err(failed(
+                    "io_error",
+                    "injected failure midway through the copy",
+                ));
+            }
+            if self.corrupt_copy {
+                let mut bytes = Vec::new();
+                source
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| io_error(error, "reading source file"))?;
+                if let Some(first) = bytes.first_mut() {
+                    *first ^= 0xff;
+                }
+                destination
+                    .write_all(&bytes)
+                    .map_err(|error| io_error(error, "writing temporary file"))?;
+                return Ok(bytes.len() as u64);
+            }
+            copy_chunked(source, destination, destination_path, context)
+        }
+    }
+
+    #[test]
+    fn move_renames_a_file_and_reports_the_rename_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("moved.txt");
+        fs::write(&source, b"hello move").unwrap();
+        let record = move_file(
+            &move_args(&source, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["bytes"].as_u64(), Some(10), "{record}");
+        assert_eq!(record["replaced"], false, "{record}");
+        assert_eq!(record["method"], "rename", "{record}");
+        assert_eq!(fs::read(&destination).unwrap(), b"hello move");
+        assert!(!source.exists());
+        assert_eq!(temporary_count(directory.path()), 0);
+    }
+
+    #[test]
+    fn move_refuses_an_existing_destination_unless_overwrite_is_true() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("target.txt");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&destination, b"old").unwrap();
+
+        let error = move_file(
+            &move_args(&source, &destination, Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "conflict");
+        assert_eq!(fs::read(&source).unwrap(), b"new");
+        assert_eq!(fs::read(&destination).unwrap(), b"old");
+
+        let record = move_file(
+            &move_args(
+                &source,
+                &destination,
+                serde_json::json!({ "overwrite": true }),
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(record["replaced"], true, "{record}");
+        assert_eq!(record["method"], "rename", "{record}");
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        assert!(!source.exists());
+    }
+
+    #[test]
+    fn move_refuses_the_same_file_before_anything_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("same.txt");
+        fs::write(&source, b"keep").unwrap();
+        let overwrite = serde_json::json!({ "overwrite": true });
+
+        let error = move_file(
+            &move_args(&source, &source, overwrite.clone()),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("same file"), "{}", error.message);
+        assert_eq!(fs::read(&source).unwrap(), b"keep");
+
+        #[cfg(unix)]
+        {
+            // A hard link names the same device and inode, so it is the same file.
+            let alias = directory.path().join("alias.txt");
+            fs::hard_link(&source, &alias).unwrap();
+            let error = move_file(
+                &move_args(&source, &alias, overwrite),
+                directory.path(),
+                &context,
+            )
+            .unwrap_err();
+            assert!(error.message.contains("same file"), "{}", error.message);
+            assert_eq!(fs::read(&source).unwrap(), b"keep");
+            assert_eq!(fs::read(&alias).unwrap(), b"keep");
+        }
+    }
+
+    #[test]
+    fn move_refuses_a_directory_source_and_a_directory_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let folder = directory.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let file = directory.path().join("file.txt");
+        fs::write(&file, b"data").unwrap();
+
+        let error = move_file(
+            &move_args(&folder, &directory.path().join("out"), Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(folder.is_dir());
+
+        for overwrite in [false, true] {
+            let error = move_file(
+                &move_args(
+                    &file,
+                    &folder,
+                    serde_json::json!({ "overwrite": overwrite }),
+                ),
+                directory.path(),
+                &context,
+            )
+            .unwrap_err();
+            assert!(
+                error.message.contains("destination is a directory"),
+                "{}",
+                error.message
+            );
+        }
+        assert_eq!(fs::read(&file).unwrap(), b"data");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_refuses_a_symlink_source_and_a_symlink_destination() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let target = directory.path().join("target.txt");
+        fs::write(&target, b"secret").unwrap();
+        let link = directory.path().join("link");
+        symlink(&target, &link).unwrap();
+
+        let error = move_file(
+            &move_args(&link, &directory.path().join("out.txt"), Value::Null),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("symbolic link"), "{}", error.message);
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&target).unwrap(), b"secret");
+
+        let source = directory.path().join("source.txt");
+        fs::write(&source, b"payload").unwrap();
+        let dest_link = directory.path().join("dest-link");
+        symlink(&target, &dest_link).unwrap();
+        let error = move_file(
+            &move_args(
+                &source,
+                &dest_link,
+                serde_json::json!({ "overwrite": true }),
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("symbolic link"), "{}", error.message);
+        assert_eq!(fs::read(&source).unwrap(), b"payload");
+        assert_eq!(fs::read(&target).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn move_of_an_absent_source_is_a_not_found_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let error = move_file(
+            &move_args(
+                &directory.path().join("missing.txt"),
+                &directory.path().join("out.txt"),
+                Value::Null,
+            ),
+            directory.path(),
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "not_found");
+    }
+
+    #[test]
+    fn move_that_loses_a_race_to_a_new_destination_does_not_clobber_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"mine").unwrap();
+        let steps = InjectedSteps {
+            dest_appears_first: true,
+            ..InjectedSteps::default()
+        };
+        let error = move_locked(&source, &destination, false, &steps, &context).unwrap_err();
+        assert_eq!(error.code, "conflict", "{}", error.message);
+        assert_eq!(fs::read(&source).unwrap(), b"mine");
+        assert_eq!(fs::read(&destination).unwrap(), b"appeared late");
+    }
+
+    #[test]
+    fn move_whose_source_removal_fails_reports_that_both_files_exist() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"kept twice").unwrap();
+        let steps = InjectedSteps {
+            fail_unlink: true,
+            ..InjectedSteps::default()
+        };
+        let error = move_locked(&source, &destination, false, &steps, &context).unwrap_err();
+        assert_eq!(error.code, "uncertain_effect");
+        assert!(
+            error.message.contains("both files exist"),
+            "{}",
+            error.message
+        );
+        assert_eq!(fs::read(&source).unwrap(), b"kept twice");
+        assert_eq!(fs::read(&destination).unwrap(), b"kept twice");
+    }
+
+    #[test]
+    fn cross_device_rename_falls_back_to_a_verified_copy_without_overwrite() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"across devices").unwrap();
+        let steps = InjectedSteps {
+            cross_device: std::cell::Cell::new(true),
+            ..InjectedSteps::default()
+        };
+        let record = move_locked(&source, &destination, false, &steps, &context).unwrap();
+        assert_eq!(record["method"], "copy", "{record}");
+        assert_eq!(record["bytes"].as_u64(), Some(14), "{record}");
+        assert_eq!(record["replaced"], false, "{record}");
+        assert_eq!(fs::read(&destination).unwrap(), b"across devices");
+        assert!(!source.exists());
+        assert_eq!(temporary_count(directory.path()), 0);
+    }
+
+    #[test]
+    fn cross_device_fallback_with_overwrite_replaces_the_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"fresh").unwrap();
+        fs::write(&destination, b"stale").unwrap();
+        let steps = InjectedSteps {
+            cross_device: std::cell::Cell::new(true),
+            ..InjectedSteps::default()
+        };
+        let record = move_locked(&source, &destination, true, &steps, &context).unwrap();
+        assert_eq!(record["method"], "copy", "{record}");
+        assert_eq!(record["replaced"], true, "{record}");
+        assert_eq!(fs::read(&destination).unwrap(), b"fresh");
+        assert!(!source.exists());
+        assert_eq!(temporary_count(directory.path()), 0);
+    }
+
+    #[test]
+    fn copy_fallback_failing_midway_keeps_the_source_and_removes_its_partial_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"0123456789").unwrap();
+        let steps = InjectedSteps {
+            cross_device: std::cell::Cell::new(true),
+            fail_copy_after: Some(4),
+            ..InjectedSteps::default()
+        };
+        let error = move_locked(&source, &destination, false, &steps, &context).unwrap_err();
+        assert_eq!(error.code, "io_error", "{}", error.message);
+        assert_eq!(fs::read(&source).unwrap(), b"0123456789");
+        assert!(!destination.exists());
+        assert_eq!(temporary_count(directory.path()), 0);
+    }
+
+    #[test]
+    fn copy_fallback_failing_midway_with_overwrite_keeps_the_old_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"0123456789").unwrap();
+        fs::write(&destination, b"old").unwrap();
+        let steps = InjectedSteps {
+            cross_device: std::cell::Cell::new(true),
+            fail_copy_after: Some(4),
+            ..InjectedSteps::default()
+        };
+        let error = move_locked(&source, &destination, true, &steps, &context).unwrap_err();
+        assert_eq!(error.code, "io_error", "{}", error.message);
+        assert_eq!(fs::read(&source).unwrap(), b"0123456789");
+        assert_eq!(fs::read(&destination).unwrap(), b"old");
+        assert_eq!(temporary_count(directory.path()), 0);
+    }
+
+    #[test]
+    fn copy_fallback_that_does_not_verify_is_removed_and_the_source_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"verify me").unwrap();
+        let steps = InjectedSteps {
+            cross_device: std::cell::Cell::new(true),
+            corrupt_copy: true,
+            ..InjectedSteps::default()
+        };
+        let error = move_locked(&source, &destination, false, &steps, &context).unwrap_err();
+        assert_eq!(error.code, "io_error", "{}", error.message);
+        assert!(
+            error.message.contains("does not match"),
+            "{}",
+            error.message
+        );
+        assert_eq!(fs::read(&source).unwrap(), b"verify me");
+        assert!(!destination.exists());
+        assert_eq!(temporary_count(directory.path()), 0);
+    }
+
+    #[test]
+    fn copy_fallback_whose_source_removal_fails_reports_that_both_files_exist() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        let source = directory.path().join("source.txt");
+        let destination = directory.path().join("dest.txt");
+        fs::write(&source, b"verified bytes").unwrap();
+        let steps = InjectedSteps {
+            cross_device: std::cell::Cell::new(true),
+            fail_unlink: true,
+            ..InjectedSteps::default()
+        };
+        let error = move_locked(&source, &destination, false, &steps, &context).unwrap_err();
+        assert_eq!(error.code, "uncertain_effect", "{}", error.message);
+        assert!(
+            error.message.contains("both files exist"),
+            "{}",
+            error.message
+        );
+        assert_eq!(fs::read(&source).unwrap(), b"verified bytes");
+        assert_eq!(fs::read(&destination).unwrap(), b"verified bytes");
+        assert_eq!(temporary_count(directory.path()), 0);
+    }
+
+    #[test]
+    fn cross_device_is_recognised_by_kind_or_by_the_os_code() {
+        assert!(is_cross_device(&std::io::Error::from(
+            std::io::ErrorKind::CrossesDevices
+        )));
+        assert!(is_cross_device(&std::io::Error::from_raw_os_error(
+            CROSS_DEVICE_OS_CODE
+        )));
+        assert!(!is_cross_device(&std::io::Error::from(
+            std::io::ErrorKind::AlreadyExists
+        )));
+        assert!(!is_cross_device(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
     }
 }

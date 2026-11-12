@@ -1,0 +1,128 @@
+{
+  "name": "conf.remove_matching",
+  "description": "Removes every line of a config file that equals the given text as a whole line, or with match prefix every line that starts with it. Matching is literal, never a pattern. Lines inside a managed block are kept, and a file with no matching line is left unchanged.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true,
+      "description": "Config file path to update; relative paths resolve from the program working directory. A missing file is left untouched and not created."
+    },
+    "line": {
+      "type": "string",
+      "required": true,
+      "description": "Literal text to match: non-empty, without a line ending and without NUL."
+    },
+    "match": {
+      "type": "string",
+      "enum": [
+        "line",
+        "prefix"
+      ],
+      "description": "line (the default) matches the whole line; prefix matches lines that start with the text."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "conf.remove_matching"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "path"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "line": {
+          "schema": {
+            "type": "text",
+            "single_line": true
+          },
+          "delivery": "single"
+        },
+        "match": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "line",
+              "prefix"
+            ]
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "path"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "conf remove matching"
+  ],
+  "examples": [
+    {
+      "program": "run conf.remove_matching with path \"catalog-example-absent.conf\" and line \"bind old\" as result",
+      "expected_output": {
+        "changed": false,
+        "path": "catalog-example-absent.conf"
+      }
+    }
+  ]
+}

@@ -225,6 +225,71 @@ pub(super) fn conf_remove_block(
     Ok(json!({"changed": updated.is_some(), "path": text}))
 }
 
+/// `conf.ensure_line_near`: make sure the whole line `line` is present exactly
+/// once, inserting it `before` or `after` the first line equal to `anchor` when
+/// it is absent. A missing anchor is an error, never an append. Reads and writes
+/// as `conf.set` does.
+pub(super) fn conf_ensure_line_near(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let text = nonempty_path(args)?;
+    let path = resolve_path(text, cwd);
+    let line = required_string(args, "line")?;
+    let anchor = required_string(args, "anchor")?;
+    let placement = match required_string(args, "position")? {
+        "before" => Placement::Before,
+        "after" => Placement::After,
+        _ => return Err(invalid("args.position must be \"before\" or \"after\"")),
+    };
+    let current = read_current(&path, context)?;
+    let existing = match &current {
+        Some(current) => std::str::from_utf8(&current.bytes)
+            .map_err(|error| invalid(format!("file is not UTF-8 text: {error}")))?,
+        None => "",
+    };
+    let updated = ensure_line_near_text(existing, line, anchor, placement).map_err(invalid)?;
+    if let Some(new_text) = &updated {
+        let expected = expected_hash(current.as_ref());
+        write_locked(&path, new_text.as_bytes(), &expected, None, None, context)?;
+    }
+    Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
+/// `conf.remove_matching`: remove every line that equals `line` as a whole line
+/// (`match` = "line", the default) or starts with it (`match` = "prefix"). Lines
+/// inside a managed block are left alone. Reads and writes as `conf.set` does;
+/// a missing file is left untouched and reports `changed: false`.
+pub(super) fn conf_remove_matching(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    let text = nonempty_path(args)?;
+    let path = resolve_path(text, cwd);
+    let line = required_string(args, "line")?;
+    let mode = match optional_string(args, "match", "line")? {
+        "line" => MatchMode::Line,
+        "prefix" => MatchMode::Prefix,
+        _ => return Err(invalid("args.match must be \"line\" or \"prefix\"")),
+    };
+    let current = read_current(&path, context)?;
+    let existing = match &current {
+        Some(current) => std::str::from_utf8(&current.bytes)
+            .map_err(|error| invalid(format!("file is not UTF-8 text: {error}")))?,
+        None => "",
+    };
+    let updated = remove_matching_text(existing, line, mode).map_err(invalid)?;
+    if let Some(new_text) = &updated {
+        let expected = expected_hash(current.as_ref());
+        write_locked(&path, new_text.as_bytes(), &expected, None, None, context)?;
+    }
+    Ok(json!({"changed": updated.is_some(), "path": text}))
+}
+
 /// Read the optional `comment` marker shared by `conf.set` and the block applets.
 fn conf_comment(args: &Map<String, Value>) -> Result<&'static str, AppletError> {
     match optional_string(args, "comment", "#")? {
@@ -537,12 +602,18 @@ fn read_chunked(
 
 /// A line matches when its text, without its line break, equals `line`.
 fn line_matches(piece: &str, line: &str) -> bool {
+    line_body(piece) == line
+}
+
+/// The text of one line without its line ending and without a leading byte
+/// order mark (only the first line of a file can carry one).
+fn line_body(piece: &str) -> &str {
     let body = piece.strip_suffix('\n').unwrap_or(piece);
     let body = body.strip_suffix('\r').unwrap_or(body);
     if piece.starts_with('\u{feff}') {
-        body.strip_prefix('\u{feff}').unwrap_or(body) == line
+        body.strip_prefix('\u{feff}').unwrap_or(body)
     } else {
-        body == line
+        body
     }
 }
 
@@ -1108,11 +1179,191 @@ fn remove_block_text(text: &str, id: &str, comment: &str) -> Result<Option<Strin
     Ok(Some(out))
 }
 
+/// Where `conf.ensure_line_near` puts a new line, relative to its anchor line.
+#[derive(Clone, Copy)]
+enum Placement {
+    Before,
+    After,
+}
+
+/// How `conf.remove_matching` compares a line with its argument.
+#[derive(Clone, Copy)]
+enum MatchMode {
+    /// The whole line, without its line ending, equals the argument.
+    Line,
+    /// The line starts with the argument.
+    Prefix,
+}
+
+/// Refuse an argument that could split a line or hide bytes in one.
+fn check_whole_line_arg(name: &str, value: &str) -> Result<(), String> {
+    if value.contains(['\r', '\n', '\0']) {
+        return Err(format!(
+            "{name} must be a single line without CR, LF or NUL"
+        ));
+    }
+    Ok(())
+}
+
+/// Which pieces belong to a managed block, markers included. These editors take
+/// no `comment` argument, so every comment marker is scanned: a block written
+/// with any of them is owned by that block. A malformed block structure is an
+/// error, so nothing is edited next to a block that cannot be read.
+fn owned_pieces(pieces: &[&str]) -> Result<Vec<bool>, String> {
+    let mut owned = vec![false; pieces.len()];
+    for comment in ["#", ";", "//", "--"] {
+        for block in find_managed_blocks(pieces, comment)? {
+            if let Some(span) = owned.get_mut(block.begin..=block.end) {
+                span.fill(true);
+            }
+        }
+    }
+    Ok(owned)
+}
+
+/// Make sure the whole line `line` is present exactly once in `text`.
+///
+/// Returns `Ok(None)` when `line` already appears anywhere, including inside a
+/// managed block, so the caller writes nothing. Otherwise `line` is inserted
+/// immediately before or after the first line that equals `anchor` (literal,
+/// whole-line comparison). When no line equals `anchor`, or that first line is
+/// inside a managed block, the call is an error and nothing is inserted. The new
+/// line uses the text's line ending (CRLF when the text contains CRLF, else LF).
+/// A byte order mark stays first in the file, and a missing final newline stays
+/// missing.
+fn ensure_line_near_text(
+    text: &str,
+    line: &str,
+    anchor: &str,
+    placement: Placement,
+) -> Result<Option<String>, String> {
+    check_whole_line_arg("line", line)?;
+    check_whole_line_arg("anchor", anchor)?;
+    let pieces: Vec<&str> = text.split_inclusive('\n').collect();
+    let owned = owned_pieces(&pieces)?;
+    if pieces.iter().any(|piece| line_matches(piece, line)) {
+        return Ok(None);
+    }
+    let Some(index) = pieces.iter().position(|piece| line_matches(piece, anchor)) else {
+        return Err(format!(
+            "no line equals anchor {anchor:?}; nothing was inserted"
+        ));
+    };
+    if owned.get(index).copied().unwrap_or(false) {
+        return Err(format!(
+            "anchor {anchor:?} at line {} is inside a managed block; nothing was inserted",
+            index + 1
+        ));
+    }
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(text.len() + line.len() + eol.len() + 1);
+    for (position, piece) in pieces.iter().enumerate() {
+        if position != index {
+            out.push_str(piece);
+            continue;
+        }
+        match placement {
+            Placement::Before => {
+                let (bom, rest) = match piece.strip_prefix('\u{feff}') {
+                    Some(rest) if index == 0 => ("\u{feff}", rest),
+                    _ => ("", *piece),
+                };
+                out.push_str(bom);
+                out.push_str(line);
+                out.push_str(eol);
+                out.push_str(rest);
+            }
+            Placement::After => {
+                out.push_str(piece);
+                if piece.ends_with('\n') {
+                    out.push_str(line);
+                    out.push_str(eol);
+                } else {
+                    // The anchor is the last line and has no line ending: the
+                    // new line becomes the last line, still without one.
+                    out.push_str(eol);
+                    out.push_str(line);
+                }
+            }
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Remove every line of `text` that matches `needle` (see [`MatchMode`]).
+///
+/// Lines inside a managed block are kept, because the block owns them. Returns
+/// `Ok(None)` when nothing is removed. An empty `needle` is refused, since it
+/// would match every blank line (or every line in prefix mode). A byte order mark
+/// on the first line stays in the file. When the removed line was the last one and
+/// had no line ending, the line before it loses its line ending too, so a missing
+/// final newline stays missing. That line is not changed when it is in a block.
+fn remove_matching_text(
+    text: &str,
+    needle: &str,
+    mode: MatchMode,
+) -> Result<Option<String>, String> {
+    check_whole_line_arg("line", needle)?;
+    if needle.is_empty() {
+        return Err("line must not be empty".to_owned());
+    }
+    let pieces: Vec<&str> = text.split_inclusive('\n').collect();
+    let owned = owned_pieces(&pieces)?;
+    let keep: Vec<bool> = pieces
+        .iter()
+        .enumerate()
+        .map(|(index, piece)| {
+            if owned.get(index).copied().unwrap_or(false) {
+                return true;
+            }
+            let body = line_body(piece);
+            let hit = match mode {
+                MatchMode::Line => body == needle,
+                MatchMode::Prefix => body.starts_with(needle),
+            };
+            !hit
+        })
+        .collect();
+    if keep.iter().all(|kept| *kept) {
+        return Ok(None);
+    }
+    let removed_tail =
+        pieces.last().is_some_and(|piece| !piece.ends_with('\n')) && keep.last() == Some(&false);
+    let last_kept = keep.iter().rposition(|kept| *kept);
+    let mut out = String::with_capacity(text.len());
+    if keep.first() == Some(&false)
+        && pieces
+            .first()
+            .is_some_and(|piece| piece.starts_with('\u{feff}'))
+    {
+        out.push('\u{feff}');
+    }
+    for (index, (piece, kept)) in pieces.iter().zip(keep.iter()).enumerate() {
+        if !kept {
+            continue;
+        }
+        let strip =
+            removed_tail && Some(index) == last_kept && !owned.get(index).copied().unwrap_or(false);
+        if strip {
+            out.push_str(
+                piece
+                    .strip_suffix("\r\n")
+                    .or_else(|| piece.strip_suffix('\n'))
+                    .unwrap_or(piece),
+            );
+        } else {
+            out.push_str(piece);
+        }
+    }
+    Ok(Some(out))
+}
+
 #[cfg(test)]
 mod set_key_tests {
     use super::{
-        conf_ensure_block, conf_remove_block, ensure_block_text, remove_block_text, set_key_text,
-        ConfStyle, ExecutionContext, BLOCK_ID_MAX_BYTES,
+        conf_ensure_block, conf_ensure_line_near, conf_remove_block, conf_remove_matching,
+        ensure_block_text, ensure_line_near_text, remove_block_text, remove_matching_text,
+        set_key_text, ConfStyle, ExecutionContext, MatchMode, Placement, BLOCK_ID_MAX_BYTES,
     };
     use serde_json::{json, Map, Value};
     use std::fs;
@@ -1931,5 +2182,408 @@ mod set_key_tests {
             conf_remove_block(&args(json!({"path": "new.conf"})), dir.path(), &context,).is_err()
         );
         assert!(!dir.path().join("new.conf").exists());
+    }
+
+    fn near(text: &str, line: &str, anchor: &str, at: Placement) -> Option<String> {
+        ensure_line_near_text(text, line, anchor, at).expect("valid arguments")
+    }
+
+    fn near_refused(text: &str, line: &str, anchor: &str, at: Placement) -> String {
+        ensure_line_near_text(text, line, anchor, at).expect_err("the edit must be refused")
+    }
+
+    fn strip(text: &str, needle: &str, mode: MatchMode) -> Option<String> {
+        remove_matching_text(text, needle, mode).expect("valid arguments")
+    }
+
+    #[test]
+    fn near_inserts_after_the_anchor_and_keeps_other_lines() {
+        assert_eq!(
+            near("# head\nanchor\nkeep\n", "new", "anchor", Placement::After).as_deref(),
+            Some("# head\nanchor\nnew\nkeep\n")
+        );
+    }
+
+    #[test]
+    fn near_inserts_before_the_anchor() {
+        assert_eq!(
+            near("# head\nanchor\nkeep\n", "new", "anchor", Placement::Before).as_deref(),
+            Some("# head\nnew\nanchor\nkeep\n")
+        );
+    }
+
+    #[test]
+    fn near_is_none_when_the_line_is_present_anywhere() {
+        for at in [Placement::Before, Placement::After] {
+            assert_eq!(near("new\nanchor\n", "new", "anchor", at), None);
+            assert_eq!(near("anchor\nx\nnew\n", "new", "anchor", at), None);
+        }
+    }
+
+    #[test]
+    fn near_treats_a_line_only_inside_a_block_as_present() {
+        let text = format!("{BEGIN_NET}new\n{END_NET}anchor\n");
+        assert_eq!(near(&text, "new", "anchor", Placement::After), None);
+    }
+
+    #[test]
+    fn near_uses_only_the_first_anchor_line() {
+        assert_eq!(
+            near("anchor\nx\nanchor\n", "new", "anchor", Placement::After).as_deref(),
+            Some("anchor\nnew\nx\nanchor\n")
+        );
+    }
+
+    #[test]
+    fn near_matches_the_anchor_literally_and_whole_line() {
+        let text = "auth pam_unix.so\nabc\n* \n";
+        for anchor in ["pam_unix", "pam_unix.so ", "a.c", "*", "^abc$", "ab"] {
+            let message = near_refused(text, "new", anchor, Placement::After);
+            assert!(
+                message.contains("no line equals anchor"),
+                "{anchor:?}: {message}"
+            );
+        }
+        assert_eq!(
+            near(text, "new", "abc", Placement::After).as_deref(),
+            Some("auth pam_unix.so\nabc\nnew\n* \n")
+        );
+    }
+
+    #[test]
+    fn near_refuses_a_missing_anchor_instead_of_appending() {
+        assert!(ensure_line_near_text("a\nb\n", "new", "absent", Placement::After).is_err());
+        assert!(ensure_line_near_text("", "new", "anchor", Placement::After).is_err());
+    }
+
+    #[test]
+    fn near_crlf_text_gets_crlf_for_the_new_line() {
+        assert_eq!(
+            near("a\r\nanchor\r\nb\r\n", "new", "anchor", Placement::After).as_deref(),
+            Some("a\r\nanchor\r\nnew\r\nb\r\n")
+        );
+        assert_eq!(
+            near("a\r\nanchor\r\nb\r\n", "new", "anchor", Placement::Before).as_deref(),
+            Some("a\r\nnew\r\nanchor\r\nb\r\n")
+        );
+    }
+
+    #[test]
+    fn near_keeps_a_missing_final_newline_missing() {
+        assert_eq!(
+            near("a\nanchor", "new", "anchor", Placement::After).as_deref(),
+            Some("a\nanchor\nnew")
+        );
+        assert_eq!(
+            near("a\nanchor", "new", "anchor", Placement::Before).as_deref(),
+            Some("a\nnew\nanchor")
+        );
+        assert_eq!(
+            near("a\r\nanchor", "new", "anchor", Placement::After).as_deref(),
+            Some("a\r\nanchor\r\nnew")
+        );
+    }
+
+    #[test]
+    fn near_keeps_the_byte_order_mark_first() {
+        assert_eq!(
+            near("\u{feff}anchor\nb\n", "new", "anchor", Placement::Before).as_deref(),
+            Some("\u{feff}new\nanchor\nb\n")
+        );
+        assert_eq!(
+            near("\u{feff}anchor\nb\n", "new", "anchor", Placement::After).as_deref(),
+            Some("\u{feff}anchor\nnew\nb\n")
+        );
+        assert_eq!(
+            near("\u{feff}new\nb\n", "new", "anchor", Placement::After),
+            None
+        );
+    }
+
+    #[test]
+    fn near_refuses_line_breaks_and_nul_in_line_or_anchor() {
+        for bad in ["a\rb", "a\nb", "a\0b"] {
+            assert!(ensure_line_near_text("anchor\n", bad, "anchor", Placement::After).is_err());
+            assert!(ensure_line_near_text("anchor\n", "new", bad, Placement::After).is_err());
+        }
+    }
+
+    #[test]
+    fn near_twice_equals_once() {
+        let once = near("anchor\nkeep\n", "new", "anchor", Placement::After).unwrap();
+        assert_eq!(near(&once, "new", "anchor", Placement::After), None);
+        assert_eq!(near(&once, "new", "anchor", Placement::Before), None);
+    }
+
+    #[test]
+    fn near_refuses_an_anchor_inside_a_managed_block() {
+        let text = format!("{BEGIN_NET}anchor\n{END_NET}");
+        let message = near_refused(&text, "new", "anchor", Placement::After);
+        assert!(message.contains("inside a managed block"), "{message}");
+    }
+
+    #[test]
+    fn near_refuses_when_the_first_anchor_is_in_a_block_even_if_a_later_one_is_not() {
+        let text = format!("{BEGIN_NET}anchor\n{END_NET}anchor\n");
+        assert!(ensure_line_near_text(&text, "new", "anchor", Placement::After).is_err());
+    }
+
+    #[test]
+    fn near_leaves_the_block_alone_when_the_anchor_is_outside_it() {
+        let text = format!("{BEGIN_NET}x\n{END_NET}anchor\ntail\n");
+        assert_eq!(
+            near(&text, "new", "anchor", Placement::After),
+            Some(format!("{BEGIN_NET}x\n{END_NET}anchor\nnew\ntail\n"))
+        );
+    }
+
+    #[test]
+    fn near_recognises_a_semicolon_block() {
+        let text = "; BEGIN execute managed block: net\nanchor\n; END execute managed block: net\n";
+        assert!(ensure_line_near_text(text, "new", "anchor", Placement::After).is_err());
+    }
+
+    #[test]
+    fn near_refuses_a_malformed_block_structure() {
+        let text = format!("{BEGIN_NET}x\nanchor\n");
+        assert!(ensure_line_near_text(&text, "new", "anchor", Placement::After).is_err());
+    }
+
+    #[test]
+    fn remove_matching_removes_every_exact_line_and_keeps_the_others() {
+        assert_eq!(
+            strip("pam a\nkeep\npam a\nend\n", "pam a", MatchMode::Line).as_deref(),
+            Some("keep\nend\n")
+        );
+    }
+
+    #[test]
+    fn remove_matching_line_mode_ignores_substrings_and_indented_copies() {
+        let text = "  pam_u2f.so\npam_u2f.so x\n# pam_u2f.so\n";
+        assert_eq!(strip(text, "pam_u2f.so", MatchMode::Line), None);
+    }
+
+    #[test]
+    fn remove_matching_prefix_mode_removes_lines_that_start_with_the_text() {
+        assert_eq!(
+            strip(
+                "auth pam_u2f.so\nkeep\nauth pam_u2f.so sufficient\n",
+                "auth pam_u2f",
+                MatchMode::Prefix
+            )
+            .as_deref(),
+            Some("keep\n")
+        );
+        assert_eq!(
+            strip("  auth pam_u2f\n", "auth pam_u2f", MatchMode::Prefix),
+            None
+        );
+    }
+
+    #[test]
+    fn remove_matching_is_none_when_nothing_matches() {
+        assert_eq!(strip("a\nb\n", "c", MatchMode::Line), None);
+        assert_eq!(strip("", "c", MatchMode::Line), None);
+    }
+
+    #[test]
+    fn remove_matching_keeps_crlf_on_the_other_lines() {
+        assert_eq!(
+            strip("a\r\nneedle\r\nb\r\n", "needle", MatchMode::Line).as_deref(),
+            Some("a\r\nb\r\n")
+        );
+    }
+
+    #[test]
+    fn remove_matching_keeps_the_byte_order_mark_when_the_first_line_goes() {
+        assert_eq!(
+            strip("\u{feff}needle\nb\n", "needle", MatchMode::Line).as_deref(),
+            Some("\u{feff}b\n")
+        );
+    }
+
+    #[test]
+    fn remove_matching_keeps_a_missing_final_newline_missing() {
+        assert_eq!(
+            strip("a\nneedle", "needle", MatchMode::Line).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            strip("a\r\nb\r\nneedle", "needle", MatchMode::Line).as_deref(),
+            Some("a\r\nb")
+        );
+        assert_eq!(
+            strip("a\nneedle\n", "needle", MatchMode::Line).as_deref(),
+            Some("a\n")
+        );
+    }
+
+    #[test]
+    fn remove_matching_of_every_line_leaves_an_empty_text() {
+        assert_eq!(
+            strip("needle\n", "needle", MatchMode::Line).as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn remove_matching_keeps_lines_inside_a_managed_block() {
+        let text = format!("needle\n{BEGIN_NET}needle\n{END_NET}needle\n");
+        let expected = format!("{BEGIN_NET}needle\n{END_NET}");
+        assert_eq!(
+            strip(&text, "needle", MatchMode::Line).as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn remove_matching_keeps_a_block_end_line_terminated_when_it_is_last() {
+        let text = format!("{BEGIN_NET}x\n{END_NET}needle");
+        let expected = format!("{BEGIN_NET}x\n{END_NET}");
+        assert_eq!(
+            strip(&text, "needle", MatchMode::Line).as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn remove_matching_refuses_an_empty_needle_and_line_breaks() {
+        assert!(remove_matching_text("a\n", "", MatchMode::Line).is_err());
+        assert!(remove_matching_text("a\n", "", MatchMode::Prefix).is_err());
+        for bad in ["a\rb", "a\nb", "a\0b"] {
+            assert!(remove_matching_text("a\n", bad, MatchMode::Line).is_err());
+        }
+    }
+
+    #[test]
+    fn remove_matching_twice_equals_once() {
+        let once = strip("a\nneedle\nneedle\nb\n", "needle", MatchMode::Line).unwrap();
+        assert_eq!(once, "a\nb\n");
+        assert_eq!(strip(&once, "needle", MatchMode::Line), None);
+    }
+
+    #[test]
+    fn remove_matching_refuses_a_malformed_block_structure() {
+        let text = format!("{BEGIN_NET}needle\n");
+        assert!(remove_matching_text(&text, "needle", MatchMode::Line).is_err());
+    }
+
+    #[test]
+    fn applet_ensure_line_near_inserts_once_then_reports_no_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        fs::write(dir.path().join("tmux.conf"), "# Pane Controls\nbind x\n").unwrap();
+        let request = json!({
+            "path": "tmux.conf",
+            "line": "bind y",
+            "anchor": "# Pane Controls",
+            "position": "after"
+        });
+        let first = conf_ensure_line_near(&args(request.clone()), dir.path(), &context).unwrap();
+        assert_eq!(first, json!({"changed": true, "path": "tmux.conf"}));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("tmux.conf")).unwrap(),
+            "# Pane Controls\nbind y\nbind x\n"
+        );
+        let second = conf_ensure_line_near(&args(request), dir.path(), &context).unwrap();
+        assert_eq!(second["changed"], false);
+    }
+
+    #[test]
+    fn applet_ensure_line_near_refuses_a_missing_anchor_and_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        assert!(conf_ensure_line_near(
+            &args(
+                json!({"path": "new.conf", "line": "x", "anchor": "absent", "position": "before"})
+            ),
+            dir.path(),
+            &context,
+        )
+        .is_err());
+        assert!(!dir.path().join("new.conf").exists());
+    }
+
+    #[test]
+    fn applet_ensure_line_near_rejects_a_bad_position() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(conf_ensure_line_near(
+            &args(json!({"path": "a.conf", "line": "x", "anchor": "y", "position": "middle"})),
+            dir.path(),
+            &ExecutionContext::unrestricted(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn applet_remove_matching_removes_once_then_reports_no_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        fs::write(dir.path().join("app.conf"), "name = demo\nold = 1\n").unwrap();
+        let request = json!({"path": "app.conf", "line": "old = 1"});
+        let first = conf_remove_matching(&args(request.clone()), dir.path(), &context).unwrap();
+        assert_eq!(first, json!({"changed": true, "path": "app.conf"}));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            "name = demo\n"
+        );
+        let second = conf_remove_matching(&args(request), dir.path(), &context).unwrap();
+        assert_eq!(second["changed"], false);
+    }
+
+    #[test]
+    fn applet_remove_matching_prefix_mode_and_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        fs::write(dir.path().join("app.conf"), "auth pam_u2f.so a\nkeep\n").unwrap();
+        let output = conf_remove_matching(
+            &args(json!({"path": "app.conf", "line": "auth pam_u2f", "match": "prefix"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(output["changed"], true);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app.conf")).unwrap(),
+            "keep\n"
+        );
+        let absent = conf_remove_matching(
+            &args(json!({"path": "absent.conf", "line": "x"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(absent["changed"], false);
+        assert!(!dir.path().join("absent.conf").exists());
+        assert!(conf_remove_matching(
+            &args(json!({"path": "app.conf", "line": "x", "match": "regex"})),
+            dir.path(),
+            &context,
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn applet_remove_matching_through_a_symlink_keeps_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::unrestricted();
+        fs::write(dir.path().join("target.conf"), "a\nneedle\n").unwrap();
+        std::os::unix::fs::symlink("target.conf", dir.path().join("link.conf")).unwrap();
+        let output = conf_remove_matching(
+            &args(json!({"path": "link.conf", "line": "needle"})),
+            dir.path(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(output["changed"], true);
+        assert!(fs::symlink_metadata(dir.path().join("link.conf"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("target.conf")).unwrap(),
+            "a\n"
+        );
     }
 }

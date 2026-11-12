@@ -1,0 +1,69 @@
+{
+  "name": "record.make",
+  "description": "Builds a record from a fields record. Keys come back in sorted order and values pass through unchanged, so text stays text whatever it contains.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "fields": {
+      "type": "json",
+      "required": true,
+      "description": "Record whose keys and values become the result."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "record.make"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "fields": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "record make"
+  ],
+  "examples": [
+    {
+      "program": "run record.make with fields {\"name\":\"Ada\",\"count\":2} as result",
+      "expected_output": {
+        "count": 2,
+        "name": "Ada"
+      }
+    }
+  ]
+}

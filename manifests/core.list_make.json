@@ -1,0 +1,69 @@
+{
+  "name": "list.make",
+  "description": "Builds a list from an items list. Values pass through unchanged.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "items": {
+      "type": "json",
+      "required": true,
+      "description": "List whose elements become the result."
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.make"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "items": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "list make"
+  ],
+  "examples": [
+    {
+      "program": "run list.make with items [1, \"two\"] as result",
+      "expected_output": [
+        1,
+        "two"
+      ]
+    }
+  ]
+}

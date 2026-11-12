@@ -360,6 +360,355 @@ pub fn report(program_path: &str, fingerprint: &str, plan: Value, settings: Valu
     })
 }
 
+/// Stable code of the `--confirm` refusal that carries a plan diff.
+pub const CHANGED_CODE: &str = "plan.changed";
+
+/// One difference between the confirmed plan and the current plan. Values are
+/// already redacted: a sensitive value is shown as `[sensitive]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanChange {
+    StepAdded {
+        label: String,
+        line: u64,
+        call: String,
+    },
+    StepRemoved {
+        label: String,
+        line: u64,
+        call: String,
+    },
+    ArgumentChanged {
+        label: String,
+        old: String,
+        new: String,
+    },
+    TargetChanged {
+        label: String,
+        old: String,
+        new: String,
+    },
+    StepChanged {
+        label: String,
+        field: String,
+    },
+    InputChanged {
+        name: String,
+        old: String,
+        new: String,
+    },
+    CwdChanged {
+        old: String,
+        new: String,
+    },
+    SettingChanged {
+        name: String,
+    },
+}
+
+/// Compare two `--what-if` reports, each as `report` writes it (`plan` and
+/// `settings`). Pure: reads nothing but its arguments. The order is fixed: the
+/// program, plan fields, steps in the current plan's order followed by removed
+/// steps, inputs, the working directory, executables, then other settings by name.
+pub fn diff_reports(confirmed: &Value, current: &Value) -> Vec<PlanChange> {
+    let mut changes = Vec::new();
+    if confirmed["program"] != current["program"] {
+        changes.push(PlanChange::SettingChanged {
+            name: "program".to_owned(),
+        });
+    }
+    diff_plan_fields(&confirmed["plan"], &current["plan"], &mut changes);
+    diff_steps(&confirmed["plan"], &current["plan"], &mut changes);
+    diff_settings(&confirmed["settings"], &current["settings"], &mut changes);
+    changes
+}
+
+/// One line per change, in the order `diff_reports` gives them.
+pub fn describe_changes(changes: &[PlanChange]) -> Vec<String> {
+    changes
+        .iter()
+        .map(|change| match change {
+            PlanChange::StepAdded { label, line, call } => {
+                format!("{label} added (line {line}): {call}")
+            }
+            PlanChange::StepRemoved { label, line, call } => {
+                format!("{label} removed (line {line}): {call}")
+            }
+            PlanChange::ArgumentChanged { label, old, new } => {
+                format!("{label}: argument changed: {old} -> {new}")
+            }
+            PlanChange::TargetChanged { label, old, new } => {
+                format!("{label}: target changed: {old} -> {new}")
+            }
+            PlanChange::StepChanged { label, field } => format!("{label}: {field} changed"),
+            PlanChange::InputChanged { name, old, new } => {
+                format!("input {name} changed: {old} -> {new}")
+            }
+            PlanChange::CwdChanged { old, new } => format!("cwd changed: {old} -> {new}"),
+            PlanChange::SettingChanged { name } => format!("{name} changed"),
+        })
+        .collect()
+}
+
+fn union_keys(old: &Value, new: &Value) -> BTreeSet<String> {
+    old.as_object()
+        .into_iter()
+        .chain(new.as_object())
+        .flat_map(|map| map.keys().cloned())
+        .collect()
+}
+
+/// True when a value carries a sensitive input, an HMAC of one, or a withheld
+/// marker anywhere inside it.
+fn is_withheld(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.get("sensitive") == Some(&Value::Bool(true))
+                || map.contains_key("withheld")
+                || map.contains_key("hmac_sha256")
+                || map.values().any(is_withheld)
+        }
+        Value::Array(items) => items.iter().any(is_withheld),
+        _ => false,
+    }
+}
+
+/// A value as a diff line shows it. Arrays are shown element by element, so one
+/// sensitive argument does not hide its neighbours.
+fn shown(value: &Value) -> String {
+    match value {
+        Value::Array(items) => format!(
+            "[{}]",
+            items.iter().map(shown).collect::<Vec<_>>().join(", ")
+        ),
+        _ if is_withheld(value) => "[sensitive]".to_owned(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "null".to_owned()),
+    }
+}
+
+/// A string as itself, anything else as `shown`.
+fn plain(value: &Value) -> String {
+    value.as_str().map_or_else(|| shown(value), str::to_owned)
+}
+
+fn step_key(row: &Value) -> String {
+    match row["id"].as_str() {
+        Some(id) => id.to_owned(),
+        None => format!("line {}", row["line"].as_u64().unwrap_or(0)),
+    }
+}
+
+/// The steps of a plan, keyed by id and by how many earlier steps had that id.
+fn keyed_steps(plan: &Value) -> Vec<((String, usize), &Value)> {
+    let mut seen = BTreeMap::<String, usize>::new();
+    plan["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            let id = step_key(row);
+            let count = seen.entry(id.clone()).or_insert(0);
+            let occurrence = *count;
+            *count += 1;
+            ((id, occurrence), row)
+        })
+        .collect()
+}
+
+/// The arguments a step runs with: its argv for a direct call, else its parameters.
+fn call_of(row: &Value) -> String {
+    let arguments = if row["argv"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        &row["argv"]
+    } else {
+        &row["parameters"]
+    };
+    let binary = row["binary"].as_str().unwrap_or("");
+    format!("{binary} {}", shown(arguments))
+        .trim_end()
+        .to_owned()
+}
+
+fn target_of(row: &Value) -> String {
+    format!(
+        "{} ({})",
+        row["binary"].as_str().unwrap_or(""),
+        row["resolved_path"].as_str().unwrap_or("unresolved")
+    )
+}
+
+fn diff_plan_fields(old: &Value, new: &Value, changes: &mut Vec<PlanChange>) {
+    for key in union_keys(old, new) {
+        if key == "steps" || key == "inputs" {
+            continue;
+        }
+        if old.get(key.as_str()) != new.get(key.as_str()) {
+            changes.push(PlanChange::SettingChanged {
+                name: format!("plan {key}"),
+            });
+        }
+    }
+}
+
+fn diff_steps(old: &Value, new: &Value, changes: &mut Vec<PlanChange>) {
+    let old_rows = keyed_steps(old);
+    let new_rows = keyed_steps(new);
+    let old_map: BTreeMap<(String, usize), &Value> = old_rows.iter().cloned().collect();
+    let mut matched = BTreeSet::new();
+    for (key, row) in &new_rows {
+        let label = format!("step {}", key.0);
+        match old_map.get(key) {
+            None => changes.push(PlanChange::StepAdded {
+                label,
+                line: row["line"].as_u64().unwrap_or(0),
+                call: call_of(row),
+            }),
+            Some(before) => {
+                matched.insert(key.clone());
+                compare_step(&label, before, row, changes);
+            }
+        }
+    }
+    for (key, row) in &old_rows {
+        if !matched.contains(key) {
+            changes.push(PlanChange::StepRemoved {
+                label: format!("step {}", key.0),
+                line: row["line"].as_u64().unwrap_or(0),
+                call: call_of(row),
+            });
+        }
+    }
+}
+
+/// Fields compared by `compare_step` itself. `line` is left out so that adding a
+/// step above a reviewed one does not report every later step as changed.
+const STEP_FIELDS_HANDLED: [&str; 6] = [
+    "id",
+    "line",
+    "argv",
+    "parameters",
+    "binary",
+    "resolved_path",
+];
+
+fn compare_step(label: &str, before: &Value, after: &Value, changes: &mut Vec<PlanChange>) {
+    if before["argv"] != after["argv"] {
+        changes.push(PlanChange::ArgumentChanged {
+            label: label.to_owned(),
+            old: shown(&before["argv"]),
+            new: shown(&after["argv"]),
+        });
+    } else if before["parameters"] != after["parameters"] {
+        changes.push(PlanChange::ArgumentChanged {
+            label: label.to_owned(),
+            old: shown(&before["parameters"]),
+            new: shown(&after["parameters"]),
+        });
+    }
+    if before["binary"] != after["binary"] || before["resolved_path"] != after["resolved_path"] {
+        changes.push(PlanChange::TargetChanged {
+            label: label.to_owned(),
+            old: target_of(before),
+            new: target_of(after),
+        });
+    }
+    if let (Some(old), Some(new)) = (before.as_object(), after.as_object()) {
+        for key in old.keys().chain(new.keys()).collect::<BTreeSet<_>>() {
+            if STEP_FIELDS_HANDLED.contains(&key.as_str()) {
+                continue;
+            }
+            if old.get(key) != new.get(key) {
+                changes.push(PlanChange::StepChanged {
+                    label: label.to_owned(),
+                    field: key.clone(),
+                });
+            }
+        }
+    }
+}
+
+fn diff_settings(old: &Value, new: &Value, changes: &mut Vec<PlanChange>) {
+    diff_inputs(&old["inputs"], &new["inputs"], changes);
+    if old["cwd"] != new["cwd"] {
+        changes.push(PlanChange::CwdChanged {
+            old: plain(&old["cwd"]),
+            new: plain(&new["cwd"]),
+        });
+    }
+    diff_executables(&old["executables"], &new["executables"], changes);
+    for key in union_keys(old, new) {
+        if matches!(key.as_str(), "inputs" | "cwd" | "executables") {
+            continue;
+        }
+        if old.get(key.as_str()) != new.get(key.as_str()) {
+            changes.push(PlanChange::SettingChanged { name: key });
+        }
+    }
+}
+
+fn named_inputs(value: &Value) -> BTreeMap<String, &Value> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|input| Some((input["name"].as_str()?.to_owned(), input)))
+        .collect()
+}
+
+fn diff_inputs(old: &Value, new: &Value, changes: &mut Vec<PlanChange>) {
+    let (old, new) = (named_inputs(old), named_inputs(new));
+    let names: BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+    for name in names {
+        let (before, after) = (old.get(name).copied(), new.get(name).copied());
+        if before == after {
+            continue;
+        }
+        if before.map(|input| &input["value"]) == after.map(|input| &input["value"]) {
+            changes.push(PlanChange::SettingChanged {
+                name: format!("input {name}"),
+            });
+            continue;
+        }
+        let shown_value = |input: Option<&Value>| {
+            input.map_or_else(|| "(absent)".to_owned(), |input| shown(&input["value"]))
+        };
+        changes.push(PlanChange::InputChanged {
+            name: name.clone(),
+            old: shown_value(before),
+            new: shown_value(after),
+        });
+    }
+}
+
+fn diff_executables(old: &Value, new: &Value, changes: &mut Vec<PlanChange>) {
+    for key in union_keys(old, new) {
+        let label = format!("executable {key}");
+        match (old.get(key.as_str()), new.get(key.as_str())) {
+            (Some(before), Some(after)) => {
+                if before == after {
+                    continue;
+                }
+                if before["path"] != after["path"] {
+                    changes.push(PlanChange::TargetChanged {
+                        label: label.clone(),
+                        old: plain(&before["path"]),
+                        new: plain(&after["path"]),
+                    });
+                }
+                if before["sha256"] != after["sha256"]
+                    || before["effective_path_hmac_sha256"] != after["effective_path_hmac_sha256"]
+                {
+                    changes.push(PlanChange::SettingChanged {
+                        name: format!("{label} contents"),
+                    });
+                }
+            }
+            _ => changes.push(PlanChange::SettingChanged { name: label }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +878,124 @@ mod tests {
         assert!(error
             .to_string()
             .contains("after a run-time environment change"));
+    }
+
+    fn step(id: &str, line: u64, argv: Value) -> Value {
+        json!({
+            "id": id,
+            "line": line,
+            "binary": "printf",
+            "process": true,
+            "argv": argv,
+            "resolved_path": "/usr/bin/printf",
+        })
+    }
+
+    fn report(steps: Vec<Value>, cwd: &str, inputs: Value) -> Value {
+        json!({
+            "program": "plan.program",
+            "plan": {"steps": steps},
+            "settings": {"cwd": cwd, "inputs": inputs, "executables": {}, "version": "1"},
+        })
+    }
+
+    #[test]
+    fn identical_plans_have_no_changes() {
+        let before = report(vec![step("s1", 1, json!(["one"]))], "/work", json!([]));
+        let after = before.clone();
+        assert!(diff_reports(&before, &after).is_empty());
+        assert!(describe_changes(&diff_reports(&before, &after)).is_empty());
+    }
+
+    #[test]
+    fn one_changed_argument_names_the_step_and_both_argv() {
+        let before = report(vec![step("s1", 1, json!(["one"]))], "/work", json!([]));
+        let after = report(vec![step("s1", 1, json!(["two"]))], "/work", json!([]));
+        let changes = diff_reports(&before, &after);
+        assert_eq!(
+            changes,
+            vec![PlanChange::ArgumentChanged {
+                label: "step s1".to_owned(),
+                old: "[\"one\"]".to_owned(),
+                new: "[\"two\"]".to_owned(),
+            }]
+        );
+        assert_eq!(
+            describe_changes(&changes),
+            vec!["step s1: argument changed: [\"one\"] -> [\"two\"]".to_owned()]
+        );
+    }
+
+    #[test]
+    fn one_added_step_is_reported_once() {
+        let before = report(vec![step("s1", 1, json!(["one"]))], "/work", json!([]));
+        let after = report(
+            vec![
+                step("s1", 1, json!(["one"])),
+                step("s2", 2, json!(["three"])),
+            ],
+            "/work",
+            json!([]),
+        );
+        let changes = diff_reports(&before, &after);
+        assert_eq!(
+            changes,
+            vec![PlanChange::StepAdded {
+                label: "step s2".to_owned(),
+                line: 2,
+                call: "printf [\"three\"]".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_removed_step_and_a_moved_target_are_reported() {
+        let before = report(
+            vec![step("s1", 1, json!(["one"])), step("s2", 2, json!(["two"]))],
+            "/work",
+            json!([]),
+        );
+        let mut moved = step("s1", 1, json!(["one"]));
+        moved["resolved_path"] = json!("/opt/printf");
+        let after = report(vec![moved], "/work", json!([]));
+        let lines = describe_changes(&diff_reports(&before, &after));
+        assert_eq!(
+            lines,
+            vec![
+                "step s1: target changed: printf (/usr/bin/printf) -> printf (/opt/printf)"
+                    .to_owned(),
+                "step s2 removed (line 2): printf [\"two\"]".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn changing_only_the_working_directory_yields_only_a_cwd_entry() {
+        let before = report(vec![step("s1", 1, json!(["one"]))], "/work/a", json!([]));
+        let after = report(vec![step("s1", 1, json!(["one"]))], "/work/b", json!([]));
+        assert_eq!(
+            describe_changes(&diff_reports(&before, &after)),
+            vec!["cwd changed: /work/a -> /work/b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn sensitive_values_are_never_printed() {
+        let secret_before = json!({"sensitive": true, "hmac_sha256": "5ec2e7aa"});
+        let secret_after = json!({"sensitive": true, "hmac_sha256": "c0ffee11"});
+        let before = report(
+            vec![step("s1", 1, json!(["x", secret_before.clone()]))],
+            "/work",
+            json!([{"name": "TOKEN", "type": "string", "source": "environment", "value": secret_before}]),
+        );
+        let after = report(
+            vec![step("s1", 1, json!(["x", secret_after.clone()]))],
+            "/work",
+            json!([{"name": "TOKEN", "type": "string", "source": "environment", "value": secret_after}]),
+        );
+        let text = describe_changes(&diff_reports(&before, &after)).join("\n");
+        assert!(text.contains("[sensitive]"), "{text}");
+        assert!(!text.contains("5ec2e7aa"), "{text}");
+        assert!(!text.contains("c0ffee11"), "{text}");
     }
 }

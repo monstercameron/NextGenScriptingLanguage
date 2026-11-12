@@ -38,17 +38,21 @@ use std::process::Stdio;
 pub const PROTOCOL: &str = "execute.doctor/1";
 
 /// Helper binaries the runtime looks for beside the running executable:
-/// (check id, title, binary name without `.exe`).
-const HELPERS: [(&str, &str, &str); 2] = [
+/// (check id, title, binary name without `.exe`, trust check id, trust check title).
+const HELPERS: [(&str, &str, &str, &str, &str); 2] = [
     (
         "helpers.execute-applet",
         "Helper binary execute-applet",
         "execute-applet",
+        "helpers.execute-applet.trust",
+        "Helper trust execute-applet",
     ),
     (
         "helpers.execute-model",
         "Helper binary execute-model",
         "execute-model",
+        "helpers.execute-model.trust",
+        "Helper trust execute-model",
     ),
 ];
 
@@ -58,8 +62,13 @@ const HOME_ID: &str = "dirs.home";
 const STATE_ID: &str = "dirs.state";
 const CACHE_ID: &str = "dirs.cache";
 const XDG_RUNTIME_ID: &str = "desktop.xdg-runtime-dir";
+const XDG_PRIVATE_ID: &str = "desktop.xdg-runtime-dir.private";
 const HYPRLAND_ID: &str = "desktop.hyprland-signature";
 const WAYLAND_ID: &str = "desktop.wayland-display";
+const FEATURES_ID: &str = "build.features";
+
+/// How many differing manifest names a detail line lists before it only counts the rest.
+const LISTED_NAMES: usize = 10;
 
 const INSTALL_REMEDY: &str = "reinstall so execute, execute-model and execute-applet sit in one directory at the same version (docs/releases.md)";
 const MANIFEST_REMEDY: &str = "install manifests/ beside bin/ or under share/execute/ (docs/releases.md); without it no applet resolves";
@@ -142,6 +151,19 @@ pub trait Environment {
     fn find_on_path(&self, binary: &str) -> Option<PathBuf>;
     /// File names of the manifests compiled into this binary.
     fn bundled_manifest_files(&self) -> Result<Vec<String>, String>;
+    /// File name and SHA-256 (lowercase hex) of each manifest compiled into this binary.
+    fn bundled_manifest_digests(&self) -> Result<Vec<(String, String)>, String>;
+    /// SHA-256 (lowercase hex) of the bytes of a file, computed as the registry
+    /// fingerprints a loaded manifest.
+    fn file_digest(&self, path: &Path) -> Result<String, String>;
+    /// Whether the helper passes the same gate the runtime applies before running it
+    /// (`src/runtime.rs`, `bundled_helper`). `name` labels the refusal.
+    fn helper_trust(&self, helper: &Path, name: &str) -> Result<(), String>;
+    /// The effective user id of this process, when the platform has one.
+    fn current_uid(&self) -> Option<u32>;
+    /// The owner user id and permission bits (`mode & 0o777`) of a path, without
+    /// following a final symbolic link.
+    fn unix_owner_and_mode(&self, path: &Path) -> Result<(u32, u32), String>;
 }
 
 /// The real machine: process environment, file system, PATH and helper processes.
@@ -249,6 +271,63 @@ impl Environment for SystemEnvironment {
             .map(|entry| entry.file().to_owned())
             .collect())
     }
+
+    fn bundled_manifest_digests(&self) -> Result<Vec<(String, String)>, String> {
+        let index = crate::bundled_manifests::index().map_err(|error| format!("{error:#}"))?;
+        Ok(index
+            .entries()
+            .iter()
+            .map(|entry| (entry.file().to_owned(), entry.sha256().to_owned()))
+            .collect())
+    }
+
+    fn file_digest(&self, path: &Path) -> Result<String, String> {
+        let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+        let size = file.metadata().map_err(|error| error.to_string())?.len();
+        let digest = crate::manifest::fingerprint_exact(&mut file, size)
+            .map_err(|error| error.to_string())?;
+        Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
+
+    fn helper_trust(&self, helper: &Path, name: &str) -> Result<(), String> {
+        let label = format!("bundled {name} helper");
+        let metadata = crate::security::verify_trusted_input_file(helper, &label)
+            .map_err(|error| format!("{error:#}"))?;
+        if !metadata.is_file() || !crate::platform::executable(&metadata) {
+            return Err(format!("{} is not an executable file", helper.display()));
+        }
+        let recorded = crate::security::recorded_bundled_helper_sha256(helper)
+            .map_err(|error| format!("{error:#}"))?;
+        crate::security::verify_bundled_helper(helper, recorded.as_deref())
+            .map_err(|error| format!("{error:#}"))
+    }
+
+    fn current_uid(&self) -> Option<u32> {
+        #[cfg(unix)]
+        {
+            Some(crate::platform::unix_ffi::effective_uid())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
+    fn unix_owner_and_mode(&self, path: &Path) -> Result<(u32, u32), String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+            Ok((metadata.uid(), metadata.mode() & 0o777))
+        }
+        #[cfg(not(unix))]
+        {
+            Err(format!(
+                "owner and mode are not checked on this platform: {}",
+                path.display()
+            ))
+        }
+    }
 }
 
 fn probe_writable(dir: &Path) -> bool {
@@ -269,8 +348,12 @@ fn probe_writable(dir: &Path) -> bool {
 /// Run every check in a fixed order. Stable ids make the output safe to script against.
 pub fn run_checks(env: &dyn Environment) -> Vec<Check> {
     let mut checks = Vec::new();
-    for (id, title, name) in HELPERS {
-        checks.push(check_helper(env, id, title, name));
+    for (id, title, name, trust_id, trust_title) in HELPERS {
+        checks.extend(check_helper(
+            env,
+            (id, title, name),
+            (trust_id, trust_title),
+        ));
     }
     checks.push(check_bundled_index(env));
     checks.push(check_manifest_dir(env));
@@ -284,6 +367,7 @@ pub fn run_checks(env: &dyn Environment) -> Vec<Check> {
         None,
     ));
     checks.extend(desktop_checks(env));
+    checks.push(check_build_features());
     checks
 }
 
@@ -377,7 +461,75 @@ fn manifest_candidates(env: &dyn Environment) -> Option<[PathBuf; 2]> {
     ])
 }
 
-fn check_helper(env: &dyn Environment, id: &'static str, title: &'static str, name: &str) -> Check {
+/// The version check and the trust check for one helper, in that order. The trust
+/// gate decides first: `--version` runs only on a helper that passes it, because
+/// the runtime refuses to run any other.
+fn check_helper(
+    env: &dyn Environment,
+    (id, title, name): (&'static str, &'static str, &str),
+    (trust_id, trust_title): (&'static str, &'static str),
+) -> Vec<Check> {
+    let path = match locate_helper(env, id, title, name) {
+        Ok(path) => path,
+        Err(located) => {
+            let not_checked = format!("not checked; see {id}");
+            return vec![
+                located,
+                check(trust_id, trust_title, Status::Skipped, not_checked, None),
+            ];
+        }
+    };
+    let file_name = path.file_name().map_or_else(
+        || name.to_owned(),
+        |file| file.to_string_lossy().into_owned(),
+    );
+    let dir = path.parent().map_or_else(
+        || path.display().to_string(),
+        |dir| dir.display().to_string(),
+    );
+    match env.helper_trust(&path, name) {
+        Ok(()) => vec![
+            helper_version_check(env, (id, title, name), &path, &file_name),
+            check(
+                trust_id,
+                trust_title,
+                Status::Ok,
+                format!("{file_name} passes the trusted-input gate"),
+                None,
+            ),
+        ],
+        Err(error) => {
+            let remedy = format!(
+                "reinstall {name} from this release and remove write access for other users from {dir} and its parent directories; the runtime refuses the helper until then"
+            );
+            vec![
+                check(
+                    id,
+                    title,
+                    Status::Skipped,
+                    format!("{file_name} is refused by the trusted-input gate, so --version was not run"),
+                    None,
+                ),
+                check(
+                    trust_id,
+                    trust_title,
+                    Status::Fail,
+                    format!("{file_name} is refused by the trusted-input gate: {error}"),
+                    Some(remedy.as_str()),
+                ),
+            ]
+        }
+    }
+}
+
+/// Finds the helper beside the running executable and proves it is a regular file.
+/// A missing, linked or directory entry is returned as the failing check.
+fn locate_helper(
+    env: &dyn Environment,
+    id: &'static str,
+    title: &'static str,
+    name: &str,
+) -> Result<PathBuf, Check> {
     let file_name = if env.platform() == Platform::Windows {
         format!("{name}.exe")
     } else {
@@ -387,59 +539,59 @@ fn check_helper(env: &dyn Environment, id: &'static str, title: &'static str, na
         .current_exe()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
     else {
-        return check(
+        return Err(check(
             id,
             title,
             Status::Fail,
             "cannot locate the running executable",
             Some("run execute from its installed bin directory"),
-        );
+        ));
     };
     let path = dir.join(&file_name);
     match env.file_kind(&path) {
-        Ok(FileKind::File) => {}
-        Ok(FileKind::Missing) => {
-            return check(
-                id,
-                title,
-                Status::Fail,
-                format!(
-                    "{file_name} is not beside the executable in {}",
-                    dir.display()
-                ),
-                Some(INSTALL_REMEDY),
-            );
-        }
-        Ok(FileKind::Symlink) => {
-            return check(
-                id,
-                title,
-                Status::Fail,
-                format!("{file_name} is a symbolic link; the runtime refuses links"),
-                Some("replace the link with the real binary"),
-            );
-        }
-        Ok(FileKind::Directory) => {
-            return check(
-                id,
-                title,
-                Status::Fail,
-                format!("{file_name} is a directory, not a binary"),
-                Some(INSTALL_REMEDY),
-            );
-        }
-        Err(error) => {
-            return check(
-                id,
-                title,
-                Status::Fail,
-                format!("cannot inspect {file_name}: {error}"),
-                Some(INSTALL_REMEDY),
-            );
-        }
+        Ok(FileKind::File) => Ok(path),
+        Ok(FileKind::Missing) => Err(check(
+            id,
+            title,
+            Status::Fail,
+            format!(
+                "{file_name} is not beside the executable in {}",
+                dir.display()
+            ),
+            Some(INSTALL_REMEDY),
+        )),
+        Ok(FileKind::Symlink) => Err(check(
+            id,
+            title,
+            Status::Fail,
+            format!("{file_name} is a symbolic link; the runtime refuses links"),
+            Some("replace the link with the real binary"),
+        )),
+        Ok(FileKind::Directory) => Err(check(
+            id,
+            title,
+            Status::Fail,
+            format!("{file_name} is a directory, not a binary"),
+            Some(INSTALL_REMEDY),
+        )),
+        Err(error) => Err(check(
+            id,
+            title,
+            Status::Fail,
+            format!("cannot inspect {file_name}: {error}"),
+            Some(INSTALL_REMEDY),
+        )),
     }
+}
+
+fn helper_version_check(
+    env: &dyn Environment,
+    (id, title, name): (&'static str, &'static str, &str),
+    path: &Path,
+    file_name: &str,
+) -> Check {
     let expected = format!("{name} {}", env.build_version());
-    match env.helper_version(&path) {
+    match env.helper_version(path) {
         Ok(reported) if reported == expected => check(
             id,
             title,
@@ -574,17 +726,81 @@ fn check_manifest_dir(env: &dyn Environment) -> Check {
             Some("remove the extra files; the directory then matches the bundled index"),
         )
     } else {
-        check(
-            MANIFEST_DIR_ID,
-            title,
-            Status::Ok,
-            format!(
-                "{} holds the {} bundled manifests",
-                root.display(),
-                expected.len()
-            ),
-            None,
-        )
+        let digests = match env.bundled_manifest_digests() {
+            Ok(digests) => digests,
+            Err(_) => {
+                return check(
+                    MANIFEST_DIR_ID,
+                    title,
+                    Status::Skipped,
+                    "the bundled index did not load (see manifests.bundled-index)",
+                    None,
+                );
+            }
+        };
+        let differing = differing_manifests(env, root, &digests);
+        if differing.is_empty() {
+            check(
+                MANIFEST_DIR_ID,
+                title,
+                Status::Ok,
+                format!(
+                    "{} holds the {} bundled manifests",
+                    root.display(),
+                    expected.len()
+                ),
+                None,
+            )
+        } else {
+            check(
+                MANIFEST_DIR_ID,
+                title,
+                Status::Fail,
+                format!(
+                    "{} has {} manifest(s) whose bytes differ from the bundled index: {}",
+                    root.display(),
+                    differing.len(),
+                    listed_names(&differing)
+                ),
+                Some("restore the listed manifests from the release (docs/releases.md); this binary runs only the bytes it was built with"),
+            )
+        }
+    }
+}
+
+/// Names of the bundled manifests whose bytes in `root` do not hash to the indexed
+/// SHA-256, in name order. A file that cannot be read counts as differing.
+fn differing_manifests(
+    env: &dyn Environment,
+    root: &Path,
+    digests: &[(String, String)],
+) -> Vec<String> {
+    let mut differing: Vec<String> = digests
+        .iter()
+        .filter(|(name, digest)| {
+            !matches!(
+                env.file_digest(&root.join(name)),
+                Ok(actual) if actual == *digest
+            )
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    differing.sort();
+    differing
+}
+
+/// The first [`LISTED_NAMES`] names, then a count of the rest.
+fn listed_names(names: &[String]) -> String {
+    let shown = names
+        .iter()
+        .take(LISTED_NAMES)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > LISTED_NAMES {
+        format!("{shown} and {} more", names.len() - LISTED_NAMES)
+    } else {
+        shown
     }
 }
 
@@ -693,6 +909,7 @@ fn desktop_checks(env: &dyn Environment) -> Vec<Check> {
                 detail,
                 None,
             ),
+            check_xdg_private(env),
             check(
                 HYPRLAND_ID,
                 "Hyprland session",
@@ -758,12 +975,165 @@ fn desktop_checks(env: &dyn Environment) -> Vec<Check> {
             None,
         ),
     };
-    vec![xdg, hyprland, wayland]
+    vec![xdg, check_xdg_private(env), hyprland, wayland]
+}
+
+/// The XDG Base Directory rule for `XDG_RUNTIME_DIR` (the specification requires a
+/// directory owned by the user with mode 0700), checked on Unix. The runtime's own
+/// check is `verified_xdg_runtime_directory` in `src/desktop.rs`. Each violation is
+/// reported with its own remedy. Other platforms skip it.
+fn check_xdg_private(env: &dyn Environment) -> Check {
+    let title = "XDG_RUNTIME_DIR owner and mode";
+    if !matches!(env.platform(), Platform::Linux | Platform::MacOs) {
+        return check(
+            XDG_PRIVATE_ID,
+            title,
+            Status::Skipped,
+            "owner and mode rules apply to Unix only",
+            None,
+        );
+    }
+    let Some(configured) = var(env, "XDG_RUNTIME_DIR") else {
+        return check(
+            XDG_PRIVATE_ID,
+            title,
+            Status::Skipped,
+            "XDG_RUNTIME_DIR is not set; see desktop.xdg-runtime-dir",
+            None,
+        );
+    };
+    if !configured.starts_with('/') {
+        return check(
+            XDG_PRIVATE_ID,
+            title,
+            Status::Skipped,
+            "XDG_RUNTIME_DIR is not absolute; see desktop.xdg-runtime-dir",
+            None,
+        );
+    }
+    let Some(uid) = env.current_uid() else {
+        return check(
+            XDG_PRIVATE_ID,
+            title,
+            Status::Skipped,
+            "the current user id is not available on this platform",
+            None,
+        );
+    };
+    let path = PathBuf::from(&configured);
+    let shown = path.display();
+    // Each violation: (what is wrong, what to do about it).
+    let mut violations: Vec<(String, String)> = Vec::new();
+    match env.file_kind(&path) {
+        Ok(FileKind::Directory) => match env.unix_owner_and_mode(&path) {
+            Ok((owner, mode)) => {
+                if owner != uid {
+                    violations.push((
+                        format!("{shown} is owned by uid {owner}, not uid {uid}"),
+                        format!("make this user own {shown} (or log in again so the session manager creates it)"),
+                    ));
+                }
+                if mode != 0o700 {
+                    violations.push((
+                        format!("{shown} has mode {mode:04o}, not 0700"),
+                        format!("run chmod 0700 on {shown}"),
+                    ));
+                }
+            }
+            Err(error) => violations.push((
+                format!("cannot read the owner and mode of {shown}: {error}"),
+                format!("give this user access to {shown}, or log in again so the session manager creates it"),
+            )),
+        },
+        Ok(FileKind::Missing) => violations.push((
+            format!("{shown} does not exist"),
+            format!("log in again so the session manager creates {shown}, or create it with mode 0700 owned by this user"),
+        )),
+        Ok(FileKind::Symlink) => violations.push((
+            format!("{shown} is a symbolic link, not a directory"),
+            "replace the link with a real directory owned by this user with mode 0700".to_owned(),
+        )),
+        Ok(FileKind::File) => violations.push((
+            format!("{shown} is a file, not a directory"),
+            "remove the file and create a directory owned by this user with mode 0700 in its place".to_owned(),
+        )),
+        Err(error) => violations.push((
+            format!("cannot inspect {shown}: {error}"),
+            format!("give this user access to the parent of {shown}"),
+        )),
+    }
+    if violations.is_empty() {
+        return check(
+            XDG_PRIVATE_ID,
+            title,
+            Status::Ok,
+            format!("{shown} is a directory owned by this user with mode 0700"),
+            None,
+        );
+    }
+    let detail = violations
+        .iter()
+        .map(|(detail, _)| detail.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let remedy = violations
+        .iter()
+        .map(|(_, remedy)| remedy.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    check(
+        XDG_PRIVATE_ID,
+        title,
+        Status::Fail,
+        detail,
+        Some(remedy.as_str()),
+    )
+}
+
+/// Names the Cargo features this binary was built with. Informational: always `ok`,
+/// so a user can see why a command is unavailable. The list follows the `[features]`
+/// table in `Cargo.toml`, without `default`, which only selects the others.
+fn check_build_features() -> Check {
+    let enabled = enabled_features();
+    let detail = if enabled.is_empty() {
+        "no optional features enabled".to_owned()
+    } else {
+        format!("built with {}", enabled.join(", "))
+    };
+    check(FEATURES_ID, "Build features", Status::Ok, detail, None)
+}
+
+fn enabled_features() -> Vec<&'static str> {
+    let flags: [(&'static str, bool); 17] = [
+        ("full", cfg!(feature = "full")),
+        ("graph", cfg!(feature = "graph")),
+        ("screens", cfg!(feature = "screens")),
+        ("records", cfg!(feature = "records")),
+        ("tooling", cfg!(feature = "tooling")),
+        ("module-tools", cfg!(feature = "module-tools")),
+        ("agent-advisory", cfg!(feature = "agent-advisory")),
+        ("tui", cfg!(feature = "tui")),
+        ("live", cfg!(feature = "live")),
+        ("lsp", cfg!(feature = "lsp")),
+        ("model", cfg!(feature = "model")),
+        ("remote", cfg!(feature = "remote")),
+        ("desktop", cfg!(feature = "desktop")),
+        ("dap", cfg!(feature = "dap")),
+        ("failpoints", cfg!(feature = "failpoints")),
+        ("fuzzing", cfg!(feature = "fuzzing")),
+        ("test-fixtures", cfg!(feature = "test-fixtures")),
+    ];
+    flags
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| name)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
 
     const VERSION: &str = "9.9.9";
@@ -778,7 +1148,17 @@ mod tests {
         dir_states: BTreeMap<PathBuf, DirState>,
         listings: BTreeMap<PathBuf, Result<Vec<String>, String>>,
         versions: BTreeMap<PathBuf, Result<String, String>>,
+        /// Helpers that pass the trusted-input gate; any other helper is refused.
+        trust: BTreeMap<PathBuf, Result<(), String>>,
+        /// Every path `--version` was run on, in order.
+        version_calls: RefCell<Vec<PathBuf>>,
         bundled: Result<Vec<String>, String>,
+        /// Digests of manifest files on disk. A missing entry reads as unreadable.
+        digests: BTreeMap<PathBuf, Result<String, String>>,
+        /// Overrides for the indexed digest of a bundled file. The default is `sha-<file>`.
+        bundled_digests: BTreeMap<String, String>,
+        uid: Option<u32>,
+        owners: BTreeMap<PathBuf, Result<(u32, u32), String>>,
     }
 
     impl Environment for Fake {
@@ -810,6 +1190,7 @@ mod tests {
                 .unwrap_or_else(|| Err("no such directory".to_owned()))
         }
         fn helper_version(&self, helper: &Path) -> Result<String, String> {
+            self.version_calls.borrow_mut().push(helper.to_path_buf());
             self.versions
                 .get(helper)
                 .cloned()
@@ -820,6 +1201,41 @@ mod tests {
         }
         fn bundled_manifest_files(&self) -> Result<Vec<String>, String> {
             self.bundled.clone()
+        }
+        fn bundled_manifest_digests(&self) -> Result<Vec<(String, String)>, String> {
+            let files = self.bundled.clone()?;
+            Ok(files
+                .into_iter()
+                .map(|file| {
+                    let digest = self
+                        .bundled_digests
+                        .get(&file)
+                        .cloned()
+                        .unwrap_or_else(|| format!("sha-{file}"));
+                    (file, digest)
+                })
+                .collect())
+        }
+        fn file_digest(&self, path: &Path) -> Result<String, String> {
+            self.digests
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| Err("unreadable".to_owned()))
+        }
+        fn helper_trust(&self, helper: &Path, _name: &str) -> Result<(), String> {
+            self.trust
+                .get(helper)
+                .cloned()
+                .unwrap_or_else(|| Err("refused".to_owned()))
+        }
+        fn current_uid(&self) -> Option<u32> {
+            self.uid
+        }
+        fn unix_owner_and_mode(&self, path: &Path) -> Result<(u32, u32), String> {
+            self.owners
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| Err("no such entry".to_owned()))
         }
     }
 
@@ -842,7 +1258,13 @@ mod tests {
             dir_states: BTreeMap::new(),
             listings: BTreeMap::new(),
             versions: BTreeMap::new(),
+            trust: BTreeMap::new(),
+            version_calls: RefCell::new(Vec::new()),
             bundled: Ok(vec!["awk.json".to_owned(), "cat.json".to_owned()]),
+            digests: BTreeMap::new(),
+            bundled_digests: BTreeMap::new(),
+            uid: Some(1000),
+            owners: BTreeMap::new(),
         };
         for (key, value) in [
             ("HOME", "/home/u"),
@@ -855,6 +1277,7 @@ mod tests {
         for name in ["execute-applet", "execute-model"] {
             let path = bin().join(name);
             fake.kinds.insert(path.clone(), FileKind::File);
+            fake.trust.insert(path.clone(), Ok(()));
             fake.versions.insert(path, Ok(format!("{name} {VERSION}")));
         }
         fake.kinds.insert(manifests(), FileKind::Directory);
@@ -866,6 +1289,13 @@ mod tests {
                 "README.txt".to_owned(),
             ]),
         );
+        for name in ["awk.json", "cat.json"] {
+            fake.digests
+                .insert(manifests().join(name), Ok(format!("sha-{name}")));
+        }
+        let runtime = PathBuf::from("/run/user/1000");
+        fake.kinds.insert(runtime.clone(), FileKind::Directory);
+        fake.owners.insert(runtime, Ok((1000, 0o700)));
         fake.dir_states
             .insert(PathBuf::from("/home/u"), DirState::Writable);
         fake.dir_states.insert(
@@ -890,15 +1320,19 @@ mod tests {
             ids,
             [
                 "helpers.execute-applet",
+                "helpers.execute-applet.trust",
                 "helpers.execute-model",
+                "helpers.execute-model.trust",
                 "manifests.bundled-index",
                 "manifests.directory",
                 "dirs.home",
                 "dirs.state",
                 "dirs.cache",
                 "desktop.xdg-runtime-dir",
+                "desktop.xdg-runtime-dir.private",
                 "desktop.hyprland-signature",
                 "desktop.wayland-display",
+                "build.features",
             ]
         );
         for check in &checks {
@@ -987,6 +1421,7 @@ mod tests {
         for name in ["execute-applet", "execute-model"] {
             let path = bin().join(format!("{name}.exe"));
             fake.kinds.insert(path.clone(), FileKind::File);
+            fake.trust.insert(path.clone(), Ok(()));
             fake.versions.insert(path, Ok(format!("{name} {VERSION}")));
         }
         let checks = run_checks(&fake);
@@ -1258,8 +1693,9 @@ mod tests {
         assert_eq!(value["execute_version"], VERSION);
         assert_eq!(value["ok"], false);
         assert_eq!(value["counts"]["fail"], 1);
-        assert_eq!(value["counts"]["skipped"], 1);
-        assert_eq!(value["counts"]["ok"], 8);
+        // The cache check and the trust check of the missing helper are skipped.
+        assert_eq!(value["counts"]["skipped"], 2);
+        assert_eq!(value["counts"]["ok"], 11);
         let entries = value["checks"].as_array().expect("checks array");
         assert_eq!(entries.len(), checks.len());
         let applet = entries
@@ -1290,7 +1726,7 @@ mod tests {
         assert!(text.contains("helpers.execute-applet"));
         assert!(text.contains("fix: reinstall so execute"));
         assert!(text.contains("[skipped]"));
-        assert!(text.ends_with("1 failed, 0 warnings, 1 skipped, 8 ok\n"));
+        assert!(text.ends_with("1 failed, 0 warnings, 2 skipped, 11 ok\n"));
     }
 
     #[test]
@@ -1304,5 +1740,268 @@ mod tests {
         );
         assert_eq!(check.detail, "first second");
         assert_eq!(check.remedy.as_deref(), Some("fix  it"));
+    }
+
+    fn xdg_dir() -> PathBuf {
+        PathBuf::from("/run/user/1000")
+    }
+
+    #[test]
+    fn helper_trust_passing_helpers_are_probed_and_report_ok() {
+        let fake = healthy();
+        let checks = run_checks(&fake);
+        assert_eq!(
+            find(&checks, "helpers.execute-applet.trust").status,
+            Status::Ok
+        );
+        assert_eq!(
+            find(&checks, "helpers.execute-model.trust").status,
+            Status::Ok
+        );
+        assert_eq!(fake.version_calls.borrow().len(), 2);
+    }
+
+    #[test]
+    fn refused_helper_fails_its_trust_check_and_is_never_run() {
+        let mut fake = healthy();
+        let refused = bin().join("execute-model");
+        fake.trust.insert(
+            refused.clone(),
+            Err(
+                "bundled execute-model helper /opt/execute/bin/execute-model is group-writable"
+                    .to_owned(),
+            ),
+        );
+        let checks = run_checks(&fake);
+        let trust = find(&checks, "helpers.execute-model.trust");
+        assert_eq!(trust.status, Status::Fail);
+        assert!(trust.detail.contains("refused by the trusted-input gate"));
+        assert!(trust
+            .remedy
+            .as_deref()
+            .unwrap_or("")
+            .contains("/opt/execute/bin"));
+        let version = find(&checks, "helpers.execute-model");
+        assert_eq!(version.status, Status::Skipped);
+        assert!(version.detail.contains("--version was not run"));
+        assert!(!fake.version_calls.borrow().contains(&refused));
+        assert!(has_failures(&checks));
+        // The helper that passes is still probed.
+        assert!(fake
+            .version_calls
+            .borrow()
+            .contains(&bin().join("execute-applet")));
+        assert_eq!(
+            find(&checks, "helpers.execute-applet.trust").status,
+            Status::Ok
+        );
+    }
+
+    #[test]
+    fn helper_trust_is_skipped_when_the_helper_is_missing() {
+        let mut fake = healthy();
+        fake.kinds.remove(&bin().join("execute-applet"));
+        let checks = run_checks(&fake);
+        let trust = find(&checks, "helpers.execute-applet.trust");
+        assert_eq!(trust.status, Status::Skipped);
+        assert!(trust.detail.contains("helpers.execute-applet"));
+        assert!(!fake
+            .version_calls
+            .borrow()
+            .contains(&bin().join("execute-applet")));
+    }
+
+    #[test]
+    fn manifest_content_that_differs_from_the_index_fails_and_names_it() {
+        let mut fake = healthy();
+        fake.digests
+            .insert(manifests().join("cat.json"), Ok("tampered".to_owned()));
+        let check = find(&run_checks(&fake), "manifests.directory").clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("1 manifest(s) whose bytes differ"));
+        assert!(check.detail.contains("cat.json"));
+        assert!(!check.detail.contains("awk.json"));
+        assert!(check.remedy.is_some());
+    }
+
+    #[test]
+    fn unreadable_manifest_counts_as_differing() {
+        let mut fake = healthy();
+        fake.digests.insert(
+            manifests().join("awk.json"),
+            Err("permission denied".to_owned()),
+        );
+        let check = find(&run_checks(&fake), "manifests.directory").clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("awk.json"));
+    }
+
+    #[test]
+    fn differing_manifest_names_are_bounded_to_ten_plus_a_count() {
+        let names: Vec<String> = (0..12).map(|index| format!("m{index:02}.json")).collect();
+        let mut fake = healthy();
+        fake.bundled = Ok(names.clone());
+        fake.listings.insert(manifests(), Ok(names.clone()));
+        for name in &names {
+            fake.digests
+                .insert(manifests().join(name), Ok("tampered".to_owned()));
+        }
+        let check = find(&run_checks(&fake), "manifests.directory").clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("12 manifest(s)"));
+        assert!(check.detail.contains("m09.json"));
+        assert!(!check.detail.contains("m10.json"));
+        assert!(check.detail.ends_with("and 2 more"));
+    }
+
+    #[test]
+    fn matching_manifest_digests_stay_ok() {
+        let check = find(&run_checks(&healthy()), "manifests.directory").clone();
+        assert_eq!(check.status, Status::Ok);
+    }
+
+    #[test]
+    fn xdg_runtime_dir_private_is_ok_for_an_owned_0700_directory() {
+        let check = find(&run_checks(&healthy()), XDG_PRIVATE_ID).clone();
+        assert_eq!(check.status, Status::Ok);
+        assert!(check.remedy.is_none());
+    }
+
+    #[test]
+    fn xdg_runtime_dir_private_is_skipped_when_unset_relative_or_uid_unknown() {
+        let mut fake = healthy();
+        fake.vars.remove("XDG_RUNTIME_DIR");
+        assert_eq!(
+            find(&run_checks(&fake), XDG_PRIVATE_ID).status,
+            Status::Skipped
+        );
+
+        fake.vars
+            .insert("XDG_RUNTIME_DIR".to_owned(), "run/user/1000".to_owned());
+        assert_eq!(
+            find(&run_checks(&fake), XDG_PRIVATE_ID).status,
+            Status::Skipped
+        );
+
+        let mut fake = healthy();
+        fake.uid = None;
+        assert_eq!(
+            find(&run_checks(&fake), XDG_PRIVATE_ID).status,
+            Status::Skipped
+        );
+    }
+
+    #[test]
+    fn xdg_runtime_dir_private_fails_when_missing_or_not_a_directory() {
+        let mut fake = healthy();
+        fake.kinds.remove(&xdg_dir());
+        let check = find(&run_checks(&fake), XDG_PRIVATE_ID).clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("does not exist"));
+        assert!(check
+            .remedy
+            .as_deref()
+            .unwrap_or("")
+            .contains("/run/user/1000"));
+
+        fake.kinds.insert(xdg_dir(), FileKind::Symlink);
+        let check = find(&run_checks(&fake), XDG_PRIVATE_ID).clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("symbolic link"));
+
+        fake.kinds.insert(xdg_dir(), FileKind::File);
+        let check = find(&run_checks(&fake), XDG_PRIVATE_ID).clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("is a file, not a directory"));
+    }
+
+    #[test]
+    fn xdg_runtime_dir_private_reports_each_violation_with_its_remedy() {
+        let mut fake = healthy();
+        fake.owners.insert(xdg_dir(), Ok((0, 0o755)));
+        let check = find(&run_checks(&fake), XDG_PRIVATE_ID).clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("owned by uid 0, not uid 1000"));
+        assert!(check.detail.contains("has mode 0755, not 0700"));
+        let remedy = check.remedy.unwrap_or_default();
+        assert!(remedy.contains("make this user own /run/user/1000"));
+        assert!(remedy.contains("chmod 0700 on /run/user/1000"));
+    }
+
+    #[test]
+    fn xdg_runtime_dir_private_fails_for_group_readable_mode_alone() {
+        let mut fake = healthy();
+        fake.owners.insert(xdg_dir(), Ok((1000, 0o750)));
+        let check = find(&run_checks(&fake), XDG_PRIVATE_ID).clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("has mode 0750, not 0700"));
+        assert!(!check.detail.contains("owned by"));
+    }
+
+    #[test]
+    fn xdg_runtime_dir_private_reports_an_unreadable_owner_and_mode() {
+        let mut fake = healthy();
+        fake.owners
+            .insert(xdg_dir(), Err("permission denied".to_owned()));
+        let check = find(&run_checks(&fake), XDG_PRIVATE_ID).clone();
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("permission denied"));
+    }
+
+    #[test]
+    fn xdg_runtime_dir_private_runs_on_macos_and_skips_elsewhere() {
+        let mut fake = healthy();
+        fake.platform = Platform::MacOs;
+        fake.owners.insert(xdg_dir(), Ok((1000, 0o755)));
+        assert_eq!(
+            find(&run_checks(&fake), XDG_PRIVATE_ID).status,
+            Status::Fail
+        );
+
+        fake.platform = Platform::Windows;
+        assert_eq!(
+            find(&run_checks(&fake), XDG_PRIVATE_ID).status,
+            Status::Skipped
+        );
+        fake.platform = Platform::Other;
+        assert_eq!(
+            find(&run_checks(&fake), XDG_PRIVATE_ID).status,
+            Status::Skipped
+        );
+    }
+
+    #[test]
+    fn build_features_check_is_always_ok_and_matches_the_build() {
+        let check = check_build_features();
+        assert_eq!(check.id, FEATURES_ID);
+        assert_eq!(check.status, Status::Ok);
+        assert!(check.remedy.is_none());
+        if enabled_features().is_empty() {
+            assert_eq!(check.detail, "no optional features enabled");
+        } else {
+            assert!(check.detail.starts_with("built with "));
+            for feature in enabled_features() {
+                assert!(check.detail.contains(feature));
+            }
+        }
+        assert_eq!(
+            enabled_features().contains(&"graph"),
+            cfg!(feature = "graph")
+        );
+    }
+
+    #[test]
+    fn build_features_check_is_present_in_every_run() {
+        let checks = run_checks(&healthy());
+        assert_eq!(find(&checks, FEATURES_ID).status, Status::Ok);
+    }
+
+    #[test]
+    fn listed_names_stop_at_ten() {
+        let names: Vec<String> = (0..10).map(|index| format!("n{index}")).collect();
+        assert_eq!(listed_names(&names), names.join(", "));
+        let mut more = names.clone();
+        more.push("n10".to_owned());
+        assert!(listed_names(&more).ends_with(", n9 and 1 more"));
     }
 }

@@ -752,7 +752,12 @@ fn validate_ports_against_manifest(
         let Some((schema, _)) = parameters.get(name) else {
             bail!("applet {:?} has no input parameter {name:?}", manifest.name);
         };
-        if !graph_inputs[name].schema.is_assignable_to(schema) {
+        // A generic JSON port carries no shape of its own. For list and record
+        // parameters the concrete value is checked against the full parameter
+        // schema by the manifest's own validation, so admission defers to it.
+        let generic_json_into_container = graph_inputs[name].schema.kind == OutputType::Json
+            && matches!(schema.kind, OutputType::List | OutputType::Record);
+        if !generic_json_into_container && !graph_inputs[name].schema.is_assignable_to(schema) {
             bail!(
                 "applet {:?} input port {name:?} schema {:?} does not match parameter schema {:?}",
                 manifest.name,

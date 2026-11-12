@@ -23,6 +23,7 @@ MAINTAINED = [
     "DESIGN.md",
     "docs/README.md",
     "docs/guide.md",
+    "docs/omarchy-quickstart.md",
     "docs/language.md",
     "docs/runtime-reference.md",
     "docs/internals/checkpoint-format.md",

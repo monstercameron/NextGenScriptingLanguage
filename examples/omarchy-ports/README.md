@@ -22,7 +22,9 @@ run "omarchy-shell" with arguments ["-q", "notifications", "dismiss", summary]
 The variadic declaration accepts the extra arguments that these upstream
 wrappers ignore. The summary remains one literal argument, including spaces,
 newlines, wildcard characters and option-looking text. To run a file directly,
-mark your copy executable and put a source-built `execute` on `PATH`.
+mark your copy executable and put a source-built `execute` on `PATH`. To write new
+Omarchy programs rather than read these ports, see the
+[Omarchy quickstart](../../docs/omarchy-quickstart.md).
 
 Run the safe interface tests from the project root:
 

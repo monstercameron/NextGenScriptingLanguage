@@ -2009,6 +2009,496 @@ fn receipt(directory: &Path, data: &JournalData, status: &str) -> Value {
     })
 }
 
+// Single-file write journal (#393). `fs.ensure_file` and `fs.ensure_line`
+// replace one file at a time. Without a journal, a workflow that fails later
+// cannot put that file back. Before each replacement the journal records the
+// target, the digest of the previous content and a saved copy of it. The
+// entry is marked committed only after the replacement has returned. Recovery
+// restores each entry that was recorded but not committed, and only where the
+// current content is still the recorded replacement. Committed entries and
+// targets that match neither recorded state are left alone and reported.
+
+const WRITE_JOURNAL_VERSION: u32 = 1;
+const WRITE_JOURNAL_FILE: &str = "writes.json";
+const MAX_WRITE_JOURNAL_ENTRIES: usize = 4096;
+const MAX_WRITE_JOURNAL_BYTES: usize = 16 * 1024 * 1024;
+/// Digest recorded for a target that did not exist before the write.
+const MISSING_HASH: &str = "missing";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteJournalData {
+    version: u32,
+    entries: Vec<WriteJournalEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteJournalEntry {
+    path: EncodedPath,
+    /// `missing` when the target did not exist before the write; the saved copy
+    /// is then absent and recovery removes the created file.
+    before_hash: String,
+    after_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    before_mode: Option<u32>,
+    committed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteJournalEnvelope {
+    checksum: String,
+    data: WriteJournalData,
+}
+
+#[derive(Serialize)]
+struct WriteJournalEnvelopeRef<'a> {
+    checksum: String,
+    data: &'a WriteJournalData,
+}
+
+/// A private directory holding `writes.json` and one saved copy per replaced
+/// existing file. The journal is updated before and after each replacement, so
+/// recovery sees the state the last successful update recorded.
+pub(super) struct WriteJournal {
+    directory: PathBuf,
+    data: WriteJournalData,
+}
+
+/// What recovery did with one journaled target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum WriteRecovery {
+    /// The recorded replacement was on disk without its commit mark, and the
+    /// saved previous content was put back (or the created file removed).
+    Restored,
+    /// The recorded replacement never reached the target; it already holds the
+    /// previous content. Nothing was written.
+    NotReplaced,
+    /// The entry was committed before the failure and is left as written.
+    Committed,
+    /// The target matches neither recorded state, or the restore could not be
+    /// verified. It is left in place and the reason is reported.
+    Conflict(String),
+}
+
+impl WriteJournal {
+    /// Creates a new private journal directory. An existing directory is
+    /// refused, so a stale journal is never overwritten.
+    // Start-up wiring of the journal and recovery is NEEDS under #393; until
+    // then only the tests and the explicit callers use these.
+    #[allow(dead_code)]
+    pub(super) fn create(
+        directory: &Path,
+        context: &ExecutionContext<'_>,
+    ) -> Result<Self, AppletError> {
+        #[allow(unused_mut)]
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(directory).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                failed(
+                    "journal_exists",
+                    format!("write journal already exists: {}", directory.display()),
+                )
+            } else {
+                super::io_error(
+                    error,
+                    format!("creating write journal {}", directory.display()),
+                )
+            }
+        })?;
+        restrict_directory(directory)?;
+        let journal = Self {
+            directory: directory.to_path_buf(),
+            data: WriteJournalData {
+                version: WRITE_JOURNAL_VERSION,
+                entries: Vec::new(),
+            },
+        };
+        journal.persist(context)?;
+        Ok(journal)
+    }
+
+    /// Replaces `path` with `content` through the journal. The caller holds the
+    /// target's advisory lock. Any failure after `record` leaves the entry
+    /// uncommitted, so recovery decides what the target should hold.
+    pub(super) fn replace(
+        &mut self,
+        path: &Path,
+        content: &[u8],
+        expected_hash: &str,
+        permission_policy: &str,
+        mode: Option<u32>,
+        context: &ExecutionContext<'_>,
+    ) -> Result<(), AppletError> {
+        let index = self.record(path, content, expected_hash, context)?;
+        filesystem::atomic_replace_locked(
+            path,
+            content,
+            expected_hash,
+            "preserve",
+            permission_policy,
+            mode,
+            context,
+        )?;
+        self.commit(index, context)
+    }
+
+    /// Records the target, its previous digest and a saved copy of its previous
+    /// content, and publishes the entry before the replacement starts. Returns
+    /// the entry index for `commit`.
+    pub(super) fn record(
+        &mut self,
+        path: &Path,
+        after: &[u8],
+        expected_hash: &str,
+        context: &ExecutionContext<'_>,
+    ) -> Result<usize, AppletError> {
+        context.checkpoint()?;
+        let target = journal_target(path)?;
+        let before = read_before(&target, context)?;
+        let before_hash = match &before {
+            Some((bytes, _)) => digest_with_context(bytes, context)?,
+            None => MISSING_HASH.to_owned(),
+        };
+        if before_hash != expected_hash {
+            return Err(failed(
+                "conflict",
+                format!(
+                    "expected content hash for {} is {}, found {}",
+                    target.display(),
+                    expected_hash,
+                    before_hash
+                ),
+            ));
+        }
+        let index = self.data.entries.len();
+        if index >= MAX_WRITE_JOURNAL_ENTRIES {
+            return Err(invalid(format!(
+                "write journal is limited to {MAX_WRITE_JOURNAL_ENTRIES} entries"
+            )));
+        }
+        let before_mode = before.as_ref().and_then(|(_, mode)| *mode);
+        if let Some((bytes, _)) = &before {
+            write_private_new(&self.directory.join(blob_name(index)), bytes, context)?;
+        }
+        let after_hash = digest_with_context(after, context)?;
+        self.data.entries.push(WriteJournalEntry {
+            path: EncodedPath::from_path(&target),
+            before_hash,
+            after_hash,
+            before_mode,
+            committed: false,
+        });
+        self.persist(context)?;
+        Ok(index)
+    }
+
+    /// Marks the entry committed once its replacement has returned.
+    pub(super) fn commit(
+        &mut self,
+        index: usize,
+        context: &ExecutionContext<'_>,
+    ) -> Result<(), AppletError> {
+        let entry = self
+            .data
+            .entries
+            .get_mut(index)
+            .ok_or_else(|| invalid("write journal has no entry with that index"))?;
+        entry.committed = true;
+        self.persist(context)
+    }
+
+    /// Publishes the journal with the same temporary, rename and directory-sync
+    /// sequence as the multi-file journal.
+    fn persist(&self, context: &ExecutionContext<'_>) -> Result<(), AppletError> {
+        context.checkpoint()?;
+        let data_bytes = serde_json::to_vec(&self.data)
+            .map_err(|error| failed("journal_error", format!("encoding write journal: {error}")))?;
+        let checksum = digest_with_context(&data_bytes, context)?;
+        let bytes = serde_json::to_vec(&WriteJournalEnvelopeRef {
+            checksum,
+            data: &self.data,
+        })
+        .map_err(|error| failed("journal_error", format!("encoding write journal: {error}")))?;
+        if bytes.len() > MAX_WRITE_JOURNAL_BYTES {
+            return Err(failed(
+                "journal_error",
+                "write journal exceeds its size limit",
+            ));
+        }
+        let final_path = self.directory.join(WRITE_JOURNAL_FILE);
+        let temporary = self.directory.join(format!(
+            ".writes.{}.{}.tmp",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        write_private_new(&temporary, &bytes, context).inspect_err(|_error| {
+            let _ = fs::remove_file(&temporary);
+        })?;
+        context.checkpoint()?;
+        if let Err(error) = crate::platform::replace_file(&temporary, &final_path) {
+            if error.published {
+                return Err(failed(
+                    "uncertain_effect",
+                    format!(
+                        "write journal {} was published but its directory entry may not be on disk: {}",
+                        final_path.display(),
+                        error.error
+                    ),
+                ));
+            }
+            let _ = fs::remove_file(&temporary);
+            return Err(failed(
+                "uncertain_effect",
+                format!(
+                    "could not publish write journal {}: {}",
+                    final_path.display(),
+                    error.error
+                ),
+            ));
+        }
+        context.checkpoint()?;
+        sync_directory(&self.directory).map_err(|error| {
+            failed(
+                "uncertain_effect",
+                format!("write journal update was published but directory sync failed: {error}"),
+            )
+        })?;
+        context.checkpoint()?;
+        Ok(())
+    }
+}
+
+/// Restores every journaled target whose replacement was recorded but not
+/// committed, in reverse order. Committed entries are left alone. Each
+/// restore runs under the target's advisory lock and only when the current
+/// content is still the recorded replacement, so re-running recovery after a
+/// partial pass changes nothing that was already put back.
+// Start-up wiring is NEEDS under #393; see `WriteJournal::create`.
+#[allow(dead_code)]
+pub(super) fn recover_writes(
+    directory: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<(PathBuf, WriteRecovery)>, AppletError> {
+    context.checkpoint()?;
+    validate_journal_directory(directory)?;
+    let data = read_write_journal(directory, context)?;
+    let mut report = Vec::with_capacity(data.entries.len());
+    for index in (0..data.entries.len()).rev() {
+        context.checkpoint()?;
+        let entry = &data.entries[index];
+        let path = entry.path.to_path()?;
+        let outcome = if entry.committed {
+            WriteRecovery::Committed
+        } else {
+            let lock = filesystem::default_lock_path(&path)?;
+            let locked = filesystem::with_path_lock(
+                &lock,
+                Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+                context,
+                || restore_entry(directory, index, entry, &path, context),
+            );
+            match locked {
+                Ok(outcome) => outcome,
+                Err(error) => WriteRecovery::Conflict(format!(
+                    "could not recover {}: {}",
+                    path.display(),
+                    error.message
+                )),
+            }
+        };
+        report.push((path, outcome));
+    }
+    report.reverse();
+    Ok(report)
+}
+
+fn restore_entry(
+    directory: &Path,
+    index: usize,
+    entry: &WriteJournalEntry,
+    path: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<WriteRecovery, AppletError> {
+    context.checkpoint()?;
+    let current = match read_current_target(path, context) {
+        Ok(current) => current,
+        Err(error) => {
+            return Ok(WriteRecovery::Conflict(format!(
+                "cannot classify {}: {}",
+                path.display(),
+                error.message
+            )));
+        }
+    };
+    let observed = match &current {
+        Some(bytes) => digest_with_context(bytes, context)?,
+        None => MISSING_HASH.to_owned(),
+    };
+    if observed == entry.before_hash {
+        return Ok(WriteRecovery::NotReplaced);
+    }
+    if observed != entry.after_hash {
+        return Ok(WriteRecovery::Conflict(format!(
+            "{} matches neither the journaled previous nor replacement content; left in place",
+            path.display()
+        )));
+    }
+    if entry.before_hash == MISSING_HASH {
+        remove_locked(path, &entry.after_hash, context)?;
+    } else {
+        let before = read_write_blob(directory, index, &entry.before_hash, context)?;
+        let (policy, mode) = entry
+            .before_mode
+            .map(|mode| ("exact", Some(mode)))
+            .unwrap_or(("preserve", None));
+        filesystem::atomic_replace_locked(
+            path,
+            &before,
+            &entry.after_hash,
+            "preserve",
+            policy,
+            mode,
+            context,
+        )?;
+    }
+    let restored = match read_current_target(path, context)? {
+        Some(bytes) => digest_with_context(&bytes, context)?,
+        None => MISSING_HASH.to_owned(),
+    };
+    if restored != entry.before_hash {
+        return Ok(WriteRecovery::Conflict(format!(
+            "{} did not return to its journaled previous content after restore",
+            path.display()
+        )));
+    }
+    Ok(WriteRecovery::Restored)
+}
+
+fn read_write_journal(
+    directory: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<WriteJournalData, AppletError> {
+    context.checkpoint()?;
+    let path = directory.join(WRITE_JOURNAL_FILE);
+    let mut file = open_private_regular(&path, "write journal")?;
+    let mut bytes = Vec::new();
+    read_chunked_bounded(
+        &mut file,
+        &mut bytes,
+        &path,
+        MAX_WRITE_JOURNAL_BYTES,
+        context,
+    )?;
+    if bytes.len() > MAX_WRITE_JOURNAL_BYTES {
+        return Err(failed("journal_corrupt", "write journal is too large"));
+    }
+    let envelope: WriteJournalEnvelope = serde_json::from_slice(&bytes).map_err(|error| {
+        failed(
+            "journal_corrupt",
+            format!("malformed write journal: {error}"),
+        )
+    })?;
+    let data_bytes = serde_json::to_vec(&envelope.data).map_err(|error| {
+        failed(
+            "journal_corrupt",
+            format!("re-encoding write journal: {error}"),
+        )
+    })?;
+    if digest_with_context(&data_bytes, context)? != envelope.checksum {
+        return Err(failed("journal_corrupt", "write journal checksum mismatch"));
+    }
+    if envelope.data.version != WRITE_JOURNAL_VERSION
+        || envelope.data.entries.len() > MAX_WRITE_JOURNAL_ENTRIES
+    {
+        return Err(failed(
+            "journal_corrupt",
+            "write journal has an unsupported version or entry count",
+        ));
+    }
+    Ok(envelope.data)
+}
+
+fn read_write_blob(
+    directory: &Path,
+    index: usize,
+    expected_hash: &str,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<u8>, AppletError> {
+    context.checkpoint()?;
+    let path = directory.join(blob_name(index));
+    let mut file = open_private_regular(&path, "write journal saved copy")?;
+    let mut bytes = Vec::new();
+    read_chunked_bounded(&mut file, &mut bytes, &path, MAX_FILE_BYTES, context)?;
+    if bytes.len() > MAX_FILE_BYTES || digest_with_context(&bytes, context)? != expected_hash {
+        return Err(failed(
+            "journal_corrupt",
+            format!(
+                "write journal saved copy {} is truncated or corrupt",
+                path.display()
+            ),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn blob_name(index: usize) -> String {
+    format!("{index:04}.before")
+}
+
+/// Canonical path of the target, so recovery addresses the same file the
+/// write replaced even when the caller named it through a symbolic link. A
+/// target that does not exist yet is named by its canonical parent.
+fn journal_target(path: &Path) -> Result<PathBuf, AppletError> {
+    match fs::canonicalize(path) {
+        Ok(target) => Ok(target),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if fs::symlink_metadata(path).is_ok() {
+                return Err(invalid(format!(
+                    "write journal cannot record a dangling symbolic link: {}",
+                    path.display()
+                )));
+            }
+            let name = path
+                .file_name()
+                .ok_or_else(|| invalid(format!("path has no file name: {}", path.display())))?;
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let parent = fs::canonicalize(parent).map_err(|error| {
+                super::io_error(error, format!("resolving {}", parent.display()))
+            })?;
+            Ok(parent.join(name))
+        }
+        Err(error) => Err(super::io_error(
+            error,
+            format!("resolving {}", path.display()),
+        )),
+    }
+}
+
+/// Content and Unix mode of a file before a journaled write, or `None` when it is absent.
+type BeforeContent = Option<(Vec<u8>, Option<u32>)>;
+
+/// Previous content and Unix mode of the target, or `None` when it is absent.
+fn read_before(
+    target: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<BeforeContent, AppletError> {
+    match fs::symlink_metadata(target) {
+        Ok(_) => read_existing_regular_with_mode(target, context).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(super::io_error(
+            error,
+            format!("checking {}", target.display()),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2521,5 +3011,285 @@ mod tests {
             TransactionState::Committed
         );
         assert_eq!(fs::read(&target).unwrap(), b"after");
+    }
+
+    // Each write-journal test stops at one injected point and checks that every
+    // target holds either its full previous content or its full replacement.
+
+    #[test]
+    fn write_journal_crash_after_record_keeps_the_previous_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("config.conf");
+        fs::write(&target, "old").unwrap();
+        let journal_dir = temp.path().join("writes");
+        let context = ExecutionContext::unrestricted();
+        let mut journal = WriteJournal::create(&journal_dir, &context).unwrap();
+        journal
+            .record(&target, b"new", &digest(b"old"), &context)
+            .unwrap();
+        // Injected crash: the entry is published, the replacement never starts.
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+
+        let report = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(
+            report,
+            vec![(
+                fs::canonicalize(&target).unwrap(),
+                WriteRecovery::NotReplaced
+            )]
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+    }
+
+    #[test]
+    fn write_journal_crash_after_replace_before_commit_restores_the_previous_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("config.conf");
+        fs::write(&target, "old").unwrap();
+        let journal_dir = temp.path().join("writes");
+        let context = ExecutionContext::unrestricted();
+        let mut journal = WriteJournal::create(&journal_dir, &context).unwrap();
+        journal
+            .record(&target, b"new", &digest(b"old"), &context)
+            .unwrap();
+        filesystem::atomic_replace_locked(
+            &target,
+            b"new",
+            &digest(b"old"),
+            "preserve",
+            "preserve",
+            None,
+            &context,
+        )
+        .unwrap();
+        // Injected crash: the file is replaced, the commit mark is never written.
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+
+        let report = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(
+            report,
+            vec![(fs::canonicalize(&target).unwrap(), WriteRecovery::Restored)]
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+    }
+
+    #[test]
+    fn write_journal_crash_after_commit_keeps_the_committed_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("config.conf");
+        fs::write(&target, "old").unwrap();
+        let journal_dir = temp.path().join("writes");
+        let context = ExecutionContext::unrestricted();
+        let mut journal = WriteJournal::create(&journal_dir, &context).unwrap();
+        // The commit mark is persisted before the injected crash.
+        journal
+            .replace(&target, b"new", &digest(b"old"), "preserve", None, &context)
+            .unwrap();
+
+        let report = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(
+            report,
+            vec![(fs::canonicalize(&target).unwrap(), WriteRecovery::Committed)]
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    #[test]
+    fn write_journal_restores_uncommitted_targets_including_a_created_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let committed = temp.path().join("committed.conf");
+        let uncommitted = temp.path().join("uncommitted.conf");
+        let created = temp.path().join("created.conf");
+        fs::write(&committed, "old-a").unwrap();
+        fs::write(&uncommitted, "old-b").unwrap();
+        let journal_dir = temp.path().join("writes");
+        let context = ExecutionContext::unrestricted();
+        let mut journal = WriteJournal::create(&journal_dir, &context).unwrap();
+        journal
+            .replace(
+                &committed,
+                b"new-a",
+                &digest(b"old-a"),
+                "preserve",
+                None,
+                &context,
+            )
+            .unwrap();
+        journal
+            .record(&uncommitted, b"new-b", &digest(b"old-b"), &context)
+            .unwrap();
+        filesystem::atomic_replace_locked(
+            &uncommitted,
+            b"new-b",
+            &digest(b"old-b"),
+            "preserve",
+            "preserve",
+            None,
+            &context,
+        )
+        .unwrap();
+        journal
+            .record(&created, b"new-c", MISSING_HASH, &context)
+            .unwrap();
+        filesystem::atomic_replace_locked(
+            &created,
+            b"new-c",
+            MISSING_HASH,
+            "preserve",
+            "preserve",
+            None,
+            &context,
+        )
+        .unwrap();
+        // Injected crash before either later commit mark.
+
+        let report = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(
+            report,
+            vec![
+                (
+                    fs::canonicalize(&committed).unwrap(),
+                    WriteRecovery::Committed
+                ),
+                (
+                    fs::canonicalize(&uncommitted).unwrap(),
+                    WriteRecovery::Restored
+                ),
+                (
+                    fs::canonicalize(temp.path()).unwrap().join("created.conf"),
+                    WriteRecovery::Restored
+                ),
+            ]
+        );
+        assert_eq!(fs::read_to_string(&committed).unwrap(), "new-a");
+        assert_eq!(fs::read_to_string(&uncommitted).unwrap(), "old-b");
+        assert!(
+            !created.exists(),
+            "a file created by the failed run is removed"
+        );
+    }
+
+    #[test]
+    fn write_journal_reports_a_concurrent_edit_and_restores_the_other_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first.conf");
+        let second = temp.path().join("second.conf");
+        fs::write(&first, "old-a").unwrap();
+        fs::write(&second, "old-b").unwrap();
+        let journal_dir = temp.path().join("writes");
+        let context = ExecutionContext::unrestricted();
+        let mut journal = WriteJournal::create(&journal_dir, &context).unwrap();
+        for (path, old, new) in [(&first, "old-a", "new-a"), (&second, "old-b", "new-b")] {
+            journal
+                .record(path, new.as_bytes(), &digest(old.as_bytes()), &context)
+                .unwrap();
+            filesystem::atomic_replace_locked(
+                path,
+                new.as_bytes(),
+                &digest(old.as_bytes()),
+                "preserve",
+                "preserve",
+                None,
+                &context,
+            )
+            .unwrap();
+        }
+        // Injected crash before either commit mark. A writer that ignores the
+        // lock then edits the first file.
+        fs::write(&first, "third party").unwrap();
+
+        let report = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(report[0].0, fs::canonicalize(&first).unwrap());
+        assert!(
+            matches!(report[0].1, WriteRecovery::Conflict(_)),
+            "the concurrent edit must be reported: {:?}",
+            report[0].1
+        );
+        assert_eq!(
+            report[1],
+            (fs::canonicalize(&second).unwrap(), WriteRecovery::Restored)
+        );
+        assert_eq!(fs::read_to_string(&first).unwrap(), "third party");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "old-b");
+    }
+
+    #[test]
+    fn write_journal_leaves_an_uncommitted_target_with_third_party_content_in_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first.conf");
+        let second = temp.path().join("second.conf");
+        fs::write(&first, "old-a").unwrap();
+        fs::write(&second, "old-b").unwrap();
+        let journal_dir = temp.path().join("writes");
+        let context = ExecutionContext::unrestricted();
+        let mut journal = WriteJournal::create(&journal_dir, &context).unwrap();
+        journal
+            .record(&first, b"new-a", &digest(b"old-a"), &context)
+            .unwrap();
+        filesystem::atomic_replace_locked(
+            &first,
+            b"new-a",
+            &digest(b"old-a"),
+            "preserve",
+            "preserve",
+            None,
+            &context,
+        )
+        .unwrap();
+        journal
+            .replace(
+                &second,
+                b"new-b",
+                &digest(b"old-b"),
+                "preserve",
+                None,
+                &context,
+            )
+            .unwrap();
+        // A concurrent writer edits the uncommitted first file after the crash.
+        fs::write(&first, "third party").unwrap();
+
+        let report = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(report[0].0, fs::canonicalize(&first).unwrap());
+        assert!(
+            matches!(report[0].1, WriteRecovery::Conflict(_)),
+            "a third-party edit must be reported, not overwritten: {:?}",
+            report[0].1
+        );
+        assert_eq!(
+            report[1],
+            (fs::canonicalize(&second).unwrap(), WriteRecovery::Committed)
+        );
+        assert_eq!(fs::read_to_string(&first).unwrap(), "third party");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "new-b");
+    }
+
+    #[test]
+    fn write_journal_recovery_is_idempotent_after_a_restore() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("config.conf");
+        fs::write(&target, "old").unwrap();
+        let journal_dir = temp.path().join("writes");
+        let context = ExecutionContext::unrestricted();
+        let mut journal = WriteJournal::create(&journal_dir, &context).unwrap();
+        journal
+            .record(&target, b"new", &digest(b"old"), &context)
+            .unwrap();
+        filesystem::atomic_replace_locked(
+            &target,
+            b"new",
+            &digest(b"old"),
+            "preserve",
+            "preserve",
+            None,
+            &context,
+        )
+        .unwrap();
+        let first = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(first[0].1, WriteRecovery::Restored);
+        // A second pass, as after a crash during recovery, restores nothing.
+        let second = recover_writes(&journal_dir, &context).unwrap();
+        assert_eq!(second[0].1, WriteRecovery::NotReplaced);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old");
     }
 }

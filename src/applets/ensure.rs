@@ -22,6 +22,7 @@
 use super::filesystem::{
     atomic_replace_locked, default_lock_path, hash, resolve_path, with_path_lock,
 };
+use super::transaction::WriteJournal;
 use super::{invalid, io_error, required_string, AppletError, ExecutionContext};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -61,7 +62,7 @@ pub(super) fn ensure_file(
     let changed = !(content_matches && mode_matches);
     if changed {
         let expected = expected_hash(current.as_ref());
-        write_locked(&path, content.as_bytes(), &expected, mode, context)?;
+        write_locked(&path, content.as_bytes(), &expected, mode, None, context)?;
     }
     Ok(json!({
         "changed": changed,
@@ -131,7 +132,7 @@ pub(super) fn ensure_line(
     };
     if let Some(content) = &updated {
         let expected = expected_hash(current.as_ref());
-        write_locked(&path, content.as_bytes(), &expected, None, context)?;
+        write_locked(&path, content.as_bytes(), &expected, None, None, context)?;
     }
     Ok(json!({"changed": updated.is_some(), "path": text}))
 }
@@ -355,12 +356,14 @@ fn expected_hash(current: Option<&Current>) -> String {
     current.map_or_else(|| "missing".to_owned(), |current| hash(&current.bytes))
 }
 
-/// Replace a file under the sibling advisory lock, expecting `expected`.
+/// Replace a file under the sibling advisory lock, expecting `expected`. With a
+/// journal, the prior state is recorded before the replacement (#393).
 fn write_locked(
     path: &Path,
     content: &[u8],
     expected: &str,
     mode: Option<u32>,
+    journal: Option<&mut WriteJournal>,
     context: &ExecutionContext<'_>,
 ) -> Result<(), AppletError> {
     let lock = default_lock_path(path)?;
@@ -369,8 +372,13 @@ fn write_locked(
             Some(mode) if cfg!(unix) => ("exact", Some(mode)),
             _ => ("preserve", None),
         };
-        atomic_replace_locked(path, content, expected, "preserve", policy, mode, context)
-            .map(|_| ())
+        match journal {
+            Some(journal) => journal.replace(path, content, expected, policy, mode, context),
+            None => {
+                atomic_replace_locked(path, content, expected, "preserve", policy, mode, context)
+                    .map(|_| ())
+            }
+        }
     })
 }
 

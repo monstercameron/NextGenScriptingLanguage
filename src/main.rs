@@ -784,6 +784,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "fmt") {
         return fmt_cli(&arguments[1..]);
     }
+    if arguments.first().is_some_and(|a| a == "migrate") {
+        return migrate_cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
     }
@@ -809,7 +812,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             warm_forwarded_manifests,
         )?);
     }
-    let args = match parse_args(&arguments)? {
+    let mut args = match parse_args(&arguments)? {
         Some(args) => args,
         None => return Ok(()),
     };
@@ -826,15 +829,117 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    if args.fix {
-        apply_check_fixes(&args)?;
+    if args.stdin {
+        args.stdin_source = Some(read_check_stdin()?);
     }
 
     if args.command == "check" {
+        return check_cli(args);
+    }
+    execute_workflow(args, None)
+}
+
+/// `execute check`: one file, or several in argument order (#464). A single file prints
+/// what it always printed. With several files, `--json` prints one JSON array of the
+/// per-file documents and `--json=compact` prints one document per line. The status is 1
+/// when any file fails, and each file is checked in its own pass.
+fn check_cli(args: Args) -> Result<()> {
+    let (json, json_compact) = (args.json, args.json_compact);
+    if args.extra_files.is_empty() {
+        let outcome = check_one(args)?;
+        if let Some(report) = &outcome.report {
+            print_check_report(report, json_compact)?;
+        }
+        if outcome.failed {
+            // Validation has no spawned workers/effects. The JSON response is
+            // complete; preserve the ordinary failing-check exit status.
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    let mut files = vec![args.file.clone()];
+    files.extend(args.extra_files.iter().cloned());
+    let mut reports = Vec::new();
+    let mut failed = false;
+    for file in files {
+        let mut one = args.clone();
+        one.file = file.clone();
+        one.extra_files = Vec::new();
+        match check_one(one) {
+            Ok(outcome) => {
+                failed |= outcome.failed;
+                reports.extend(outcome.report);
+            }
+            Err(error) => {
+                failed = true;
+                let message = format!("{error:#}");
+                if json {
+                    reports.push(serde_json::json!({
+                        "protocol": "execute.check/1", "validation": "static",
+                        "ok": false, "path": file.to_string_lossy(),
+                        "path_bytes": file.as_os_str().as_encoded_bytes().to_vec(),
+                        "diagnostics": [{"severity": "error", "code": "check_failed", "message": message}]
+                    }));
+                } else {
+                    eprintln!("{}: {message}", file.display());
+                }
+            }
+        }
+    }
+    if json {
+        if json_compact {
+            for report in &reports {
+                writeln!(
+                    io::stdout(),
+                    "{}",
+                    flow::diagnostics::render_check_compact(report)
+                )?;
+            }
+        } else {
+            write_json(&serde_json::Value::Array(reports))?;
+        }
+    }
+    if failed {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Writes one check report: one line when `json_compact`, otherwise the pretty document.
+fn print_check_report(report: &serde_json::Value, json_compact: bool) -> Result<()> {
+    if json_compact {
+        writeln!(
+            io::stdout(),
+            "{}",
+            flow::diagnostics::render_check_compact(report)
+        )?;
+        Ok(())
+    } else {
+        write_json(report)
+    }
+}
+
+/// The result of checking one file: whether the check failed, and its JSON report when
+/// `--json` asked for one.
+struct CheckOutcome {
+    failed: bool,
+    report: Option<serde_json::Value>,
+}
+
+/// Checks the one file (or the standard input program) that `args` names. Plain output
+/// is printed here; a JSON report is returned for the caller to print.
+fn check_one(args: Args) -> Result<CheckOutcome> {
+    if args.fix {
+        apply_check_fixes(&args)?;
+    }
+    {
         let json = args.json;
         let path = args.file.to_string_lossy().into_owned();
         let path_bytes = args.file.as_os_str().as_encoded_bytes().to_vec();
-        let source = fs::read_to_string(&args.file).ok();
+        let source = match &args.stdin_source {
+            Some(text) => Some(text.clone()),
+            None => fs::read_to_string(&args.file).ok(),
+        };
         #[cfg(not(feature = "screens"))]
         if source.as_deref().is_some_and(is_screen_source) {
             bail!("screen programs require the screens feature; rebuild with --features screens");
@@ -853,7 +958,6 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         };
         let data_flow_warning = args.capability_policy.is_some() && args.data_flow_policy.is_none();
         let github = args.github;
-        let json_compact = args.json_compact;
         let deny_warnings = args.deny_warnings;
         let result = execute_workflow(args, finite_check_snapshot);
         if !json {
@@ -897,7 +1001,10 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             {
                 bail!("warnings are denied (--deny-warnings)");
             }
-            return Ok(());
+            return Ok(CheckOutcome {
+                failed: false,
+                report: None,
+            });
         }
         let has_static_error = static_diagnostics
             .iter()
@@ -941,32 +1048,48 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
                 diagnostics.push(diagnostic);
             }
         }
+        let mut report_value = None;
         if github {
             github_annotations::write(&path, &diagnostics)?;
         } else {
-            let report = serde_json::json!({
+            report_value = Some(serde_json::json!({
                 "protocol": "execute.check/1", "validation": "static",
                 "ok": result.is_ok() && !has_static_error && !has_denied_warning, "path": path, "path_bytes": path_bytes,
                 "diagnostics": diagnostics
-            });
-            if json_compact {
-                writeln!(
-                    io::stdout(),
-                    "{}",
-                    flow::diagnostics::render_check_compact(&report)
-                )?;
-            } else {
-                write_json(&report)?;
-            }
+            }));
         }
-        if result.is_err() || has_static_error || has_denied_warning {
-            // Validation has no spawned workers/effects. The JSON response is
-            // complete; preserve the ordinary failing-check exit status.
-            std::process::exit(1);
-        }
-        return Ok(());
+        Ok(CheckOutcome {
+            failed: result.is_err() || has_static_error || has_denied_warning,
+            report: report_value,
+        })
     }
-    execute_workflow(args, None)
+}
+
+/// Reads the program text for `check --stdin` from standard input. The limit is the one a
+/// called program file has, so a standard input program is never larger than a file it
+/// could call.
+fn read_check_stdin() -> Result<String> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    io::stdin()
+        .lock()
+        .take(flow::program_files::MAX_PROGRAM_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("could not read standard input")?;
+    if bytes.len() as u64 > flow::program_files::MAX_PROGRAM_FILE_BYTES {
+        bail!("standard input program is larger than 1 MiB");
+    }
+    String::from_utf8(bytes).map_err(|_| anyhow!("standard input program is not UTF-8 text"))
+}
+
+/// The path that a program's relative file calls resolve from. A file is canonicalized as
+/// before. Standard input has no file on disk, so its name is taken from the working
+/// directory (`--path` names it).
+fn program_resolution_path(args: &Args) -> Result<PathBuf> {
+    if args.stdin {
+        return Ok(env::current_dir()?.join(&args.file));
+    }
+    fs::canonicalize(&args.file).with_context(|| format!("resolving {}", args.file.display()))
 }
 
 /// The static diagnostics of `check` for one source text, under the policies it runs with.
@@ -1011,16 +1134,21 @@ fn static_check_diagnostics(
                                 capability.as_ref(),
                                 data_flow.as_ref(),
                             );
+                            // Standard input has no file on disk unless --path names one, and
+                            // analysis resolves its path, so a name that is not a file is
+                            // passed as no path at all.
+                            let analysis_path =
+                                (!args.stdin || args.file.exists()).then_some(args.file.as_path());
                             let mut diagnostics = flow::diagnostics::analyze_source_at(
                                 &source,
-                                Some(&args.file),
+                                analysis_path,
                                 &registry,
                             );
                             if args.resolve {
                                 diagnostics.extend(
                                     flow::diagnostics::resolve_executable_diagnostics(
                                         &source,
-                                        Some(&args.file),
+                                        analysis_path,
                                         &registry,
                                     ),
                                 );
@@ -1106,6 +1234,46 @@ fn doctor_cli(arguments: &[String]) -> Result<()> {
     }
     if flow::doctor::has_failures(&checks) {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// `execute migrate scan [--home DIR] [--json]` (#402): the read-only scan of Omarchy
+/// customisations under a home directory. Nothing is run or written. HOME (or
+/// USERPROFILE) is the default home.
+fn migrate_cli(arguments: &[String]) -> Result<()> {
+    const USAGE: &str = "usage: execute migrate scan [--home DIR] [--json]";
+    let rest = match arguments.first().map(String::as_str) {
+        Some("scan") => &arguments[1..],
+        _ => bail!(USAGE),
+    };
+    let mut home: Option<PathBuf> = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--json" if !json => json = true,
+            "--home" if home.is_none() => {
+                index += 1;
+                let value = rest.get(index).context("--home requires a directory")?;
+                home = Some(PathBuf::from(value));
+            }
+            _ => bail!(USAGE),
+        }
+        index += 1;
+    }
+    let home = match home {
+        Some(home) => home,
+        None => env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .context("no home directory: pass --home DIR")?,
+    };
+    let report = flow::migrate_scan::scan(&home).map_err(|error| anyhow!(error))?;
+    if json {
+        write_json(&flow::migrate_scan::render_json(&report))?;
+    } else {
+        io::stdout().write_all(flow::migrate_scan::render_text(&report).as_bytes())?;
     }
     Ok(())
 }
@@ -1414,8 +1582,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     let (source, registry_hint) = match finite_check_snapshot {
         Some(snapshot) => (snapshot.source, Some(snapshot.registry)),
         None => (
-            fs::read_to_string(&args.file)
-                .with_context(|| format!("could not read workflow {}", args.file.display()))?,
+            match &args.stdin_source {
+                Some(text) => text.clone(),
+                None => fs::read_to_string(&args.file)
+                    .with_context(|| format!("could not read workflow {}", args.file.display()))?,
+            },
             None,
         ),
     };
@@ -2022,9 +2193,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             Err(error) => {
                 // The program's own syntax error is the more useful report, so parse
                 // first. A file call that needs the policy is not such an error here.
-                if let Err(parse_error) =
-                    flow::program_files::parse_source(&args.file, &source, None)
-                {
+                let parsed = match program_resolution_path(&args) {
+                    Ok(path) => flow::program_files::parse_source_resolved(&path, &source, None),
+                    Err(error) => Err(error),
+                };
+                if let Err(parse_error) = parsed {
                     if !format!("{parse_error:#}").contains("needs the program's capability policy")
                     {
                         return Err(parse_error).with_context(|| {
@@ -2044,8 +2217,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     // The registry carries the capability policy, which authorizes the reads of any
     // program file the program calls, so it is loaded before the program is parsed.
     let cwd = env::current_dir()?;
-    let canonical_file = fs::canonicalize(&args.file)
-        .with_context(|| format!("resolving {}", args.file.display()))?;
+    let canonical_file = program_resolution_path(&args)?;
     let program = flow::program_files::parse_source_resolved(
         &canonical_file,
         &source,
@@ -4069,7 +4241,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute doctor [--json]\n       execute fmt [--check] FILE\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute check --explain CODE\n       execute resume FILE (--checkpoint DIR | --from-record DIR) [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|search|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|systemd-timer|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute shim PROGRAM [--name NAME] [--out DIR] [--force]\n       execute grammar --format gbnf\n       execute doctor [--json]\n       execute fmt [--check] FILE\n       execute migrate scan [--home DIR] [--json]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --clear-env             Pass no ambient environment to native children\n  --env-allow NAMES       Pass only these child variables (comma-separated; repeatable)\n  --json                  Structured result for check or explain\n  --json=compact          One-line check result (check); several files print one line each\n  --stdin, -              Check program text from standard input (check; name it with --path NAME)\n  --path NAME             File name used for the standard input program in messages (check)\n  --fix                   Apply the machine fixes to the checked file, then report what remains (check)\n  --explain CODE          Explain a registered check diagnostic code\n  --resolve               Resolve quoted executables on PATH during check\n  --deny-warnings         Treat check warnings as errors\n  --explain-version 1|2   Select explain protocol (default 2); applies to reviews and confirmations\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome
   --now EPOCH             Pin the injectable clock time.now reads (run/resume; wins over EXECUTE_NOW)\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --from-record DIR       Replay a record's completed prefix (resume)\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --confirm-report FILE  Saved what-if report to diff when --confirm does not match (run)\n  --model-fixtures DIR    Replay model calls from DIR (run/resume; wins over EXECUTE_MODEL_FIXTURES)\n  --model-budget BUDGET   Limit model calls, e.g. calls=50,tokens=200000 (run/resume; wins over EXECUTE_MODEL_BUDGET)\n  --allow CATEGORY        Approve an effect category in explain --json review only; not a runtime capability grant\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --agent-policy FILE     Require this agent policy on the --control endpoint\n  --allow-unauthenticated Allow unauthenticated mutating --control operations\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-loop-iterations N  Maximum iterations per loop (default 1000000)\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --fs-timeout-ms N  Maximum filesystem open/read wait (run/resume)\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run (default 10000 ms; expiry cancels)\n  --kill-grace-ms N       Grace between polite signal and SIGKILL (run/resume)\n  --max-record-bytes N    Maximum listener/stream record size\n  --events MODE           Graph terminal events: document or jsonl (run/resume; default jsonl for graphs with persistent nodes, document otherwise)"
 }
 

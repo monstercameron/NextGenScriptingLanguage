@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Args {
     pub(crate) inputs: BTreeMap<String, String>,
     /// `--answers FILE`: a JSON object of answers for declared prompts and inputs.
@@ -44,8 +44,15 @@ pub(crate) struct Args {
     pub(crate) deny_warnings: bool,
     /// `check --fix`: apply the machine fixes of the check diagnostics and write the file.
     pub(crate) fix: bool,
+    /// `check --stdin` or `check -`: the program text is read from standard input, and
+    /// `file` is the name given by `--path` (or `<stdin>`) for messages and resolution.
+    pub(crate) stdin: bool,
+    /// The text read from standard input for `check --stdin`, filled before the check runs.
+    pub(crate) stdin_source: Option<String>,
     pub(crate) command: &'static str,
     pub(crate) file: PathBuf,
+    /// `check FILE...`: the files after the first one, which is `file`.
+    pub(crate) extra_files: Vec<PathBuf>,
     pub(crate) manifest_dir: Option<PathBuf>,
     pub(crate) manifest_catalog: Option<PathBuf>,
     pub(crate) capability_policy: Option<PathBuf>,

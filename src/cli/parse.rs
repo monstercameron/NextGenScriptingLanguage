@@ -34,6 +34,9 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut diagnostic_explain = None;
     let mut deny_warnings = false;
     let mut fix = false;
+    let mut stdin = false;
+    let mut stdin_path: Option<PathBuf> = None;
+    let mut extra_files: Vec<PathBuf> = Vec::new();
     let mut resolve = false;
     let mut explain_version = None;
     #[cfg(feature = "agent-advisory")]
@@ -603,9 +606,29 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     _ => bail!("--events accepts document or jsonl"),
                 }
             }
+            "--stdin" | "-" if command == "check" => {
+                if stdin {
+                    bail!("--stdin may be specified only once");
+                }
+                stdin = true;
+            }
+            "--path" if command == "check" => {
+                if stdin_path.is_some() {
+                    bail!("--path may be specified only once");
+                }
+                stdin_path = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--path",
+                    "a file name",
+                )?));
+            }
             value if value.starts_with('-') => bail!("unknown or unsupported option `{value}`"),
             _ => {
-                if file.replace(workflow_path(argument)?).is_some() {
+                let path = workflow_path(argument)?;
+                if command == "check" && file.is_some() {
+                    extra_files.push(path);
+                } else if file.replace(path).is_some() {
                     bail!("only one workflow file may be specified");
                 }
             }
@@ -616,12 +639,22 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     if diagnostic_explain.is_some() && (arguments.len() != 3 || file.is_some() || json) {
         bail!("check --explain CODE accepts only a diagnostic code");
     }
-    let file = match (file, diagnostic_explain.is_some()) {
-        (Some(file), _) => file,
-        (None, true) => PathBuf::new(),
-        (None, false) => return Err(anyhow!("missing workflow file\n{}", usage())),
+    if stdin_path.is_some() && !stdin {
+        bail!("--path requires --stdin or -");
+    }
+    if stdin && (file.is_some() || !extra_files.is_empty()) {
+        bail!("--stdin cannot be combined with a workflow file");
+    }
+    let file = if stdin {
+        stdin_path.unwrap_or_else(|| PathBuf::from("<stdin>"))
+    } else {
+        match (file, diagnostic_explain.is_some()) {
+            (Some(file), _) => file,
+            (None, true) => PathBuf::new(),
+            (None, false) => return Err(anyhow!("missing workflow file\n{}", usage())),
+        }
     };
-    if fix && file.to_str() == Some("/dev/stdin") {
+    if fix && (stdin || file.to_str() == Some("/dev/stdin")) {
         bail!(
             "--fix writes the program file back, so it cannot read the program from standard input"
         );
@@ -665,6 +698,8 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         diagnostic_explain,
         deny_warnings,
         fix,
+        stdin,
+        stdin_source: None,
         resolve,
         explain_version,
         allow,
@@ -678,6 +713,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         github,
         command,
         file,
+        extra_files,
         manifest_dir,
         manifest_catalog,
         capability_policy,

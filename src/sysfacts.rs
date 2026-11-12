@@ -16,14 +16,26 @@ use serde::{Deserialize, Serialize};
 const SYSFS_ATTR_LIMIT: u64 = 4 * 1024;
 /// Largest `/proc/cpuinfo` read. Each logical CPU adds a few KiB, so this is generous.
 const CPUINFO_LIMIT: u64 = 8 * 1024 * 1024;
+/// Most entries read from one listing (`power_supply`, `drm`). Real machines have a handful.
+const MAX_LISTED: usize = 1024;
 
-/// The first slice of machine facts.
+/// Machine facts. The first four fields are the first slice; the rest were
+/// added later and default to empty when absent from older serialised data.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Facts {
     pub dmi: Dmi,
     pub cpu: Cpu,
     pub power: Power,
     pub pci_display: Vec<PciDevice>,
+    /// Every entry under `sys/class/power_supply`, sorted by name.
+    #[serde(default)]
+    pub power_supplies: Vec<PowerSupply>,
+    /// Every `cardN-CONNECTOR` entry under `sys/class/drm`, sorted by name.
+    #[serde(default)]
+    pub drm_outputs: Vec<DrmOutput>,
+    /// Hypervisor evidence from DMI and `sys/hypervisor/type`.
+    #[serde(default)]
+    pub virtualization: Virtualization,
 }
 
 /// Identity from `sys/class/dmi/id`.
@@ -142,6 +154,11 @@ pub struct Cpu {
     pub logical_count: Option<u32>,
     /// x86 `flags`, or arm64 `Features`, split on whitespace.
     pub flags: Option<BTreeSet<String>>,
+    /// The vendor name for an arm64 implementer code published by Arm (`0x41`
+    /// is `Arm`). A hex code not in the table stays the raw code. `None` when
+    /// `vendor` is not a hex code (x86).
+    #[serde(default)]
+    pub implementer: Option<String>,
 }
 
 /// Battery and lid, from the power supply and ACPI button trees.
@@ -171,20 +188,323 @@ pub struct PciDevice {
     pub device_id: Option<String>,
 }
 
+/// One entry under `sys/class/power_supply`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PowerSupply {
+    /// Directory name, e.g. `BAT0` or `AC`.
+    pub name: String,
+    /// The `type` attribute as read, e.g. `Battery`.
+    pub supply_type: Option<String>,
+    /// `supply_type` when it is a type the kernel documents. Other text is `None`.
+    pub kind: Option<SupplyKind>,
+    /// Battery only: the `status` attribute when it is a documented state.
+    pub status: Option<BatteryStatus>,
+    /// Battery only: the `capacity` attribute, 0 to 100. Anything else (a sign,
+    /// a fraction, a value over 100) is absent, not clamped.
+    pub capacity: Option<u8>,
+    /// Battery only: the `present` attribute, `1` true and `0` false.
+    pub present: Option<bool>,
+}
+
+/// Power supply types from the kernel's `power_supply` sysfs ABI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupplyKind {
+    Unknown,
+    Battery,
+    Ups,
+    Mains,
+    Usb,
+    UsbDcp,
+    UsbCdp,
+    UsbAca,
+    UsbC,
+    UsbPd,
+    UsbPdDrp,
+    BrickId,
+    Wireless,
+}
+
+impl SupplyKind {
+    /// Maps the kernel's type name (case-sensitive, as the kernel writes it).
+    pub fn from_name(name: &str) -> Option<Self> {
+        use SupplyKind::*;
+        Some(match name {
+            "Unknown" => Unknown,
+            "Battery" => Battery,
+            "UPS" => Ups,
+            "Mains" => Mains,
+            "USB" => Usb,
+            "USB_DCP" => UsbDcp,
+            "USB_CDP" => UsbCdp,
+            "USB_ACA" => UsbAca,
+            "USB_C" => UsbC,
+            "USB_PD" => UsbPd,
+            "USB_PD_DRP" => UsbPdDrp,
+            "BrickID" => BrickId,
+            "Wireless" => Wireless,
+            _ => return None,
+        })
+    }
+}
+
+/// Battery `status` values from the kernel's `power_supply` sysfs ABI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatteryStatus {
+    Unknown,
+    Charging,
+    Discharging,
+    NotCharging,
+    Full,
+}
+
+impl BatteryStatus {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Unknown" => Self::Unknown,
+            "Charging" => Self::Charging,
+            "Discharging" => Self::Discharging,
+            "Not charging" => Self::NotCharging,
+            "Full" => Self::Full,
+            _ => return None,
+        })
+    }
+}
+
+/// One `cardN-CONNECTOR` entry under `sys/class/drm`, such as `card0-eDP-1`.
+/// The card and render nodes are not outputs and are not listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrmOutput {
+    /// Directory name, e.g. `card0-eDP-1`.
+    pub name: String,
+    /// The connector part, e.g. `eDP-1` or `HDMI-A-1`.
+    pub connector: String,
+    /// The `status` attribute.
+    pub status: Option<DrmStatus>,
+    /// The `enabled` attribute: `enabled` true, `disabled` false, else absent.
+    pub enabled: Option<bool>,
+}
+
+/// Connector `status` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrmStatus {
+    Connected,
+    Disconnected,
+    Unknown,
+}
+
+impl DrmStatus {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "connected" => Self::Connected,
+            "disconnected" => Self::Disconnected,
+            "unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
+}
+
+/// Virtual machine hint from files only. Nothing is executed, so this never
+/// asks `systemd-detect-virt`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Virtualization {
+    /// The hypervisor name from the identifier table, for the first match.
+    pub hypervisor: Option<String>,
+    /// `sys/hypervisor/type` as read (Xen sets it; it also appears on a Xen host).
+    pub hypervisor_type: Option<String>,
+    /// Each piece of evidence, e.g. `sys_vendor contains "QEMU"`.
+    pub evidence: Vec<String>,
+    /// `Some(true)` with any evidence. `Some(false)` when DMI identity was
+    /// read, matched nothing and `sys/hypervisor/type` is absent. `None` when
+    /// there is no DMI identity and no hypervisor file. The table is not
+    /// exhaustive, so `Some(false)` does not prove bare metal.
+    pub likely_virtual: Option<bool>,
+}
+
+/// Well-known hypervisor identifiers: (DMI field, identifier, hypervisor name).
+/// An identifier matches when the field contains it, ignoring ASCII case. The
+/// list is short and not exhaustive; a hypervisor not listed gives no DMI evidence.
+const HYPERVISOR_IDENTIFIERS: &[(&str, &str, &str)] = &[
+    ("sys_vendor", "QEMU", "QEMU"),
+    ("sys_vendor", "VMware", "VMware"),
+    ("product_name", "VMware Virtual Platform", "VMware"),
+    ("sys_vendor", "innotek GmbH", "VirtualBox"),
+    ("product_name", "VirtualBox", "VirtualBox"),
+    ("product_name", "Virtual Machine", "Hyper-V"),
+    ("sys_vendor", "Xen", "Xen"),
+    ("sys_vendor", "Parallels", "Parallels"),
+    ("sys_vendor", "Bochs", "Bochs"),
+    ("sys_vendor", "Amazon EC2", "Amazon EC2"),
+    (
+        "product_name",
+        "Google Compute Engine",
+        "Google Compute Engine",
+    ),
+];
+
 /// Reads every fact below `root`. Facts that cannot be read are `None` (or an
 /// empty list). If `root` does not exist, every fact is absent.
 pub fn facts(root: &Path) -> Facts {
     let Ok(root) = fs::canonicalize(root) else {
         return Facts::default();
     };
+    let dmi = dmi(&root);
+    let virtualization = virtualization(&root, &dmi);
     Facts {
-        dmi: dmi(&root),
+        dmi,
         cpu: cpu(&root),
         power: Power {
             battery: battery(&root),
             lid: lid(&root),
         },
         pci_display: pci_display(&root),
+        power_supplies: power_supplies(&root),
+        drm_outputs: drm_outputs(&root),
+        virtualization,
+    }
+}
+
+fn power_supplies(root: &Path) -> Vec<PowerSupply> {
+    let Some(dir) = join_checked(root, &["sys", "class", "power_supply"]) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut supplies: Vec<PowerSupply> = entries
+        .take(MAX_LISTED)
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let base = entry.path();
+            let supply_type = attr_at(root, &base.join("type"));
+            let kind = supply_type.as_deref().and_then(SupplyKind::from_name);
+            let is_battery = kind == Some(SupplyKind::Battery);
+            Some(PowerSupply {
+                name,
+                supply_type,
+                kind,
+                status: is_battery
+                    .then(|| attr_at(root, &base.join("status")))
+                    .flatten()
+                    .and_then(|text| BatteryStatus::from_name(&text)),
+                capacity: is_battery
+                    .then(|| attr_at(root, &base.join("capacity")))
+                    .flatten()
+                    .and_then(|text| parse_capacity(&text)),
+                present: is_battery
+                    .then(|| attr_at(root, &base.join("present")))
+                    .flatten()
+                    .and_then(|text| parse_flag(&text)),
+            })
+        })
+        .collect();
+    supplies.sort_by(|a, b| a.name.cmp(&b.name));
+    supplies
+}
+
+/// Parses a battery capacity: one to three ASCII digits, at most 100.
+fn parse_capacity(text: &str) -> Option<u8> {
+    if text.is_empty() || text.len() > 3 || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse::<u8>().ok().filter(|value| *value <= 100)
+}
+
+/// Parses a sysfs boolean flag: `1` is true, `0` is false, anything else absent.
+fn parse_flag(text: &str) -> Option<bool> {
+    match text {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn drm_outputs(root: &Path) -> Vec<DrmOutput> {
+    let Some(dir) = join_checked(root, &["sys", "class", "drm"]) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut outputs: Vec<DrmOutput> = entries
+        .take(MAX_LISTED)
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let connector = drm_connector(&name)?.to_owned();
+            let base = entry.path();
+            Some(DrmOutput {
+                status: attr_at(root, &base.join("status"))
+                    .and_then(|text| DrmStatus::from_name(&text)),
+                enabled: attr_at(root, &base.join("enabled")).and_then(|text| {
+                    match text.as_str() {
+                        "enabled" => Some(true),
+                        "disabled" => Some(false),
+                        _ => None,
+                    }
+                }),
+                connector,
+                name,
+            })
+        })
+        .collect();
+    outputs.sort_by(|a, b| a.name.cmp(&b.name));
+    outputs
+}
+
+/// The connector part of a `cardN-CONNECTOR` name. Any other name (`card0`,
+/// `renderD128`, `version`) gives `None`.
+fn drm_connector(name: &str) -> Option<&str> {
+    let (digits, connector) = name.strip_prefix("card")?.split_once('-')?;
+    let numbered = !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit());
+    (numbered && !connector.is_empty()).then_some(connector)
+}
+
+fn virtualization(root: &Path, dmi: &Dmi) -> Virtualization {
+    let mut evidence = Vec::new();
+    let mut hypervisor = None;
+    let identity = [
+        ("sys_vendor", dmi.sys_vendor.as_deref()),
+        ("product_name", dmi.product_name.as_deref()),
+    ];
+    for (field, value) in identity {
+        let Some(value) = value else {
+            continue;
+        };
+        for (_, identifier, name) in HYPERVISOR_IDENTIFIERS
+            .iter()
+            .filter(|(entry_field, _, _)| *entry_field == field)
+        {
+            if value
+                .to_ascii_lowercase()
+                .contains(&identifier.to_ascii_lowercase())
+            {
+                evidence.push(format!("{field} contains \"{identifier}\""));
+                if hypervisor.is_none() {
+                    hypervisor = Some((*name).to_owned());
+                }
+            }
+        }
+    }
+    let hypervisor_type = attr(root, &["sys", "hypervisor", "type"]);
+    if let Some(text) = &hypervisor_type {
+        evidence.push(format!("sys/hypervisor/type is \"{text}\""));
+    }
+    let likely_virtual = if !evidence.is_empty() {
+        Some(true)
+    } else if dmi.sys_vendor.is_some() || dmi.product_name.is_some() {
+        Some(false)
+    } else {
+        None
+    };
+    Virtualization {
+        hypervisor,
+        hypervisor_type,
+        evidence,
+        likely_virtual,
     }
 }
 
@@ -231,7 +551,35 @@ fn parse_cpuinfo(text: &str) -> Cpu {
         }
     }
     cpu.logical_count = Some(processors);
+    cpu.implementer = implementer(cpu.vendor.as_deref());
     cpu
+}
+
+/// Names an arm64 implementer code. Only codes Arm publishes in the MIDR
+/// implementer table are listed; others are left to the caller as raw codes.
+fn implementer(vendor: Option<&str>) -> Option<String> {
+    let raw = vendor?;
+    let code = parse_hex(raw)?;
+    let name = match code {
+        0x41 => "Arm",
+        0x42 => "Broadcom",
+        0x43 => "Cavium",
+        0x44 => "Digital Equipment Corporation",
+        0x46 => "Fujitsu",
+        0x48 => "HiSilicon",
+        0x49 => "Infineon",
+        0x4e => "NVIDIA",
+        0x50 => "Applied Micro",
+        0x51 => "Qualcomm",
+        0x53 => "Samsung",
+        0x56 => "Marvell",
+        0x61 => "Apple",
+        0x66 => "Faraday",
+        0x69 => "Intel",
+        0xc0 => "Ampere",
+        _ => return Some(raw.to_owned()),
+    };
+    Some(name.to_owned())
 }
 
 fn keep_first(slot: &mut Option<String>, value: &str) {

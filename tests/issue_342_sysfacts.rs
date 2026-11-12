@@ -7,7 +7,9 @@
 use std::fs;
 use std::path::Path;
 
-use flow::sysfacts::{facts, ChassisKind, Facts};
+use flow::sysfacts::{
+    facts, BatteryStatus, ChassisKind, DrmStatus, Facts, SupplyKind, Virtualization,
+};
 
 fn write(root: &Path, rel: &str, text: &str) {
     let path = root.join(rel);
@@ -27,6 +29,24 @@ fn pci(root: &Path, slot: &str, class: &str, vendor: &str, device: &str) {
     write(root, &format!("{base}/device"), &format!("{device}\n"));
 }
 
+/// A battery under `sys/class/power_supply/<name>` with the given attributes.
+fn battery(root: &Path, name: &str, status: &str, capacity: &str, present: &str) {
+    let base = format!("sys/class/power_supply/{name}");
+    write(root, &format!("{base}/type"), "Battery\n");
+    write(root, &format!("{base}/status"), &format!("{status}\n"));
+    write(root, &format!("{base}/capacity"), &format!("{capacity}\n"));
+    write(root, &format!("{base}/present"), &format!("{present}\n"));
+}
+
+/// A DRM connector directory such as `card0-eDP-1`.
+fn connector(root: &Path, name: &str, status: &str, enabled: Option<&str>) {
+    let base = format!("sys/class/drm/{name}");
+    write(root, &format!("{base}/status"), &format!("{status}\n"));
+    if let Some(enabled) = enabled {
+        write(root, &format!("{base}/enabled"), &format!("{enabled}\n"));
+    }
+}
+
 /// Hybrid laptop: Intel iGPU and NVIDIA dGPU, an audio device that must be
 /// ignored, one battery and an AC adapter, and an ACPI lid.
 fn laptop(root: &Path) {
@@ -43,7 +63,7 @@ fn laptop(root: &Path) {
     );
 
     write(root, "sys/class/power_supply/AC/type", "Mains\n");
-    write(root, "sys/class/power_supply/BAT0/type", "Battery\n");
+    battery(root, "BAT0", "Discharging", "87", "1");
 
     write(
         root,
@@ -54,6 +74,14 @@ fn laptop(root: &Path) {
     pci(root, "0000-00-02.0", "0x030000", "0x8086", "0x9a49");
     pci(root, "0000-01-00.0", "0x030200", "0x10de", "0x25a2");
     pci(root, "0000-00-1f.3", "0x040300", "0x8086", "0x51ca");
+
+    // The panel is connected and enabled; the HDMI port is idle and disabled.
+    connector(root, "card0-eDP-1", "connected", Some("enabled"));
+    connector(root, "card0-HDMI-A-1", "disconnected", Some("disabled"));
+    // Card and render nodes are not outputs and must not be listed.
+    write(root, "sys/class/drm/card0/dev", "226:0\n");
+    write(root, "sys/class/drm/renderD128/dev", "226:128\n");
+    write(root, "sys/class/drm/version", "i915\n");
 }
 
 /// Desktop with an AMD GPU and a mains supply but no battery and no lid.
@@ -65,6 +93,8 @@ fn desktop(root: &Path) {
     write(root, "sys/class/power_supply/AC/type", "Mains\n");
 
     pci(root, "0000-03-00.0", "0x030000", "0x1002", "0x73df");
+
+    connector(root, "card1-DP-1", "connected", Some("enabled"));
 }
 
 /// QEMU guest: a virtual VGA device the reader must report by id only.
@@ -74,6 +104,23 @@ fn vm(root: &Path) {
     dmi(root, "chassis_type", "1\n");
 
     pci(root, "0000-00-01.0", "0x030000", "0x1234", "0x1111");
+    connector(root, "card0-Virtual-1", "unknown", None);
+}
+
+/// Laptop with two batteries (one charging, one full and absent) and an
+/// external DisplayPort monitor beside the built-in panel.
+fn two_batteries_and_external_display(root: &Path) {
+    dmi(root, "sys_vendor", "Framework\n");
+    dmi(root, "product_name", "Laptop 16\n");
+    dmi(root, "chassis_type", "10\n");
+
+    write(root, "sys/class/power_supply/AC/type", "Mains\n");
+    battery(root, "BAT0", "Charging", "45", "1");
+    battery(root, "BAT1", "Full", "100", "0");
+
+    connector(root, "card1-DP-2", "connected", Some("enabled"));
+    connector(root, "card0-eDP-1", "connected", Some("enabled"));
+    connector(root, "card1-HDMI-A-1", "disconnected", None);
 }
 
 #[test]
@@ -172,6 +219,7 @@ fn arm64_cpuinfo_uses_arm_field_names() {
     assert_eq!(f.cpu.vendor.as_deref(), Some("0x41"));
     assert_eq!(f.cpu.cpu_part.as_deref(), Some("0xd0c"));
     assert_eq!(f.cpu.model_name, None, "arm64 cpuinfo has no model name");
+    assert_eq!(f.cpu.implementer.as_deref(), Some("Arm"));
     assert_eq!(f.cpu.logical_count, Some(2));
     let flags = f.cpu.flags.expect("Features read as flags");
     assert!(flags.contains("asimdhp"));
@@ -273,4 +321,306 @@ fn symlink_that_stays_inside_the_root_is_followed() {
     let f = facts(dir.path());
     assert_eq!(f.pci_display.len(), 1);
     assert_eq!(f.pci_display[0].vendor_name.as_deref(), Some("Intel"));
+}
+
+#[test]
+fn laptop_lists_batteries_and_drm_connectors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    laptop(dir.path());
+    let f = facts(dir.path());
+
+    let names: Vec<&str> = f.power_supplies.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["AC", "BAT0"]);
+    let ac = &f.power_supplies[0];
+    assert_eq!(ac.kind, Some(SupplyKind::Mains));
+    assert_eq!(ac.status, None, "battery fields only for batteries");
+    let bat = &f.power_supplies[1];
+    assert_eq!(bat.supply_type.as_deref(), Some("Battery"));
+    assert_eq!(bat.kind, Some(SupplyKind::Battery));
+    assert_eq!(bat.status, Some(BatteryStatus::Discharging));
+    assert_eq!(bat.capacity, Some(87));
+    assert_eq!(bat.present, Some(true));
+
+    let outputs: Vec<&str> = f.drm_outputs.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(outputs, ["card0-HDMI-A-1", "card0-eDP-1"]);
+    let hdmi = &f.drm_outputs[0];
+    assert_eq!(hdmi.connector, "HDMI-A-1");
+    assert_eq!(hdmi.status, Some(DrmStatus::Disconnected));
+    assert_eq!(hdmi.enabled, Some(false));
+    let panel = &f.drm_outputs[1];
+    assert_eq!(panel.connector, "eDP-1");
+    assert_eq!(panel.status, Some(DrmStatus::Connected));
+    assert_eq!(panel.enabled, Some(true));
+
+    assert_eq!(f.virtualization.likely_virtual, Some(false));
+    assert_eq!(f.virtualization.hypervisor, None);
+    assert!(f.virtualization.evidence.is_empty());
+}
+
+#[test]
+fn desktop_lists_mains_and_one_display() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    desktop(dir.path());
+    let f = facts(dir.path());
+
+    assert_eq!(f.power_supplies.len(), 1);
+    assert_eq!(f.power_supplies[0].kind, Some(SupplyKind::Mains));
+    assert_eq!(f.drm_outputs.len(), 1);
+    assert_eq!(f.drm_outputs[0].name, "card1-DP-1");
+    assert_eq!(f.drm_outputs[0].connector, "DP-1");
+    assert_eq!(f.drm_outputs[0].status, Some(DrmStatus::Connected));
+    assert_eq!(f.drm_outputs[0].enabled, Some(true));
+    assert_eq!(f.virtualization.likely_virtual, Some(false));
+}
+
+#[test]
+fn virtual_machine_reports_hypervisor_and_evidence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    vm(dir.path());
+    let f = facts(dir.path());
+
+    assert_eq!(
+        f.virtualization,
+        Virtualization {
+            hypervisor: Some("QEMU".to_owned()),
+            hypervisor_type: None,
+            evidence: vec!["sys_vendor contains \"QEMU\"".to_owned()],
+            likely_virtual: Some(true),
+        }
+    );
+    assert_eq!(f.drm_outputs.len(), 1);
+    assert_eq!(f.drm_outputs[0].status, Some(DrmStatus::Unknown));
+    assert_eq!(f.drm_outputs[0].enabled, None, "no enabled attribute");
+}
+
+#[test]
+fn two_batteries_and_external_display_report() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    two_batteries_and_external_display(dir.path());
+    let f = facts(dir.path());
+
+    let names: Vec<&str> = f.power_supplies.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["AC", "BAT0", "BAT1"]);
+    assert_eq!(f.power_supplies[1].status, Some(BatteryStatus::Charging));
+    assert_eq!(f.power_supplies[1].capacity, Some(45));
+    assert_eq!(f.power_supplies[1].present, Some(true));
+    assert_eq!(f.power_supplies[2].status, Some(BatteryStatus::Full));
+    assert_eq!(f.power_supplies[2].capacity, Some(100));
+    assert_eq!(f.power_supplies[2].present, Some(false));
+
+    let outputs: Vec<(&str, &str)> = f
+        .drm_outputs
+        .iter()
+        .map(|o| (o.name.as_str(), o.connector.as_str()))
+        .collect();
+    assert_eq!(
+        outputs,
+        [
+            ("card0-eDP-1", "eDP-1"),
+            ("card1-DP-2", "DP-2"),
+            ("card1-HDMI-A-1", "HDMI-A-1"),
+        ]
+    );
+    assert_eq!(f.drm_outputs[1].status, Some(DrmStatus::Connected));
+    assert_eq!(f.drm_outputs[2].status, Some(DrmStatus::Disconnected));
+    assert_eq!(f.drm_outputs[2].enabled, None, "no enabled attribute");
+    assert_eq!(f.virtualization.likely_virtual, Some(false));
+}
+
+#[test]
+fn malformed_power_and_drm_values_are_absent_not_clamped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    battery(dir.path(), "BAT0", "Empty", "101", "yes");
+    battery(dir.path(), "BAT1", "Full", "-5", "1");
+    battery(dir.path(), "BAT2", "Charging", "50.0", "0");
+    battery(dir.path(), "BAT3", "Discharging", " 50", "1");
+    battery(dir.path(), "BAT4", "Full", "0", "1");
+    battery(dir.path(), "BAT5", "Full", "100", "1");
+    write(dir.path(), "sys/class/power_supply/WEIRD/type", "Gadget\n");
+    connector(dir.path(), "card0-DP-1", "sleeping", Some("maybe"));
+
+    let f = facts(dir.path());
+    let by_name = |name: &str| {
+        f.power_supplies
+            .iter()
+            .find(|s| s.name == name)
+            .expect("supply listed")
+    };
+    let bad = by_name("BAT0");
+    assert_eq!(bad.status, None, "Empty is not a documented state");
+    assert_eq!(
+        bad.capacity, None,
+        "101 is out of range, not clamped to 100"
+    );
+    assert_eq!(bad.present, None, "yes is not a flag");
+    assert_eq!(by_name("BAT1").capacity, None, "negative capacity");
+    assert_eq!(by_name("BAT2").capacity, None, "fraction");
+    assert_eq!(by_name("BAT3").capacity, None, "surrounding space");
+    assert_eq!(by_name("BAT2").present, Some(false));
+    assert_eq!(by_name("BAT4").capacity, Some(0), "zero is in range");
+    assert_eq!(by_name("BAT5").capacity, Some(100), "100 is in range");
+
+    let weird = by_name("WEIRD");
+    assert_eq!(weird.supply_type.as_deref(), Some("Gadget"));
+    assert_eq!(weird.kind, None, "undocumented type has no kind");
+    assert_eq!(weird.capacity, None, "battery fields need a Battery type");
+
+    assert_eq!(f.drm_outputs.len(), 1);
+    assert_eq!(f.drm_outputs[0].status, None, "sleeping is not a status");
+    assert_eq!(f.drm_outputs[0].enabled, None, "maybe is not enabled");
+}
+
+#[test]
+fn power_supply_kinds_follow_the_kernel_names() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (name, kind) in [
+        ("USB0", "USB"),
+        ("USBC0", "USB_C"),
+        ("PD0", "USB_PD_DRP"),
+        ("UPS0", "UPS"),
+    ] {
+        write(
+            dir.path(),
+            &format!("sys/class/power_supply/{name}/type"),
+            &format!("{kind}\n"),
+        );
+    }
+    let f = facts(dir.path());
+    let kind_of = |name: &str| {
+        f.power_supplies
+            .iter()
+            .find(|s| s.name == name)
+            .and_then(|s| s.kind)
+    };
+    assert_eq!(kind_of("USB0"), Some(SupplyKind::Usb));
+    assert_eq!(kind_of("USBC0"), Some(SupplyKind::UsbC));
+    assert_eq!(kind_of("PD0"), Some(SupplyKind::UsbPdDrp));
+    assert_eq!(kind_of("UPS0"), Some(SupplyKind::Ups));
+}
+
+#[test]
+fn hypervisor_table_and_xen_hint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    dmi(dir.path(), "sys_vendor", "Microsoft Corporation\n");
+    dmi(dir.path(), "product_name", "Surface Laptop 5\n");
+    let f = facts(dir.path());
+    assert_eq!(
+        f.virtualization.likely_virtual,
+        Some(false),
+        "vendor name alone must not match Hyper-V"
+    );
+
+    let hyperv = tempfile::tempdir().expect("tempdir");
+    dmi(hyperv.path(), "sys_vendor", "Microsoft Corporation\n");
+    dmi(hyperv.path(), "product_name", "Virtual Machine\n");
+    let f = facts(hyperv.path());
+    assert_eq!(f.virtualization.hypervisor.as_deref(), Some("Hyper-V"));
+    assert_eq!(f.virtualization.likely_virtual, Some(true));
+
+    let vbox = tempfile::tempdir().expect("tempdir");
+    dmi(vbox.path(), "sys_vendor", "innotek GmbH\n");
+    dmi(vbox.path(), "product_name", "VirtualBox\n");
+    let f = facts(vbox.path());
+    assert_eq!(f.virtualization.hypervisor.as_deref(), Some("VirtualBox"));
+    assert_eq!(
+        f.virtualization.evidence,
+        [
+            "sys_vendor contains \"innotek GmbH\"",
+            "product_name contains \"VirtualBox\"",
+        ]
+    );
+
+    let xen = tempfile::tempdir().expect("tempdir");
+    write(xen.path(), "sys/hypervisor/type", "xen\n");
+    let f = facts(xen.path());
+    assert_eq!(f.dmi, Default::default(), "no DMI, so only the hint");
+    assert_eq!(f.virtualization.hypervisor, None);
+    assert_eq!(f.virtualization.hypervisor_type.as_deref(), Some("xen"));
+    assert_eq!(f.virtualization.likely_virtual, Some(true));
+}
+
+#[test]
+fn no_identity_and_no_hint_is_unknown_not_false() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), "proc/cpuinfo", "processor\t: 0\n");
+    let f = facts(dir.path());
+    assert_eq!(f.virtualization, Virtualization::default());
+    assert_eq!(f.virtualization.likely_virtual, None);
+}
+
+#[test]
+fn unknown_arm_implementer_stays_raw_and_x86_has_none() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "proc/cpuinfo",
+        "processor\t: 0\nCPU implementer\t: 0x99\nCPU part\t: 0x001\n",
+    );
+    let f = facts(dir.path());
+    assert_eq!(f.cpu.vendor.as_deref(), Some("0x99"));
+    assert_eq!(f.cpu.implementer.as_deref(), Some("0x99"));
+
+    let x86 = tempfile::tempdir().expect("tempdir");
+    write(
+        x86.path(),
+        "proc/cpuinfo",
+        "processor\t: 0\nvendor_id\t: AuthenticAMD\n",
+    );
+    let f = facts(x86.path());
+    assert_eq!(f.cpu.vendor.as_deref(), Some("AuthenticAMD"));
+    assert_eq!(f.cpu.implementer, None);
+}
+
+#[test]
+fn first_slice_field_names_survive_serialisation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    laptop(dir.path());
+    let f = facts(dir.path());
+    let value = serde_json::to_value(&f).expect("serialise");
+
+    for key in ["dmi", "cpu", "power", "pci_display"] {
+        assert!(value.get(key).is_some(), "top-level field {key} kept");
+    }
+    for key in [
+        "sys_vendor",
+        "product_name",
+        "product_version",
+        "board_name",
+        "chassis_type",
+        "chassis_kind",
+    ] {
+        assert!(value["dmi"].get(key).is_some(), "dmi.{key} kept");
+    }
+    for key in ["vendor", "model_name", "cpu_part", "logical_count", "flags"] {
+        assert!(value["cpu"].get(key).is_some(), "cpu.{key} kept");
+    }
+    assert_eq!(value["power"]["battery"], true);
+    assert_eq!(value["power"]["lid"], true);
+    for key in ["slot", "class", "vendor_id", "vendor_name", "device_id"] {
+        assert!(value["pci_display"][0].get(key).is_some(), "pci.{key} kept");
+    }
+    assert_eq!(value["power_supplies"][1]["capacity"], 87);
+    assert_eq!(value["drm_outputs"][1]["status"], "connected");
+    assert_eq!(value["virtualization"]["likely_virtual"], false);
+
+    let back: Facts = serde_json::from_value(value).expect("deserialise");
+    assert_eq!(back, f);
+}
+
+#[test]
+fn first_slice_json_without_new_fields_still_reads() {
+    let old = serde_json::json!({
+        "dmi": {"sys_vendor": "LENOVO", "product_name": null, "product_version": null,
+                "board_name": null, "chassis_type": 10, "chassis_kind": "notebook"},
+        "cpu": {"vendor": "GenuineIntel", "model_name": null, "cpu_part": null,
+                "logical_count": 2, "flags": null},
+        "power": {"battery": true, "lid": null},
+        "pci_display": []
+    });
+    let f: Facts = serde_json::from_value(old).expect("old shape still reads");
+    assert_eq!(f.dmi.sys_vendor.as_deref(), Some("LENOVO"));
+    assert_eq!(f.cpu.implementer, None);
+    assert!(f.power_supplies.is_empty());
+    assert!(f.drm_outputs.is_empty());
+    assert_eq!(f.virtualization, Virtualization::default());
 }

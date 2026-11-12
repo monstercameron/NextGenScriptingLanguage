@@ -1299,6 +1299,48 @@ pub mod arch {
     }
 }
 
+/// Parses an `*.packages` set file (#328): one Arch package name per line, with `#` comment
+/// lines and blank lines dropped and file order kept. Every name goes through the Arch validator,
+/// so a malformed line refuses the whole file with [`PackagesError::InvalidSpec`].
+pub fn parse_package_set(input: &str) -> Result<Vec<arch::PackageSpec>, PackagesError> {
+    input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(arch::PackageSpec::parse)
+        .collect()
+}
+
+/// The difference between a desired package set and the installed names (#328).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetDelta {
+    /// Desired names that are not installed, in set-file order, each listed once.
+    pub install: Vec<String>,
+    /// Installed names the set does not list, sorted. Act on these only when the caller has
+    /// asked for extra packages to be removed.
+    pub remove: Vec<String>,
+}
+
+/// Computes what applying `desired` would change, given the `installed` names. Nothing is
+/// spawned and no version is compared: a name counts as present when it is installed at all.
+pub fn set_delta(desired: &[arch::PackageSpec], installed: &[&str]) -> SetDelta {
+    let installed: std::collections::BTreeSet<&str> = installed.iter().copied().collect();
+    let mut wanted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut install = Vec::new();
+    for spec in desired {
+        let name = spec.name();
+        if wanted.insert(name) && !installed.contains(name) {
+            install.push(name.to_string());
+        }
+    }
+    let remove = installed
+        .iter()
+        .filter(|name| !wanted.contains(*name))
+        .map(|name| name.to_string())
+        .collect();
+    SetDelta { install, remove }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

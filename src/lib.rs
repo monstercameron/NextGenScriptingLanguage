@@ -11,6 +11,8 @@ pub mod bundled_manifests;
 mod bytes;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capabilities;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod compare;
 #[cfg(feature = "tooling")]
 pub mod compile_sh;
 pub mod contracts;
@@ -25,6 +27,10 @@ pub mod diagnostics;
 pub mod discovery;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doctor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod env_export;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod event_source;
 #[cfg(feature = "failpoints")]
 pub(crate) mod failpoint;
 pub mod format;
@@ -32,6 +38,8 @@ pub mod github_actions;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(feature = "graph")]
 pub mod graph;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gsettings_value;
 pub mod home;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hypr_ipc;
@@ -41,6 +49,8 @@ pub mod inputs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lua_config;
 pub mod manifest;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod merge3;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod migrate_scan;
 pub(crate) mod model_schema;

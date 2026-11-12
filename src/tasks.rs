@@ -21,18 +21,32 @@ use std::sync::{Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+/// A callback run on every explicit cancellation of a task group.
+pub(crate) type CancelHook = Arc<dyn Fn() + Send + Sync>;
+
 /// A one-shot wake descriptor shared by a task group and its native children.
 /// Unix supervisors poll this beside their pipes and child-exit handles, so an
 /// idle group sleeps until output, process exit, or cancellation is ready.
-#[derive(Debug)]
+/// Blocking waiters that sleep on their own condition variable register a
+/// [`CancelHook`] so an explicit cancellation wakes them as well.
 pub(crate) struct CancellationWake {
     notified: AtomicBool,
+    hooks: Mutex<Vec<CancelHook>>,
     #[cfg(unix)]
     reader: std::os::unix::net::UnixStream,
     #[cfg(unix)]
     writer: Mutex<std::os::unix::net::UnixStream>,
     #[cfg(unix)]
     writer_fd: RawFd,
+}
+
+impl std::fmt::Debug for CancellationWake {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CancellationWake")
+            .field("notified", &self.notified.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
 }
 
 impl CancellationWake {
@@ -45,6 +59,7 @@ impl CancellationWake {
             let writer_fd = writer.as_raw_fd();
             Ok(Self {
                 notified: AtomicBool::new(false),
+                hooks: Mutex::new(Vec::new()),
                 reader,
                 writer: Mutex::new(writer),
                 writer_fd,
@@ -54,6 +69,7 @@ impl CancellationWake {
         {
             Ok(Self {
                 notified: AtomicBool::new(false),
+                hooks: Mutex::new(Vec::new()),
             })
         }
     }
@@ -65,6 +81,24 @@ impl CancellationWake {
                 let _ = writer.write(&[1]);
             }
         }
+    }
+
+    /// Register a hook that runs on every [`CancellationWake::cancel_all`].
+    pub(crate) fn on_cancel(&self, hook: CancelHook) {
+        let mut hooks = self.hooks.lock().unwrap_or_else(|e| e.into_inner());
+        hooks.push(hook);
+    }
+
+    /// Wake every waiter for an explicit cancellation. The caller must store the
+    /// cancellation flag before calling this, and must not hold any lock that a
+    /// hook takes. A waiter that re-checks the flag under its own lock then either
+    /// sees it, or is already blocked when its hook notifies.
+    pub(crate) fn cancel_all(&self) {
+        let hooks = self.hooks.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        for hook in &hooks {
+            hook();
+        }
+        self.notify();
     }
 
     /// Signal-handler variant: this uses only lock-free atomics and `write(2)`.
@@ -141,10 +175,85 @@ impl CancellationToken {
         Arc::clone(&self.cancelled)
     }
 
+    /// Set the shared cancellation flag and wake every registered waiter. Prefer
+    /// this over storing into [`CancellationToken::cancellation_flag`] directly,
+    /// which does not wake blocked waiters.
+    #[cfg_attr(not(feature = "graph"), allow(dead_code))]
+    pub(crate) fn request_cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.wake.cancel_all();
+    }
+
+    /// Run `hook` on every [`CancellationToken::request_cancel`] and on the
+    /// scope's cancellation. Blocking waiters use this to notify their condition
+    /// variable under the lock they re-check the flag with.
+    #[cfg_attr(not(feature = "graph"), allow(dead_code))]
+    pub(crate) fn on_cancel(&self, hook: CancelHook) {
+        self.wake.on_cancel(hook);
+    }
+
     /// Shared event descriptor used by native supervisors to wake on group
     /// cancellation without periodic polling.
     pub(crate) fn cancellation_wake(&self) -> Arc<CancellationWake> {
         Arc::clone(&self.wake)
+    }
+}
+
+/// An event count a waiter can block on, so one wait can cover several sources
+/// (worker exits, queue pushes and closes, cancellation) without a timed poll.
+///
+/// Every state change that could satisfy a waiter's predicate calls `notify`.
+/// A waiter reads `epoch` before it checks its predicate, then calls
+/// `wait_past` with that value. A change after the read moves the epoch, so
+/// the wait returns at once: no wake-up can be lost between check and wait.
+#[derive(Default)]
+pub(crate) struct ScopeSignal {
+    epoch: Mutex<u64>,
+    changed: Condvar,
+    #[cfg(test)]
+    wakeups: AtomicUsize,
+}
+
+impl ScopeSignal {
+    /// The current event count. Read it before checking the predicate.
+    #[cfg_attr(not(feature = "graph"), allow(dead_code))]
+    pub(crate) fn epoch(&self) -> u64 {
+        *self.epoch.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Record a state change and wake every waiter.
+    pub(crate) fn notify(&self) {
+        let mut epoch = self.epoch.lock().unwrap_or_else(|e| e.into_inner());
+        *epoch = epoch.wrapping_add(1);
+        self.changed.notify_all();
+    }
+
+    /// Block until the epoch differs from `observed`, or `until` passes. Returns
+    /// immediately if a change already happened after `observed` was read. The
+    /// caller re-checks its predicate after every return.
+    #[cfg_attr(not(feature = "graph"), allow(dead_code))]
+    pub(crate) fn wait_past(&self, observed: u64, until: Instant) {
+        let mut epoch = self.epoch.lock().unwrap_or_else(|e| e.into_inner());
+        while *epoch == observed {
+            let now = Instant::now();
+            if now >= until {
+                return;
+            }
+            let (next, _) = self
+                .changed
+                .wait_timeout(epoch, until - now)
+                .unwrap_or_else(|e| e.into_inner());
+            epoch = next;
+            #[cfg(test)]
+            self.wakeups.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Number of condition-variable returns from `wait_past` (notified, timed
+    /// out or spurious), counted for structural tests.
+    #[cfg(test)]
+    pub(crate) fn wakeups(&self) -> usize {
+        self.wakeups.load(Ordering::Relaxed)
     }
 }
 
@@ -212,6 +321,8 @@ pub struct TaskScope {
     queue: Arc<WorkerQueue>,
     pool: Vec<JoinHandle<()>>,
     wake: Arc<CancellationWake>,
+    /// Notified when a worker finishes and on every cancellation.
+    exits: Arc<ScopeSignal>,
 }
 
 impl TaskScope {
@@ -230,6 +341,9 @@ impl TaskScope {
             bail!("task group max_parallel must be greater than zero")
         }
         let wake = Arc::new(CancellationWake::new()?);
+        let exits = Arc::new(ScopeSignal::default());
+        let hook_exits = Arc::clone(&exits);
+        wake.on_cancel(Arc::new(move || hook_exits.notify()));
         Ok(Self {
             max_parallel,
             deadline,
@@ -246,7 +360,16 @@ impl TaskScope {
             }),
             pool: Vec::new(),
             wake,
+            exits,
         })
+    }
+
+    /// Signal notified whenever a worker of this scope exits or the scope is
+    /// cancelled. A waiter reads its epoch, checks its predicate, then waits on
+    /// it with [`ScopeSignal::wait_past`].
+    #[cfg_attr(not(feature = "graph"), allow(dead_code))]
+    pub(crate) fn exit_signal(&self) -> Arc<ScopeSignal> {
+        Arc::clone(&self.exits)
     }
 
     /// The maximum number of tasks allowed to execute concurrently.
@@ -276,7 +399,7 @@ impl TaskScope {
     /// Request cooperative cancellation for every child.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
-        self.wake.notify();
+        self.wake.cancel_all();
     }
 
     /// Start a child if the configured concurrency bound has capacity.
@@ -319,6 +442,7 @@ impl TaskScope {
         let wake = Arc::clone(&self.wake);
         let deadline = self.deadline;
         let worker_active = Arc::clone(&self.active);
+        let worker_exits = Arc::clone(&self.exits);
         let finished = Arc::new(AtomicBool::new(false));
         let worker_finished = Arc::clone(&finished);
         // Grow the fixed pool only as concurrency is requested. In particular,
@@ -352,6 +476,7 @@ impl TaskScope {
             worker_finished.store(true, Ordering::Release);
             worker_active.fetch_sub(1, Ordering::AcqRel);
             let _ = done_sender.send(());
+            worker_exits.notify();
         });
         {
             let mut state = self.queue.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -611,6 +736,93 @@ mod retention_tests {
             scope.join(handle)?;
         }
         assert_eq!(scope.pool.len(), 64);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod issue_556_wait_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn idle_scope_signal_wait_does_not_poll() {
+        let signal = ScopeSignal::default();
+        let observed = signal.epoch();
+        let started = Instant::now();
+        signal.wait_past(observed, started + Duration::from_millis(300));
+        assert!(
+            started.elapsed() >= Duration::from_millis(280),
+            "wait returned before its bound"
+        );
+        assert!(
+            signal.wakeups() <= 2,
+            "idle wait returned {} times in 300 ms",
+            signal.wakeups()
+        );
+    }
+
+    #[test]
+    fn change_after_epoch_read_does_not_block() {
+        let signal = ScopeSignal::default();
+        let observed = signal.epoch();
+        signal.notify();
+        let started = Instant::now();
+        signal.wait_past(observed, started + Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(signal.wakeups(), 0);
+    }
+
+    #[test]
+    fn worker_exit_wakes_exit_waiter_without_polling() -> Result<()> {
+        let mut scope = TaskScope::new(1, None)?;
+        let exits = scope.exit_signal();
+        let handle = scope.spawn(|_| {
+            thread::sleep(Duration::from_millis(100));
+            Ok(())
+        })?;
+        let started = Instant::now();
+        loop {
+            let observed = exits.epoch();
+            if handle.is_finished() {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "worker exit was never signalled"
+            );
+            exits.wait_past(observed, started + Duration::from_secs(5));
+        }
+        let wakeups = exits.wakeups();
+        assert!(wakeups <= 3, "worker exit woke the waiter {wakeups} times");
+        scope.join(handle)?;
+        Ok(())
+    }
+
+    #[test]
+    fn cancel_wakes_exit_waiter_promptly() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let exits = scope.exit_signal();
+        let token = scope.cancellation_token();
+        let waiter = thread::spawn(move || {
+            let started = Instant::now();
+            loop {
+                let observed = exits.epoch();
+                if token.is_cancelled() {
+                    return started.elapsed();
+                }
+                exits.wait_past(observed, started + Duration::from_secs(10));
+            }
+        });
+        thread::sleep(Duration::from_millis(100));
+        scope.cancel();
+        let elapsed = waiter
+            .join()
+            .map_err(|_| anyhow!("waiter thread panicked"))?;
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "cancel woke the waiter after {elapsed:?}"
+        );
         Ok(())
     }
 }

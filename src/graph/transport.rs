@@ -10,18 +10,39 @@ use crate::contracts::{OutcomeKind, OutputEncoding, OutputType, PortDelivery, Se
 use crate::manifest::{Manifest, Registry};
 use crate::runtime::{self, AppletInvocationResult, RunOptions};
 use crate::security::SensitivitySet;
-use crate::tasks::{CancellationToken, TaskHandle, TaskScope};
+use crate::tasks::{CancellationToken, ScopeSignal, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const QUEUE_POLL: Duration = Duration::from_millis(10);
-const INPUT_RECEIVE_POLL: Duration = Duration::from_millis(2);
+/// Upper bound on any single blocking wait in this module. Wake-ups normally
+/// come from notifications (push, close, worker exit, cancellation). This bound
+/// only covers a cancellation stored directly into a flag by code outside this
+/// module (the Ctrl-C handler in src/main.rs and the TUI in src/desktop.rs) that
+/// cannot notify; without it such a store would go unseen by an idle wait.
+const WAIT_SAFETY: Duration = Duration::from_secs(1);
+
+/// The instant a blocking wait must return by: the caller's own limit, capped
+/// by [`WAIT_SAFETY`].
+fn wake_deadline(limit: Option<Instant>) -> Instant {
+    let safety = Instant::now() + WAIT_SAFETY;
+    limit.map_or(safety, |limit| limit.min(safety))
+}
+
+/// The earlier of two optional deadlines.
+fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, None) => a,
+        (None, b) => b,
+    }
+}
 /// Absolute ceiling for per-graph declared listener-port reader admission.
 pub const MAX_GRAPH_LISTENER_READERS: usize = 128;
 /// Maximum declared event ports on one applet listener. Remote listeners
@@ -182,8 +203,18 @@ struct BoundedQueue {
     capacity: usize,
     policy: BufferPolicy,
     state: Mutex<QueueState>,
+    /// Signalled on push, pop, close, detach and cancellation. A blocked
+    /// consumer waits here for a push or close, a blocked producer for a pop,
+    /// close or detach. Every wait re-checks its condition under `state`.
     changed: Condvar,
+    /// Notified on push, close and cancellation. Set once by the single node (or
+    /// the graph's terminal reader) that consumes this queue, so a waiter over
+    /// several queues can block on one signal.
+    observer: OnceLock<Arc<ScopeSignal>>,
     dropped: AtomicUsize,
+    /// Condition-variable returns from waits on `changed`, for structural tests.
+    #[cfg(test)]
+    wakeups: AtomicUsize,
 }
 
 impl BoundedQueue {
@@ -197,8 +228,62 @@ impl BoundedQueue {
                 consumer_detached: false,
             }),
             changed: Condvar::new(),
+            observer: OnceLock::new(),
             dropped: AtomicUsize::new(0),
+            #[cfg(test)]
+            wakeups: AtomicUsize::new(0),
         })
+    }
+
+    /// Attach the signal a multi-queue waiter blocks on. Each queue has one
+    /// consumer, so the first attachment is the only one.
+    fn attach_observer(&self, signal: Arc<ScopeSignal>) {
+        let _ = self.observer.set(signal);
+    }
+
+    fn notify_observer(&self) {
+        if let Some(signal) = self.observer.get() {
+            signal.notify();
+        }
+    }
+
+    /// Wake this queue's waiters when its scope is cancelled. Registering holds
+    /// only a weak reference, so the queue is not kept alive by the scope.
+    fn wake_on_cancel(queue: &Arc<Self>, token: &CancellationToken) {
+        let queue = Arc::downgrade(queue);
+        token.on_cancel(Arc::new(move || {
+            if let Some(queue) = queue.upgrade() {
+                queue.wake_waiters();
+            }
+        }));
+    }
+
+    /// Notify both condition variables under the queue lock. The cancellation
+    /// flag is stored before this runs, so a waiter that checked it under the
+    /// lock is either already blocked, or sees it on its next check.
+    fn wake_waiters(&self) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.changed.notify_all();
+        self.notify_observer();
+        drop(state);
+    }
+
+    /// Block on `changed` until a push, pop, close or cancellation. The caller
+    /// must re-check its condition under the returned guard. The wait is capped
+    /// by the token's deadline and by [`WAIT_SAFETY`].
+    fn wait_changed<'a>(
+        &self,
+        state: MutexGuard<'a, QueueState>,
+        token: &CancellationToken,
+    ) -> Result<MutexGuard<'a, QueueState>> {
+        let until = wake_deadline(token.deadline());
+        let (state, _) = self
+            .changed
+            .wait_timeout(state, until.saturating_duration_since(Instant::now()))
+            .map_err(|_| anyhow!("graph queue lock poisoned"))?;
+        #[cfg(test)]
+        self.wakeups.fetch_add(1, Ordering::Relaxed);
+        Ok(state)
     }
 
     fn send(
@@ -208,12 +293,14 @@ impl BoundedQueue {
         token: &CancellationToken,
     ) -> Result<bool> {
         envelope.input = input;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("graph queue lock poisoned"))?;
         loop {
+            // Checked under the queue lock: `check` only reads atomics and never
+            // takes a queue lock, so it cannot deadlock with a cancel hook.
             token.check()?;
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| anyhow!("graph queue lock poisoned"))?;
             if state.consumer_detached {
                 return Ok(false);
             }
@@ -223,16 +310,12 @@ impl BoundedQueue {
             if state.items.len() < self.capacity {
                 state.items.push_back(envelope);
                 self.changed.notify_all();
+                self.notify_observer();
                 return Ok(true);
             }
             match self.policy {
                 BufferPolicy::Lossless => {
-                    let (next, _) = self
-                        .changed
-                        .wait_timeout(state, QUEUE_POLL)
-                        .map_err(|_| anyhow!("graph queue lock poisoned"))?;
-                    state = next;
-                    drop(state);
+                    state = self.wait_changed(state, token)?;
                 }
                 BufferPolicy::DropNewest => {
                     self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -243,6 +326,7 @@ impl BoundedQueue {
                     self.dropped.fetch_add(1, Ordering::Relaxed);
                     state.items.push_back(envelope);
                     self.changed.notify_all();
+                    self.notify_observer();
                     return Ok(true);
                 }
                 BufferPolicy::Latest => {
@@ -251,6 +335,7 @@ impl BoundedQueue {
                     self.dropped.fetch_add(removed, Ordering::Relaxed);
                     state.items.push_back(envelope);
                     self.changed.notify_all();
+                    self.notify_observer();
                     return Ok(true);
                 }
             }
@@ -278,24 +363,13 @@ impl BoundedQueue {
         Ok(state.items.front().map(|event| event.sequence))
     }
 
-    fn wait_for_change(&self, timeout: Duration) {
-        // Defer poison errors to the caller's next scan, after its cancellation check.
-        let Ok(state) = self.state.lock() else {
-            return;
-        };
-        if !state.items.is_empty() || state.closed {
-            return;
-        }
-        let _ = self.changed.wait_timeout(state, timeout);
-    }
-
     fn recv(&self, token: &CancellationToken) -> Result<Option<EventEnvelope>> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("graph queue lock poisoned"))?;
         loop {
             token.check()?;
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| anyhow!("graph queue lock poisoned"))?;
             if let Some(item) = state.items.pop_front() {
                 self.changed.notify_all();
                 return Ok(Some(item));
@@ -303,11 +377,7 @@ impl BoundedQueue {
             if state.closed {
                 return Ok(None);
             }
-            let (next, _) = self
-                .changed
-                .wait_timeout(state, QUEUE_POLL)
-                .map_err(|_| anyhow!("graph queue lock poisoned"))?;
-            drop(next);
+            state = self.wait_changed(state, token)?;
         }
     }
 
@@ -323,6 +393,7 @@ impl BoundedQueue {
         if let Ok(mut state) = self.state.lock() {
             state.closed = true;
             self.changed.notify_all();
+            self.notify_observer();
         }
     }
 
@@ -404,6 +475,9 @@ pub struct NodeIo {
     recording: Option<HeldOutputs>,
     /// Called once, just before the node first invokes an applet.
     effects_started: Option<EffectsHook>,
+    /// Notified by every input queue of this node on push and close, and on
+    /// cancellation. A receive over several inputs blocks here.
+    input_signal: Arc<ScopeSignal>,
 }
 
 /// Runs just before a node's first applet invocation, so a checkpoint can mark the
@@ -514,15 +588,10 @@ impl NodeIo {
             .ok()
     }
 
-    fn single_active_input_queue(&self) -> Option<&BoundedQueue> {
-        if self.active_input_names.len() != 1 {
-            return None;
-        }
-        let name = &self.input_names[self.active_input_names[0]];
-        match self.inputs.get(name)?.as_slice() {
-            [queue] => Some(queue),
-            _ => None,
-        }
+    /// The latest instant an input wait may sleep until: the receive's own
+    /// limit, the graph deadline, and [`WAIT_SAFETY`].
+    fn input_wait_until(&self, receive_deadline: Option<Instant>) -> Instant {
+        wake_deadline(earliest(receive_deadline, self.deadline))
     }
 
     fn discard_seed_only_name(&mut self, name_index: usize) {
@@ -672,6 +741,9 @@ impl NodeIo {
             return Ok(event.map(|event| self.observe_input(event)));
         }
         loop {
+            // The epoch is read before the checks, so a push, close or
+            // cancellation after this point makes the wait below return at once.
+            let observed = self.input_signal.epoch();
             self.check_cancelled()?;
             if let Some(event) = self.try_recv_from_named_input(port, cursor_index, queue_count)? {
                 return Ok(Some(self.observe_input(event)));
@@ -686,7 +758,8 @@ impl NodeIo {
             if all_closed {
                 return Ok(None);
             }
-            thread::sleep(Duration::from_millis(2));
+            self.input_signal
+                .wait_past(observed, self.input_wait_until(None));
         }
     }
 
@@ -708,6 +781,7 @@ impl NodeIo {
             .input_name_index(port)
             .expect("bound input has a cached queue cursor");
         loop {
+            let observed = self.input_signal.epoch();
             self.check_cancelled()?;
             if let Some(event) = self.try_recv_from_named_input(port, cursor_index, queue_count)? {
                 return Ok(Some(self.observe_input(event)));
@@ -722,78 +796,35 @@ impl NodeIo {
             if all_closed {
                 return Ok(None);
             }
-            let now = Instant::now();
-            if deadline.is_some_and(|deadline| now >= deadline) {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Ok(None);
             }
-            let wait = deadline.map_or(INPUT_RECEIVE_POLL, |deadline| {
-                deadline
-                    .saturating_duration_since(now)
-                    .min(INPUT_RECEIVE_POLL)
-            });
-            if queue_count == 1 {
-                self.inputs
-                    .get(port)
-                    .expect("named receive has a bound input")[0]
-                    .wait_for_change(wait);
-            } else {
-                thread::sleep(wait);
-            }
+            self.input_signal
+                .wait_past(observed, self.input_wait_until(deadline));
         }
     }
 
     /// Receive the next message from any bound input. `event.input` identifies
     /// the destination port so adapters can update the matching parameter.
     pub fn recv_any(&mut self) -> Result<Option<EventEnvelope>> {
-        if self.active_input_names.is_empty() {
-            return Ok(None);
-        }
-        loop {
-            self.check_cancelled()?;
-            let active_count = self.active_input_names.len();
-            let start = self.input_name_cursor % active_count;
-            for offset in 0..active_count {
-                let active_index = (start + offset) % active_count;
-                let name_index = self.active_input_names[active_index];
-                if let Some(event) = self.take_initial_input(name_index)? {
-                    self.input_name_cursor = active_index + 1;
-                    return Ok(Some(event));
-                }
-                if let Some((event, queue_index)) = self.try_recv_from_any_input(name_index)? {
-                    self.input_name_cursor = active_index + 1;
-                    self.input_queue_cursors[name_index] = queue_index + 1;
-                    return Ok(Some(self.observe_input(event)));
-                }
-            }
-            let all_closed = self.active_input_names.iter().all(|name_index| {
-                let name = &self.input_names[*name_index];
-                !self.initial_inputs.contains_key(name)
-                    && self
-                        .inputs
-                        .get(name)
-                        .into_iter()
-                        .flatten()
-                        .map(|queue| queue.is_closed_and_empty())
-                        .collect::<Result<Vec<_>>>()
-                        .is_ok_and(|states| states.iter().all(|closed| *closed))
-            });
-            if all_closed {
-                return Ok(None);
-            }
-            if let Some(queue) = self.single_active_input_queue() {
-                queue.wait_for_change(INPUT_RECEIVE_POLL);
-            } else {
-                thread::sleep(INPUT_RECEIVE_POLL);
-            }
-        }
+        self.recv_any_until(None)
     }
 
     pub fn recv_any_timeout(&mut self, timeout: Duration) -> Result<Option<EventEnvelope>> {
-        let deadline = Instant::now().checked_add(timeout);
+        self.recv_any_until(Instant::now().checked_add(timeout))
+    }
+
+    /// Shared receive over every active input. `deadline` is the caller's own
+    /// limit (`None` for an unbounded receive). The node blocks on its input
+    /// signal, which its queues notify on push and close.
+    fn recv_any_until(&mut self, deadline: Option<Instant>) -> Result<Option<EventEnvelope>> {
         if self.active_input_names.is_empty() {
             return Ok(None);
         }
         loop {
+            // The epoch is read before the checks, so a push, close or
+            // cancellation after this point makes the wait below return at once.
+            let observed = self.input_signal.epoch();
             self.check_cancelled()?;
             let active_count = self.active_input_names.len();
             let start = self.input_name_cursor % active_count;
@@ -825,16 +856,8 @@ impl NodeIo {
             if all_closed || deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Ok(None);
             }
-            let wait = deadline.map_or(INPUT_RECEIVE_POLL, |deadline| {
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(INPUT_RECEIVE_POLL)
-            });
-            if let Some(queue) = self.single_active_input_queue() {
-                queue.wait_for_change(wait);
-            } else {
-                thread::sleep(wait);
-            }
+            self.input_signal
+                .wait_past(observed, self.input_wait_until(deadline));
         }
     }
 
@@ -1012,9 +1035,7 @@ impl NodeIo {
             .deadline
             .is_some_and(|deadline| Instant::now() >= deadline);
         if deadline_expired || self.external_cancelled.load(Ordering::Acquire) {
-            self.token
-                .cancellation_flag()
-                .store(true, Ordering::Release);
+            self.token.request_cancel();
         }
         self.token.is_cancelled()
     }
@@ -1028,15 +1049,11 @@ impl NodeIo {
             .deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            self.token
-                .cancellation_flag()
-                .store(true, Ordering::Release);
+            self.token.request_cancel();
             bail!("graph execution deadline exceeded");
         }
         if self.external_cancelled.load(Ordering::Acquire) {
-            self.token
-                .cancellation_flag()
-                .store(true, Ordering::Release);
+            self.token.request_cancel();
         }
         self.token.check()
     }
@@ -1091,6 +1108,65 @@ pub struct GraphRunResult {
     pub launched_processes: usize,
 }
 
+/// How often a session's watcher checks the externally owned cancel flag.
+const EXTERNAL_CANCEL_PERIOD: Duration = Duration::from_millis(25);
+
+/// One thread per graph session. The signal handler in `src/main.rs` and the
+/// TUI in `src/desktop.rs` store into the session's external cancel flag and
+/// can do nothing else, so this watcher carries that store into the session's
+/// own cancellation (`CancellationToken::request_cancel`), which wakes every
+/// blocked waiter. It exits after cancelling. Dropping it stops the thread and
+/// joins it, so no watcher outlives its session.
+struct ExternalCancelWatch {
+    stop: Arc<(Mutex<bool>, Condvar)>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl ExternalCancelWatch {
+    fn start(token: CancellationToken, external: Arc<AtomicBool>) -> Result<Self> {
+        let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let watcher_stop = Arc::clone(&stop);
+        let thread = thread::Builder::new()
+            .name("graph-cancel-watch".to_owned())
+            .spawn(move || {
+                let (lock, changed) = &*watcher_stop;
+                loop {
+                    if external.load(Ordering::Acquire) {
+                        token.request_cancel();
+                        return;
+                    }
+                    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    if *guard {
+                        return;
+                    }
+                    let (guard, _) = changed
+                        .wait_timeout(guard, EXTERNAL_CANCEL_PERIOD)
+                        .unwrap_or_else(|e| e.into_inner());
+                    if *guard {
+                        return;
+                    }
+                }
+            })?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for ExternalCancelWatch {
+    fn drop(&mut self) {
+        {
+            let (lock, changed) = &*self.stop;
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            changed.notify_all();
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 pub struct GraphSession {
     context: GraphContext,
     scope: TaskScope,
@@ -1099,6 +1175,11 @@ pub struct GraphSession {
     all_queues: Vec<Arc<BoundedQueue>>,
     cancelled: Arc<AtomicBool>,
     external_cancelled: Arc<AtomicBool>,
+    /// Notified on terminal push/close, worker exit and cancellation.
+    exits: Arc<ScopeSignal>,
+    /// Carries the external cancel flag into this session's cancellation. Declared
+    /// after `scope`, so it is joined after the session has been cancelled.
+    _external_watch: ExternalCancelWatch,
     worker_error: Arc<Mutex<Option<String>>>,
     options: GraphRunOptions,
 }
@@ -1245,6 +1326,17 @@ impl GraphSession {
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut scope =
             TaskScope::new_with_cancellation(options.max_parallel, None, Arc::clone(&cancelled))?;
+        // Terminal pushes, closes and worker exits all notify this signal, so
+        // `recv_output` blocks on one wait. Every queue wakes its waiters on
+        // cancellation.
+        let exits = scope.exit_signal();
+        for (_, queue) in &terminals {
+            queue.attach_observer(Arc::clone(&exits));
+        }
+        let cancel_token = scope.cancellation_token();
+        for queue in &all_queues {
+            BoundedQueue::wake_on_cancel(queue, &cancel_token);
+        }
         let worker_error = Arc::new(Mutex::new(None));
         let context = GraphContext {
             graph_name: plan.name.clone(),
@@ -1282,6 +1374,12 @@ impl GraphSession {
                 );
                 schemas.insert(name.clone(), schema.clone());
             }
+            let input_signal = Arc::new(ScopeSignal::default());
+            for queue in node_inputs.values().flatten() {
+                queue.attach_observer(Arc::clone(&input_signal));
+            }
+            let node_wake = Arc::clone(&input_signal);
+            cancel_token.on_cancel(Arc::new(move || node_wake.notify()));
             let mut io = NodeIo {
                 node: node.id.clone(),
                 inputs: node_inputs,
@@ -1303,6 +1401,7 @@ impl GraphSession {
                 max_message_bytes: options.max_message_bytes,
                 recording: None,
                 effects_started: None,
+                input_signal,
             };
             let node_owned = node.clone();
             let executor = Arc::clone(&executor);
@@ -1312,7 +1411,6 @@ impl GraphSession {
                 .filter(|((node_id, _), _)| node_id == &node.id)
                 .flat_map(|(_, sinks)| sinks.iter().map(|sink| Arc::clone(&sink.queue)))
                 .collect::<Vec<_>>();
-            let cancel_on_error = Arc::clone(&cancelled);
             let worker_error_on_error = Arc::clone(&worker_error);
             let handle = scope.spawn(move |token| {
                 #[cfg(target_os = "linux")]
@@ -1326,13 +1424,15 @@ impl GraphSession {
                             first.get_or_insert_with(|| format!("{error:#}"));
                         }
                     }
-                    cancel_on_error.store(true, Ordering::Release);
+                    io.token.request_cancel();
                 }
                 result
             })?;
             tasks.push(Some(handle));
         }
 
+        let external_watch =
+            ExternalCancelWatch::start(cancel_token.clone(), Arc::clone(&external_cancelled))?;
         Ok(Self {
             context,
             scope,
@@ -1341,6 +1441,8 @@ impl GraphSession {
             all_queues,
             cancelled,
             external_cancelled,
+            exits,
+            _external_watch: external_watch,
             worker_error,
             options,
         })
@@ -1377,6 +1479,10 @@ impl GraphSession {
     /// terminal comes first in the plan.
     pub fn recv_output(&mut self) -> Result<Option<EventEnvelope>> {
         loop {
+            // Read the epoch before any check: a terminal push or close, a
+            // worker exit or a cancellation after this point makes the wait at
+            // the bottom return at once instead of missing it.
+            let observed = self.exits.epoch();
             self.poll_finished_workers()?;
             if let Some(event) = next_terminal_event(
                 &self.terminals,
@@ -1414,10 +1520,10 @@ impl GraphSession {
                 self.cancellation_check()?;
                 return Ok(None);
             }
-            // Workers report exit only through their task handles, which are
-            // polled at the top of this loop; this is the same short poll the
-            // loop already used while terminal queues were open.
-            thread::sleep(Duration::from_millis(2));
+            // Workers report exit through their task handles, which the top of
+            // this loop polls; the exit signal wakes this wait when one finishes.
+            self.exits
+                .wait_past(observed, wake_deadline(self.context.deadline));
         }
     }
 
@@ -1426,7 +1532,7 @@ impl GraphSession {
     /// returns. Use [`GraphSession::cancel_and_join`] to wait for termination
     /// and to receive worker join errors.
     pub fn cancel(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.scope.cancel();
         for queue in &self.all_queues {
             queue.close();
         }
@@ -1551,7 +1657,7 @@ impl GraphSession {
         while remaining > 0 {
             let mut made_progress = false;
             if self.external_cancelled.load(Ordering::Acquire) {
-                self.cancelled.store(true, Ordering::Release);
+                self.scope.cancel();
                 for queue in &self.all_queues {
                     queue.close();
                 }
@@ -1561,7 +1667,7 @@ impl GraphSession {
                 .deadline
                 .is_some_and(|deadline| Instant::now() >= deadline)
             {
-                self.cancelled.store(true, Ordering::Release);
+                self.scope.cancel();
                 for queue in &self.all_queues {
                     queue.close();
                 }
@@ -1580,7 +1686,7 @@ impl GraphSession {
                             || collected_bytes.saturating_add(event_bytes)
                                 > self.options.max_collected_bytes
                         {
-                            self.cancelled.store(true, Ordering::Release);
+                            self.scope.cancel();
                             for queue in &self.all_queues {
                                 queue.close();
                             }
@@ -1609,7 +1715,7 @@ impl GraphSession {
                     Err(error) => {
                         made_progress = true;
                         first_error.get_or_insert(error);
-                        self.cancelled.store(true, Ordering::Release);
+                        self.scope.cancel();
                         *task = None;
                         remaining -= 1;
                     }
@@ -1629,7 +1735,7 @@ impl GraphSession {
                         || collected_bytes.saturating_add(event_bytes)
                             > self.options.max_collected_bytes
                     {
-                        self.cancelled.store(true, Ordering::Release);
+                        self.scope.cancel();
                         for queue in &self.all_queues {
                             queue.close();
                         }
@@ -1680,7 +1786,7 @@ impl GraphSession {
             }
         }
         if self.external_cancelled.load(Ordering::Acquire) {
-            self.cancelled.store(true, Ordering::Release);
+            self.scope.cancel();
             for queue in &self.all_queues {
                 queue.close();
             }
@@ -1690,7 +1796,7 @@ impl GraphSession {
             .deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            self.cancelled.store(true, Ordering::Release);
+            self.scope.cancel();
             for queue in &self.all_queues {
                 queue.close();
             }
@@ -1731,7 +1837,7 @@ impl GraphSession {
             if let Ok(mut first) = self.worker_error.lock() {
                 first.get_or_insert(error);
             }
-            self.cancelled.store(true, Ordering::Release);
+            self.scope.cancel();
             for queue in &self.all_queues {
                 queue.close();
             }
@@ -1920,6 +2026,7 @@ mod payload_size_tests {
             max_message_bytes,
             recording: None,
             effects_started: None,
+            input_signal: Arc::new(ScopeSignal::default()),
         };
         (scope, io, queue)
     }
@@ -3794,7 +3901,7 @@ mod input_cursor_tests {
         }
     }
 
-    fn enqueue(
+    pub(super) fn enqueue(
         queue: &BoundedQueue,
         source: String,
         input: &str,
@@ -3810,7 +3917,7 @@ mod input_cursor_tests {
             .unwrap();
     }
 
-    fn node_io(
+    pub(super) fn node_io(
         inputs: BTreeMap<String, Vec<Arc<BoundedQueue>>>,
         token: CancellationToken,
     ) -> NodeIo {
@@ -3848,10 +3955,11 @@ mod input_cursor_tests {
             max_message_bytes: 1024,
             recording: None,
             effects_started: None,
+            input_signal: Arc::new(ScopeSignal::default()),
         }
     }
 
-    fn lossless_queue() -> Arc<BoundedQueue> {
+    pub(super) fn lossless_queue() -> Arc<BoundedQueue> {
         BoundedQueue::new(1, BufferPolicy::Lossless)
     }
 
@@ -4544,6 +4652,7 @@ mod emit_fanout_tests {
             max_message_bytes,
             recording: None,
             effects_started: None,
+            input_signal: Arc::new(ScopeSignal::default()),
         };
         (scope, io, queues)
     }
@@ -4854,5 +4963,278 @@ mod activation_cache_tests {
         // A fresh activation canonicalizes again and therefore sees the deletion.
         let mut fresh = ActivationCache::default();
         assert!(executor.activation_working_directory(&mut fresh).is_err());
+    }
+}
+
+#[cfg(test)]
+mod issue_556_wait_tests {
+    use super::input_cursor_tests::{enqueue, lossless_queue, node_io};
+    use super::*;
+    use std::time::Duration;
+
+    /// Wire a node's inputs the way `GraphSession::start` does: each input
+    /// queue notifies the node's input signal.
+    fn wired_node(token: CancellationToken, queues: &[&Arc<BoundedQueue>]) -> NodeIo {
+        let inputs = BTreeMap::from([(
+            "events".to_owned(),
+            queues
+                .iter()
+                .map(|queue| Arc::clone(queue))
+                .collect::<Vec<_>>(),
+        )]);
+        let io = node_io(inputs, token);
+        for queue in queues {
+            queue.attach_observer(Arc::clone(&io.input_signal));
+        }
+        io
+    }
+
+    #[test]
+    fn idle_multi_input_receive_does_not_poll() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let first = lossless_queue();
+        let second = lossless_queue();
+        let mut io = wired_node(scope.cancellation_token(), &[&first, &second]);
+        let started = Instant::now();
+        assert!(io
+            .recv_timeout("events", Duration::from_millis(300))?
+            .is_none());
+        assert!(
+            started.elapsed() >= Duration::from_millis(280),
+            "receive returned before its timeout"
+        );
+        let wakeups = io.input_signal.wakeups();
+        assert!(
+            wakeups <= 2,
+            "idle receive returned {wakeups} times in 300 ms"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multi_input_receive_wakes_on_push_and_close() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let first = lossless_queue();
+        let second = lossless_queue();
+        let mut io = wired_node(token.clone(), &[&first, &second]);
+        let producer_first = Arc::clone(&first);
+        let producer_second = Arc::clone(&second);
+        let producer_token = token.clone();
+        let producer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            enqueue(
+                &producer_second,
+                "source".into(),
+                "events",
+                7,
+                &producer_token,
+            );
+            thread::sleep(Duration::from_millis(100));
+            producer_first.close();
+            producer_second.close();
+        });
+        let pushed = io.recv("events")?;
+        let closed = io.recv("events")?;
+        producer
+            .join()
+            .map_err(|_| anyhow!("producer thread panicked"))?;
+        assert_eq!(pushed.map(|event| event.sequence), Some(7));
+        assert!(closed.is_none(), "closed inputs must end the receive");
+        let wakeups = io.input_signal.wakeups();
+        assert!(
+            wakeups <= 4,
+            "push and close returned the receive {wakeups} times"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn queue_consumer_wakes_on_push_and_close() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let queue = lossless_queue();
+        let producer_queue = Arc::clone(&queue);
+        let producer_token = token.clone();
+        let producer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            enqueue(
+                &producer_queue,
+                "source".into(),
+                "events",
+                3,
+                &producer_token,
+            );
+            thread::sleep(Duration::from_millis(100));
+            producer_queue.close();
+        });
+        let pushed = queue.recv(&token)?;
+        let closed = queue.recv(&token)?;
+        producer
+            .join()
+            .map_err(|_| anyhow!("producer thread panicked"))?;
+        assert_eq!(pushed.map(|event| event.sequence), Some(3));
+        assert!(
+            closed.is_none(),
+            "a closed empty queue must end the receive"
+        );
+        let wakeups = queue.wakeups.load(Ordering::Relaxed);
+        assert!(
+            wakeups <= 3,
+            "push and close woke the consumer {wakeups} times"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_queue_producer_wakes_on_pop() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let queue = lossless_queue();
+        enqueue(&queue, "fill".into(), "events", 1, &token);
+        let producer_queue = Arc::clone(&queue);
+        let producer_token = token.clone();
+        let producer = thread::spawn(move || {
+            enqueue(&producer_queue, "late".into(), "events", 2, &producer_token);
+        });
+        thread::sleep(Duration::from_millis(100));
+        let first = queue.try_recv()?;
+        producer
+            .join()
+            .map_err(|_| anyhow!("producer thread panicked"))?;
+        let second = queue.try_recv()?;
+        assert_eq!(first.map(|event| event.sequence), Some(1));
+        assert_eq!(second.map(|event| event.sequence), Some(2));
+        let wakeups = queue.wakeups.load(Ordering::Relaxed);
+        assert!(
+            wakeups <= 3,
+            "a pop woke the full-queue producer {wakeups} times"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_queue_receive_returns_promptly_after_cancel() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let queue = lossless_queue();
+        BoundedQueue::wake_on_cancel(&queue, &token);
+        let waiter_queue = Arc::clone(&queue);
+        let waiter_token = token.clone();
+        let waiter = thread::spawn(move || {
+            let started = Instant::now();
+            let failed = waiter_queue.recv(&waiter_token).is_err();
+            (failed, started.elapsed())
+        });
+        thread::sleep(Duration::from_millis(100));
+        token.request_cancel();
+        let (failed, elapsed) = waiter
+            .join()
+            .map_err(|_| anyhow!("waiter thread panicked"))?;
+        assert!(failed, "a cancelled receive must fail");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "cancelled queue receive returned after {elapsed:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_multi_input_receive_returns_promptly_after_cancel() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let first = lossless_queue();
+        let second = lossless_queue();
+        let mut io = wired_node(token.clone(), &[&first, &second]);
+        let node_wake = Arc::clone(&io.input_signal);
+        token.on_cancel(Arc::new(move || node_wake.notify()));
+        let waiter = thread::spawn(move || {
+            let started = Instant::now();
+            let failed = io.recv("events").is_err();
+            (failed, started.elapsed())
+        });
+        thread::sleep(Duration::from_millis(100));
+        token.request_cancel();
+        let (failed, elapsed) = waiter
+            .join()
+            .map_err(|_| anyhow!("waiter thread panicked"))?;
+        assert!(failed, "a cancelled receive must fail");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "cancelled multi-input receive returned after {elapsed:?}"
+        );
+        Ok(())
+    }
+
+    /// Store into the external flag exactly as the signal handler does: no
+    /// notify call. The watcher must carry it to the blocked receive.
+    #[test]
+    fn external_flag_store_wakes_blocked_queue_receive_within_bound() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let external = Arc::new(AtomicBool::new(false));
+        let watch = ExternalCancelWatch::start(token.clone(), Arc::clone(&external))?;
+        let queue = lossless_queue();
+        BoundedQueue::wake_on_cancel(&queue, &token);
+        let waiter_queue = Arc::clone(&queue);
+        let waiter_token = token.clone();
+        let waiter = thread::spawn(move || waiter_queue.recv(&waiter_token).is_err());
+        thread::sleep(Duration::from_millis(100));
+        let stored = Instant::now();
+        external.store(true, Ordering::Release);
+        let failed = waiter
+            .join()
+            .map_err(|_| anyhow!("waiter thread panicked"))?;
+        let elapsed = stored.elapsed();
+        assert!(failed, "an external cancel must fail the receive");
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "external cancel woke the queue receive after {elapsed:?}"
+        );
+        drop(watch);
+        Ok(())
+    }
+
+    #[test]
+    fn external_flag_store_wakes_blocked_multi_input_receive_within_bound() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let external = Arc::new(AtomicBool::new(false));
+        let watch = ExternalCancelWatch::start(token.clone(), Arc::clone(&external))?;
+        let first = lossless_queue();
+        let second = lossless_queue();
+        let mut io = wired_node(token.clone(), &[&first, &second]);
+        let node_wake = Arc::clone(&io.input_signal);
+        token.on_cancel(Arc::new(move || node_wake.notify()));
+        let waiter = thread::spawn(move || io.recv("events").is_err());
+        thread::sleep(Duration::from_millis(100));
+        let stored = Instant::now();
+        external.store(true, Ordering::Release);
+        let failed = waiter
+            .join()
+            .map_err(|_| anyhow!("waiter thread panicked"))?;
+        let elapsed = stored.elapsed();
+        assert!(failed, "an external cancel must fail the receive");
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "external cancel woke the multi-input receive after {elapsed:?}"
+        );
+        drop(watch);
+        Ok(())
+    }
+
+    /// The watcher holds a clone of the external flag. Once the session's
+    /// watcher is dropped, the thread has been joined and that clone is gone.
+    #[test]
+    fn dropped_cancel_watcher_releases_its_thread_and_clone() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let external = Arc::new(AtomicBool::new(false));
+        let base = Arc::strong_count(&external);
+        let watch = ExternalCancelWatch::start(token, Arc::clone(&external))?;
+        assert_eq!(Arc::strong_count(&external), base + 1);
+        drop(watch);
+        assert_eq!(Arc::strong_count(&external), base);
+        Ok(())
     }
 }

@@ -26,6 +26,10 @@ docs/** linguist-documentation
 benchmarks/optimization-pass/** linguist-documentation
 work/** linguist-documentation
 
+# Execute programs have no Linguist language yet, so keep the content
+# classifier from guessing one for them.
+*.program linguist-detectable=false
+
 # Hash-pinned benchmark artifacts retain their exact raw bytes across checkouts.
 benchmarks/**/*.bin binary
 benchmarks/**/*.patch binary

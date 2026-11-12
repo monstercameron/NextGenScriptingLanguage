@@ -1,5 +1,6 @@
 //! Syntax and validation for a persistent native pipeline with a line sink.
 use crate::ast::{Connection, Program, StepKind};
+use crate::diagnostics::{self, Diagnostic, SourceSpan};
 use crate::manifest::Registry;
 use crate::{parser, runtime};
 use anyhow::{bail, Context, Result};
@@ -100,6 +101,39 @@ pub fn parse(source: &str) -> Result<StreamProgram> {
 
 /// `parse` with each error's code, line and column. The message is the one `parse` returns.
 pub fn parse_detailed(source: &str) -> Result<StreamProgram, DetailedError> {
+    let Normalized {
+        text,
+        line_limit,
+        header_line,
+        body_offset,
+        header_text,
+    } = normalize(source)?;
+    let pipeline = parser::parse(&text).map_err(|error| {
+        native_pipeline_error(
+            &error,
+            &text,
+            (header_line, body_offset, header_text.as_str()),
+        )
+    })?;
+    Ok(StreamProgram {
+        pipeline,
+        line_limit,
+    })
+}
+
+/// A stream rewritten as finite-program text, with one output line per source line.
+struct Normalized {
+    text: String,
+    line_limit: Option<usize>,
+    /// The header's line number, the byte offset of its applet phrase in that line, and the line.
+    header_line: usize,
+    body_offset: usize,
+    header_text: String,
+}
+
+/// Check a stream's statements and rewrite it as finite-program text. The header becomes
+/// `run <applet>`, and `take` and the sink become blank lines.
+fn normalize(source: &str) -> Result<Normalized, DetailedError> {
     let mut normalized = String::new();
     let mut saw_header = false;
     let mut saw_sink = false;
@@ -240,17 +274,97 @@ pub fn parse_detailed(source: &str) -> Result<StreamProgram, DetailedError> {
             "stream program requires final sink `show each line`".to_owned(),
         ));
     }
-    let pipeline = parser::parse(&normalized).map_err(|error| {
-        native_pipeline_error(
-            &error,
-            &normalized,
-            (header_line, body_offset, header_text.as_str()),
-        )
-    })?;
-    Ok(StreamProgram {
-        pipeline,
+    Ok(Normalized {
+        text: normalized,
         line_limit,
+        header_line,
+        body_offset,
+        header_text,
     })
+}
+
+/// The `applet.parameter.unknown` diagnostics for the stream's invocations, with spans in
+/// the stream source and the finite analyzer's suggested fix. The stream is checked as its
+/// finite pipeline, so this is the finite validator's own check. A source that does not
+/// parse gives no diagnostics here; `parse_detailed` reports its error.
+pub fn parameter_diagnostics(source: &str, registry: &Registry) -> Vec<Diagnostic> {
+    let Ok(normalized) = normalize(source) else {
+        return Vec::new();
+    };
+    let mut found = diagnostics::analyze_source(&normalized.text, registry);
+    found.retain(|diagnostic| diagnostic.code == "applet.parameter.unknown");
+    let mapper = SpanMapper::new(source, &normalized);
+    for diagnostic in &mut found {
+        mapper.apply(&mut diagnostic.span);
+        for fix in &mut diagnostic.fixes {
+            for edit in &mut fix.edits {
+                mapper.apply(&mut edit.span);
+            }
+        }
+        diagnostic.related.clear();
+    }
+    found
+}
+
+/// Maps spans of the finite text back to the stream source. Lines correspond one to one.
+/// Only the header line differs: `run ` there stands for `stream from `.
+struct SpanMapper<'a> {
+    source: &'a str,
+    header_line: usize,
+    /// Characters before the applet phrase in the source header.
+    header_prefix_columns: usize,
+}
+
+impl<'a> SpanMapper<'a> {
+    fn new(source: &'a str, normalized: &Normalized) -> Self {
+        let prefix = normalized
+            .header_text
+            .get(..normalized.body_offset)
+            .unwrap_or("");
+        Self {
+            source,
+            header_line: normalized.header_line,
+            header_prefix_columns: prefix.chars().count(),
+        }
+    }
+
+    /// The source column and byte offset for a finite-text position.
+    fn position(&self, line: usize, column: usize) -> (usize, usize) {
+        let column = if line == self.header_line {
+            if column > "run ".len() {
+                column - "run ".len() + self.header_prefix_columns
+            } else {
+                1
+            }
+        } else {
+            column
+        };
+        (column, self.byte_of(line, column))
+    }
+
+    fn byte_of(&self, line: usize, column: usize) -> usize {
+        let mut line_start = 0;
+        for (index, text) in self.source.split('\n').enumerate() {
+            if index + 1 == line {
+                let within = text
+                    .char_indices()
+                    .nth(column.saturating_sub(1))
+                    .map_or(text.len(), |(offset, _)| offset);
+                return line_start + within;
+            }
+            line_start += text.len() + 1;
+        }
+        self.source.len()
+    }
+
+    fn apply(&self, span: &mut SourceSpan) {
+        let (column, start_byte) = self.position(span.line, span.column);
+        let (end_column, end_byte) = self.position(span.end_line, span.end_column);
+        span.column = column;
+        span.start_byte = start_byte;
+        span.end_column = end_column;
+        span.end_byte = end_byte;
+    }
 }
 
 /// Validate the underlying finite native pipeline and stream-only restrictions.

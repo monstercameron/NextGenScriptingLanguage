@@ -195,7 +195,7 @@ fn model_fixtures_option_is_accepted_for_resume_as_well() {
             "--model-fixtures",
             "",
             "--checkpoint",
-            &directory.path().to_string_lossy().into_owned(),
+            &directory.path().to_string_lossy(),
         ],
     );
     // The option parses for resume; the empty directory is refused by the run setup.

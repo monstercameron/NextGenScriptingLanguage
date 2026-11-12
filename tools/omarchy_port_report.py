@@ -17,7 +17,9 @@ Inputs:
   --checkout   optional local Omarchy checkout; its bin/ scripts are analyzed too
   --manifests  Execute manifest directory, used to mark commands that have one
 
-Outputs a JSON report (--json PATH) and a summary table on stdout.
+Outputs a JSON report (--json PATH) and a summary table on stdout. The report ranks
+internal helpers (omarchy commands that other scripts call) by distinct calling scripts
+in `internal_helper_ranking`; the summary table shows the top few.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_INVENTORY = os.path.join(ROOT, "docs", "omarchy-inventory.json")
 DEFAULT_FIXTURES = os.path.join(ROOT, "tests", "fixtures", "omarchy-v4.0.4", "bin")
 DEFAULT_MANIFESTS = os.path.join(ROOT, "manifests")
+TOP_HELPERS = 12  # helpers shown in the summary table; the JSON report ranks them all
 
 # Feature -> (category, what Execute offers instead). "unsupported" blocks a direct
 # port, "partial" needs an applet or a rewrite, "supported" maps onto language forms.
@@ -697,6 +700,26 @@ def build_report(args: argparse.Namespace) -> dict:
         for name, count in sorted(command_scripts.items(), key=lambda item: (-item[1], item[0]))
     ]
 
+    # Internal helpers are omarchy commands that other scripts call. Ranked by the number
+    # of distinct calling scripts (self-calls excluded): the order to port them in.
+    helper_names = {path[len("bin/"):] for path in inventory_paths} | {key[len("bin/"):] for key in scripts}
+    helper_callers: dict[str, set[str]] = {}
+    for path, item in scripts.items():
+        for command in item.get("external_commands", []):
+            name = command["name"]
+            if name in helper_names and path != f"bin/{name}":
+                helper_callers.setdefault(name, set()).add(path)
+    internal_helper_ranking = [
+        {
+            "name": name,
+            "path": f"bin/{name}",
+            "scripts": len(callers),
+            "callers": sorted(callers),
+            "manifest": name in manifests,
+        }
+        for name, callers in sorted(helper_callers.items(), key=lambda item: (-len(item[1]), item[0]))
+    ]
+
     analyzed_inventory = sum(1 for row in rows if row["status"] == "analyzed")
     return {
         "tool": "tools/omarchy_port_report.py",
@@ -714,6 +737,7 @@ def build_report(args: argparse.Namespace) -> dict:
         },
         "verdicts": verdicts,
         "external_command_ranking": command_ranking,
+        "internal_helper_ranking": internal_helper_ranking,
         "feature_scripts": dict(sorted(feature_scripts.items())),
         "feature_categories": {name: FEATURES[name][0] for name in sorted(FEATURES)},
         "scripts": dict(sorted(scripts.items())),
@@ -739,6 +763,10 @@ def summary_table(report: dict) -> str:
         )
     lines.append("-" * 100)
     lines.append("verdicts: " + ", ".join(f"{k}={v}" for k, v in report["verdicts"].items()))
+    if report["internal_helper_ranking"]:
+        lines.append(f"most-called internal helpers (calling scripts, top {TOP_HELPERS}):")
+        for item in report["internal_helper_ranking"][:TOP_HELPERS]:
+            lines.append(f"  {item['name']:<56} {item['scripts']:>4}")
     if report["feature_scripts"]:
         lines.append("features (scripts): " + ", ".join(f"{k}={v}" for k, v in report["feature_scripts"].items()))
     return "\n".join(lines)

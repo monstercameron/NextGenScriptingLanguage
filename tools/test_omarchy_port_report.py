@@ -153,5 +153,67 @@ class ExternalCommandTests(unittest.TestCase):
             self.assertEqual(data["verdicts"]["out_of_scope"], 1)
 
 
+class InternalHelperRankingTests(unittest.TestCase):
+    def run_report(self, scripts: dict[str, str], inventory_paths: list[str]) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = os.path.join(directory, "bin")
+            os.mkdir(bin_dir)
+            for name, body in scripts.items():
+                with open(os.path.join(bin_dir, name), "wb") as handle:
+                    handle.write(body.encode("utf-8"))
+            inventory = {
+                "release_tag": "test",
+                "commit": "0" * 40,
+                "command_count": len(inventory_paths),
+                "commands": [{"path": path} for path in inventory_paths],
+            }
+            inventory_file = os.path.join(directory, "inventory.json")
+            with open(inventory_file, "w", encoding="utf-8") as handle:
+                json.dump(inventory, handle)
+            manifests = os.path.join(directory, "manifests")
+            os.mkdir(manifests)
+            out = os.path.join(directory, "report.json")
+            code = report.main([
+                "--inventory", inventory_file, "--fixtures", bin_dir,
+                "--manifests", manifests, "--json", out,
+            ])
+            self.assertEqual(code, 0)
+            with open(out, encoding="utf-8") as handle:
+                return json.load(handle)
+
+    def test_helpers_are_ranked_by_distinct_calling_scripts(self):
+        scripts = {
+            # Calls notify twice: still one calling script.
+            "omarchy-menu": "#!/bin/bash\nomarchy-notify a\nomarchy-notify b\nomarchy-pkg-add x\nls\n",
+            "omarchy-launch": "#!/bin/bash\nomarchy-notify c\nomarchy-launch again\n",
+            "omarchy-sync": "#!/bin/bash\nomarchy-pkg-add y\nomarchy-remote-only\n",
+            "omarchy-notify": "#!/bin/bash\necho sent\n",
+            "omarchy-pkg-add": "#!/bin/bash\necho added\n",
+            # A Python script is not lexed, so its mention of notify is not a call.
+            "omarchy-py": "#!/usr/bin/python3\nprint('omarchy-notify')\n",
+        }
+        inventory = [f"bin/{name}" for name in scripts] + ["bin/omarchy-remote-only"]
+        data = self.run_report(scripts, inventory)
+        ranking = data["internal_helper_ranking"]
+        self.assertEqual(
+            [(item["name"], item["scripts"]) for item in ranking],
+            [("omarchy-notify", 2), ("omarchy-pkg-add", 2), ("omarchy-remote-only", 1)],
+        )
+        notify = ranking[0]
+        self.assertEqual(notify["path"], "bin/omarchy-notify")
+        self.assertEqual(notify["callers"], ["bin/omarchy-launch", "bin/omarchy-menu"])
+        self.assertFalse(notify["manifest"])
+
+    def test_self_calls_and_external_commands_are_not_helpers(self):
+        scripts = {
+            "omarchy-loop": "#!/bin/bash\nomarchy-loop again\ncurl -s x\n",
+            "omarchy-notify": "#!/bin/bash\necho sent\n",
+        }
+        data = self.run_report(scripts, ["bin/omarchy-loop", "bin/omarchy-notify"])
+        self.assertEqual(data["internal_helper_ranking"], [])
+        # The external ranking still lists curl; only the helper ranking excludes it.
+        self.assertIn("curl", [item["name"] for item in data["external_command_ranking"]])
+
+
 if __name__ == "__main__":
     unittest.main()

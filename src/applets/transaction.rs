@@ -1407,6 +1407,15 @@ fn read_journal(
     Ok(envelope.data)
 }
 
+/// Publish the journal file (initial and every progress update) so recovery sees
+/// either the previous state or the new one. Durability guarantee: the bytes are
+/// synced before the rename; the rename is a POSIX-semantics replace or
+/// `MOVEFILE_WRITE_THROUGH`; the parent directory is then flushed through a
+/// handle pinned before the rename. A failed rename fails closed and keeps the
+/// previous journal. A failed flush after a completed rename reports
+/// `uncertain_effect` (published, durability unproven), never a clean failure.
+/// Power-loss survival beyond that depends on the filesystem and is evidenced
+/// only by the hard-reset lab.
 fn persist_journal(
     directory: &Path,
     data: &JournalData,

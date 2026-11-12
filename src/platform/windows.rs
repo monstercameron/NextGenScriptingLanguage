@@ -1327,4 +1327,110 @@ mod tests {
         assert!(backend.write_through_move(&source, &target).is_err());
         assert!(source.exists(), "a failed pin must not move the source");
     }
+
+    /// Fault-injection backend: the real pinned-parent rename runs, and only the
+    /// directory flush is forced to fail (ERROR_NOT_SUPPORTED, as a volume without
+    /// flush support reports). It records whether the target already held the new
+    /// bytes when the flush ran, which is the rename-before-flush ordering.
+    struct FlushFault {
+        inner: NativePublishBackend,
+        force_fallback: bool,
+        flush_saw_new_bytes: std::cell::Cell<Option<bool>>,
+        expected: Vec<u8>,
+    }
+
+    impl WindowsPublishBackend for FlushFault {
+        fn posix_rename(&self, source: &Path, target: &Path) -> std::io::Result<bool> {
+            if self.force_fallback {
+                return Ok(false);
+            }
+            self.inner.posix_rename(source, target)
+        }
+
+        fn write_through_move(&self, source: &Path, target: &Path) -> std::io::Result<()> {
+            self.inner.write_through_move(source, target)
+        }
+
+        fn flush_published(&self, target: &Path) -> std::io::Result<()> {
+            let published = std::fs::read(target).ok();
+            self.flush_saw_new_bytes
+                .set(Some(published.as_deref() == Some(self.expected.as_slice())));
+            Err(std::io::Error::from_raw_os_error(50))
+        }
+    }
+
+    fn faulty_publish(force_fallback: bool) -> (tempfile::TempDir, PathBuf, FlushFault, Vec<u8>) {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let source = temp.path().join("journal.json.tmp");
+        let target = temp.path().join("journal.json");
+        let bytes = b"prepared journal".to_vec();
+        std::fs::write(&source, &bytes).expect("staging a journal file");
+        let backend = FlushFault {
+            inner: NativePublishBackend::new(),
+            force_fallback,
+            flush_saw_new_bytes: std::cell::Cell::new(None),
+            expected: bytes.clone(),
+        };
+        (temp, target, backend, bytes)
+    }
+
+    #[test]
+    fn flush_failure_after_posix_rename_reports_published_not_failed() {
+        // Fast path: the rename lands, then the flush fails. The caller must get
+        // published == true (published-but-unsynced), and the flush must have run
+        // after the new bytes were already at the target.
+        let (temp, target, backend, bytes) = faulty_publish(false);
+        let source = temp.path().join("journal.json.tmp");
+        let error = super::super::publish::windows_publish_with(&backend, &source, &target)
+            .expect_err("a failed flush must fail closed");
+        assert!(
+            error.published,
+            "the rename completed before the flush failed"
+        );
+        assert_eq!(backend.flush_saw_new_bytes.get(), Some(true));
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&target).expect("published target"), bytes);
+    }
+
+    #[test]
+    fn flush_failure_after_write_through_fallback_reports_published() {
+        // Fallback path (no POSIX rename): MoveFileExW with MOVEFILE_WRITE_THROUGH,
+        // then the same fail-closed flush.
+        let (temp, target, backend, bytes) = faulty_publish(true);
+        let source = temp.path().join("journal.json.tmp");
+        let error = super::super::publish::windows_publish_with(&backend, &source, &target)
+            .expect_err("a failed flush must fail closed");
+        assert!(error.published, "the write-through move completed");
+        assert_eq!(backend.flush_saw_new_bytes.get(), Some(true));
+        assert_eq!(std::fs::read(&target).expect("published target"), bytes);
+    }
+
+    #[test]
+    fn failed_rename_is_not_published_and_never_flushes() {
+        // A missing source makes both rename attempts fail. The error must say
+        // nothing was published, and no flush may run against an unchanged target.
+        let (temp, target, backend, _bytes) = faulty_publish(false);
+        let missing = temp.path().join("absent.tmp");
+        let error = super::super::publish::windows_publish_with(&backend, &missing, &target)
+            .expect_err("a missing source cannot publish");
+        assert!(!error.published);
+        assert_eq!(backend.flush_saw_new_bytes.get(), None);
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn unsupported_directory_flush_names_the_local_ntfs_requirement() {
+        // ERROR_NOT_SUPPORTED is enriched with the local-NTFS requirement; any other
+        // error passes through with its original OS code.
+        let mapped = map_flush_error(
+            Path::new("volume-dir"),
+            std::io::Error::from_raw_os_error(50),
+        );
+        assert!(mapped.to_string().contains("local NTFS volume"));
+        let passthrough = map_flush_error(
+            Path::new("volume-dir"),
+            std::io::Error::from_raw_os_error(5),
+        );
+        assert_eq!(passthrough.raw_os_error(), Some(5));
+    }
 }

@@ -2841,8 +2841,8 @@ fn preflight_invocations_with_policy<'a>(
 /// the child its target's name. Multicall dispatch keys on argv[0], so a relative
 /// binary keeps its manifest spelling, joined under the manifest directory. The
 /// canonical `binary` still runs.
-fn launch_argv0(registry: &Registry, applet_name: &str, binary: &Path) -> PathBuf {
-    let Ok(manifest) = registry.resolve(applet_name) else {
+fn launch_argv0(binary: &Path, manifest: Option<&crate::manifest::Manifest>) -> PathBuf {
+    let Some(manifest) = manifest else {
         return binary.to_path_buf();
     };
     let spelled = manifest.binary.as_str();
@@ -2904,7 +2904,7 @@ where
         .into_iter()
         .collect();
     check_privileged_launch(registry, &names, binary)?;
-    let argv0 = launch_argv0(registry, applet_name, binary);
+    let argv0 = launch_argv0(binary, resolved_manifest.as_ref().ok().copied());
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     // With no capability policy, command overlay, manifest environment section or declared
     // secret variable, the child environment is exactly the inherited one. The command then

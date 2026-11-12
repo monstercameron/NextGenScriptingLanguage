@@ -1466,10 +1466,17 @@ impl GraphPlan {
                     node.id
                 );
             }
+            // Count only bound stream inputs, as plan validation does, so a graph
+            // that runs without checkpoints is not refused for an unbound port.
             let streams = node
                 .inputs
-                .values()
-                .filter(|schema| schema.delivery != PortDelivery::Single)
+                .iter()
+                .filter(|(name, schema)| {
+                    schema.delivery != PortDelivery::Single
+                        && self.edges.iter().any(|edge| {
+                            edge.to.node == node.id && edge.to.port.as_str() == name.as_str()
+                        })
+                })
                 .count();
             if streams > 1 {
                 bail!(

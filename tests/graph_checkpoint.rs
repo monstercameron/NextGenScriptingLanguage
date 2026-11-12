@@ -539,15 +539,24 @@ fn persistent_sources_are_refused_under_checkpoints() {
 }
 
 #[test]
-fn a_node_with_two_stream_inputs_is_refused_naming_the_node() {
+fn a_node_with_unbound_stream_inputs_is_not_refused_under_checkpoints() {
+    // The refusal counts only bound stream inputs (#546), as plan validation does.
     let fixture = fixture();
+    let (binary, arguments) = if cfg!(windows) {
+        (
+            "cmd.exe",
+            json!([{"literal": "/d"}, {"literal": "/c"}, {"literal": "echo"}, {"literal": "ok"}]),
+        )
+    } else {
+        ("/bin/echo", json!([{"literal": "ok"}]))
+    };
     let manifest = json!({
         "name": "ctrl.merge",
-        "binary": if cfg!(windows) { "cmd.exe" } else { "/bin/sh" },
+        "binary": binary,
         "accepts_stdin": false,
         "cacheable": false,
         "parameters": {"left": {"type": "string"}, "right": {"type": "string"}},
-        "arguments": [],
+        "arguments": arguments,
         "contract": {
             "version": 1,
             "backend": "command",
@@ -575,7 +584,7 @@ fn a_node_with_two_stream_inputs_is_refused_naming_the_node() {
         \x20 run ctrl.merge as merged\n\
         end graph\n";
     let store = Arc::new(MemoryGraphStore::default());
-    let refused = graph::run_checkpointed(
+    let result = graph::run_checkpointed(
         plan(source, &registry),
         &registry,
         &options(&fixture.root),
@@ -583,11 +592,9 @@ fn a_node_with_two_stream_inputs_is_refused_naming_the_node() {
         store,
         false,
     );
-    let message = format!("{:#}", refused.unwrap_err());
-    assert!(
-        message.contains("\"merged\"") && message.contains("stream inputs"),
-        "{message}"
-    );
+    if let Err(error) = result {
+        panic!("a node with no bound stream input was refused: {error:#}");
+    }
 }
 
 /// A direct program-module applet, written as `program_modules.rs` writes one.

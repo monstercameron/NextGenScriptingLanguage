@@ -46,6 +46,8 @@ pub(crate) mod model_schema;
 #[cfg(feature = "model")]
 pub mod models;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod migrate_scan;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod modules;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod named_state;

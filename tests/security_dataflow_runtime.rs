@@ -84,6 +84,7 @@ fn remote_manifest(
         remote: Some(endpoint_config),
         environment: None,
         output: Some(flow::contracts::OutputSchema {
+            enum_from_parameter: Default::default(),
             kind: OutputType::Text,
             encoding: flow::contracts::OutputEncoding::Raw,
             enum_values: None,

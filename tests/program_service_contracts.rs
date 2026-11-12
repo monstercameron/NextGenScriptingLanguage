@@ -42,6 +42,7 @@ fn integer_schema() -> ValueSchema {
 
 fn output_schema() -> OutputSchema {
     OutputSchema {
+        enum_from_parameter: Default::default(),
         kind: OutputType::Record,
         encoding: OutputEncoding::Json,
         enum_values: None,

@@ -714,7 +714,7 @@ fn assignment<'a>(body: &'a str, key: &str, style: ConfStyle) -> Option<Assignme
 
 /// A commented line: the indentation before its comment marker, and the text
 /// after the marker.
-fn commented<'a>(body: &'a str, style: ConfStyle) -> Option<(&'a str, &'a str)> {
+fn commented(body: &str, style: ConfStyle) -> Option<(&str, &str)> {
     let after_indent = body.trim_start_matches([' ', '\t']);
     let rest = after_indent.strip_prefix(style.comment)?;
     Some((&body[..body.len() - after_indent.len()], rest))
@@ -723,7 +723,7 @@ fn commented<'a>(body: &'a str, style: ConfStyle) -> Option<(&'a str, &'a str)> 
 fn replace_piece(pieces: &[&str], index: usize, line: &str) -> String {
     let mut out = String::new();
     for (position, piece) in pieces.iter().enumerate() {
-        out.push_str(if position == index { line } else { *piece });
+        out.push_str(if position == index { line } else { piece });
     }
     out
 }

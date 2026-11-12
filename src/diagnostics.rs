@@ -168,6 +168,22 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
+        code: "parse.foreign.else",
+        family: "parse",
+        meaning: "an `else` block, which Execute spells as `otherwise` under the `if` it follows",
+        example: "else\n  run \"true\"",
+        typical_fix: "Replace `else` with `otherwise` at the same indentation as the `if` line.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
+        code: "parse.foreign.for_in",
+        family: "parse",
+        meaning: "a `for X in` loop, which Execute spells as `for each X in`",
+        example: "for file in files\n  run \"true\"",
+        typical_fix: "Insert `each` after `for`: `for each <name> in <list>`.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
         code: "parse.suffix_order",
         family: "parse",
         meaning: "invocation suffixes are out of canonical order",
@@ -638,6 +654,24 @@ fn analyze_source_impl(
         } else {
             (&tokens[..], &token_ranges[..])
         };
+        // A `for X in` header is a contextual header, so it is never validated here;
+        // its foreign form is recognised before that skip.
+        if matches!(tokens.first(), Some(parser::Token::Word("for")))
+            && !matches!(tokens.get(1), Some(parser::Token::Word("each")))
+        {
+            if let Some(repair) = control_foreign_repair(
+                source,
+                content,
+                tokens,
+                token_ranges,
+                content_source_offset,
+                &line_starts,
+            ) {
+                diagnostics.push(repair);
+                local_error_lines.insert(line_number);
+                continue;
+            }
+        }
         if is_contextual_header(tokens) {
             continue;
         }
@@ -667,6 +701,17 @@ fn analyze_source_impl(
                     )
                 });
                 if let Some(repair) = repair {
+                    diagnostic = repair;
+                }
+            } else if message.contains("unsupported control") {
+                if let Some(repair) = control_foreign_repair(
+                    source,
+                    content,
+                    tokens,
+                    token_ranges,
+                    content_source_offset,
+                    &line_starts,
+                ) {
                     diagnostic = repair;
                 }
             }
@@ -3737,6 +3782,82 @@ fn foreign_rewrite(
                 .is_ok_and(|(tokens, _)| parser::validate_statement(&tokens).is_ok())
         });
     checks.then_some(edits)
+}
+
+/// Recognise an `else` head, or a `for X in` head, on a line that fails as an
+/// unsupported control block. The diagnostic is always returned, and its fix is
+/// attached only when the whole program parses after the one-line rewrite, because a
+/// control head does not parse on its own line.
+fn control_foreign_repair(
+    source: &str,
+    content: &str,
+    tokens: &[parser::Token<'_>],
+    token_ranges: &[std::ops::Range<usize>],
+    content_source_offset: Option<usize>,
+    line_starts: &LineStarts,
+) -> Option<Diagnostic> {
+    let offset = content_source_offset?;
+    let word = |index: usize| match tokens.get(index) {
+        Some(parser::Token::Word(text)) => Some(*text),
+        _ => None,
+    };
+    let head_range = token_ranges.first()?;
+    let span_of = |range: &std::ops::Range<usize>| {
+        line_starts.span_at(
+            source,
+            offset + range.start,
+            offset + range.end,
+            SpanPrecision::Token,
+        )
+    };
+    let (code, message, fix_message, edit) = match word(0)? {
+        "else" => (
+            "parse.foreign.else",
+            "`else` is not Execute syntax; use `otherwise` under the `if` it follows",
+            "replace `else` with `otherwise`",
+            (head_range.clone(), "otherwise".to_owned()),
+        ),
+        "for" if word(1).is_some_and(|name| name != "each") && word(2) == Some("in") => {
+            let name_range = token_ranges.get(1)?;
+            (
+                "parse.foreign.for_in",
+                "`for X in` is not Execute syntax; use `for each X in`",
+                "insert `each` after `for`",
+                (
+                    name_range.clone(),
+                    format!("each {}", content.get(name_range.clone())?),
+                ),
+            )
+        }
+        _ => return None,
+    };
+    let mut diagnostic = Diagnostic::error(code, message, span_of(head_range));
+    // The fix must leave the whole program parsing, not just the rewritten line.
+    let (edit_range, replacement) = &edit;
+    let rewritten_line = format!(
+        "{}{}{}",
+        content.get(..edit_range.start)?,
+        replacement,
+        content.get(edit_range.end..)?
+    );
+    if source.get(offset..offset + content.len()) == Some(content) {
+        let whole = format!(
+            "{}{}{}",
+            source.get(..offset)?,
+            rewritten_line,
+            source.get(offset + content.len()..)?
+        );
+        if parser::parse(&whole).is_ok() {
+            diagnostic.fixes.push(SuggestedFix {
+                message: fix_message.into(),
+                edits: vec![TextEdit {
+                    span: span_of(edit_range),
+                    replacement: replacement.clone(),
+                }],
+            });
+        }
+    }
+    Some(diagnostic)
 }
 
 /// When a stray-token failure is only an invocation suffix-order error, build a

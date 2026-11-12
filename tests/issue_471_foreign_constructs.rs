@@ -122,3 +122,52 @@ fn a_known_applet_head_gets_no_keyword_suggestion() {
         );
     }
 }
+
+#[test]
+fn an_else_block_becomes_otherwise_that_checks() {
+    let registry = Registry::default();
+    let source = "if true is true\n  run \"true\"\nelse\n  run \"false\"\n";
+    let diagnostic = only_diagnostic(source, &registry, "parse.foreign.else");
+    assert!(
+        diagnostic.message.contains("`otherwise`"),
+        "{}",
+        diagnostic.message
+    );
+    let fix = diagnostic.fixes.first().expect("an otherwise fix");
+    let repaired = apply(source, fix);
+    assert_eq!(
+        repaired,
+        "if true is true\n  run \"true\"\notherwise\n  run \"false\"\n"
+    );
+    assert!(errors(&repaired, &registry).is_empty(), "{repaired:?}");
+}
+
+#[test]
+fn an_else_with_no_if_gets_a_diagnostic_but_no_fix() {
+    let registry = Registry::default();
+    let source = "else\n  run \"true\"\n";
+    let diagnostic = only_diagnostic(source, &registry, "parse.foreign.else");
+    assert!(
+        diagnostic.fixes.is_empty(),
+        "an otherwise with no if does not check: {diagnostic:#?}"
+    );
+}
+
+#[test]
+fn a_for_in_loop_becomes_for_each_that_checks() {
+    let registry = Registry::default();
+    let source = "for item in [\"a\", \"b\"]\n  run \"true\"\n";
+    let diagnostic = only_diagnostic(source, &registry, "parse.foreign.for_in");
+    assert!(
+        diagnostic.message.contains("`for each X in`"),
+        "{}",
+        diagnostic.message
+    );
+    let fix = diagnostic.fixes.first().expect("a for each fix");
+    let repaired = apply(source, fix);
+    assert_eq!(
+        repaired,
+        "for each item in [\"a\", \"b\"]\n  run \"true\"\n"
+    );
+    assert!(errors(&repaired, &registry).is_empty(), "{repaired:?}");
+}

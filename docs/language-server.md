@@ -102,8 +102,11 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `parse.syntax` | parse | a statement does not match the grammar |
 | `parse.suffix_order` | parse | invocation suffixes are out of canonical order |
 | `check.literal_not_in_set` | type | a value bound from a closed set of outputs is compared with a literal outside that set |
+| `check.pointer.unknown` | validate | a literal `take` pointer names a field the producer's declared JSON output does not have |
 | `parse.foreign.pipe` | parse | a shell pipe `\|` between commands, which Execute spells as `pipe to` lines |
 | `parse.foreign.discard_stderr` | parse | a shell stderr redirect to `/dev/null`, which Execute spells as `and discard stderr` |
+| `parse.foreign.else` | parse | an `else` block, which Execute spells as `otherwise` under the `if` it follows |
+| `parse.foreign.for_in` | parse | a `for X in` loop, which Execute spells as `for each X in` |
 | `parse.indentation` | parse | a line is indented with tabs, or its indentation does not nest |
 | `parse.control` | parse | a control construct is unsupported or nested beyond the supported depth |
 | `source.invisible_format` | validate | source contains a Unicode format control that can change how it is displayed |

@@ -964,6 +964,18 @@ fn render_text(summary: &Value) -> String {
         journal["completed_nodes"].as_u64().unwrap_or(0)
     ));
     match journal.get("in_flight").filter(|value| !value.is_null()) {
+        // Graph checkpoints list every unfinished node as {node, retry_safe}.
+        Some(Value::Array(nodes)) if nodes.is_empty() => text.push_str("in flight: none\n"),
+        Some(Value::Array(nodes)) => {
+            text.push_str(&format!("in flight: {} node(s)\n", nodes.len()));
+            for node in nodes {
+                text.push_str(&format!(
+                    "  node={} retry_safe={}\n",
+                    escape_controls(node["node"].as_str().unwrap_or("?")),
+                    node["retry_safe"]
+                ));
+            }
+        }
         Some(node) => text.push_str(&format!(
             "in flight: lines {} steps {}..{} retry_safe={}\n",
             node["line"], node["start"], node["end"], node["retry_safe"]
@@ -1122,6 +1134,56 @@ mod resume_action_tests {
                 )),
                 "checksum {expected} in JSON but text was: {text:?}"
             );
+        }
+    }
+
+    #[test]
+    fn status_text_lists_graph_in_flight_nodes_matching_json() {
+        let cases = [
+            (json!([]), "in flight: none\n", Vec::<&str>::new()),
+            (
+                json!([
+                    {"node": "fetch\u{202e}all", "retry_safe": false},
+                    {"node": "build", "retry_safe": true},
+                ]),
+                "in flight: 2 node(s)\n",
+                vec![
+                    r"  node=fetch\u{202e}all retry_safe=false",
+                    "  node=build retry_safe=true",
+                ],
+            ),
+        ];
+        for (in_flight, header, lines) in cases {
+            let directory = tempfile::tempdir().unwrap();
+            let journal = json!({
+                "data": {
+                    "kind": "graph",
+                    "version": 1,
+                    "completed_count": 1,
+                    "in_flight": in_flight,
+                },
+            });
+            fs::write(
+                directory.path().join("journal.json"),
+                serde_json::to_vec(&journal).unwrap(),
+            )
+            .unwrap();
+            let summary = summarize(directory.path()).unwrap();
+            let json_nodes = summary["journal"]["in_flight"].as_array().unwrap();
+            assert_eq!(json_nodes.len(), lines.len());
+            let text = render_text(&summary);
+            assert!(text.contains(header), "{text:?}");
+            for (node, line) in json_nodes.iter().zip(&lines) {
+                let name = node["node"].as_str().unwrap();
+                let expected = format!(
+                    "  node={} retry_safe={}\n",
+                    escape_controls(name),
+                    node["retry_safe"]
+                );
+                assert_eq!(&expected.trim_end(), line, "{text:?}");
+                assert!(text.contains(&expected), "{text:?}");
+            }
+            assert!(!text.contains('\u{202e}'), "{text:?}");
         }
     }
 

@@ -1,0 +1,1156 @@
+{
+  "bands": {
+    "50_to_200": "50 <= lines <= 200",
+    "over_200": "lines > 200",
+    "under_50": "lines < 50"
+  },
+  "commands": [
+    {
+      "band": "over_200",
+      "family": "omarchy",
+      "lines": 1091,
+      "path": "bin/omarchy",
+      "sha256": "acf2e54c9ee66b38637d646feed6978d4b29e8301b68d38dbffc9ba2cacb1847"
+    },
+    {
+      "band": "50_to_200",
+      "family": "agent",
+      "lines": 52,
+      "path": "bin/omarchy-agent-crash",
+      "sha256": "a2a100e49904a41958c32344e54eba1e63afbaa0b6fca24177cb26e64b8dfa20"
+    },
+    {
+      "band": "over_200",
+      "family": "agent",
+      "lines": 905,
+      "path": "bin/omarchy-agent-usage-claude",
+      "sha256": "88938e35170a5ef8da30b665114740440eb3bd68dba9579a818e8b02c4a0ffc3"
+    },
+    {
+      "band": "over_200",
+      "family": "agent",
+      "lines": 603,
+      "path": "bin/omarchy-agent-usage-codex",
+      "sha256": "821f627f1be5ac691f70885060d0b2b65a14972162f82962e7a5575badaf39dd"
+    },
+    {
+      "band": "over_200",
+      "family": "agent",
+      "lines": 511,
+      "path": "bin/omarchy-agent-usage-fireworks",
+      "sha256": "f8b1c47fbaf63f2a4f6e54f5d75bd7c09755de9c802ebe944a717c590e99ba5a"
+    },
+    {
+      "band": "50_to_200",
+      "family": "apply",
+      "lines": 102,
+      "path": "bin/omarchy-apply-system",
+      "sha256": "403b83536e69812667464bd188d0a4f90466e867f5192a30710b90d26bdd93ca"
+    },
+    {
+      "band": "under_50",
+      "family": "audio",
+      "lines": 13,
+      "path": "bin/omarchy-audio-input-mute",
+      "sha256": "6d40373cb79e6639898f125cb147700ff06bf28e74fbcf40062ea3413eea057e"
+    },
+    {
+      "band": "50_to_200",
+      "family": "audio",
+      "lines": 59,
+      "path": "bin/omarchy-audio-output-switch",
+      "sha256": "d696d6fc6627338453524560a80c45d00a037b0c2356e43d43673a5bcbf9d165"
+    },
+    {
+      "band": "50_to_200",
+      "family": "audio",
+      "lines": 86,
+      "path": "bin/omarchy-audio-output-volume",
+      "sha256": "08611ec849c020625b784b360a84aed0bc43b93ba82c7f02616bf5e1917d8c80"
+    },
+    {
+      "band": "over_200",
+      "family": "audio",
+      "lines": 357,
+      "path": "bin/omarchy-audio-tuning",
+      "sha256": "dd596e3e4ef30206fb610b708face1b861bab07ca49db5da79a9dc7facbdb162"
+    },
+    {
+      "band": "over_200",
+      "family": "bar",
+      "lines": 403,
+      "path": "bin/omarchy-bar",
+      "sha256": "bc3a15e8fa6df1ce45d2e229d829b2bbbfe114f7a8cd5cc2fc5e47c32bfc81ad"
+    },
+    {
+      "band": "50_to_200",
+      "family": "bar",
+      "lines": 125,
+      "path": "bin/omarchy-bar-text-color",
+      "sha256": "9c43f79b0a9652978d3ae75c22c386acfc99e65f5873c3168ac7dd35f5ec2cc7"
+    },
+    {
+      "band": "under_50",
+      "family": "battery",
+      "lines": 17,
+      "path": "bin/omarchy-battery-low",
+      "sha256": "e00f559489418d42a94dad867f5908d363fcf68794591bd46317a1d3a9df2444"
+    },
+    {
+      "band": "50_to_200",
+      "family": "battery",
+      "lines": 137,
+      "path": "bin/omarchy-battery-status",
+      "sha256": "10a6b8ea5fb9b7dc8b0d635085eb21eac3ac9cf9def349ad2824a4c6a152ccc9"
+    },
+    {
+      "band": "50_to_200",
+      "family": "bluetooth",
+      "lines": 52,
+      "path": "bin/omarchy-bluetooth-device",
+      "sha256": "e1b9acf4838070afea8a42a8681daa1806608f5bab3d51d415ae126092c8bb80"
+    },
+    {
+      "band": "under_50",
+      "family": "branding",
+      "lines": 28,
+      "path": "bin/omarchy-branding-about",
+      "sha256": "08b077478ed442e33a9588da0b85b2bcf65fa40ea0fc646ab97c4b9b03adacf2"
+    },
+    {
+      "band": "50_to_200",
+      "family": "brightness",
+      "lines": 122,
+      "path": "bin/omarchy-brightness-display",
+      "sha256": "587908cfeb5c99fa7746fd4616eeef593ba278de0e153dc77918caa72bd18930"
+    },
+    {
+      "band": "50_to_200",
+      "family": "brightness",
+      "lines": 58,
+      "path": "bin/omarchy-brightness-keyboard",
+      "sha256": "128e697067a44b98304cc8c1cfe7ac07a3ef4055a56087efa56b47cd15adab5d"
+    },
+    {
+      "band": "over_200",
+      "family": "capture",
+      "lines": 370,
+      "path": "bin/omarchy-capture-region",
+      "sha256": "aab486332834bbba5f880afd821c8fb4888e02bd0c95b1bf1265f8b741dfe25b"
+    },
+    {
+      "band": "over_200",
+      "family": "capture",
+      "lines": 288,
+      "path": "bin/omarchy-capture-screenrecording",
+      "sha256": "6d70541c44a82fde5a44d712f348df35f8372c080436433916694738627c4c66"
+    },
+    {
+      "band": "50_to_200",
+      "family": "capture",
+      "lines": 82,
+      "path": "bin/omarchy-capture-screenshot",
+      "sha256": "8c6200090912a6dc0f397de90bc6898960308cbc498ff5e8599e62c21e3075c5"
+    },
+    {
+      "band": "under_50",
+      "family": "capture",
+      "lines": 26,
+      "path": "bin/omarchy-capture-text",
+      "sha256": "4572f2e6508d9fc71dc63a0d845d987cb6cf3ee0ebe6a99bee6324e0b979e11c"
+    },
+    {
+      "band": "50_to_200",
+      "family": "channel",
+      "lines": 99,
+      "path": "bin/omarchy-channel-set",
+      "sha256": "6515539654284884fcae0a41a12b56583c3948a2fefa1b5a0db4d4b1fb5a7edb"
+    },
+    {
+      "band": "50_to_200",
+      "family": "chromium",
+      "lines": 196,
+      "path": "bin/omarchy-chromium-ytdlp-host",
+      "sha256": "f2ebe04b2a925179af5455eb9436df2d8f8a3e8ca5eff2732bea67c22a873ccb"
+    },
+    {
+      "band": "50_to_200",
+      "family": "clipboard",
+      "lines": 63,
+      "path": "bin/omarchy-clipboard-paste-text",
+      "sha256": "b3248e407e0b62521021a53dcfa7416ef32041b23a8b925f4fc01983843e0865"
+    },
+    {
+      "band": "under_50",
+      "family": "cmd",
+      "lines": 27,
+      "path": "bin/omarchy-cmd-terminal-cwd",
+      "sha256": "64ef9d88a1e462f2e44522d1e0c9c436537237de92b360892c9d4ed1e4521f0f"
+    },
+    {
+      "band": "50_to_200",
+      "family": "crash",
+      "lines": 86,
+      "path": "bin/omarchy-crash-watch",
+      "sha256": "8b46a991b70c276fcb58fe6728c9ca0efe0261c8b332a82fa2fa522b3170039b"
+    },
+    {
+      "band": "50_to_200",
+      "family": "debug",
+      "lines": 96,
+      "path": "bin/omarchy-debug",
+      "sha256": "9248839d1ce5b656c28b5bd4813ed4dcc70e01ee54641d707ec445bad947c9ac"
+    },
+    {
+      "band": "50_to_200",
+      "family": "default",
+      "lines": 96,
+      "path": "bin/omarchy-default-agent",
+      "sha256": "a408c3bd7b3210df8c8ee834d85d0b137588b1324c735f51bbac3330d91c48a5"
+    },
+    {
+      "band": "under_50",
+      "family": "default",
+      "lines": 37,
+      "path": "bin/omarchy-default-terminal",
+      "sha256": "30262c52361cb2f83eb74088b12afe83424a69f38bb38e6b34e7e3b55078af8a"
+    },
+    {
+      "band": "under_50",
+      "family": "dev",
+      "lines": 41,
+      "path": "bin/omarchy-dev-add-migration",
+      "sha256": "e9975559b87dda8db044acd95eb8846f128ecb92d8efa7fa63a38e84f51296ea"
+    },
+    {
+      "band": "50_to_200",
+      "family": "dev",
+      "lines": 160,
+      "path": "bin/omarchy-dev-benchmark-theme-switcher",
+      "sha256": "79a5c459acda9bf7446e0371882c1cd65d51bbcb5fb25f9214111faf17fcf197"
+    },
+    {
+      "band": "over_200",
+      "family": "dev",
+      "lines": 652,
+      "path": "bin/omarchy-dev-font",
+      "sha256": "e853733b130916657e89bcc5957baf77bf9374270f6e6992c8a12eaca2b9af7b"
+    },
+    {
+      "band": "50_to_200",
+      "family": "dev",
+      "lines": 50,
+      "path": "bin/omarchy-dev-install-ydoo",
+      "sha256": "2646087587450ca9ee47eca1c1dc45f610629d05ec5b5cb687cc0e2143992afe"
+    },
+    {
+      "band": "50_to_200",
+      "family": "dev",
+      "lines": 64,
+      "path": "bin/omarchy-dev-status",
+      "sha256": "62b77c30958d048478ac3fa7a7e3ec07100b0f6cdd498215648850b5cca3dcf9"
+    },
+    {
+      "band": "over_200",
+      "family": "dev",
+      "lines": 439,
+      "path": "bin/omarchy-dev-theme-preview",
+      "sha256": "f409a90419ee2bf9975b023d4c678123424a6ec17981acc50f2819f8a2c5b197"
+    },
+    {
+      "band": "over_200",
+      "family": "disk",
+      "lines": 232,
+      "path": "bin/omarchy-disk-speedtest",
+      "sha256": "66fd00638df4919a9fd707bace8c38c5d71ef37f5f6e39aa89cab9bb05b9d868"
+    },
+    {
+      "band": "over_200",
+      "family": "display",
+      "lines": 236,
+      "path": "bin/omarchy-display-text-size",
+      "sha256": "8dad4951ec1e70998ee5f7aa41c6a49f267800fd3d42ae952bf8a3b8f37c433b"
+    },
+    {
+      "band": "over_200",
+      "family": "dns",
+      "lines": 319,
+      "path": "bin/omarchy-dns",
+      "sha256": "258bea5f2a1db7f3edd67e5d7ed4c14c5c4c5dc96608c5cdafb8970d2a8bc7fb"
+    },
+    {
+      "band": "50_to_200",
+      "family": "drive",
+      "lines": 50,
+      "path": "bin/omarchy-drive-info",
+      "sha256": "9edce093cbc8e607a0434ef8a9eac32c537e46413a907536236dc63107dc473d"
+    },
+    {
+      "band": "under_50",
+      "family": "drive",
+      "lines": 18,
+      "path": "bin/omarchy-drive-select",
+      "sha256": "9c0ab5cfa5dabb609a3363c65640167c042330eff1d6c86344376867a918b7e6"
+    },
+    {
+      "band": "under_50",
+      "family": "font",
+      "lines": 9,
+      "path": "bin/omarchy-font-current",
+      "sha256": "2fbaa43d7d3266ec8ac9201fc5fb36f6bb2295476b3b7dc038348ec76e25022a"
+    },
+    {
+      "band": "50_to_200",
+      "family": "hibernation",
+      "lines": 166,
+      "path": "bin/omarchy-hibernation-setup",
+      "sha256": "c05881585232eed72a629e7a5faf1d738f1eaeba165d45cc8a7b28885f5f54ac"
+    },
+    {
+      "band": "under_50",
+      "family": "hook",
+      "lines": 28,
+      "path": "bin/omarchy-hook",
+      "sha256": "c64ea844feb1849375e7cd43dde98933293b0e0f0f522e1ba2c6572d86386c7b"
+    },
+    {
+      "band": "under_50",
+      "family": "hw",
+      "lines": 7,
+      "path": "bin/omarchy-hw-clamshell",
+      "sha256": "a522ede5d3d1f8777f3a8941d478c82a22bac7976e90d2f40a440d3dab77c5aa"
+    },
+    {
+      "band": "under_50",
+      "family": "hw",
+      "lines": 5,
+      "path": "bin/omarchy-hw-dell-xps-haptic-touchpad",
+      "sha256": "b13167309205d37a9576dcb236071185d0e53c59dac96c6108c06f8508a9c048"
+    },
+    {
+      "band": "under_50",
+      "family": "hw",
+      "lines": 12,
+      "path": "bin/omarchy-hw-external-monitors",
+      "sha256": "30420de2b470149e9faaea107e758e382096b07131a5baaecc3c255e1e55257f"
+    },
+    {
+      "band": "under_50",
+      "family": "hw",
+      "lines": 5,
+      "path": "bin/omarchy-hw-intel-sof",
+      "sha256": "f9e487ee72b13490ed417e0aaa1b07503de99e9b25ccc59dca536b530377ab34"
+    },
+    {
+      "band": "under_50",
+      "family": "hw",
+      "lines": 9,
+      "path": "bin/omarchy-hw-recover-internal-monitor",
+      "sha256": "7ca3abc6091e60387d8cc049311398022ebb96c14c12af66823bb847b54db4e8"
+    },
+    {
+      "band": "over_200",
+      "family": "hyprland",
+      "lines": 252,
+      "path": "bin/omarchy-hyprland-monitor-clamshell",
+      "sha256": "00f1caf1b1be2794a4dc4405cce5758afbbaeba7d3e21eae0af344d4f05b65b7"
+    },
+    {
+      "band": "under_50",
+      "family": "hyprland",
+      "lines": 6,
+      "path": "bin/omarchy-hyprland-monitor-external-active",
+      "sha256": "3ccc2ec167eff8122163cd809393527c5491b925195b08e075381b389b946456"
+    },
+    {
+      "band": "50_to_200",
+      "family": "hyprland",
+      "lines": 73,
+      "path": "bin/omarchy-hyprland-monitor-internal-mirror",
+      "sha256": "d32f6e08fa03d7b1adf1e36e1e3ff9ff366be82707c4d845fbea5e52524911bf"
+    },
+    {
+      "band": "over_200",
+      "family": "hyprland",
+      "lines": 203,
+      "path": "bin/omarchy-hyprland-monitor-scaling",
+      "sha256": "6ef14d1224da38f7a9a4780e2b1c7d049411248082f4617004f44d85273fc4b9"
+    },
+    {
+      "band": "50_to_200",
+      "family": "hyprland",
+      "lines": 114,
+      "path": "bin/omarchy-hyprland-monitor-watch",
+      "sha256": "124c14fbc0285cf195e529d7cdee6f90baeec2c9a1421f9b9a3cec933024eced"
+    },
+    {
+      "band": "50_to_200",
+      "family": "hyprland",
+      "lines": 115,
+      "path": "bin/omarchy-hyprland-reload-guard",
+      "sha256": "d2f830bf0dc0d27b275524f98748dee9363dcb5d12182fd9d82a5988aece35fe"
+    },
+    {
+      "band": "under_50",
+      "family": "hyprland",
+      "lines": 40,
+      "path": "bin/omarchy-hyprland-window-pop",
+      "sha256": "b5dfad94e9d874f244f778b56ab704ba41c7177fe375ca395d09016ea62f9628"
+    },
+    {
+      "band": "under_50",
+      "family": "hyprland",
+      "lines": 8,
+      "path": "bin/omarchy-hyprland-window-single-square-aspect-toggle",
+      "sha256": "61b4dd6c847a0259544f88cf7029604d7c6a9f55fe26089619a816b369cbac62"
+    },
+    {
+      "band": "50_to_200",
+      "family": "install",
+      "lines": 159,
+      "path": "bin/omarchy-install-ai-hermes",
+      "sha256": "200aafc9d3207e43f5f777c4d11d7943b019ab844840e14f2977b5e68761a31c"
+    },
+    {
+      "band": "under_50",
+      "family": "install",
+      "lines": 29,
+      "path": "bin/omarchy-install-chromium-ytdlp",
+      "sha256": "c43978ceea348edfa8f5e124c87dbcb14463d1fb69f700b8ee0ed7ca08a25211"
+    },
+    {
+      "band": "under_50",
+      "family": "install",
+      "lines": 21,
+      "path": "bin/omarchy-install-font",
+      "sha256": "ba93b8e19b84ca32b4c6108fd4552e0120f6766b9c3fef2a5509d748e8f4a1fc"
+    },
+    {
+      "band": "50_to_200",
+      "family": "install",
+      "lines": 88,
+      "path": "bin/omarchy-install-gaming-battlenet",
+      "sha256": "7d687f439d9ea1b5de6cc7b5c8c054e8276fe3357e9792a67a6c5304e06dcfbb"
+    },
+    {
+      "band": "under_50",
+      "family": "install",
+      "lines": 12,
+      "path": "bin/omarchy-install-gaming-heroic",
+      "sha256": "c1536bde8a3ed65d0c7f434c15c08bd76f5d98981da9516c95cac51a69ef5f62"
+    },
+    {
+      "band": "50_to_200",
+      "family": "install",
+      "lines": 85,
+      "path": "bin/omarchy-install-gaming-retroarch",
+      "sha256": "aa2602bf6252a3a67428860885ca19f6878d689ef679d60d65637bb8c429cbbb"
+    },
+    {
+      "band": "over_200",
+      "family": "install",
+      "lines": 280,
+      "path": "bin/omarchy-install-hermes-cli",
+      "sha256": "d1cdf1724d6d7dfc50f6874193405dcd66f5f8bc028b3207288495e723809e53"
+    },
+    {
+      "band": "under_50",
+      "family": "install",
+      "lines": 34,
+      "path": "bin/omarchy-install-service-1password",
+      "sha256": "5d5a5a9b3cf87579b4232067c9f7c78091cecf250111b802ffffa49c607f52d7"
+    },
+    {
+      "band": "under_50",
+      "family": "install",
+      "lines": 13,
+      "path": "bin/omarchy-install-service-dropbox",
+      "sha256": "90f36082ab995dc5e124996da15d551d058892eedbc7d290c93ded4f495ba6af"
+    },
+    {
+      "band": "under_50",
+      "family": "install",
+      "lines": 15,
+      "path": "bin/omarchy-install-service-spotify",
+      "sha256": "5828b7146be7a5cfe82c16b903b04d360ea28a4398231b1efefd89eec3042c75"
+    },
+    {
+      "band": "under_50",
+      "family": "installed",
+      "lines": 12,
+      "path": "bin/omarchy-installed-service-dropbox",
+      "sha256": "0ac9c9b63b5e98e1002a93057fd8eb0f645e2c7bb68bb5f6871ef82564f90aed"
+    },
+    {
+      "band": "50_to_200",
+      "family": "launch",
+      "lines": 181,
+      "path": "bin/omarchy-launch-about",
+      "sha256": "2b6e6902737ef43bd731e5c7dd026d96b72d52b6e20904323c3092d509ed3fca"
+    },
+    {
+      "band": "under_50",
+      "family": "launch",
+      "lines": 5,
+      "path": "bin/omarchy-launch-nautilus",
+      "sha256": "f86e527d80b39b25d172a2c958634777e8243c035351b803459dd366b36940b2"
+    },
+    {
+      "band": "50_to_200",
+      "family": "launch",
+      "lines": 91,
+      "path": "bin/omarchy-launch-openclaw",
+      "sha256": "d12c9a66b6af9c98a284d5d2b8afc3c3b3446bbfd455e1ca00eeafd9c5576979"
+    },
+    {
+      "band": "under_50",
+      "family": "launch",
+      "lines": 19,
+      "path": "bin/omarchy-launch-or-focus",
+      "sha256": "930a0d12ab270c6a5e55790f305230ef0f41602292320c01cba6978669a2a898"
+    },
+    {
+      "band": "under_50",
+      "family": "launch",
+      "lines": 6,
+      "path": "bin/omarchy-launch-terminal",
+      "sha256": "ce2034ecd029b738c6424339da4af57e920b2ede3589cd5d004fc27986021594"
+    },
+    {
+      "band": "under_50",
+      "family": "launch",
+      "lines": 13,
+      "path": "bin/omarchy-launch-tui",
+      "sha256": "f53f3f4747be5e19df5fc1e2fb91786a93c839cec84449a0fc13489a795577c0"
+    },
+    {
+      "band": "50_to_200",
+      "family": "menu",
+      "lines": 52,
+      "path": "bin/omarchy-menu",
+      "sha256": "c3189dd9c4ca3d6a202d1da5fd8aef6bc8556ac4d37f397b788f7f51bc392147"
+    },
+    {
+      "band": "over_200",
+      "family": "menu",
+      "lines": 231,
+      "path": "bin/omarchy-menu-herdr-keybindings",
+      "sha256": "13eb04d29aacb52186be0a76adcfbe11016ac326028c25557152c723762ebb53"
+    },
+    {
+      "band": "over_200",
+      "family": "menu",
+      "lines": 313,
+      "path": "bin/omarchy-menu-images",
+      "sha256": "9d113b2138c49a944fe4e25f5b062d875d8ef4aaa5e00e59cc9282229d8e2093"
+    },
+    {
+      "band": "50_to_200",
+      "family": "menu",
+      "lines": 58,
+      "path": "bin/omarchy-menu-input",
+      "sha256": "2395c494be5ca47dd1211a0b0ce153e9b0f74515ec26503f97e0adde9e44a28c"
+    },
+    {
+      "band": "over_200",
+      "family": "menu",
+      "lines": 597,
+      "path": "bin/omarchy-menu-keybindings",
+      "sha256": "8f183f9b4ae5b73b2b25568b5b35ee4f5b4fdc1d345b207dc53c8a35938a5bbf"
+    },
+    {
+      "band": "under_50",
+      "family": "menu",
+      "lines": 46,
+      "path": "bin/omarchy-menu-plugin",
+      "sha256": "78577bb9f6fadd29dbe5e74123b7526d7f1ce4525fc5f8f1183ee4c7feefc43e"
+    },
+    {
+      "band": "50_to_200",
+      "family": "migrate",
+      "lines": 60,
+      "path": "bin/omarchy-migrate-notify",
+      "sha256": "69f11807eb3dbc1a5d7abd6b52b91315ab873f81ef516db7b2d21998b3e0f6a1"
+    },
+    {
+      "band": "50_to_200",
+      "family": "network",
+      "lines": 95,
+      "path": "bin/omarchy-network-qr",
+      "sha256": "1f833eb91a5c5f9a61de98da2e9e59870c327b71bcedc9d8478b8f265a0f7ba7"
+    },
+    {
+      "band": "50_to_200",
+      "family": "network",
+      "lines": 142,
+      "path": "bin/omarchy-network-status",
+      "sha256": "0eef1581e42e42e32df2d67355d99c3f4de424ef8278157339a77cfa847dfcaf"
+    },
+    {
+      "band": "under_50",
+      "family": "notification",
+      "lines": 5,
+      "path": "bin/omarchy-notification-battery",
+      "sha256": "dfc65faf626d8a964cf845d315eb12ea446060a45cee114564d2bfb454e35805"
+    },
+    {
+      "band": "over_200",
+      "family": "notification",
+      "lines": 211,
+      "path": "bin/omarchy-notification-send",
+      "sha256": "93f2e88fe86b03cc636a451cc0b1d766970ef85f32e98eb4fde2bd48a4ba1345"
+    },
+    {
+      "band": "under_50",
+      "family": "pkg",
+      "lines": 18,
+      "path": "bin/omarchy-pkg-aur-add",
+      "sha256": "ec2f57b0d153bb814cae344618f61603282cbedce0012647b2c391d9000cd5f6"
+    },
+    {
+      "band": "under_50",
+      "family": "pkg",
+      "lines": 12,
+      "path": "bin/omarchy-pkg-missing",
+      "sha256": "c4f92a3341fc894614ca93a6134d284742ceff8c01e1712c8d484f74207a1473"
+    },
+    {
+      "band": "50_to_200",
+      "family": "plugin",
+      "lines": 175,
+      "path": "bin/omarchy-plugin-add",
+      "sha256": "fc8eb1486275e308037ca8f284fbb0eb4e010dec593260519695c79414a4b9fb"
+    },
+    {
+      "band": "50_to_200",
+      "family": "plugin",
+      "lines": 62,
+      "path": "bin/omarchy-plugin-catalog",
+      "sha256": "f995166899b794b49ac15a256cce4b1513648870a9c951c680c8fac18f627ab8"
+    },
+    {
+      "band": "50_to_200",
+      "family": "plugin",
+      "lines": 133,
+      "path": "bin/omarchy-plugin-update",
+      "sha256": "9509f925d230863ffd5246965cbaab87818c53c718bcc5deea68bea3a38a17c4"
+    },
+    {
+      "band": "under_50",
+      "family": "plymouth",
+      "lines": 9,
+      "path": "bin/omarchy-plymouth-reset",
+      "sha256": "6c562030ba69adeaf58b80720ed8be5cf3dd66ebbe6fdb97a9e6a5c71eb3d334"
+    },
+    {
+      "band": "over_200",
+      "family": "plymouth",
+      "lines": 381,
+      "path": "bin/omarchy-plymouth-set",
+      "sha256": "d45a69445f1fd086baaca913c804b60af069dc49eba0073d94cc7824f50d0a14"
+    },
+    {
+      "band": "50_to_200",
+      "family": "plymouth",
+      "lines": 53,
+      "path": "bin/omarchy-plymouth-set-by-theme",
+      "sha256": "d45f0dc115a09eed5f66019ee7bf8c33519b762524aa4305099d341de57e1a8e"
+    },
+    {
+      "band": "over_200",
+      "family": "provision",
+      "lines": 1139,
+      "path": "bin/omarchy-provision-owner",
+      "sha256": "5c71fd5730473850a598628e1d82dda3b5517a31b8a8b1e64e24e08ee73b7dea"
+    },
+    {
+      "band": "50_to_200",
+      "family": "provision",
+      "lines": 130,
+      "path": "bin/omarchy-provision-user",
+      "sha256": "324a7a6d589dda2052eaf35e335c002f2a26c65c818c69a1711f20595fa0b91d"
+    },
+    {
+      "band": "under_50",
+      "family": "refresh",
+      "lines": 6,
+      "path": "bin/omarchy-refresh-herdr",
+      "sha256": "a2db4f1394a23d6b03ee9a4f82a35bf13339f81c72ef8f645931282f5425a938"
+    },
+    {
+      "band": "under_50",
+      "family": "refresh",
+      "lines": 14,
+      "path": "bin/omarchy-refresh-hyprland",
+      "sha256": "4860c774ac268786edc869f43466a4ffccd6eed34e9310afe8a7f843a2108417"
+    },
+    {
+      "band": "under_50",
+      "family": "refresh",
+      "lines": 19,
+      "path": "bin/omarchy-refresh-limine",
+      "sha256": "cd0c5bbfa0e3122661a505a81c8de7abccd0b7c09a092b77e7465fe8974f850f"
+    },
+    {
+      "band": "under_50",
+      "family": "reinstall",
+      "lines": 18,
+      "path": "bin/omarchy-reinstall-pkgs",
+      "sha256": "178cf3519361222ac7fb8f8b468f6b2add50eb49be39653317364f51fcd16dd9"
+    },
+    {
+      "band": "over_200",
+      "family": "reminder",
+      "lines": 201,
+      "path": "bin/omarchy-reminder",
+      "sha256": "1c43da0ad54ff06a5dfa14af62bded6b17d9a15550094a717230b5af9ad8de12"
+    },
+    {
+      "band": "50_to_200",
+      "family": "remove",
+      "lines": 147,
+      "path": "bin/omarchy-remove-ai-hermes",
+      "sha256": "dd4311d1ac4f0fd21a32869ed2cea7f0ceaf157a8ddfd568620688fc74918a0d"
+    },
+    {
+      "band": "50_to_200",
+      "family": "remove",
+      "lines": 70,
+      "path": "bin/omarchy-remove-browser",
+      "sha256": "9e7d4bead390ddd4859e7bcf2381ce15f5c91176be6941db2ed2a4a118b1e136"
+    },
+    {
+      "band": "under_50",
+      "family": "remove",
+      "lines": 21,
+      "path": "bin/omarchy-remove-gaming-lutris",
+      "sha256": "dc074a63e82671052d1d0122551ff30bc8f4efe56c6604ca5de638051a03a2c2"
+    },
+    {
+      "band": "under_50",
+      "family": "remove",
+      "lines": 37,
+      "path": "bin/omarchy-remove-gaming-retroarch",
+      "sha256": "dedd1b04cee65e06b8bd45f15a3afb16780ba057e84d67c1e73512a385d6dc94"
+    },
+    {
+      "band": "50_to_200",
+      "family": "remove",
+      "lines": 101,
+      "path": "bin/omarchy-remove-launcher-entry",
+      "sha256": "7a821e855fb899cbf0cdb3439de5676debda4d998ca332ecd8198fc05523bd7c"
+    },
+    {
+      "band": "under_50",
+      "family": "remove",
+      "lines": 39,
+      "path": "bin/omarchy-remove-security-fingerprint",
+      "sha256": "d143f011036dbc4cee62168c508c94a9fa9c90174911fbf531f7858c859703fd"
+    },
+    {
+      "band": "under_50",
+      "family": "remove",
+      "lines": 34,
+      "path": "bin/omarchy-remove-security-sudoless-docker",
+      "sha256": "5e623a5e1e38e8de5db9f8294ed6b4cb0232633c3050d4d6fbca3a3b90acbed4"
+    },
+    {
+      "band": "over_200",
+      "family": "restart",
+      "lines": 225,
+      "path": "bin/omarchy-restart-audio",
+      "sha256": "6d6920ec86683b8dd976cec3ae123784071041ae49d2aaf728510e10ee6854d5"
+    },
+    {
+      "band": "under_50",
+      "family": "restart",
+      "lines": 13,
+      "path": "bin/omarchy-restart-herdr",
+      "sha256": "6876b813c7462dbf91446cbc3215220e23576cdf2bf225a57c35b86e7e2b07fc"
+    },
+    {
+      "band": "under_50",
+      "family": "restart",
+      "lines": 7,
+      "path": "bin/omarchy-restart-tmux",
+      "sha256": "fce7ae138a2faf1578690e220d72c1ee171e724124445abe3ebd1218fbc6f8f9"
+    },
+    {
+      "band": "under_50",
+      "family": "restart",
+      "lines": 10,
+      "path": "bin/omarchy-restart-xcompose",
+      "sha256": "92385d794090f0951aae61b06681489b28ab800318044d40e595e0bc0673b3ca"
+    },
+    {
+      "band": "50_to_200",
+      "family": "setup",
+      "lines": 148,
+      "path": "bin/omarchy-setup-security-fido2",
+      "sha256": "0dd2e2c8bd76613c861a7a3f136cdcd7018a07b45805e207e3c0933d0820a955"
+    },
+    {
+      "band": "50_to_200",
+      "family": "setup",
+      "lines": 111,
+      "path": "bin/omarchy-setup-security-fingerprint",
+      "sha256": "e645f16dbee117f9e8d667da21d6d66197722a1df9a1730c108e0d325c807d59"
+    },
+    {
+      "band": "50_to_200",
+      "family": "shell",
+      "lines": 62,
+      "path": "bin/omarchy-shell-config",
+      "sha256": "7e8ec1ed47c28ac44a7622765caada68f3531688cbdac366127841f49e17b3b1"
+    },
+    {
+      "band": "over_200",
+      "family": "system",
+      "lines": 441,
+      "path": "bin/omarchy-system-factory-reset",
+      "sha256": "b4388a6b3827549d44df84234b39aab80a5aee96e3b269195b79edd3d7e41a66"
+    },
+    {
+      "band": "50_to_200",
+      "family": "system",
+      "lines": 168,
+      "path": "bin/omarchy-system-factory-reset-finish",
+      "sha256": "72ead5e21b597b1a91d6d0bf361ba5db6c81bee012728a34bb790b2e79aaa78e"
+    },
+    {
+      "band": "50_to_200",
+      "family": "system",
+      "lines": 59,
+      "path": "bin/omarchy-system-stats",
+      "sha256": "e1f1d344a83eb681986bbc8fcd577f1a9b26c426f721edfccd11811df967fca9"
+    },
+    {
+      "band": "under_50",
+      "family": "system",
+      "lines": 10,
+      "path": "bin/omarchy-system-wake",
+      "sha256": "fb938c20587b91e07d8870a3b85b697ee1502482dd7c2caa816720f8f8062962"
+    },
+    {
+      "band": "50_to_200",
+      "family": "tailscale",
+      "lines": 50,
+      "path": "bin/omarchy-tailscale-send",
+      "sha256": "8f7fc0093a97f2c92c392369e887522e6fb54fa92e8ed90b6c2467d134721ffa"
+    },
+    {
+      "band": "under_50",
+      "family": "theme",
+      "lines": 12,
+      "path": "bin/omarchy-theme-bg-current",
+      "sha256": "1231261e2dd6e374499b6b691cd70fac28b9f24a47b1d7ab3698f6cfb58f78e5"
+    },
+    {
+      "band": "over_200",
+      "family": "theme",
+      "lines": 304,
+      "path": "bin/omarchy-theme-color",
+      "sha256": "a429ed1b18114ff3e784fc4479c6b829e9effb64c0f9d22d3b15eda4c62d86b5"
+    },
+    {
+      "band": "50_to_200",
+      "family": "theme",
+      "lines": 63,
+      "path": "bin/omarchy-theme-install",
+      "sha256": "1fd7417d2d9b3b6f39e4b74ae00440a6cc36a48e706c589bd5a30e6a25702550"
+    },
+    {
+      "band": "under_50",
+      "family": "theme",
+      "lines": 39,
+      "path": "bin/omarchy-theme-remove",
+      "sha256": "b54fb5c978de6b85ae46ff07e8dc9ad407749aa6f4649b05d082ac1dcfefabc6"
+    },
+    {
+      "band": "over_200",
+      "family": "theme",
+      "lines": 348,
+      "path": "bin/omarchy-theme-set",
+      "sha256": "2356e6e19656fcc67aa345fc46352a310945e54146706c039bf92a7bd3b3fb5a"
+    },
+    {
+      "band": "50_to_200",
+      "family": "theme",
+      "lines": 123,
+      "path": "bin/omarchy-theme-set-browser-policy",
+      "sha256": "644aefa2176223e606c36552dd4c047be6ca8ded6635de90f298a3a086b89180"
+    },
+    {
+      "band": "under_50",
+      "family": "theme",
+      "lines": 20,
+      "path": "bin/omarchy-theme-set-foot",
+      "sha256": "6d1a182565330580c3bb584ea05a49c29cc9cb81a805627b2b22fab9e6a3e461"
+    },
+    {
+      "band": "over_200",
+      "family": "theme",
+      "lines": 233,
+      "path": "bin/omarchy-theme-set-hermes",
+      "sha256": "4ea6110df38ca4b40ec60d0f2c97fedd518eba84fccf6f6acf9aa85919b98d3d"
+    },
+    {
+      "band": "50_to_200",
+      "family": "theme",
+      "lines": 76,
+      "path": "bin/omarchy-theme-set-pi",
+      "sha256": "cbee4837e2f329bf91f1e269a5b3a7b6f4db08afa432d48130c2c8351d40635a"
+    },
+    {
+      "band": "under_50",
+      "family": "theme",
+      "lines": 34,
+      "path": "bin/omarchy-theme-set-t3code",
+      "sha256": "f2f056094a64a3ffaac538430e61f5b54d52455c153db81b85dce94e866e7efd"
+    },
+    {
+      "band": "over_200",
+      "family": "theme",
+      "lines": 404,
+      "path": "bin/omarchy-theme-set-templates",
+      "sha256": "add9154d012c12b5628128d71efcf216ed62024cef2370e3c5c470378c06d45f"
+    },
+    {
+      "band": "50_to_200",
+      "family": "theme",
+      "lines": 153,
+      "path": "bin/omarchy-theme-set-vscode",
+      "sha256": "8a59aab3cd06f498be18434c442ddd7ea0be05ce2b24c1101dc961e14637fa26"
+    },
+    {
+      "band": "under_50",
+      "family": "theme",
+      "lines": 10,
+      "path": "bin/omarchy-theme-update",
+      "sha256": "82da4b01cb983e010606ccf794a66a280ea61c7871a7f9aa1da2b52b67098099"
+    },
+    {
+      "band": "under_50",
+      "family": "toggle",
+      "lines": 42,
+      "path": "bin/omarchy-toggle",
+      "sha256": "f1e8dfb25e31a79fc8c5a4e6e9c1c91cd60a97a854c2e2a401793155980fee5c"
+    },
+    {
+      "band": "under_50",
+      "family": "toggle",
+      "lines": 13,
+      "path": "bin/omarchy-toggle-bar",
+      "sha256": "002131ac17964ea758a45fbe718583409c974a9e9b9c67e970773ac979e375c5"
+    },
+    {
+      "band": "50_to_200",
+      "family": "toggle",
+      "lines": 119,
+      "path": "bin/omarchy-toggle-hybrid-gpu",
+      "sha256": "dd7dd03eff1a4de00c8c2688247b1252362d646c3ecd4ca537a6559c706c2f4e"
+    },
+    {
+      "band": "50_to_200",
+      "family": "toggle",
+      "lines": 59,
+      "path": "bin/omarchy-toggle-nightlight",
+      "sha256": "da1a268c58df3633441a13c2f7d0e45a04c479bcc678d3fc545c2405848c4ac8"
+    },
+    {
+      "band": "over_200",
+      "family": "transcode",
+      "lines": 207,
+      "path": "bin/omarchy-transcode",
+      "sha256": "b9d6dc93b02f2cda683d6ff4713e5392be60ac9f480babce9ead2cd819465cd7"
+    },
+    {
+      "band": "over_200",
+      "family": "transcode",
+      "lines": 243,
+      "path": "bin/omarchy-transcode-ascii",
+      "sha256": "702d81c3207658bf4aac7a0a1a6a750d1b4cc3977296a8d5bfa4a39eb6f5b976"
+    },
+    {
+      "band": "50_to_200",
+      "family": "update",
+      "lines": 64,
+      "path": "bin/omarchy-update",
+      "sha256": "cd1b703031a7456b2bd1302166a2cd29a1db8007f15bed954f64e742502aa552"
+    },
+    {
+      "band": "under_50",
+      "family": "update",
+      "lines": 18,
+      "path": "bin/omarchy-update-confirm",
+      "sha256": "ed94d094d903513c24d66c5d90267276e6e02e54df5b092c47ab968f05d8dbff"
+    },
+    {
+      "band": "under_50",
+      "family": "update",
+      "lines": 21,
+      "path": "bin/omarchy-update-dev",
+      "sha256": "a3e73119adb0019d9204f38d5410e7813e6633f2cfba5a44d32bc043c9aa32f9"
+    },
+    {
+      "band": "under_50",
+      "family": "update",
+      "lines": 22,
+      "path": "bin/omarchy-update-keyring",
+      "sha256": "1a7277106e9f3de34325d27dac5bc6c8e778a83eabeeebcc4e0b921c66be74de"
+    },
+    {
+      "band": "50_to_200",
+      "family": "update",
+      "lines": 115,
+      "path": "bin/omarchy-update-system-pkgs-when-conflicted",
+      "sha256": "dae1379216754e372f749ce4a4f3232b20225d08e2d0784d7607bba113ebbc62"
+    },
+    {
+      "band": "over_200",
+      "family": "upgrade",
+      "lines": 2407,
+      "path": "bin/omarchy-upgrade-to-quattro",
+      "sha256": "d68b69ca3844507ea4c6219b458631c10c9c09e711f4acd96e7085ded0f576f4"
+    },
+    {
+      "band": "under_50",
+      "family": "version",
+      "lines": 29,
+      "path": "bin/omarchy-version-channel",
+      "sha256": "594142750d7d2a98f35f582473373224f6e172a9b6e2653372ea627b6be26031"
+    },
+    {
+      "band": "under_50",
+      "family": "voxtype",
+      "lines": 26,
+      "path": "bin/omarchy-voxtype-install",
+      "sha256": "72e582bb5c0610375ee5517ed9e3d4d7e6742a3fd82a6b4b1c4b453de418c525"
+    },
+    {
+      "band": "under_50",
+      "family": "weather",
+      "lines": 24,
+      "path": "bin/omarchy-weather-status",
+      "sha256": "454d1e0ceb988d2f618fedb025656ff4b0e30ca526d33b329231d23eb06b6fa3"
+    },
+    {
+      "band": "under_50",
+      "family": "webapp",
+      "lines": 23,
+      "path": "bin/omarchy-webapp-handler-zoom",
+      "sha256": "5396e3acad7a6598dacb1c2e32c454ba6b5ea31b1594fa106d11710d4b7f265f"
+    },
+    {
+      "band": "over_200",
+      "family": "webapp",
+      "lines": 241,
+      "path": "bin/omarchy-webapp-install",
+      "sha256": "aaaf178afce01b19ae2698e33d1fa2be6c4ceb5107ebc96ff64248493de75cef"
+    },
+    {
+      "band": "over_200",
+      "family": "windows",
+      "lines": 1591,
+      "path": "bin/omarchy-windows-vm",
+      "sha256": "25664986469a3a32f7739cd18c23cc6f3914026375f35577b3d30ab968d94738"
+    }
+  ],
+  "counts": {
+    "bands": {
+      "50_to_200": 56,
+      "over_200": 34,
+      "under_50": 60
+    },
+    "families": {
+      "agent": 4,
+      "apply": 1,
+      "audio": 4,
+      "bar": 2,
+      "battery": 2,
+      "bluetooth": 1,
+      "branding": 1,
+      "brightness": 2,
+      "capture": 4,
+      "channel": 1,
+      "chromium": 1,
+      "clipboard": 1,
+      "cmd": 1,
+      "crash": 1,
+      "debug": 1,
+      "default": 2,
+      "dev": 6,
+      "disk": 1,
+      "display": 1,
+      "dns": 1,
+      "drive": 2,
+      "font": 1,
+      "hibernation": 1,
+      "hook": 1,
+      "hw": 5,
+      "hyprland": 8,
+      "install": 10,
+      "installed": 1,
+      "launch": 6,
+      "menu": 6,
+      "migrate": 1,
+      "network": 2,
+      "notification": 2,
+      "omarchy": 1,
+      "pkg": 2,
+      "plugin": 3,
+      "plymouth": 3,
+      "provision": 2,
+      "refresh": 3,
+      "reinstall": 1,
+      "reminder": 1,
+      "remove": 7,
+      "restart": 4,
+      "setup": 2,
+      "shell": 1,
+      "system": 4,
+      "tailscale": 1,
+      "theme": 13,
+      "toggle": 4,
+      "transcode": 2,
+      "update": 5,
+      "upgrade": 1,
+      "version": 1,
+      "voxtype": 1,
+      "weather": 1,
+      "webapp": 2,
+      "windows": 1
+    }
+  },
+  "inventory": {
+    "command_count": 444,
+    "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+    "path": "docs/omarchy-inventory.json",
+    "release_tag": "v4.0.4",
+    "sha256": "ef6be335479f9f09f5f69ad8cd838cdca724a49da630eb7b3532f42e2a3cc2a4"
+  },
+  "issue": 397,
+  "method": "Band quotas from the requested 40/35/25 percent shares, capped at the band population and with any shortfall moved to the middle band. Family counts are apportioned inside each band in proportion to the band population of each family. Each band and family cell is drawn with random.Random seeded by seed, band and family name.",
+  "population": {
+    "bands": {
+      "50_to_200": 127,
+      "over_200": 34,
+      "under_50": 283
+    }
+  },
+  "quotas": {
+    "bands": {
+      "50_to_200": 56,
+      "over_200": 34,
+      "under_50": 60
+    },
+    "requested_band_share": {
+      "50_to_200": 0.35,
+      "over_200": 0.25,
+      "under_50": 0.4
+    }
+  },
+  "sample_size": 150,
+  "schema": 1,
+  "seed": 397
+}

@@ -3526,11 +3526,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             } else {
                 if let Some(journal) = journal.as_deref_mut() {
                     if !journal.persistence_failed() {
-                        journal.fail(
+                        journal.fail_with_exit_code(
                             &format!("{error:#}"),
                             parent_signals.cancelled.load(Ordering::Relaxed)
                                 || is_timeout_error(&error)
                                 || journal_uncertain,
+                            error
+                                .downcast_ref::<CommandFailed>()
+                                .and_then(|failure| failure.status.code()),
                         )?;
                     }
                 }
@@ -3638,12 +3641,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 AppliedControl::Rethrow(error) => {
                     if let Some(journal) = journal.as_deref_mut() {
                         if !journal.persistence_failed() {
-                            journal.fail(
+                            journal.fail_with_exit_code(
                                 &format!("{error:#}"),
                                 cancellation
                                     || parent_signals.cancelled.load(Ordering::Relaxed)
                                     || is_timeout_error(&error)
                                     || journal_uncertain,
+                                error
+                                    .downcast_ref::<CommandFailed>()
+                                    .and_then(|failure| failure.status.code()),
                             )?;
                         }
                     }

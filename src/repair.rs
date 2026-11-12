@@ -1230,6 +1230,78 @@ pub fn retry_operation(facts: FailureFacts, line: usize, count: u32) -> Result<O
     Operation::parse(&format!("add-retry {line} {count}"))
 }
 
+/// The exit status a suggestion treats as transient: sysexits `EX_TEMPFAIL`, a
+/// temporary failure that a later run may not hit.
+pub const TEMPORARY_FAILURE_EXIT: i32 = 75;
+
+/// What `repair --suggest` says about a failed checkpoint. Nothing is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    pub strategy: Strategy,
+    /// Why the strategy was chosen, in one sentence.
+    pub reason: String,
+    /// The operation text to apply, for a `RetryTransient` suggestion only.
+    pub operation_text: Option<String>,
+}
+
+/// Choose a repair strategy for a failed or interrupted checkpoint from its journal
+/// alone. The choice is deterministic and no model is called. The checkpoint is only
+/// read, so no file changes.
+pub fn suggest_for_checkpoint(checkpoint: &Path) -> Result<Suggestion> {
+    let state = crate::runtime::read_repair_state(checkpoint)?;
+    match state.status {
+        "failed" | "interrupted" => {}
+        other => bail!(
+            "the checkpoint is {other}; --suggest applies only to a failed or interrupted checkpoint"
+        ),
+    }
+    let Some(step) = state.failed_step else {
+        return Ok(Suggestion {
+            strategy: Strategy::Escalate,
+            reason: "no step was running when the checkpoint stopped".into(),
+            operation_text: None,
+        });
+    };
+    let facts = FailureFacts {
+        retryable_code: step.exit_code == Some(TEMPORARY_FAILURE_EXIT),
+        idempotent: step.retry_safe,
+        input_problem: false,
+        bounded_parameter: false,
+    };
+    let strategy = eligible_strategies(facts)
+        .into_iter()
+        .next()
+        .unwrap_or(Strategy::Escalate);
+    if strategy == Strategy::RetryTransient {
+        // Build the operation through the same guard and parser a person's `--op` uses.
+        retry_operation(facts, step.line, 1)?;
+        return Ok(Suggestion {
+            strategy,
+            reason: format!(
+                "the step at line {} exited with status {TEMPORARY_FAILURE_EXIT} and is retry-safe",
+                step.line
+            ),
+            operation_text: Some(format!("add-retry {} 1", step.line)),
+        });
+    }
+    let reason = if !step.retry_safe {
+        format!(
+            "the step at line {} is not retry-safe, so running it again could repeat an effect",
+            step.line
+        )
+    } else {
+        format!(
+            "the step at line {} did not fail with a temporary exit status ({TEMPORARY_FAILURE_EXIT})",
+            step.line
+        )
+    };
+    Ok(Suggestion {
+        strategy: Strategy::Escalate,
+        reason,
+        operation_text: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2319,6 +2391,84 @@ mod tests {
             input_problem,
             bounded_parameter: false,
         }
+    }
+
+    /// A checkpoint whose journal records one failed step at line 1, with the given
+    /// retry safety and exit status. Returns the checkpoint directory and its temp root.
+    fn failed_checkpoint(retry_safe: bool, exit_code: Option<i32>) -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = crate::runtime::checkpoint::failed_checkpoint_fixture(
+            temp.path(),
+            retry_safe,
+            exit_code,
+        );
+        (temp, directory)
+    }
+
+    #[test]
+    fn suggest_retries_a_retry_safe_step_that_exits_temporarily() {
+        let (_temp, directory) = failed_checkpoint(true, Some(TEMPORARY_FAILURE_EXIT));
+        let suggestion = suggest_for_checkpoint(&directory).unwrap();
+        assert_eq!(suggestion.strategy, Strategy::RetryTransient);
+        let text = suggestion.operation_text.expect("a retry operation");
+        assert_eq!(text, "add-retry 1 1");
+        assert!(Operation::parse(&text).is_ok());
+    }
+
+    #[test]
+    fn suggest_never_retries_a_step_that_is_not_retry_safe() {
+        let (_temp, directory) = failed_checkpoint(false, Some(TEMPORARY_FAILURE_EXIT));
+        let suggestion = suggest_for_checkpoint(&directory).unwrap();
+        assert_eq!(suggestion.strategy, Strategy::Escalate);
+        assert_eq!(suggestion.operation_text, None);
+        assert!(suggestion.reason.contains("not retry-safe"));
+    }
+
+    #[test]
+    fn suggest_escalates_a_failure_without_a_temporary_exit_status() {
+        for code in [Some(1), None] {
+            let (_temp, directory) = failed_checkpoint(true, code);
+            let suggestion = suggest_for_checkpoint(&directory).unwrap();
+            assert_eq!(suggestion.strategy, Strategy::Escalate);
+            assert_eq!(suggestion.operation_text, None);
+        }
+    }
+
+    #[test]
+    fn suggest_leaves_the_checkpoint_and_program_unchanged() {
+        let (temp, directory) = failed_checkpoint(true, Some(TEMPORARY_FAILURE_EXIT));
+        let program = temp.path().join("main.program");
+        let before = (
+            fs::read(directory.join("journal.json")).unwrap(),
+            fs::read(&program).unwrap(),
+        );
+        suggest_for_checkpoint(&directory).unwrap();
+        let after = (
+            fs::read(directory.join("journal.json")).unwrap(),
+            fs::read(&program).unwrap(),
+        );
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn suggested_retry_parses_and_dry_runs_against_the_checkpoint_program() {
+        let (_temp, directory) = failed_checkpoint(true, Some(TEMPORARY_FAILURE_EXIT));
+        let text = suggest_for_checkpoint(&directory)
+            .unwrap()
+            .operation_text
+            .expect("a retry operation");
+        let (program, completed) = repairable_program(&directory).unwrap();
+        let source = fs::read_to_string(&program).unwrap();
+        let boundary = boundary_line_at(&source, Some(&program), completed).unwrap();
+        let plan = apply_all_at(
+            &source,
+            Some(&program),
+            &[Operation::parse(&text).unwrap()],
+            boundary,
+            &Registry::default(),
+        )
+        .expect("the suggested operation dry-runs cleanly");
+        assert_ne!(plan.after, source, "the retry must change the program");
     }
 
     #[test]

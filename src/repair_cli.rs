@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str =
     "usage: execute repair CHECKPOINT --op '<operation>' [--op '<operation>' ...] [--dry-run] [--manifest-dir DIR]\n\
     usage: execute repair --from-record DIR --program FILE --op '<operation>' [--op '<operation>' ...] [--dry-run] [--manifest-dir DIR]\n\
+    usage: execute repair CHECKPOINT --suggest [--manifest-dir DIR]\n\
     operations: set-parameter LINE NAME VALUE | replace-command LINE STATEMENT | \
     insert-before LINE STATEMENT | remove LINE | add-retry LINE N \
     (LINE is a physical line, or a step id or label such as fetch; repeated --op values apply in order and the result is checked once)";
@@ -22,6 +23,7 @@ pub fn repair(arguments: &[String]) -> Result<()> {
     let mut operation_texts: Vec<String> = Vec::new();
     let mut manifest_dir = None;
     let mut dry_run = false;
+    let mut suggest = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -61,6 +63,7 @@ pub fn repair(arguments: &[String]) -> Result<()> {
                 ));
             }
             "--dry-run" => dry_run = true,
+            "--suggest" => suggest = true,
             option if option.starts_with("--") => {
                 bail!("unknown repair option {option:?}; {USAGE}")
             }
@@ -71,7 +74,7 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         }
         index += 1;
     }
-    if operation_texts.is_empty() {
+    if operation_texts.is_empty() && !suggest {
         bail!("{USAGE}");
     }
     let operations = operation_texts
@@ -87,6 +90,18 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         None,
         None,
     )?;
+
+    if suggest {
+        if !operation_texts.is_empty()
+            || dry_run
+            || from_record.is_some()
+            || program_override.is_some()
+        {
+            bail!("--suggest takes only a checkpoint directory and applies no operation; {USAGE}");
+        }
+        let directory = directory.with_context(|| USAGE.to_owned())?;
+        return suggest_repair(&directory, &registry);
+    }
 
     if let Some(record) = from_record {
         if directory.is_some() {
@@ -243,6 +258,37 @@ fn finish_repair(
         directory.join(repair::REPAIRS_FILE).display()
     )?;
     writeln!(out, "{next}")?;
+    Ok(())
+}
+
+/// `repair --suggest`: print the strategy chosen for a failed checkpoint and, for a
+/// retry, dry-run the operation against the program and print the command that applies
+/// it. A model is never called and nothing is written.
+fn suggest_repair(directory: &Path, registry: &flow::manifest::Registry) -> Result<()> {
+    let suggestion = repair::suggest_for_checkpoint(directory)?;
+    let mut out = io::stdout().lock();
+    writeln!(out, "strategy: {}", suggestion.strategy.label())?;
+    writeln!(out, "reason: {}", suggestion.reason)?;
+    if let Some(text) = &suggestion.operation_text {
+        let (program_path, completed_steps) = repair::repairable_program(directory)?;
+        let source = fs::read_to_string(&program_path)
+            .with_context(|| format!("reading {}", program_path.display()))?;
+        let operation = Operation::parse(text)?;
+        let plan = plan_repair(
+            &source,
+            &program_path,
+            completed_steps,
+            &[operation],
+            registry,
+        )?;
+        write!(out, "{}", plan.diff)?;
+        writeln!(
+            out,
+            "command: execute repair {} --op '{text}'",
+            directory.display()
+        )?;
+    }
+    writeln!(out, "nothing was written")?;
     Ok(())
 }
 

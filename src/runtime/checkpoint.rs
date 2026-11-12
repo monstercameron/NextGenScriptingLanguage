@@ -371,6 +371,10 @@ struct JournalData {
     /// the write and cleared when the event finishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     emitted_sha256: Option<String>,
+    /// The exit status of the native command that failed the checkpoint, when it
+    /// exited with one. Absent in older journals and for every other failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_exit_code: Option<i32>,
 }
 
 /// A local cursor for listener records admitted to a checkpoint. `stream_offset`
@@ -414,6 +418,8 @@ struct JournalDisk {
     listener_cursor: Option<ListenerEventCursor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     emitted_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_exit_code: Option<i32>,
 }
 
 /// Borrow the large snapshot and identity while retaining the on-disk field order.
@@ -431,6 +437,8 @@ struct JournalDiskRef<'a> {
     listener_cursor: &'a Option<ListenerEventCursor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     emitted_sha256: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_exit_code: &'a Option<i32>,
 }
 
 /// The envelope around any version's body. The body stays raw, so the checksum is
@@ -1039,6 +1047,7 @@ impl Journal {
                 error: None,
                 listener_cursor: None,
                 emitted_sha256: None,
+                failure_exit_code: None,
             };
             let mut journal = Self {
                 directory,
@@ -1692,6 +1701,18 @@ impl Journal {
     }
 
     pub fn fail(&mut self, message: &str, cancelled: bool) -> Result<()> {
+        self.fail_with_exit_code(message, cancelled, None)
+    }
+
+    /// Record a failure, with the exit status of the native command that failed when
+    /// it exited with one. `repair --suggest` reads the status to tell a transient
+    /// exit from other failures; the message is unchanged.
+    pub fn fail_with_exit_code(
+        &mut self,
+        message: &str,
+        cancelled: bool,
+        exit_code: Option<i32>,
+    ) -> Result<()> {
         if self.persistence_failed {
             bail!(
                 "checkpoint persistence failed after a node ran; preserving its durable in-flight record: {message}"
@@ -1699,6 +1720,7 @@ impl Journal {
         }
         let previous_status = self.data.status;
         let previous_error = self.data.error.replace(message.to_owned());
+        let previous_exit_code = std::mem::replace(&mut self.data.failure_exit_code, exit_code);
         self.data.status = if cancelled {
             Status::Interrupted
         } else {
@@ -1707,6 +1729,7 @@ impl Journal {
         if let Err(error) = self.persist() {
             self.data.status = previous_status;
             self.data.error = previous_error;
+            self.data.failure_exit_code = previous_exit_code;
             return Err(error);
         }
         Ok(())
@@ -2017,6 +2040,7 @@ impl Journal {
             error: &self.data.error,
             listener_cursor: &self.data.listener_cursor,
             emitted_sha256: &self.data.emitted_sha256,
+            failure_exit_code: &self.data.failure_exit_code,
         };
         if let Err(error) = write_envelope(
             &self.directory,
@@ -2561,6 +2585,50 @@ pub struct RepairState {
     /// Top-level steps covered by completed nodes. Steps from this index on are the
     /// failed or unexecuted suffix that a repair may change.
     pub completed_steps: usize,
+    /// The step that was running when a failed checkpoint stopped. `None` when no
+    /// step was in flight, and for every status other than `failed`.
+    pub failed_step: Option<FailedStep>,
+}
+
+/// The step a failed checkpoint stopped on, as its journal recorded it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FailedStep {
+    /// The step's first physical source line.
+    pub line: usize,
+    /// Whether running the step again repeats no effect the journal cannot see.
+    pub retry_safe: bool,
+    /// The exit status of the native command, when it failed with one.
+    pub exit_code: Option<i32>,
+}
+
+/// Test fixture for repair suggestions: writes `main.program` under `root`, then a
+/// checkpoint whose one step, at line 1, failed with the given retry safety and exit
+/// status. Returns the checkpoint directory.
+#[cfg(test)]
+pub(crate) fn failed_checkpoint_fixture(
+    root: &Path,
+    retry_safe: bool,
+    exit_code: Option<i32>,
+) -> PathBuf {
+    let program_path = root.join("main.program");
+    fs::write(&program_path, "run \"false\"\n").unwrap();
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    let options = CheckpointOptions {
+        directory: root.join("checkpoint"),
+        program_path,
+        resume: false,
+        retry_uncertain: false,
+    };
+    let mut journal = Journal::open_with_inputs(&options, &cwd, "finite", 1024, None).unwrap();
+    journal
+        .begin_node("fingerprint", 0, 1, 1, &cwd, retry_safe)
+        .unwrap();
+    journal
+        .fail_with_exit_code("step failed", false, exit_code)
+        .unwrap();
+    drop(journal);
+    options.directory
 }
 
 /// Read a checkpoint's journal, verifying its checksum, for `execute repair`. The
@@ -2574,6 +2642,14 @@ pub fn read_repair_state(directory: &Path) -> Result<RepairState> {
         Status::Completed => "completed",
         Status::Idle => "idle",
     };
+    let failed_step = match (data.status, &data.in_flight) {
+        (Status::Failed, Some(node)) => Some(FailedStep {
+            line: node.line,
+            retry_safe: node.retry_safe,
+            exit_code: data.failure_exit_code,
+        }),
+        _ => None,
+    };
     Ok(RepairState {
         status,
         program_path: data.identity.program_path.to_path(),
@@ -2583,6 +2659,7 @@ pub fn read_repair_state(directory: &Path) -> Result<RepairState> {
             .map(|node| node.end)
             .max()
             .unwrap_or(0),
+        failed_step,
     })
 }
 
@@ -2692,6 +2769,7 @@ fn read_journal_parts_file(
             error: disk.error,
             listener_cursor: disk.listener_cursor,
             emitted_sha256: disk.emitted_sha256,
+            failure_exit_code: disk.failure_exit_code,
         };
         (data, log)
     } else {

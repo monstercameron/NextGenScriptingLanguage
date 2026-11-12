@@ -530,7 +530,7 @@ pub mod dropin {
         ))
     }
 
-    fn sha256_hex(bytes: &[u8]) -> String {
+    pub(super) fn sha256_hex(bytes: &[u8]) -> String {
         let mut hex = String::with_capacity(64);
         for byte in Sha256::digest(bytes) {
             let _ = write!(hex, "{byte:02x}");
@@ -652,6 +652,22 @@ pub mod sudo_session {
     /// phase. The command is a vector of arguments, never a shell string.
     pub fn no_update_call(command: &[OsString]) -> SudoCall {
         let mut argv = vec![OsString::from("sudo"), OsString::from("-N")];
+        argv.extend(command.iter().cloned());
+        SudoCall {
+            argv,
+            env: SUDO_ENV,
+        }
+    }
+
+    /// `sudo -n -- <command...>`: run a fixed command without prompting. `-n` makes sudo fail
+    /// instead of asking for a password, and `--` ends sudo's own options, so the first word
+    /// of the command is never read as a sudo option. The command is a vector, never a shell.
+    pub fn non_interactive_call(command: &[OsString]) -> SudoCall {
+        let mut argv = vec![
+            OsString::from("sudo"),
+            OsString::from("-n"),
+            OsString::from("--"),
+        ];
         argv.extend(command.iter().cloned());
         SudoCall {
             argv,
@@ -822,6 +838,1266 @@ pub mod sudo_session {
         /// never gets here, which is why the runtime also ends the keepalive with the run.
         fn drop(&mut self) {
             let _ = self.revoke();
+        }
+    }
+}
+
+/// Elevated applet calls (issue #317).
+///
+/// One in-process applet call runs as root through a minimal helper, `execute-applet`
+/// (subcommand `elevated-applet`), instead of through a root shell. The interpreter keeps its
+/// own privileges. It runs `sudo -n -- <helper> elevated-applet` with the JSON request on
+/// standard input, and the helper calls `authorize_elevated` again before it dispatches,
+/// whatever the interpreter already checked.
+///
+/// This module is pure. It builds and parses the request, decides whether an applet and its
+/// paths may run as root, builds the transport argument vector, and renders the audit record
+/// for explain and what-if. It runs no process and reads no file. The allow-list and the
+/// parameter table are compiled in, and a test checks the table against the shipped manifests.
+///
+/// Path patterns are absolute and split on `/`. `*` matches any run of characters inside one
+/// component and never a `/`. `**` is a whole component that matches one or more whole
+/// components, so `/etc/sudoers.d/**` matches `/etc/sudoers.d/x` but not `/etc/sudoers.d`.
+/// Matching is anchored at both ends, so a prefix of a longer name never matches.
+pub mod elevated {
+    use std::ffi::OsString;
+    use std::fmt;
+
+    use serde::de::{self, Deserializer, MapAccess, Visitor};
+    use serde::{Deserialize, Serialize};
+    use serde_json::{json, Map, Value};
+
+    use super::dropin::sha256_hex;
+    use super::sudo_session::{non_interactive_call, SudoCall};
+
+    /// The protocol id of the request, in the house style (`execute.<name>/<n>`).
+    pub const PROTOCOL: &str = "execute.elevated_applet/1";
+    /// The request version. It must agree with the version at the end of `PROTOCOL`.
+    pub const VERSION: u32 = 1;
+    /// The largest request the helper reads, in bytes.
+    pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+    /// The fixed subcommand the transport passes to the helper.
+    pub const HELPER_SUBCOMMAND: &str = "elevated-applet";
+    const MAX_APPLET_NAME_BYTES: usize = 64;
+    const MAX_PATH_BYTES: usize = 4096;
+
+    /// How one parameter of an allowed applet is treated.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Kind {
+        /// A filesystem path. It must be absolute, normalized and inside the policy.
+        Path,
+        /// Text written to the target. The audit record holds its SHA-256, never the text.
+        Content,
+        /// A file mode. The audit record shows it.
+        Mode,
+        /// An owner. The audit record shows it.
+        Owner,
+        /// A group. The audit record shows it.
+        Group,
+        /// Any other parameter. It is not checked here; the applet validates it.
+        Other,
+    }
+
+    /// One applet on the allow-list, with every parameter its shipped manifest declares.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct AppletSpec {
+        pub name: &'static str,
+        pub params: &'static [(&'static str, Kind)],
+    }
+
+    /// The applets that may run as root. Each one changes only the files its path parameters
+    /// name. None reads arbitrary files, runs a process or uses the network. `fs.unlink_checked`,
+    /// `fs.transaction` and the `jsonc.*` applets are not listed; they need a separate decision.
+    /// The table repeats each shipped manifest's parameter names, and a test fails when a
+    /// manifest gains or loses one.
+    pub const ALLOWED_APPLETS: &[AppletSpec] = &[
+        AppletSpec {
+            name: "fs.ensure_file",
+            params: &[
+                ("path", Kind::Path),
+                ("content", Kind::Content),
+                ("mode", Kind::Mode),
+            ],
+        },
+        AppletSpec {
+            name: "fs.ensure_line",
+            params: &[
+                ("path", Kind::Path),
+                ("line", Kind::Content),
+                ("state", Kind::Other),
+            ],
+        },
+        AppletSpec {
+            name: "fs.ensure_dir",
+            params: &[("path", Kind::Path), ("mode", Kind::Mode)],
+        },
+        AppletSpec {
+            name: "fs.ensure_symlink",
+            params: &[("path", Kind::Path), ("target", Kind::Path)],
+        },
+        AppletSpec {
+            name: "fs.write_atomic",
+            params: &[
+                ("path", Kind::Path),
+                ("lock", Kind::Path),
+                ("content", Kind::Content),
+                ("mode", Kind::Mode),
+                ("expected_content_hash", Kind::Other),
+                ("symlink_policy", Kind::Other),
+                ("permissions_policy", Kind::Other),
+                ("lock_timeout_ms", Kind::Other),
+            ],
+        },
+        AppletSpec {
+            name: "conf.set",
+            params: &[
+                ("path", Kind::Path),
+                ("key", Kind::Other),
+                ("value", Kind::Content),
+                ("separator", Kind::Other),
+                ("comment", Kind::Other),
+                ("spaced", Kind::Other),
+                ("uncomment", Kind::Other),
+            ],
+        },
+        AppletSpec {
+            name: "conf.ensure_block",
+            params: &[
+                ("path", Kind::Path),
+                ("id", Kind::Other),
+                ("content", Kind::Content),
+                ("comment", Kind::Other),
+            ],
+        },
+        AppletSpec {
+            name: "conf.remove_block",
+            params: &[
+                ("path", Kind::Path),
+                ("id", Kind::Other),
+                ("comment", Kind::Other),
+            ],
+        },
+    ];
+
+    fn spec_for(name: &str) -> Option<&'static AppletSpec> {
+        ALLOWED_APPLETS.iter().find(|spec| spec.name == name)
+    }
+
+    fn kind_of(spec: &AppletSpec, parameter: &str) -> Option<Kind> {
+        spec.params
+            .iter()
+            .find(|(name, _)| *name == parameter)
+            .map(|(_, kind)| *kind)
+    }
+
+    /// Why a path was refused.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PathRefusal {
+        Empty,
+        NulByte,
+        TooLong,
+        NotAbsolute,
+        ParentComponent,
+        /// An empty component (`//`, a trailing `/`) or a `.` component.
+        Unnormalized,
+        NotAllowedByPolicy,
+    }
+
+    impl fmt::Display for PathRefusal {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(match self {
+                Self::Empty => "the path is empty",
+                Self::NulByte => "the path contains a NUL byte",
+                Self::TooLong => "the path is longer than the limit",
+                Self::NotAbsolute => "the path is relative; paths must be absolute",
+                Self::ParentComponent => "the path contains a '..' component",
+                Self::Unnormalized => "the path contains an empty or '.' component",
+                Self::NotAllowedByPolicy => "no path pattern in the policy allows this path",
+            })
+        }
+    }
+
+    /// Split an absolute path into its components. A relative path is refused, never resolved.
+    fn split_path(path: &str) -> Result<Vec<&str>, PathRefusal> {
+        if path.is_empty() {
+            return Err(PathRefusal::Empty);
+        }
+        if path.contains('\0') {
+            return Err(PathRefusal::NulByte);
+        }
+        if path.len() > MAX_PATH_BYTES {
+            return Err(PathRefusal::TooLong);
+        }
+        let Some(rest) = path.strip_prefix('/') else {
+            return Err(PathRefusal::NotAbsolute);
+        };
+        let parts: Vec<&str> = rest.split('/').collect();
+        for part in &parts {
+            match *part {
+                ".." => return Err(PathRefusal::ParentComponent),
+                "" | "." => return Err(PathRefusal::Unnormalized),
+                _ => {}
+            }
+        }
+        Ok(parts)
+    }
+
+    /// A glob component: `*` matches any run of characters, every other byte matches itself.
+    /// Anchored at both ends. Iterative, so a long name cannot blow the stack.
+    fn wildcard_matches(pattern: &str, text: &str) -> bool {
+        let pat = pattern.as_bytes();
+        let txt = text.as_bytes();
+        let (mut p, mut t) = (0usize, 0usize);
+        let mut star: Option<usize> = None;
+        let mut resume = 0usize;
+        while t < txt.len() {
+            if p < pat.len() && pat[p] == b'*' {
+                star = Some(p);
+                resume = t;
+                p += 1;
+            } else if p < pat.len() && pat[p] == txt[t] {
+                p += 1;
+                t += 1;
+            } else if let Some(star_at) = star {
+                p = star_at + 1;
+                resume += 1;
+                t = resume;
+            } else {
+                return false;
+            }
+        }
+        pat[p..].iter().all(|&byte| byte == b'*')
+    }
+
+    /// Whole-path matching over components. `**` consumes one or more components. Every other
+    /// segment consumes exactly one component and must match it with `wildcard_matches`.
+    /// The table runs in O(segments x components) and cannot backtrack exponentially.
+    fn segments_match(pattern: &[String], path: &[&str]) -> bool {
+        let mut reach = vec![false; path.len() + 1];
+        reach[0] = true;
+        for segment in pattern {
+            let mut next = vec![false; path.len() + 1];
+            if segment.as_str() == "**" {
+                // next[k] is true when some j < k is reachable, so ** took path[j..k].
+                let mut seen = false;
+                for (slot, &here) in next.iter_mut().zip(reach.iter()) {
+                    *slot = seen;
+                    seen |= here;
+                }
+            } else {
+                for (index, name) in path.iter().enumerate() {
+                    next[index + 1] = reach[index] && wildcard_matches(segment, name);
+                }
+            }
+            reach = next;
+        }
+        reach[path.len()]
+    }
+
+    /// A malformed policy pattern.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PatternError {
+        pub pattern: String,
+        pub reason: &'static str,
+    }
+
+    impl fmt::Display for PatternError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "policy path pattern {:?} {}",
+                self.pattern, self.reason
+            )
+        }
+    }
+
+    fn pattern_reason(refusal: PathRefusal) -> &'static str {
+        match refusal {
+            PathRefusal::Empty => "is empty",
+            PathRefusal::NulByte => "contains a NUL byte",
+            PathRefusal::TooLong => "is too long",
+            PathRefusal::NotAbsolute => "must be absolute",
+            PathRefusal::ParentComponent => "contains a '..' component",
+            PathRefusal::Unnormalized => "contains an empty or '.' component",
+            PathRefusal::NotAllowedByPolicy => "is not a valid pattern",
+        }
+    }
+
+    fn parse_pattern(pattern: &str) -> Result<Vec<String>, PatternError> {
+        let fail = |reason: &'static str| PatternError {
+            pattern: pattern.to_string(),
+            reason,
+        };
+        let parts = split_path(pattern).map_err(|refusal| fail(pattern_reason(refusal)))?;
+        if parts
+            .iter()
+            .any(|part| part.contains("**") && *part != "**")
+        {
+            return Err(fail("uses '**' outside a whole component"));
+        }
+        Ok(parts.into_iter().map(str::to_string).collect())
+    }
+
+    /// The path patterns a helper allows. An empty policy allows nothing.
+    #[derive(Debug, Clone, PartialEq, Eq, Default)]
+    pub struct ElevationPolicy {
+        patterns: Vec<Vec<String>>,
+    }
+
+    impl ElevationPolicy {
+        /// Build a policy from patterns. A malformed pattern is an error, not a silent drop.
+        pub fn new<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<Self, PatternError> {
+            let mut parsed = Vec::new();
+            for pattern in patterns {
+                parsed.push(parse_pattern(pattern)?);
+            }
+            Ok(Self { patterns: parsed })
+        }
+
+        /// `Ok` when the path is absolute, normalized and matches at least one pattern.
+        pub fn check_path(&self, path: &str) -> Result<(), PathRefusal> {
+            let parts = split_path(path)?;
+            if self
+                .patterns
+                .iter()
+                .any(|segments| segments_match(segments, &parts))
+            {
+                Ok(())
+            } else {
+                Err(PathRefusal::NotAllowedByPolicy)
+            }
+        }
+    }
+
+    /// The largest protocol request that is accepted, checked before parsing.
+    fn check_size(bytes: usize) -> Result<(), RequestError> {
+        if bytes > MAX_REQUEST_BYTES {
+            Err(RequestError::TooLarge {
+                bytes,
+                limit: MAX_REQUEST_BYTES,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn well_formed_applet_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= MAX_APPLET_NAME_BYTES
+            && name.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'.'
+            })
+    }
+
+    /// One applet call as data: exactly one applet name and its JSON arguments.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct ElevatedRequest {
+        applet: String,
+        arguments: Map<String, Value>,
+    }
+
+    impl ElevatedRequest {
+        pub fn new(applet: &str, arguments: Map<String, Value>) -> Result<Self, RequestError> {
+            if !well_formed_applet_name(applet) {
+                return Err(RequestError::BadAppletName {
+                    name: applet.to_string(),
+                });
+            }
+            Ok(Self {
+                applet: applet.to_string(),
+                arguments,
+            })
+        }
+
+        pub fn applet(&self) -> &str {
+            &self.applet
+        }
+
+        pub fn arguments(&self) -> &Map<String, Value> {
+            &self.arguments
+        }
+    }
+
+    /// A request that is malformed or outside the protocol. None of these runs anything.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum RequestError {
+        TooLarge { bytes: usize, limit: usize },
+        Malformed { message: String },
+        WrongProtocol { found: String },
+        UnsupportedVersion { found: u32 },
+        BadAppletName { name: String },
+    }
+
+    impl fmt::Display for RequestError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::TooLarge { bytes, limit } => {
+                    write!(formatter, "request is {bytes} bytes; the limit is {limit}")
+                }
+                Self::Malformed { message } => write!(formatter, "malformed request: {message}"),
+                Self::WrongProtocol { found } => write!(
+                    formatter,
+                    "unexpected protocol {found:?}; expected {:?}",
+                    PROTOCOL
+                ),
+                Self::UnsupportedVersion { found } => {
+                    write!(formatter, "unsupported request version {found}")
+                }
+                Self::BadAppletName { name } => {
+                    write!(formatter, "applet name {name:?} is not a valid name")
+                }
+            }
+        }
+    }
+
+    /// The wire form. `deny_unknown_fields` refuses extra keys, and the arguments must be an
+    /// object with no repeated key.
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Wire {
+        protocol: String,
+        version: u32,
+        applet: String,
+        #[serde(deserialize_with = "strict_arguments")]
+        arguments: Map<String, Value>,
+    }
+
+    /// Accepts only a JSON object and refuses a repeated top-level argument key. Values are
+    /// parsed as ordinary JSON; a repeated key inside a nested value is not checked here.
+    fn strict_arguments<'de, D>(deserializer: D) -> Result<Map<String, Value>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Arguments;
+
+        impl<'de> Visitor<'de> for Arguments {
+            type Value = Map<String, Value>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON object of applet arguments")
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut arguments = Map::new();
+                while let Some((key, value)) = access.next_entry::<String, Value>()? {
+                    if arguments.contains_key(&key) {
+                        return Err(de::Error::custom(format!("duplicate argument {key:?}")));
+                    }
+                    arguments.insert(key, value);
+                }
+                Ok(arguments)
+            }
+        }
+
+        deserializer.deserialize_map(Arguments)
+    }
+
+    /// Serialise a request to the bytes the helper reads on standard input. The output is one
+    /// JSON object. Its argument keys are in sorted order, so the same request always gives the
+    /// same bytes.
+    pub fn encode_request(request: &ElevatedRequest) -> Result<Vec<u8>, RequestError> {
+        let wire = Wire {
+            protocol: PROTOCOL.to_string(),
+            version: VERSION,
+            applet: request.applet.clone(),
+            arguments: request.arguments.clone(),
+        };
+        let bytes = serde_json::to_vec(&wire).map_err(|error| RequestError::Malformed {
+            message: error.to_string(),
+        })?;
+        check_size(bytes.len())?;
+        Ok(bytes)
+    }
+
+    /// Parse the helper's standard input. It must be exactly one JSON object with the right
+    /// protocol and version, no unknown or repeated top-level key, a valid applet name and an
+    /// object of arguments.
+    pub fn decode_request(bytes: &[u8]) -> Result<ElevatedRequest, RequestError> {
+        check_size(bytes.len())?;
+        let wire: Wire =
+            serde_json::from_slice(bytes).map_err(|error| RequestError::Malformed {
+                message: error.to_string(),
+            })?;
+        if wire.protocol != PROTOCOL {
+            return Err(RequestError::WrongProtocol {
+                found: wire.protocol,
+            });
+        }
+        if wire.version != VERSION {
+            return Err(RequestError::UnsupportedVersion {
+                found: wire.version,
+            });
+        }
+        ElevatedRequest::new(&wire.applet, wire.arguments)
+    }
+
+    /// Why a request was refused. Nothing ran.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Refusal {
+        AppletNotAllowed {
+            applet: String,
+        },
+        UnknownParameter {
+            applet: &'static str,
+            parameter: String,
+        },
+        NotAString {
+            applet: &'static str,
+            parameter: String,
+        },
+        Path {
+            applet: &'static str,
+            parameter: String,
+            path: String,
+            reason: PathRefusal,
+        },
+    }
+
+    impl fmt::Display for Refusal {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::AppletNotAllowed { applet } => write!(
+                    formatter,
+                    "applet {applet:?} is not on the elevation allow-list"
+                ),
+                Self::UnknownParameter { applet, parameter } => {
+                    write!(formatter, "{applet} has no parameter {parameter:?}")
+                }
+                Self::NotAString { applet, parameter } => {
+                    write!(
+                        formatter,
+                        "parameter {parameter:?} of {applet} must be a string"
+                    )
+                }
+                Self::Path {
+                    applet,
+                    parameter,
+                    path,
+                    reason,
+                } => write!(
+                    formatter,
+                    "parameter {parameter:?} of {applet} refused for {path:?}: {reason}"
+                ),
+            }
+        }
+    }
+
+    /// A request the helper may run. It can be built only by `authorize_elevated`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Authorized {
+        request: ElevatedRequest,
+        spec: &'static AppletSpec,
+    }
+
+    impl Authorized {
+        pub fn applet(&self) -> &'static str {
+            self.spec.name
+        }
+
+        pub fn request(&self) -> &ElevatedRequest {
+            &self.request
+        }
+    }
+
+    /// The helper-side check, run again inside the helper whatever the interpreter checked.
+    /// The applet must be on the compiled-in list. Every argument must be a declared
+    /// parameter. Every path parameter must be a string that passes the path rules and the
+    /// policy, and every content parameter must be a string.
+    pub fn authorize_elevated(
+        request: &ElevatedRequest,
+        policy: &ElevationPolicy,
+    ) -> Result<Authorized, Refusal> {
+        let Some(spec) = spec_for(request.applet()) else {
+            return Err(Refusal::AppletNotAllowed {
+                applet: request.applet().to_string(),
+            });
+        };
+        for (parameter, value) in request.arguments() {
+            let Some(kind) = kind_of(spec, parameter) else {
+                return Err(Refusal::UnknownParameter {
+                    applet: spec.name,
+                    parameter: parameter.clone(),
+                });
+            };
+            if matches!(kind, Kind::Path | Kind::Content) && !value.is_string() {
+                return Err(Refusal::NotAString {
+                    applet: spec.name,
+                    parameter: parameter.clone(),
+                });
+            }
+            if let (Kind::Path, Some(path)) = (kind, value.as_str()) {
+                policy.check_path(path).map_err(|reason| Refusal::Path {
+                    applet: spec.name,
+                    parameter: parameter.clone(),
+                    path: path.to_string(),
+                    reason,
+                })?;
+            }
+        }
+        Ok(Authorized {
+            request: request.clone(),
+            spec,
+        })
+    }
+
+    /// The transport the interpreter runs: the argument vector and the bytes for standard
+    /// input. The request is on standard input only, never in argv.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ElevatedCall {
+        pub sudo: SudoCall,
+        pub stdin: Vec<u8>,
+    }
+
+    /// Why a transport could not be built.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum TransportError {
+        /// The helper path is relative, unnormalized or otherwise not a usable absolute path.
+        HelperPath(PathRefusal),
+        Request(RequestError),
+    }
+
+    impl fmt::Display for TransportError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::HelperPath(reason) => {
+                    write!(formatter, "the helper path is refused: {reason}")
+                }
+                Self::Request(error) => write!(formatter, "{error}"),
+            }
+        }
+    }
+
+    /// Build `sudo -n -- <helper> elevated-applet` with the fixed sudo environment and the
+    /// encoded request as standard input. The helper path must be absolute. A relative path
+    /// is refused rather than resolved, because the helper's working directory is not the
+    /// caller's.
+    pub fn transport_call(
+        helper: &str,
+        authorized: &Authorized,
+    ) -> Result<ElevatedCall, TransportError> {
+        split_path(helper)
+            .map(|_| ())
+            .map_err(TransportError::HelperPath)?;
+        let stdin = encode_request(authorized.request()).map_err(TransportError::Request)?;
+        let sudo =
+            non_interactive_call(&[OsString::from(helper), OsString::from(HELPER_SUBCOMMAND)]);
+        Ok(ElevatedCall { sudo, stdin })
+    }
+
+    /// What explain and what-if list for an elevated call. A content argument appears only as
+    /// its SHA-256. Owner, group and mode appear when the spec declares them and the call sets
+    /// them.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct AuditRecord {
+        pub applet: &'static str,
+        /// (parameter, path), in parameter-name order.
+        pub paths: Vec<(String, String)>,
+        /// (parameter, SHA-256 in lowercase hex) for each content parameter.
+        pub content_sha256: Vec<(String, String)>,
+        pub mode: Option<Value>,
+        pub owner: Option<Value>,
+        pub group: Option<Value>,
+    }
+
+    pub fn audit_record(authorized: &Authorized) -> AuditRecord {
+        let spec = authorized.spec;
+        let mut record = AuditRecord {
+            applet: spec.name,
+            paths: Vec::new(),
+            content_sha256: Vec::new(),
+            mode: None,
+            owner: None,
+            group: None,
+        };
+        for (parameter, value) in authorized.request().arguments() {
+            match kind_of(spec, parameter) {
+                Some(Kind::Path) => {
+                    if let Some(path) = value.as_str() {
+                        record.paths.push((parameter.clone(), path.to_string()));
+                    }
+                }
+                Some(Kind::Content) => {
+                    if let Some(text) = value.as_str() {
+                        record
+                            .content_sha256
+                            .push((parameter.clone(), sha256_hex(text.as_bytes())));
+                    }
+                }
+                Some(Kind::Mode) => record.mode = Some(value.clone()),
+                Some(Kind::Owner) => record.owner = Some(value.clone()),
+                Some(Kind::Group) => record.group = Some(value.clone()),
+                Some(Kind::Other) | None => {}
+            }
+        }
+        record
+    }
+
+    impl AuditRecord {
+        pub fn to_json(&self) -> Value {
+            let mut object = Map::new();
+            object.insert("applet".to_string(), Value::from(self.applet));
+            object.insert(
+                "paths".to_string(),
+                Value::Array(
+                    self.paths
+                        .iter()
+                        .map(|(parameter, path)| json!({"parameter": parameter, "path": path}))
+                        .collect(),
+                ),
+            );
+            object.insert(
+                "content".to_string(),
+                Value::Array(
+                    self.content_sha256
+                        .iter()
+                        .map(
+                            |(parameter, digest)| json!({"parameter": parameter, "sha256": digest}),
+                        )
+                        .collect(),
+                ),
+            );
+            if let Some(mode) = &self.mode {
+                object.insert("mode".to_string(), mode.clone());
+            }
+            if let Some(owner) = &self.owner {
+                object.insert("owner".to_string(), owner.clone());
+            }
+            if let Some(group) = &self.group {
+                object.insert("group".to_string(), group.clone());
+            }
+            Value::Object(object)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::sudo_session::SUDO_ENV;
+        use super::*;
+        use sha2::{Digest, Sha256};
+        use std::fs;
+        use std::path::Path;
+
+        fn policy(patterns: &[&str]) -> ElevationPolicy {
+            ElevationPolicy::new(patterns.iter().copied()).expect("the test policy is valid")
+        }
+
+        fn request(applet: &str, arguments: Value) -> ElevatedRequest {
+            let Value::Object(map) = arguments else {
+                panic!("test arguments must be a JSON object");
+            };
+            ElevatedRequest::new(applet, map).expect("the test request is well formed")
+        }
+
+        fn outcome(
+            patterns: &[&str],
+            applet: &str,
+            arguments: Value,
+        ) -> Result<Authorized, Refusal> {
+            authorize_elevated(&request(applet, arguments), &policy(patterns))
+        }
+
+        fn allowed(patterns: &[&str], path: &str) -> bool {
+            outcome(patterns, "fs.ensure_dir", json!({"path": path})).is_ok()
+        }
+
+        fn path_reason(patterns: &[&str], path: &str) -> PathRefusal {
+            match outcome(patterns, "fs.ensure_dir", json!({"path": path})) {
+                Err(Refusal::Path { reason, .. }) => reason,
+                other => panic!("expected a path refusal for {path:?}, got {other:?}"),
+            }
+        }
+
+        fn sample_authorized() -> Authorized {
+            outcome(
+                &["/srv/test/**"],
+                "fs.ensure_file",
+                json!({"path": "/srv/test/a", "content": "SECRET-LINE\n"}),
+            )
+            .expect("the sample call is allowed")
+        }
+
+        #[test]
+        fn request_round_trips_and_encodes_one_sorted_json_object() {
+            let original = request(
+                "fs.ensure_file",
+                json!({"path": "/srv/app/a.conf", "content": "x=1\n", "mode": "0640"}),
+            );
+            let bytes = encode_request(&original).expect("encodes");
+            let value: Value = serde_json::from_slice(&bytes).expect("the bytes are JSON");
+            assert_eq!(
+                value,
+                json!({
+                    "protocol": PROTOCOL,
+                    "version": 1,
+                    "applet": "fs.ensure_file",
+                    "arguments": {"path": "/srv/app/a.conf", "content": "x=1\n", "mode": "0640"}
+                })
+            );
+            let decoded = decode_request(&bytes).expect("decodes");
+            assert_eq!(decoded, original);
+            assert_eq!(encode_request(&decoded).expect("re-encodes"), bytes);
+        }
+
+        #[test]
+        fn request_refuses_extra_fields_wrong_protocol_and_wrong_version() {
+            let body = |protocol: &str, version: &str, extra: &str| {
+                format!(
+                    r#"{{"protocol":"{protocol}","version":{version},"applet":"fs.ensure_dir","arguments":{{"path":"/srv/a"}}{extra}}}"#
+                )
+            };
+            assert!(decode_request(body(PROTOCOL, "1", "").as_bytes()).is_ok());
+            assert!(matches!(
+                decode_request(body(PROTOCOL, "1", r#","extra":true"#).as_bytes()),
+                Err(RequestError::Malformed { .. })
+            ));
+            assert!(matches!(
+                decode_request(body("execute.elevated_applet/2", "1", "").as_bytes()),
+                Err(RequestError::WrongProtocol { .. })
+            ));
+            assert!(matches!(
+                decode_request(body(PROTOCOL, "2", "").as_bytes()),
+                Err(RequestError::UnsupportedVersion { found: 2 })
+            ));
+            let without_version = r#"{"protocol":"execute.elevated_applet/1","applet":"fs.ensure_dir","arguments":{}}"#;
+            assert!(matches!(
+                decode_request(without_version.as_bytes()),
+                Err(RequestError::Malformed { .. })
+            ));
+        }
+
+        #[test]
+        fn request_refuses_non_object_arguments_repeated_keys_and_trailing_data() {
+            let head =
+                r#"{"protocol":"execute.elevated_applet/1","version":1,"applet":"fs.ensure_dir""#;
+            for arguments in [r#""/srv/a""#, "[]", "null", "7"] {
+                let text = format!(r#"{head},"arguments":{arguments}}}"#);
+                assert!(
+                    matches!(
+                        decode_request(text.as_bytes()),
+                        Err(RequestError::Malformed { .. })
+                    ),
+                    "arguments {arguments} must be refused"
+                );
+            }
+            let repeated_argument =
+                format!(r#"{head},"arguments":{{"path":"/srv/a","path":"/etc/x"}}}}"#);
+            assert!(matches!(
+                decode_request(repeated_argument.as_bytes()),
+                Err(RequestError::Malformed { .. })
+            ));
+            let repeated_field =
+                format!(r#"{head},"applet":"fs.ensure_dir","arguments":{{"path":"/srv/a"}}}}"#);
+            assert!(matches!(
+                decode_request(repeated_field.as_bytes()),
+                Err(RequestError::Malformed { .. })
+            ));
+            let trailing = format!(r#"{head},"arguments":{{"path":"/srv/a"}}}} {{}}"#);
+            assert!(matches!(
+                decode_request(trailing.as_bytes()),
+                Err(RequestError::Malformed { .. })
+            ));
+            assert!(matches!(
+                decode_request(&[0xff, 0xfe, b'{']),
+                Err(RequestError::Malformed { .. })
+            ));
+        }
+
+        #[test]
+        fn request_refuses_bad_applet_names_and_oversize_input() {
+            for name in [
+                "",
+                "FS.ENSURE_DIR",
+                "fs ensure",
+                "fs/../x",
+                "fs.ensure_dir ",
+            ] {
+                assert!(
+                    matches!(
+                        ElevatedRequest::new(name, Map::new()),
+                        Err(RequestError::BadAppletName { .. })
+                    ),
+                    "name {name:?} must be refused"
+                );
+            }
+            let oversize = vec![b' '; MAX_REQUEST_BYTES + 1];
+            assert!(matches!(
+                decode_request(&oversize),
+                Err(RequestError::TooLarge { .. })
+            ));
+        }
+
+        #[test]
+        fn every_allow_listed_applet_is_accepted_when_its_paths_are_in_policy() {
+            for spec in ALLOWED_APPLETS {
+                let mut arguments = Map::new();
+                for (name, kind) in spec.params {
+                    let value = match kind {
+                        Kind::Path => json!(format!("/srv/test/{name}")),
+                        Kind::Content => json!("text"),
+                        Kind::Mode => json!("0644"),
+                        Kind::Owner | Kind::Group => json!("root"),
+                        Kind::Other => json!("value"),
+                    };
+                    arguments.insert((*name).to_string(), value);
+                }
+                let request = ElevatedRequest::new(spec.name, arguments).expect("well formed");
+                let authorized = authorize_elevated(&request, &policy(&["/srv/test/**"]))
+                    .unwrap_or_else(|refusal| panic!("{}: {refusal}", spec.name));
+                assert_eq!(authorized.applet(), spec.name);
+            }
+        }
+
+        #[test]
+        fn representative_applets_outside_the_list_are_refused_by_name() {
+            for applet in [
+                "run",
+                "llm.ask",
+                "http.get",
+                "fs.read",
+                "exec.which",
+                "fs.unlink_checked",
+                "fs.transaction",
+                "jsonc.set",
+                "fs.ensure_file.bak",
+                "unknown.applet",
+            ] {
+                let refusal = outcome(
+                    &["/srv/test/**"],
+                    applet,
+                    json!({"path": "/srv/test/a", "content": "x"}),
+                )
+                .expect_err("the applet must be refused");
+                assert_eq!(
+                    refusal,
+                    Refusal::AppletNotAllowed {
+                        applet: applet.to_string()
+                    }
+                );
+            }
+        }
+
+        #[test]
+        fn hostile_parent_components_are_refused_even_inside_the_policy() {
+            assert_eq!(
+                path_reason(&["/etc/**"], "/etc/../root/.ssh/authorized_keys"),
+                PathRefusal::ParentComponent
+            );
+            assert_eq!(
+                path_reason(&["/etc/**"], "/etc/sudoers.d/../../root/x"),
+                PathRefusal::ParentComponent
+            );
+            assert_eq!(path_reason(&["/**"], "/a/.."), PathRefusal::ParentComponent);
+        }
+
+        #[test]
+        fn relative_and_unnormalized_paths_are_refused_not_resolved() {
+            let policy_all = &["/**"];
+            assert_eq!(
+                path_reason(policy_all, "etc/sudoers.d/x"),
+                PathRefusal::NotAbsolute
+            );
+            assert_eq!(path_reason(policy_all, "./x"), PathRefusal::NotAbsolute);
+            assert_eq!(path_reason(policy_all, "../x"), PathRefusal::NotAbsolute);
+            assert_eq!(path_reason(policy_all, ""), PathRefusal::Empty);
+            assert_eq!(
+                path_reason(policy_all, "//etc/x"),
+                PathRefusal::Unnormalized
+            );
+            assert_eq!(
+                path_reason(policy_all, "/etc/./x"),
+                PathRefusal::Unnormalized
+            );
+            assert_eq!(
+                path_reason(policy_all, "/etc/x/"),
+                PathRefusal::Unnormalized
+            );
+            assert_eq!(
+                path_reason(policy_all, "/etc//x"),
+                PathRefusal::Unnormalized
+            );
+        }
+
+        #[test]
+        fn nul_bytes_are_refused() {
+            assert_eq!(
+                path_reason(&["/etc/**"], "/etc/sudoers.d/x\0"),
+                PathRefusal::NulByte
+            );
+        }
+
+        #[test]
+        fn a_pattern_names_a_whole_directory_and_never_a_prefix_of_a_longer_name() {
+            let pattern = &["/etc/sudoers.d/*"];
+            assert!(allowed(pattern, "/etc/sudoers.d/omarchy"));
+            assert_eq!(
+                path_reason(pattern, "/etc/sudoers.d.evil/x"),
+                PathRefusal::NotAllowedByPolicy
+            );
+            assert_eq!(
+                path_reason(pattern, "/etc/sudoers.d"),
+                PathRefusal::NotAllowedByPolicy
+            );
+            assert_eq!(
+                path_reason(pattern, "/etc/sudoers"),
+                PathRefusal::NotAllowedByPolicy
+            );
+            assert_eq!(
+                path_reason(&["/etc/sudoers.d"], "/etc/sudoers.d.evil/x"),
+                PathRefusal::NotAllowedByPolicy
+            );
+        }
+
+        #[test]
+        fn a_star_stays_in_one_component_and_double_star_crosses_them() {
+            assert!(!allowed(&["/etc/sudoers.d/*"], "/etc/sudoers.d/a/b"));
+            assert!(allowed(&["/etc/sudoers.d/**"], "/etc/sudoers.d/a/b/c"));
+            assert!(!allowed(&["/etc/sudoers.d/**"], "/etc/sudoers.d"));
+            assert!(allowed(&["/etc/**/conf"], "/etc/a/b/conf"));
+            assert!(!allowed(&["/etc/**/conf"], "/etc/conf"));
+            assert!(allowed(&["/etc/pam.d/su*"], "/etc/pam.d/sudo"));
+            assert!(!allowed(&["/etc/pam.d/su*"], "/etc/pam.d/x/sudo"));
+            assert!(!allowed(&["/etc/pam.d/su*"], "/etc/pam.d/bsudo"));
+        }
+
+        #[test]
+        fn an_empty_policy_allows_nothing() {
+            assert_eq!(
+                path_reason(&[], "/etc/sudoers.d/x"),
+                PathRefusal::NotAllowedByPolicy
+            );
+            assert_eq!(path_reason(&[], "/srv/x"), PathRefusal::NotAllowedByPolicy);
+        }
+
+        #[test]
+        fn malformed_patterns_are_rejected_when_the_policy_is_built() {
+            for bad in [
+                "",
+                "etc/**",
+                "/etc/../x",
+                "/etc//x",
+                "/etc/**x",
+                "/etc/a\0",
+                "/etc/./x",
+                "/",
+            ] {
+                assert!(
+                    ElevationPolicy::new([bad]).is_err(),
+                    "pattern {bad:?} must be refused"
+                );
+            }
+            assert!(ElevationPolicy::new(["/etc/sudoers.d/*"]).is_ok());
+        }
+
+        #[test]
+        fn path_parameters_must_be_strings_and_undeclared_parameters_are_refused() {
+            assert!(matches!(
+                outcome(&["/**"], "fs.ensure_dir", json!({"path": ["/etc/x"]})),
+                Err(Refusal::NotAString { parameter, .. }) if parameter == "path"
+            ));
+            assert!(matches!(
+                outcome(
+                    &["/etc/**"],
+                    "fs.ensure_file",
+                    json!({"path": "/etc/a", "content": "x", "lock": "/etc/b"}),
+                ),
+                Err(Refusal::UnknownParameter { parameter, .. }) if parameter == "lock"
+            ));
+        }
+
+        #[test]
+        fn a_second_path_parameter_is_checked_too() {
+            assert!(matches!(
+                outcome(
+                    &["/srv/test/**"],
+                    "fs.ensure_symlink",
+                    json!({"path": "/srv/test/l", "target": "/etc/../shadow"}),
+                ),
+                Err(Refusal::Path { parameter, reason: PathRefusal::ParentComponent, .. })
+                    if parameter == "target"
+            ));
+        }
+
+        #[test]
+        fn the_table_matches_the_shipped_manifests() {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+            let manifests: Vec<Value> = fs::read_dir(&dir)
+                .expect("the manifests directory is readable")
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+                .map(|path| {
+                    let text = fs::read_to_string(&path).expect("the manifest is readable");
+                    serde_json::from_str(&text).expect("the manifest is JSON")
+                })
+                .collect();
+            for spec in ALLOWED_APPLETS {
+                let matching: Vec<&Value> = manifests
+                    .iter()
+                    .filter(|manifest| manifest["name"] == spec.name)
+                    .collect();
+                assert_eq!(
+                    matching.len(),
+                    1,
+                    "exactly one manifest must declare {}",
+                    spec.name
+                );
+                let declared = matching[0]["parameters"]
+                    .as_object()
+                    .expect("the manifest declares parameters");
+                let mut declared_names: Vec<&str> = declared.keys().map(String::as_str).collect();
+                declared_names.sort_unstable();
+                let mut table_names: Vec<&str> =
+                    spec.params.iter().map(|(name, _)| *name).collect();
+                table_names.sort_unstable();
+                assert_eq!(
+                    table_names, declared_names,
+                    "{} gained or lost a parameter; update ALLOWED_APPLETS",
+                    spec.name
+                );
+                for (name, kind) in spec.params {
+                    let manifest_is_path = declared[*name]["type"] == "path";
+                    assert_eq!(
+                        *kind == Kind::Path,
+                        manifest_is_path,
+                        "{}.{} kind does not match its manifest type",
+                        spec.name,
+                        name
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn every_allow_listed_applet_is_in_the_applet_dispatch_table() {
+            let dispatch = include_str!("applets/mod.rs");
+            for spec in ALLOWED_APPLETS {
+                assert!(
+                    dispatch.contains(&format!("\"{}\" =>", spec.name)),
+                    "{} is not dispatched by src/applets/mod.rs",
+                    spec.name
+                );
+            }
+        }
+
+        #[test]
+        fn the_transport_argv_is_fixed_and_the_request_travels_on_stdin() {
+            let authorized = sample_authorized();
+            let call = transport_call("/usr/libexec/execute/execute-applet", &authorized)
+                .expect("the transport builds");
+            let argv: Vec<String> = call
+                .sudo
+                .argv
+                .iter()
+                .map(|part| part.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(
+                argv,
+                [
+                    "sudo",
+                    "-n",
+                    "--",
+                    "/usr/libexec/execute/execute-applet",
+                    "elevated-applet"
+                ]
+            );
+            assert_eq!(call.sudo.env, SUDO_ENV);
+            assert_eq!(
+                call.stdin,
+                encode_request(authorized.request()).expect("encodes")
+            );
+            assert!(String::from_utf8_lossy(&call.stdin).contains("SECRET-LINE"));
+            assert!(argv.iter().all(|part| {
+                !part.contains("SECRET")
+                    && !part.contains("/srv/test/a")
+                    && !part.contains("fs.ensure_file")
+            }));
+        }
+
+        #[test]
+        fn a_relative_or_hostile_helper_path_is_never_built() {
+            let authorized = sample_authorized();
+            for helper in [
+                "execute-applet",
+                "./execute-applet",
+                "/usr/../bin/execute-applet",
+                "",
+            ] {
+                assert!(
+                    matches!(
+                        transport_call(helper, &authorized),
+                        Err(TransportError::HelperPath(_))
+                    ),
+                    "helper {helper:?} must be refused"
+                );
+            }
+        }
+
+        #[test]
+        fn the_audit_record_names_paths_and_digests_but_never_content() {
+            let content = "auth required pam_unix.so PAM-SECRET-7\n";
+            let req = request(
+                "fs.write_atomic",
+                json!({
+                    "path": "/etc/pam.d/sudo",
+                    "lock": "/etc/pam.d/sudo.lock",
+                    "content": content,
+                    "mode": 420,
+                    "expected_content_hash": "0",
+                    "symlink_policy": "refuse",
+                    "permissions_policy": "keep",
+                    "lock_timeout_ms": 5000
+                }),
+            );
+            let authorized =
+                authorize_elevated(&req, &policy(&["/etc/pam.d/**"])).expect("allowed");
+            let record = audit_record(&authorized);
+            assert_eq!(record.applet, "fs.write_atomic");
+            assert!(record
+                .paths
+                .contains(&("path".to_string(), "/etc/pam.d/sudo".to_string())));
+            assert!(record
+                .paths
+                .contains(&("lock".to_string(), "/etc/pam.d/sudo.lock".to_string())));
+            let digest: String = Sha256::digest(content.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(
+                record.content_sha256,
+                vec![("content".to_string(), digest.clone())]
+            );
+            assert_eq!(record.mode, Some(json!(420)));
+            assert_eq!(record.owner, None);
+            assert_eq!(record.group, None);
+            let text = record.to_json().to_string();
+            assert!(!text.contains("PAM-SECRET-7"));
+            assert!(text.contains(&digest));
+        }
+
+        #[test]
+        fn the_audit_record_carries_owner_and_group_when_a_spec_declares_them() {
+            static SPEC: AppletSpec = AppletSpec {
+                name: "fs.ensure_dir",
+                params: &[
+                    ("path", Kind::Path),
+                    ("owner", Kind::Owner),
+                    ("group", Kind::Group),
+                ],
+            };
+            let authorized = Authorized {
+                request: request(
+                    "fs.ensure_dir",
+                    json!({"path": "/srv/test/d", "owner": "root", "group": "adm"}),
+                ),
+                spec: &SPEC,
+            };
+            let record = audit_record(&authorized);
+            assert_eq!(record.owner, Some(json!("root")));
+            assert_eq!(record.group, Some(json!("adm")));
+            assert_eq!(record.to_json()["group"], json!("adm"));
         }
     }
 }

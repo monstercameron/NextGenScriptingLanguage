@@ -387,7 +387,19 @@ fn windows_statuses(
 }
 fn execute_group_with_sink(
     request: GroupRequest<'_>,
+    sink: Option<&mut streaming::LineSink<'_>>,
+) -> Result<GroupOutput> {
+    let started = Instant::now();
+    // The inner call returns only after its children are dropped (killed and
+    // reaped), so the elapsed time is spawn to reap (issue #310).
+    execute_group_from(request, sink, started)
+        .map_err(|error| execution_result::attach_timeout_elapsed(error, started))
+}
+
+fn execute_group_from(
+    request: GroupRequest<'_>,
     mut sink: Option<&mut streaming::LineSink<'_>>,
+    started: Instant,
 ) -> Result<GroupOutput> {
     let GroupRequest {
         registry,
@@ -413,7 +425,6 @@ fn execute_group_with_sink(
     let mut input = Some(input);
     let mut previous = None;
     let mut writer = None;
-    let started = Instant::now();
     let background_job = signals.job_launch_ack.is_some();
     let mut pending_spawn_events = Vec::new();
     let bounded = Signals {

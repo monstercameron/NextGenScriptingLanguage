@@ -9,6 +9,7 @@ pub use crate::contracts::EffectCertainty;
 use crate::contracts::{Outcome, OutcomeKind};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::Instant;
 
 /// Stable classification of an applet execution result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -766,19 +767,47 @@ pub struct ExecutionFailure {
     /// The I/O error behind a launch failure, when one was observed. It is kept
     /// beside the result, not inside it, so the result's shape stays unchanged.
     pub(crate) io: Option<IoErrorDetail>,
+    /// Milliseconds from spawn to reap for a timeout outcome (issue #310). Unset otherwise.
+    pub(crate) elapsed_ms: Option<u64>,
 }
 
 impl ExecutionFailure {
     pub fn new(result: ExecutionResult) -> Self {
-        Self { result, io: None }
+        Self {
+            result,
+            io: None,
+            elapsed_ms: None,
+        }
     }
 
     pub fn error_value(&self) -> Value {
         let mut value = self.result.to_value();
         if let Value::Record(fields) = &mut value {
             insert_io_fields(fields, self.io);
+            insert_elapsed_field(fields, self.elapsed_ms);
         }
         value
+    }
+}
+
+/// Record the spawn-to-reap time on a timeout failure (issue #310). Other errors pass through.
+pub(crate) fn attach_timeout_elapsed(mut error: anyhow::Error, started: Instant) -> anyhow::Error {
+    if let Some(failure) = error.downcast_mut::<ExecutionFailure>() {
+        if failure.result.kind == ExecutionKind::Timeout {
+            failure.elapsed_ms =
+                Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+        }
+    }
+    error
+}
+
+/// Add `elapsed_ms` to a timeout record. Records of other failures keep their shape.
+fn insert_elapsed_field(fields: &mut BTreeMap<String, Value>, elapsed_ms: Option<u64>) {
+    if let Some(elapsed_ms) = elapsed_ms {
+        fields.insert(
+            "elapsed_ms".into(),
+            Value::Integer(i64::try_from(elapsed_ms).unwrap_or(i64::MAX)),
+        );
     }
 }
 
@@ -914,6 +943,10 @@ pub fn error_value(error: &anyhow::Error) -> Value {
     let mut value = result_for_error(error).to_value();
     if let Value::Record(fields) = &mut value {
         insert_io_fields(fields, io_detail_for_error(error));
+        let elapsed_ms = error
+            .downcast_ref::<ExecutionFailure>()
+            .and_then(|failure| failure.elapsed_ms);
+        insert_elapsed_field(fields, elapsed_ms);
     }
     if let (Value::Record(fields), Some(failure)) = (
         &mut value,
@@ -2373,5 +2406,33 @@ mod tests {
 
         assert_eq!(result.get("errno_name"), Some(&Value::Null));
         assert_eq!(result.get("os_error"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn timeout_record_reports_elapsed_ms_and_other_failures_do_not() {
+        let started = std::time::Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let timeout = ExecutionResult::runtime_failure(
+            ExecutionKind::Timeout,
+            "command pipeline timed out",
+            EffectCertainty::Uncertain,
+        );
+        let error =
+            attach_timeout_elapsed(anyhow::Error::new(ExecutionFailure::new(timeout)), started);
+        match fields(error_value(&error)).get("elapsed_ms") {
+            Some(Value::Integer(ms)) => assert!(*ms >= 5, "elapsed_ms was {ms}"),
+            other => panic!("expected an integer elapsed_ms, got {other:?}"),
+        }
+
+        let cancelled = ExecutionResult::runtime_failure(
+            ExecutionKind::Cancelled,
+            "workflow cancelled by signal",
+            EffectCertainty::Uncertain,
+        );
+        let error = attach_timeout_elapsed(
+            anyhow::Error::new(ExecutionFailure::new(cancelled)),
+            started,
+        );
+        assert!(!fields(error_value(&error)).contains_key("elapsed_ms"));
     }
 }

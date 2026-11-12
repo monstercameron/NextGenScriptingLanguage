@@ -862,6 +862,9 @@ pub mod sudo_session {
 pub mod elevated {
     use std::ffi::OsString;
     use std::fmt;
+    use std::fs;
+    use std::io;
+    use std::path::{Component, Path, PathBuf};
 
     use serde::de::{self, Deserializer, MapAccess, Visitor};
     use serde::{Deserialize, Serialize};
@@ -881,27 +884,50 @@ pub mod elevated {
     const MAX_APPLET_NAME_BYTES: usize = 64;
     const MAX_PATH_BYTES: usize = 4096;
 
+    /// The value that refuses links for a `symlink_policy` parameter. The shipped manifest of
+    /// fs.write_atomic allows `preserve`, `reject` and `replace`; only `reject` never follows
+    /// or replaces a link.
+    const REFUSING_SYMLINK_POLICY: &str = "reject";
+    const SYMLINK_POLICY: &str = "symlink_policy";
+
     /// How one parameter of an allowed applet is treated.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Kind {
-        /// A filesystem path. It must be absolute, normalized and inside the policy.
+        /// A filesystem path. It must be absolute, normalized and inside the policy. The
+        /// helper also verifies it on disk with `verify_on_disk`.
         Path,
+        /// A path that the applet stores as text, such as the target of a link. It is checked
+        /// against the policy like `Path`, but it is never opened, so `verify_on_disk` does
+        /// not apply to it.
+        LinkTarget,
         /// Text written to the target. The audit record holds its SHA-256, never the text.
         Content,
-        /// A file mode. The audit record shows it.
-        Mode,
+        /// A file mode written as octal text, such as `"0644"` (fs.ensure_file, fs.ensure_dir).
+        ModeText,
+        /// A file mode written as a JSON integer (fs.write_atomic).
+        ModeInteger,
         /// An owner. The audit record shows it.
         Owner,
         /// A group. The audit record shows it.
         Group,
+        /// An enum-like parameter. The value must be one of these strings.
+        Choice(&'static [&'static str]),
         /// Any other parameter. It is not checked here; the applet validates it.
         Other,
+    }
+
+    /// What the applet expects its target to be when the target already exists.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum TargetKind {
+        RegularFile,
+        Directory,
     }
 
     /// One applet on the allow-list, with every parameter its shipped manifest declares.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct AppletSpec {
         pub name: &'static str,
+        pub target: TargetKind,
         pub params: &'static [(&'static str, Kind)],
     }
 
@@ -913,68 +939,82 @@ pub mod elevated {
     pub const ALLOWED_APPLETS: &[AppletSpec] = &[
         AppletSpec {
             name: "fs.ensure_file",
+            target: TargetKind::RegularFile,
             params: &[
                 ("path", Kind::Path),
                 ("content", Kind::Content),
-                ("mode", Kind::Mode),
+                ("mode", Kind::ModeText),
             ],
         },
         AppletSpec {
             name: "fs.ensure_line",
+            target: TargetKind::RegularFile,
             params: &[
                 ("path", Kind::Path),
                 ("line", Kind::Content),
-                ("state", Kind::Other),
+                ("state", Kind::Choice(&["present", "absent"])),
             ],
         },
         AppletSpec {
             name: "fs.ensure_dir",
-            params: &[("path", Kind::Path), ("mode", Kind::Mode)],
+            target: TargetKind::Directory,
+            params: &[("path", Kind::Path), ("mode", Kind::ModeText)],
         },
         AppletSpec {
             name: "fs.ensure_symlink",
-            params: &[("path", Kind::Path), ("target", Kind::Path)],
+            target: TargetKind::RegularFile,
+            params: &[("path", Kind::Path), ("target", Kind::LinkTarget)],
         },
         AppletSpec {
             name: "fs.write_atomic",
+            target: TargetKind::RegularFile,
             params: &[
                 ("path", Kind::Path),
                 ("lock", Kind::Path),
                 ("content", Kind::Content),
-                ("mode", Kind::Mode),
+                ("mode", Kind::ModeInteger),
                 ("expected_content_hash", Kind::Other),
-                ("symlink_policy", Kind::Other),
-                ("permissions_policy", Kind::Other),
+                (
+                    "symlink_policy",
+                    Kind::Choice(&["preserve", "reject", "replace"]),
+                ),
+                (
+                    "permissions_policy",
+                    Kind::Choice(&["preserve", "private", "exact"]),
+                ),
                 ("lock_timeout_ms", Kind::Other),
             ],
         },
         AppletSpec {
             name: "conf.set",
+            target: TargetKind::RegularFile,
             params: &[
                 ("path", Kind::Path),
                 ("key", Kind::Other),
                 ("value", Kind::Content),
-                ("separator", Kind::Other),
-                ("comment", Kind::Other),
+                ("separator", Kind::Choice(&["=", ":", " "])),
+                ("comment", Kind::Choice(&["#", ";", "//", "--"])),
                 ("spaced", Kind::Other),
                 ("uncomment", Kind::Other),
             ],
         },
         AppletSpec {
             name: "conf.ensure_block",
+            target: TargetKind::RegularFile,
             params: &[
                 ("path", Kind::Path),
                 ("id", Kind::Other),
                 ("content", Kind::Content),
-                ("comment", Kind::Other),
+                ("comment", Kind::Choice(&["#", ";", "//", "--"])),
             ],
         },
         AppletSpec {
             name: "conf.remove_block",
+            target: TargetKind::RegularFile,
             params: &[
                 ("path", Kind::Path),
                 ("id", Kind::Other),
-                ("comment", Kind::Other),
+                ("comment", Kind::Choice(&["#", ";", "//", "--"])),
             ],
         },
     ];
@@ -990,6 +1030,11 @@ pub mod elevated {
             .map(|(_, kind)| *kind)
     }
 
+    /// The largest mode a file may get when the policy sets no maximum.
+    pub const DEFAULT_FILE_MAX_MODE: u32 = 0o644;
+    /// The largest mode a directory may get when the policy sets no maximum.
+    pub const DEFAULT_DIRECTORY_MAX_MODE: u32 = 0o755;
+
     /// Why a path was refused.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum PathRefusal {
@@ -1001,6 +1046,31 @@ pub mod elevated {
         /// An empty component (`//`, a trailing `/`) or a `.` component.
         Unnormalized,
         NotAllowedByPolicy,
+        /// On disk: a directory the path passes through does not exist.
+        ParentMissing,
+        /// On disk: an object could not be inspected.
+        Unreadable,
+        /// On disk: a directory the path passes through is a symbolic link (or, on Windows,
+        /// a reparse point).
+        SymbolicLinkInParent,
+        /// On disk: a directory the path passes through is not a directory.
+        ParentNotDirectory,
+        /// On disk: the target exists and is a symbolic link (or, on Windows, a reparse point).
+        SymbolicLinkTarget,
+        /// On disk: the target exists and is not a regular file, where one is expected.
+        NotRegularFile,
+        /// On disk: the target exists and is not a directory, where one is expected.
+        NotDirectory,
+        /// On disk: a directory on the way is not owned by the expected user.
+        AncestorOwnedByOther,
+        /// On disk: a directory on the way is writable by its group.
+        AncestorGroupWritable,
+        /// On disk: a directory on the way is writable by everyone. The sticky bit does not
+        /// excuse it here.
+        AncestorWorldWritable,
+        /// On disk: the canonical location is not allowed by the policy, so the path was
+        /// renamed, bind-mounted or otherwise moved outside the pattern.
+        ResolvedOutsidePolicy,
     }
 
     impl fmt::Display for PathRefusal {
@@ -1013,6 +1083,19 @@ pub mod elevated {
                 Self::ParentComponent => "the path contains a '..' component",
                 Self::Unnormalized => "the path contains an empty or '.' component",
                 Self::NotAllowedByPolicy => "no path pattern in the policy allows this path",
+                Self::ParentMissing => "a directory on the path does not exist",
+                Self::Unreadable => "a component of the path could not be inspected",
+                Self::SymbolicLinkInParent => "a directory on the path is a symbolic link",
+                Self::ParentNotDirectory => "a directory on the path is not a directory",
+                Self::SymbolicLinkTarget => "the target exists and is a symbolic link",
+                Self::NotRegularFile => "the target exists and is not a regular file",
+                Self::NotDirectory => "the target exists and is not a directory",
+                Self::AncestorOwnedByOther => "a directory on the path is not owned by root",
+                Self::AncestorGroupWritable => "a directory on the path is group-writable",
+                Self::AncestorWorldWritable => "a directory on the path is world-writable",
+                Self::ResolvedOutsidePolicy => {
+                    "the resolved location is outside the policy (renamed or moved)"
+                }
             })
         }
     }
@@ -1119,7 +1202,18 @@ pub mod elevated {
             PathRefusal::NotAbsolute => "must be absolute",
             PathRefusal::ParentComponent => "contains a '..' component",
             PathRefusal::Unnormalized => "contains an empty or '.' component",
-            PathRefusal::NotAllowedByPolicy => "is not a valid pattern",
+            PathRefusal::NotAllowedByPolicy
+            | PathRefusal::ParentMissing
+            | PathRefusal::Unreadable
+            | PathRefusal::SymbolicLinkInParent
+            | PathRefusal::ParentNotDirectory
+            | PathRefusal::SymbolicLinkTarget
+            | PathRefusal::NotRegularFile
+            | PathRefusal::NotDirectory
+            | PathRefusal::AncestorOwnedByOther
+            | PathRefusal::AncestorGroupWritable
+            | PathRefusal::AncestorWorldWritable
+            | PathRefusal::ResolvedOutsidePolicy => "is not a valid pattern",
         }
     }
 
@@ -1138,10 +1232,69 @@ pub mod elevated {
         Ok(parts.into_iter().map(str::to_string).collect())
     }
 
-    /// The path patterns a helper allows. An empty policy allows nothing.
+    /// Why a file mode was refused.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ModeRefusal {
+        /// A JSON integer was required (fs.write_atomic) and something else was given.
+        NotAnInteger,
+        /// Octal text of 1 to 4 digits from 0 to 7 was required (fs.ensure_file, fs.ensure_dir).
+        NotOctalText,
+        /// The setuid, setgid or sticky bit is set.
+        SpecialBits,
+        /// A bit above the nine permission bits is set, or the value does not fit a mode.
+        AboveFilePermissionBits,
+        /// The world-writable bit is set.
+        WorldWritable,
+        /// The mode has a bit the policy maximum does not allow.
+        AboveMaximum { maximum: u32 },
+    }
+
+    impl fmt::Display for ModeRefusal {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::NotAnInteger => write!(formatter, "the mode must be a JSON integer"),
+                Self::NotOctalText => {
+                    write!(formatter, "the mode must be 1 to 4 octal digits in text")
+                }
+                Self::SpecialBits => write!(
+                    formatter,
+                    "the setuid, setgid and sticky bits are never allowed"
+                ),
+                Self::AboveFilePermissionBits => {
+                    write!(formatter, "the mode has bits above the permission bits")
+                }
+                Self::WorldWritable => write!(formatter, "the world-writable bit is never allowed"),
+                Self::AboveMaximum { maximum } => {
+                    write!(
+                        formatter,
+                        "the mode is above the policy maximum {maximum:o}"
+                    )
+                }
+            }
+        }
+    }
+
+    /// The bits that no elevated file or directory may carry, whatever the policy says.
+    fn mode_shape(mode: u32) -> Result<(), ModeRefusal> {
+        if mode & 0o7000 != 0 {
+            Err(ModeRefusal::SpecialBits)
+        } else if mode > 0o777 {
+            Err(ModeRefusal::AboveFilePermissionBits)
+        } else if mode & 0o002 != 0 {
+            Err(ModeRefusal::WorldWritable)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The path patterns a helper allows, and the largest mode it may set. An empty policy
+    /// allows nothing.
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
     pub struct ElevationPolicy {
         patterns: Vec<Vec<String>>,
+        /// When `None`, files may get `DEFAULT_FILE_MAX_MODE` and directories
+        /// `DEFAULT_DIRECTORY_MAX_MODE`.
+        max_mode: Option<u32>,
     }
 
     impl ElevationPolicy {
@@ -1151,7 +1304,25 @@ pub mod elevated {
             for pattern in patterns {
                 parsed.push(parse_pattern(pattern)?);
             }
-            Ok(Self { patterns: parsed })
+            Ok(Self {
+                patterns: parsed,
+                max_mode: None,
+            })
+        }
+
+        /// Set the largest mode an elevated call may use, for files and directories alike.
+        /// The maximum itself must pass the same bit rules as a requested mode.
+        pub fn with_max_mode(mut self, maximum: u32) -> Result<Self, ModeRefusal> {
+            mode_shape(maximum)?;
+            self.max_mode = Some(maximum);
+            Ok(self)
+        }
+
+        fn max_mode_for(&self, target: TargetKind) -> u32 {
+            self.max_mode.unwrap_or(match target {
+                TargetKind::RegularFile => DEFAULT_FILE_MAX_MODE,
+                TargetKind::Directory => DEFAULT_DIRECTORY_MAX_MODE,
+            })
         }
 
         /// `Ok` when the path is absolute, normalized and matches at least one pattern.
@@ -1354,6 +1525,23 @@ pub mod elevated {
             path: String,
             reason: PathRefusal,
         },
+        /// An enum-like parameter had a value its table does not list.
+        NotAllowedValue {
+            applet: &'static str,
+            parameter: String,
+            value: String,
+        },
+        /// `symlink_policy` was present and was not the value that refuses links.
+        SymlinkPolicyNotRefusing {
+            applet: &'static str,
+            value: String,
+        },
+        /// A file mode had the wrong representation or broke a mode rule.
+        BadMode {
+            applet: &'static str,
+            parameter: String,
+            reason: ModeRefusal,
+        },
     }
 
     impl fmt::Display for Refusal {
@@ -1381,6 +1569,26 @@ pub mod elevated {
                     formatter,
                     "parameter {parameter:?} of {applet} refused for {path:?}: {reason}"
                 ),
+                Self::NotAllowedValue {
+                    applet,
+                    parameter,
+                    value,
+                } => write!(
+                    formatter,
+                    "parameter {parameter:?} of {applet} cannot be {value:?}"
+                ),
+                Self::SymlinkPolicyNotRefusing { applet, value } => write!(
+                    formatter,
+                    "{applet} may only be called with symlink_policy \"reject\", not {value:?}"
+                ),
+                Self::BadMode {
+                    applet,
+                    parameter,
+                    reason,
+                } => write!(
+                    formatter,
+                    "mode {parameter:?} of {applet} refused: {reason}"
+                ),
             }
         }
     }
@@ -1400,12 +1608,55 @@ pub mod elevated {
         pub fn request(&self) -> &ElevatedRequest {
             &self.request
         }
+
+        /// What the target must be when it already exists, from the applet's table row.
+        pub fn target_kind(&self) -> TargetKind {
+            self.spec.target
+        }
+
+        /// The (parameter, path) pairs the helper must verify on disk with `verify_on_disk`:
+        /// every `Path` parameter, and not a `LinkTarget`, which is stored as text.
+        pub fn on_disk_paths(&self) -> Vec<(&str, &str)> {
+            self.request
+                .arguments()
+                .iter()
+                .filter(|(name, _)| kind_of(self.spec, name.as_str()) == Some(Kind::Path))
+                .filter_map(|(name, value)| Some((name.as_str(), value.as_str()?)))
+                .collect()
+        }
+    }
+
+    /// The mode representation each mode parameter accepts, and the largest value it may
+    /// take. `fs.write_atomic` takes a JSON integer; `fs.ensure_file` and `fs.ensure_dir`
+    /// take octal text of 1 to 4 digits, as their `parse_mode` functions do.
+    fn mode_value(kind: Kind, value: &Value) -> Result<u32, ModeRefusal> {
+        match kind {
+            Kind::ModeInteger => {
+                let number = value.as_u64().ok_or(ModeRefusal::NotAnInteger)?;
+                u32::try_from(number).map_err(|_| ModeRefusal::AboveFilePermissionBits)
+            }
+            _ => {
+                let text = value.as_str().ok_or(ModeRefusal::NotOctalText)?;
+                if text.is_empty()
+                    || text.len() > 4
+                    || !text.bytes().all(|byte| (b'0'..=b'7').contains(&byte))
+                {
+                    return Err(ModeRefusal::NotOctalText);
+                }
+                u32::from_str_radix(text, 8).map_err(|_| ModeRefusal::NotOctalText)
+            }
+        }
     }
 
     /// The helper-side check, run again inside the helper whatever the interpreter checked.
     /// The applet must be on the compiled-in list. Every argument must be a declared
     /// parameter. Every path parameter must be a string that passes the path rules and the
-    /// policy, and every content parameter must be a string.
+    /// policy, and every content parameter must be a string. Every mode must use the
+    /// applet's representation, have no setuid, setgid or sticky bit, no world-writable bit
+    /// and no bit above the permission bits, and stay within the policy maximum. Every
+    /// enum-like parameter must be one of its listed values. An absent parameter is not
+    /// refused here; the applet reports a missing required one. An applet with a
+    /// `symlink_policy` parameter is refused unless that parameter is absent or is `reject`.
     pub fn authorize_elevated(
         request: &ElevatedRequest,
         policy: &ElevationPolicy,
@@ -1422,25 +1673,254 @@ pub mod elevated {
                     parameter: parameter.clone(),
                 });
             };
-            if matches!(kind, Kind::Path | Kind::Content) && !value.is_string() {
-                return Err(Refusal::NotAString {
-                    applet: spec.name,
-                    parameter: parameter.clone(),
-                });
-            }
-            if let (Kind::Path, Some(path)) = (kind, value.as_str()) {
-                policy.check_path(path).map_err(|reason| Refusal::Path {
-                    applet: spec.name,
-                    parameter: parameter.clone(),
-                    path: path.to_string(),
-                    reason,
-                })?;
+            match kind {
+                Kind::Path | Kind::LinkTarget => {
+                    let Some(path) = value.as_str() else {
+                        return Err(Refusal::NotAString {
+                            applet: spec.name,
+                            parameter: parameter.clone(),
+                        });
+                    };
+                    // A link target is only stored as text, but it still names a path in the
+                    // policy's terms, so the lexical rules apply to it as well.
+                    policy.check_path(path).map_err(|reason| Refusal::Path {
+                        applet: spec.name,
+                        parameter: parameter.clone(),
+                        path: path.to_string(),
+                        reason,
+                    })?;
+                }
+                Kind::Content => {
+                    if !value.is_string() {
+                        return Err(Refusal::NotAString {
+                            applet: spec.name,
+                            parameter: parameter.clone(),
+                        });
+                    }
+                }
+                Kind::ModeText | Kind::ModeInteger => {
+                    let bad_mode = |reason: ModeRefusal| Refusal::BadMode {
+                        applet: spec.name,
+                        parameter: parameter.clone(),
+                        reason,
+                    };
+                    let mode = mode_value(kind, value).map_err(bad_mode)?;
+                    mode_shape(mode).map_err(bad_mode)?;
+                    let maximum = policy.max_mode_for(spec.target);
+                    if mode & !maximum != 0 {
+                        return Err(bad_mode(ModeRefusal::AboveMaximum { maximum }));
+                    }
+                }
+                Kind::Choice(allowed) => {
+                    let Some(text) = value.as_str() else {
+                        return Err(Refusal::NotAString {
+                            applet: spec.name,
+                            parameter: parameter.clone(),
+                        });
+                    };
+                    if !allowed.contains(&text) {
+                        return Err(Refusal::NotAllowedValue {
+                            applet: spec.name,
+                            parameter: parameter.clone(),
+                            value: text.to_string(),
+                        });
+                    }
+                    if parameter == SYMLINK_POLICY && text != REFUSING_SYMLINK_POLICY {
+                        return Err(Refusal::SymlinkPolicyNotRefusing {
+                            applet: spec.name,
+                            value: text.to_string(),
+                        });
+                    }
+                }
+                Kind::Owner | Kind::Group | Kind::Other => {}
             }
         }
         Ok(Authorized {
             request: request.clone(),
             spec,
         })
+    }
+
+    /// The owner every directory from the root down to the target's parent must have.
+    pub const ROOT_UID: u32 = 0;
+
+    /// A path that passed `verify_on_disk`.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct VerifiedPath {
+        /// The canonical directory that holds the target.
+        pub parent: PathBuf,
+        /// The final component: one normal name, with no separator.
+        pub name: String,
+        /// The policy-form path (for example `/srv/app/file`) the canonical location matched.
+        pub logical: String,
+    }
+
+    /// Check a policy-approved path against the filesystem under `root` (`/` in production)
+    /// before the helper acts on it. This is a check made before use, not a guarantee: the
+    /// helper must also open the target without following links, which is not done here.
+    ///
+    /// The checks, in order:
+    /// 1. The lexical rules and the policy (`check_path`), as in `authorize_elevated`.
+    /// 2. Every component of the parent is inspected with `symlink_metadata` from `root` down.
+    ///    A symbolic link (or, on Windows, a reparse point) on the way is refused, and so is a
+    ///    component that is not a directory. Canonicalisation is not trusted to show that no
+    ///    link was crossed, so this walk is what catches one.
+    /// 3. Every directory from `root` down to the parent must be owned by uid 0, and must have
+    ///    no group-write and no world-write bit. The sticky bit does not excuse a
+    ///    world-writable directory such as `/tmp`. On non-Unix systems this owner and mode
+    ///    check is not applied; the root helper is Unix-only.
+    /// 4. The parent is canonicalised, and the canonical parent joined with the final name is
+    ///    checked against the policy again, so a directory that was renamed or bind-mounted
+    ///    somewhere else is refused.
+    /// 5. A final component that exists must not be a symbolic link (or reparse point), and
+    ///    must be a regular file, or a directory when `expected` is `Directory`. A missing
+    ///    final component is accepted.
+    ///
+    /// The helper must then open the target without following links: open each directory with
+    /// `O_NOFOLLOW | O_DIRECTORY` from `root`, and open the final name with `openat` relative to
+    /// that verified parent descriptor, using `O_NOFOLLOW` (and `O_CREAT` where the applet
+    /// creates the file). It must `fstat` the opened descriptor and confirm its kind. That
+    /// step closes the window between this check and the use, and it lives in the helper.
+    pub fn verify_on_disk(
+        root: &Path,
+        path: &str,
+        policy: &ElevationPolicy,
+        expected: TargetKind,
+    ) -> Result<VerifiedPath, PathRefusal> {
+        verify_with(root, path, policy, expected, ROOT_UID, |location| {
+            fs::canonicalize(location)
+        })
+    }
+
+    /// `verify_on_disk` with the owner and the canonicalisation injected, so the tests can
+    /// use the test user's own uid and simulate a resolved location that moved.
+    fn verify_with(
+        root: &Path,
+        path: &str,
+        policy: &ElevationPolicy,
+        expected: TargetKind,
+        owner: u32,
+        canonicalize: impl Fn(&Path) -> io::Result<PathBuf>,
+    ) -> Result<VerifiedPath, PathRefusal> {
+        policy.check_path(path)?;
+        let parts = split_path(path)?;
+        let Some((name, directories)) = parts.split_last() else {
+            return Err(PathRefusal::Empty);
+        };
+
+        let root_metadata = fs::symlink_metadata(root).map_err(|error| io_refusal(&error))?;
+        if is_link_like(&root_metadata) {
+            return Err(PathRefusal::SymbolicLinkInParent);
+        }
+        if let Some(refusal) = ancestor_refusal(&root_metadata, owner) {
+            return Err(refusal);
+        }
+        let mut parent = root.to_path_buf();
+        for directory in directories {
+            parent.push(directory);
+            let metadata = fs::symlink_metadata(&parent).map_err(|error| io_refusal(&error))?;
+            if is_link_like(&metadata) {
+                return Err(PathRefusal::SymbolicLinkInParent);
+            }
+            if !metadata.is_dir() {
+                return Err(PathRefusal::ParentNotDirectory);
+            }
+            if let Some(refusal) = ancestor_refusal(&metadata, owner) {
+                return Err(refusal);
+            }
+        }
+
+        let canonical_root = canonicalize(root).map_err(|error| io_refusal(&error))?;
+        let canonical_parent = canonicalize(&parent).map_err(|error| io_refusal(&error))?;
+        let relative = canonical_parent
+            .strip_prefix(&canonical_root)
+            .map_err(|_| PathRefusal::ResolvedOutsidePolicy)?;
+        let mut logical = String::new();
+        for component in relative.components() {
+            let Component::Normal(text) = component else {
+                return Err(PathRefusal::ResolvedOutsidePolicy);
+            };
+            let text = text.to_str().ok_or(PathRefusal::ResolvedOutsidePolicy)?;
+            logical.push('/');
+            logical.push_str(text);
+        }
+        logical.push('/');
+        logical.push_str(name);
+        policy.check_path(&logical).map_err(|reason| match reason {
+            PathRefusal::NotAllowedByPolicy => PathRefusal::ResolvedOutsidePolicy,
+            other => other,
+        })?;
+
+        let target = canonical_parent.join(name);
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) => {
+                if is_link_like(&metadata) {
+                    return Err(PathRefusal::SymbolicLinkTarget);
+                }
+                match expected {
+                    TargetKind::RegularFile if !metadata.is_file() => {
+                        return Err(PathRefusal::NotRegularFile)
+                    }
+                    TargetKind::Directory if !metadata.is_dir() => {
+                        return Err(PathRefusal::NotDirectory)
+                    }
+                    _ => {}
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_refusal(&error)),
+        }
+
+        Ok(VerifiedPath {
+            parent: canonical_parent,
+            name: (*name).to_string(),
+            logical,
+        })
+    }
+
+    fn io_refusal(error: &io::Error) -> PathRefusal {
+        if error.kind() == io::ErrorKind::NotFound {
+            PathRefusal::ParentMissing
+        } else {
+            PathRefusal::Unreadable
+        }
+    }
+
+    /// A symbolic link, or on Windows a reparse point, which can redirect a path.
+    fn is_link_like(metadata: &fs::Metadata) -> bool {
+        if metadata.file_type().is_symlink() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            crate::platform::windows::is_reparse(metadata)
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
+    /// The owner and mode rule for a directory on the way to a target. The sticky bit is not
+    /// an exception.
+    #[cfg(unix)]
+    fn ancestor_refusal(metadata: &fs::Metadata, owner: u32) -> Option<PathRefusal> {
+        use std::os::unix::fs::MetadataExt;
+        let mode = metadata.mode();
+        if metadata.uid() != owner {
+            Some(PathRefusal::AncestorOwnedByOther)
+        } else if mode & 0o002 != 0 {
+            Some(PathRefusal::AncestorWorldWritable)
+        } else if mode & 0o020 != 0 {
+            Some(PathRefusal::AncestorGroupWritable)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn ancestor_refusal(_metadata: &fs::Metadata, _owner: u32) -> Option<PathRefusal> {
+        None
     }
 
     /// The transport the interpreter runs: the argument vector and the bytes for standard
@@ -1514,7 +1994,7 @@ pub mod elevated {
         };
         for (parameter, value) in authorized.request().arguments() {
             match kind_of(spec, parameter) {
-                Some(Kind::Path) => {
+                Some(Kind::Path | Kind::LinkTarget) => {
                     if let Some(path) = value.as_str() {
                         record.paths.push((parameter.clone(), path.to_string()));
                     }
@@ -1526,10 +2006,10 @@ pub mod elevated {
                             .push((parameter.clone(), sha256_hex(text.as_bytes())));
                     }
                 }
-                Some(Kind::Mode) => record.mode = Some(value.clone()),
+                Some(Kind::ModeText | Kind::ModeInteger) => record.mode = Some(value.clone()),
                 Some(Kind::Owner) => record.owner = Some(value.clone()),
                 Some(Kind::Group) => record.group = Some(value.clone()),
-                Some(Kind::Other) | None => {}
+                Some(Kind::Choice(_) | Kind::Other) | None => {}
             }
         }
         record
@@ -1735,10 +2215,15 @@ pub mod elevated {
                 let mut arguments = Map::new();
                 for (name, kind) in spec.params {
                     let value = match kind {
-                        Kind::Path => json!(format!("/srv/test/{name}")),
+                        Kind::Path | Kind::LinkTarget => json!(format!("/srv/test/{name}")),
                         Kind::Content => json!("text"),
-                        Kind::Mode => json!("0644"),
+                        Kind::ModeText => json!("0644"),
+                        Kind::ModeInteger => json!(0o644),
                         Kind::Owner | Kind::Group => json!("root"),
+                        Kind::Choice(_) if *name == SYMLINK_POLICY => {
+                            json!(REFUSING_SYMLINK_POLICY)
+                        }
+                        Kind::Choice(values) => json!(values.first().expect("a listed value")),
                         Kind::Other => json!("value"),
                     };
                     arguments.insert((*name).to_string(), value);
@@ -1958,14 +2443,57 @@ pub mod elevated {
                     spec.name
                 );
                 for (name, kind) in spec.params {
-                    let manifest_is_path = declared[*name]["type"] == "path";
+                    let manifest_param = &declared[*name];
+                    let manifest_is_path = manifest_param["type"] == "path";
                     assert_eq!(
-                        *kind == Kind::Path,
+                        matches!(kind, Kind::Path | Kind::LinkTarget),
                         manifest_is_path,
                         "{}.{} kind does not match its manifest type",
                         spec.name,
                         name
                     );
+                    // The enum values must match exactly, in both directions.
+                    let manifest_values: Option<Vec<&str>> =
+                        manifest_param.get("enum").map(|list| {
+                            list.as_array()
+                                .expect("an enum is a list")
+                                .iter()
+                                .map(|value| value.as_str().expect("enum values are strings"))
+                                .collect()
+                        });
+                    match (kind, manifest_values) {
+                        (Kind::Choice(values), Some(mut listed)) => {
+                            let mut table: Vec<&str> = values.to_vec();
+                            table.sort_unstable();
+                            listed.sort_unstable();
+                            assert_eq!(
+                                table, listed,
+                                "{}.{} enum values differ from ALLOWED_APPLETS",
+                                spec.name, name
+                            );
+                        }
+                        (Kind::Choice(_), None) => panic!(
+                            "{}.{} is a Choice in the table but has no enum in its manifest",
+                            spec.name, name
+                        ),
+                        (_, Some(_)) => panic!(
+                            "{}.{} has an enum in its manifest; the table must list it as Kind::Choice",
+                            spec.name, name
+                        ),
+                        (Kind::ModeText, None) => assert!(
+                            manifest_param["type"] == "string"
+                                && manifest_param["pattern"] == "octal_mode",
+                            "{}.{} must be octal text in its manifest",
+                            spec.name,
+                            name
+                        ),
+                        (Kind::ModeInteger, None) => assert_eq!(
+                            manifest_param["type"], "integer",
+                            "{}.{} must be an integer in its manifest",
+                            spec.name, name
+                        ),
+                        _ => {}
+                    }
                 }
             }
         }
@@ -2046,8 +2574,8 @@ pub mod elevated {
                     "content": content,
                     "mode": 420,
                     "expected_content_hash": "0",
-                    "symlink_policy": "refuse",
-                    "permissions_policy": "keep",
+                    "symlink_policy": "reject",
+                    "permissions_policy": "preserve",
                     "lock_timeout_ms": 5000
                 }),
             );
@@ -2081,6 +2609,7 @@ pub mod elevated {
         fn the_audit_record_carries_owner_and_group_when_a_spec_declares_them() {
             static SPEC: AppletSpec = AppletSpec {
                 name: "fs.ensure_dir",
+                target: TargetKind::Directory,
                 params: &[
                     ("path", Kind::Path),
                     ("owner", Kind::Owner),
@@ -2098,6 +2627,538 @@ pub mod elevated {
             assert_eq!(record.owner, Some(json!("root")));
             assert_eq!(record.group, Some(json!("adm")));
             assert_eq!(record.to_json()["group"], json!("adm"));
+        }
+
+        // ---- On-disk verification and link refusal (review gap 1) ----
+
+        /// A temporary root holding a plain directory /srv/test.
+        fn tree() -> tempfile::TempDir {
+            let dir = tempfile::tempdir().expect("a temporary directory");
+            fs::create_dir_all(dir.path().join("srv/test")).expect("the test directory");
+            dir
+        }
+
+        /// The uid that owns the temporary tree: the test user, since root-owned files cannot
+        /// be made here. On non-Unix systems the owner rule is not applied, so 0 is passed.
+        fn own_uid(dir: &Path) -> u32 {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                fs::metadata(dir).expect("the tree exists").uid()
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = dir;
+                0
+            }
+        }
+
+        fn verify(
+            root: &Path,
+            owner: u32,
+            path: &str,
+            patterns: &[&str],
+            expected: TargetKind,
+        ) -> Result<VerifiedPath, PathRefusal> {
+            verify_with(root, path, &policy(patterns), expected, owner, |location| {
+                fs::canonicalize(location)
+            })
+        }
+
+        #[test]
+        fn a_plain_target_passes_and_resolves_to_its_canonical_parent() {
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            fs::write(dir.path().join("srv/test/a"), b"x").expect("the file");
+            let verified = verify(
+                dir.path(),
+                owner,
+                "/srv/test/a",
+                &["/srv/test/**"],
+                TargetKind::RegularFile,
+            )
+            .expect("a plain existing file passes");
+            assert_eq!(verified.name, "a");
+            assert_eq!(verified.logical, "/srv/test/a");
+            assert_eq!(
+                verified.parent,
+                fs::canonicalize(dir.path().join("srv/test")).expect("canonical")
+            );
+            let missing = verify(
+                dir.path(),
+                owner,
+                "/srv/test/new",
+                &["/srv/test/**"],
+                TargetKind::RegularFile,
+            );
+            assert!(missing.is_ok(), "a missing final name passes: {missing:?}");
+        }
+
+        #[test]
+        fn the_lexical_policy_is_checked_before_the_disk_is_touched() {
+            let dir = tree();
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    own_uid(dir.path()),
+                    "/etc/passwd",
+                    &["/srv/test/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::NotAllowedByPolicy)
+            );
+        }
+
+        #[test]
+        fn a_missing_parent_and_a_parent_that_is_a_file_are_refused() {
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            fs::write(dir.path().join("srv/test/f"), b"x").expect("the file");
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    owner,
+                    "/srv/missing/a",
+                    &["/srv/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::ParentMissing)
+            );
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    owner,
+                    "/srv/test/f/a",
+                    &["/srv/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::ParentNotDirectory)
+            );
+        }
+
+        #[test]
+        fn a_directory_where_a_file_is_expected_and_a_file_where_a_directory_is_expected_are_refused(
+        ) {
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            fs::create_dir(dir.path().join("srv/test/sub")).expect("the directory");
+            fs::write(dir.path().join("srv/test/file"), b"x").expect("the file");
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    owner,
+                    "/srv/test/sub",
+                    &["/srv/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::NotRegularFile)
+            );
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    owner,
+                    "/srv/test/file",
+                    &["/srv/**"],
+                    TargetKind::Directory
+                ),
+                Err(PathRefusal::NotDirectory)
+            );
+            assert!(verify(
+                dir.path(),
+                owner,
+                "/srv/test/sub",
+                &["/srv/**"],
+                TargetKind::Directory
+            )
+            .is_ok());
+        }
+
+        #[test]
+        fn a_canonical_location_outside_the_policy_is_refused_however_it_got_there() {
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            let root = fs::canonicalize(dir.path()).expect("canonical root");
+            let parent = dir.path().join("srv/test");
+            // Simulates a rename or bind mount: the parent resolves to /moved, which the
+            // policy does not allow. The injected resolver stands in for the mount.
+            let moved = root.join("moved");
+            let result = verify_with(
+                dir.path(),
+                "/srv/test/a",
+                &policy(&["/srv/test/**"]),
+                TargetKind::RegularFile,
+                owner,
+                |location| {
+                    if location == parent.as_path() {
+                        Ok(moved.clone())
+                    } else {
+                        fs::canonicalize(location)
+                    }
+                },
+            );
+            assert_eq!(result, Err(PathRefusal::ResolvedOutsidePolicy));
+            let escaped = verify_with(
+                dir.path(),
+                "/srv/test/a",
+                &policy(&["/srv/test/**"]),
+                TargetKind::RegularFile,
+                owner,
+                |location| {
+                    if location == parent.as_path() {
+                        Ok(PathBuf::from("/elsewhere/test"))
+                    } else {
+                        fs::canonicalize(location)
+                    }
+                },
+            );
+            assert_eq!(escaped, Err(PathRefusal::ResolvedOutsidePolicy));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn an_ancestor_owned_by_another_user_is_refused() {
+            let dir = tree();
+            let other = own_uid(dir.path()).wrapping_add(1);
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    other,
+                    "/srv/test/a",
+                    &["/srv/test/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::AncestorOwnedByOther)
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_symlinked_parent_component_is_refused() {
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            std::os::unix::fs::symlink(dir.path().join("srv/test"), dir.path().join("srv/link"))
+                .expect("the symlink");
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    owner,
+                    "/srv/link/a",
+                    &["/srv/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::SymbolicLinkInParent)
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_symlinked_final_component_is_refused_even_when_dangling() {
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            fs::write(dir.path().join("srv/test/real"), b"x").expect("the file");
+            std::os::unix::fs::symlink(
+                dir.path().join("srv/test/real"),
+                dir.path().join("srv/test/a"),
+            )
+            .expect("the symlink");
+            std::os::unix::fs::symlink("/nowhere", dir.path().join("srv/test/b"))
+                .expect("the dangling symlink");
+            for name in ["a", "b"] {
+                assert_eq!(
+                    verify(
+                        dir.path(),
+                        owner,
+                        &format!("/srv/test/{name}"),
+                        &["/srv/**"],
+                        TargetKind::RegularFile
+                    ),
+                    Err(PathRefusal::SymbolicLinkTarget),
+                    "{name}"
+                );
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_group_writable_ancestor_is_refused() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            fs::set_permissions(
+                dir.path().join("srv/test"),
+                fs::Permissions::from_mode(0o775),
+            )
+            .expect("the mode");
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    owner,
+                    "/srv/test/a",
+                    &["/srv/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::AncestorGroupWritable)
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_sticky_world_writable_ancestor_is_refused_and_the_sticky_bit_does_not_excuse_it() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tree();
+            let owner = own_uid(dir.path());
+            fs::set_permissions(
+                dir.path().join("srv/test"),
+                fs::Permissions::from_mode(0o1777),
+            )
+            .expect("the mode");
+            assert_eq!(
+                verify(
+                    dir.path(),
+                    owner,
+                    "/srv/test/a",
+                    &["/srv/**"],
+                    TargetKind::RegularFile
+                ),
+                Err(PathRefusal::AncestorWorldWritable)
+            );
+        }
+
+        #[test]
+        fn on_disk_paths_are_the_path_parameters_and_never_a_link_target() {
+            let authorized = outcome(
+                &["/srv/test/**"],
+                "fs.ensure_symlink",
+                json!({"path": "/srv/test/l", "target": "/srv/test/real"}),
+            )
+            .expect("allowed");
+            assert_eq!(authorized.on_disk_paths(), vec![("path", "/srv/test/l")]);
+            assert_eq!(authorized.target_kind(), TargetKind::RegularFile);
+        }
+
+        // ---- File modes (review gap 2) ----
+
+        fn write_atomic_base() -> Value {
+            json!({
+                "path": "/srv/test/a",
+                "expected_content_hash": "0",
+                "permissions_policy": "preserve"
+            })
+        }
+
+        /// `base` with the keys of `extra` added or replaced.
+        fn merged(mut base: Value, extra: Value) -> Value {
+            if let (Some(target), Value::Object(more)) = (base.as_object_mut(), extra) {
+                target.extend(more);
+            }
+            base
+        }
+
+        /// The refusal reason of a request that must be refused for its mode.
+        fn mode_reason(applet: &str, arguments: Value) -> ModeRefusal {
+            match outcome(&["/srv/test/**"], applet, arguments) {
+                Err(Refusal::BadMode { reason, .. }) => reason,
+                other => panic!("expected a mode refusal, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn integer_modes_refuse_setuid_setgid_sticky_world_writable_and_wide_values() {
+            let mode = |value: Value| merged(write_atomic_base(), json!({"mode": value}));
+            assert_eq!(
+                mode_reason("fs.write_atomic", mode(json!(0o4755))),
+                ModeRefusal::SpecialBits
+            );
+            assert_eq!(
+                mode_reason("fs.write_atomic", mode(json!(0o2755))),
+                ModeRefusal::SpecialBits
+            );
+            assert_eq!(
+                mode_reason("fs.write_atomic", mode(json!(0o1777))),
+                ModeRefusal::SpecialBits
+            );
+            assert_eq!(
+                mode_reason("fs.write_atomic", mode(json!(0o666))),
+                ModeRefusal::WorldWritable
+            );
+            assert_eq!(
+                mode_reason("fs.write_atomic", mode(json!(0o1000000))),
+                ModeRefusal::AboveFilePermissionBits
+            );
+        }
+
+        #[test]
+        fn a_string_mode_is_refused_where_an_integer_is_required_and_a_number_where_text_is() {
+            assert_eq!(
+                mode_reason(
+                    "fs.write_atomic",
+                    merged(write_atomic_base(), json!({"mode": "0644"}))
+                ),
+                ModeRefusal::NotAnInteger
+            );
+            assert_eq!(
+                mode_reason(
+                    "fs.write_atomic",
+                    merged(write_atomic_base(), json!({"mode": -1}))
+                ),
+                ModeRefusal::NotAnInteger
+            );
+            let file = |mode: Value| json!({"path": "/srv/test/a", "content": "x", "mode": mode});
+            assert_eq!(
+                mode_reason("fs.ensure_file", file(json!(420))),
+                ModeRefusal::NotOctalText
+            );
+        }
+
+        #[test]
+        fn octal_text_modes_refuse_the_same_bits_and_non_octal_digits() {
+            let file = |mode: &str| json!({"path": "/srv/test/a", "content": "x", "mode": mode});
+            for (text, reason) in [
+                ("4755", ModeRefusal::SpecialBits),
+                ("2755", ModeRefusal::SpecialBits),
+                ("1777", ModeRefusal::SpecialBits),
+                ("666", ModeRefusal::WorldWritable),
+                ("0648", ModeRefusal::NotOctalText),
+                ("1000000", ModeRefusal::NotOctalText),
+            ] {
+                assert_eq!(mode_reason("fs.ensure_file", file(text)), reason, "{text}");
+            }
+        }
+
+        #[test]
+        fn modes_0644_and_0600_pass_in_both_representations() {
+            for mode in [0o644, 0o600] {
+                let integer = merged(write_atomic_base(), json!({"mode": mode}));
+                assert!(
+                    outcome(&["/srv/test/**"], "fs.write_atomic", integer).is_ok(),
+                    "{mode:o} as an integer"
+                );
+            }
+            for text in ["0644", "600"] {
+                let file = json!({"path": "/srv/test/a", "content": "x", "mode": text});
+                assert!(
+                    outcome(&["/srv/test/**"], "fs.ensure_file", file).is_ok(),
+                    "{text} as text"
+                );
+            }
+        }
+
+        #[test]
+        fn a_mode_above_the_policy_maximum_is_refused_and_the_default_is_644_for_files() {
+            let patterns = ["/srv/test/**"];
+            let strict = ElevationPolicy::new(patterns)
+                .expect("valid")
+                .with_max_mode(0o600)
+                .expect("0600 is a valid maximum");
+            let integer = |mode: u32| merged(write_atomic_base(), json!({"mode": mode}));
+            assert!(
+                authorize_elevated(&request("fs.write_atomic", integer(0o600)), &strict).is_ok()
+            );
+            assert!(matches!(
+                authorize_elevated(&request("fs.write_atomic", integer(0o644)), &strict),
+                Err(Refusal::BadMode {
+                    reason: ModeRefusal::AboveMaximum { maximum: 0o600 },
+                    ..
+                })
+            ));
+            let file = |text: &str| json!({"path": "/srv/test/a", "content": "x", "mode": text});
+            assert!(matches!(
+                outcome(&patterns, "fs.ensure_file", file("0664")),
+                Err(Refusal::BadMode {
+                    reason: ModeRefusal::AboveMaximum { maximum: 0o644 },
+                    ..
+                })
+            ));
+            let dir = |text: &str| json!({"path": "/srv/test/d", "mode": text});
+            assert!(outcome(&patterns, "fs.ensure_dir", dir("0755")).is_ok());
+            assert!(matches!(
+                outcome(&patterns, "fs.ensure_dir", dir("0775")),
+                Err(Refusal::BadMode {
+                    reason: ModeRefusal::AboveMaximum { maximum: 0o755 },
+                    ..
+                })
+            ));
+            assert!(ElevationPolicy::new(patterns)
+                .expect("valid")
+                .with_max_mode(0o666)
+                .is_err());
+        }
+
+        #[test]
+        fn symlink_policy_must_be_absent_or_the_refusing_value() {
+            let with = |value: Value| merged(write_atomic_base(), json!({"symlink_policy": value}));
+            assert!(outcome(&["/srv/test/**"], "fs.write_atomic", write_atomic_base()).is_ok());
+            assert!(outcome(&["/srv/test/**"], "fs.write_atomic", with(json!("reject"))).is_ok());
+            for value in ["preserve", "replace"] {
+                assert_eq!(
+                    outcome(&["/srv/test/**"], "fs.write_atomic", with(json!(value))),
+                    Err(Refusal::SymlinkPolicyNotRefusing {
+                        applet: "fs.write_atomic",
+                        value: value.to_string()
+                    })
+                );
+            }
+            assert!(matches!(
+                outcome(&["/srv/test/**"], "fs.write_atomic", with(json!("refuse"))),
+                Err(Refusal::NotAllowedValue { .. })
+            ));
+            assert!(matches!(
+                outcome(&["/srv/test/**"], "fs.write_atomic", with(json!(1))),
+                Err(Refusal::NotAString { .. })
+            ));
+        }
+
+        #[test]
+        fn each_enum_parameter_accepts_a_listed_value_refuses_others_and_accepts_absence() {
+            let cases = [
+                ("fs.ensure_line", "state", "present", "maybe"),
+                ("conf.set", "separator", "=", "::"),
+                ("conf.set", "comment", "//", "/*"),
+                ("conf.ensure_block", "comment", "#", "%%"),
+                ("conf.remove_block", "comment", "--", "*"),
+                ("fs.write_atomic", "permissions_policy", "private", "keep"),
+            ];
+            for (applet, parameter, good, bad) in cases {
+                let with = |value: Value| {
+                    let mut map = Map::new();
+                    map.insert("path".to_string(), json!("/srv/test/f"));
+                    map.insert(parameter.to_string(), value);
+                    Value::Object(map)
+                };
+                let pattern = ["/srv/test/**"];
+                assert!(
+                    outcome(&pattern, applet, with(json!(good))).is_ok(),
+                    "{applet}.{parameter} accepts {good:?}"
+                );
+                assert!(
+                    matches!(
+                        outcome(&pattern, applet, with(json!(bad))),
+                        Err(Refusal::NotAllowedValue { parameter: ref p, value: ref v, .. })
+                            if p == parameter && v == bad
+                    ),
+                    "{applet}.{parameter} refuses {bad:?}"
+                );
+                assert!(
+                    matches!(
+                        outcome(&pattern, applet, with(json!(1))),
+                        Err(Refusal::NotAString { .. })
+                    ),
+                    "{applet}.{parameter} refuses a number"
+                );
+                assert!(
+                    outcome(&pattern, applet, json!({"path": "/srv/test/f"})).is_ok(),
+                    "{applet} with {parameter} absent is left to the applet"
+                );
+            }
+        }
+
+        #[test]
+        fn an_unknown_enum_like_parameter_name_is_refused() {
+            let arguments = json!({"path": "/srv/test/a", "content": "x", "state": "present"});
+            assert!(matches!(
+                outcome(&["/srv/test/**"], "fs.ensure_file", arguments),
+                Err(Refusal::UnknownParameter { parameter, .. }) if parameter == "state"
+            ));
         }
     }
 }

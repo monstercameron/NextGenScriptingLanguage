@@ -83,6 +83,14 @@ texts and the positional inputs. Copy them into the first 80 lines of a port to 
 Omarchy its summary and usage text. The output has no `group`, `alias`, `hidden` or
 `requires-sudo` lines yet, because the language does not declare those.
 
+No port file carries `# omarchy:` lines yet, and no port declares `described as`, so no
+port's generated output has a `summary` line. Adding the lines means editing the port
+`.program` files, which this section does not do. `tests/issue_401_omarchy_headers.rs`
+checks that the generated lines pass the header lint once embedded below each port's
+first line, and that the lint reports a stale or late header on a real port. It does
+not compare headers with the pinned upstream `bin/omarchy` dispatcher, which needs Bash
+and the pinned source.
+
 ## Ports compared with their Bash originals
 
 Twenty more scripts live in subdirectories, `omarchy-ports/<script>/`, each with three

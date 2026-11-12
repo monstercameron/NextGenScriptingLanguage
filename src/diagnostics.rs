@@ -6612,6 +6612,154 @@ fn find_parameter_index(words: &[(String, usize, usize, bool)], name: &str) -> O
     None
 }
 
+/// Why a machine-applicable fix was not applied by `apply_machine_fixes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixSkipReason {
+    /// An edit has a span outside the source or not on UTF-8 character boundaries.
+    InvalidSpan,
+    /// An edit overlaps an edit that was already applied (or another edit of the same fix).
+    Overlap,
+    /// Applying the fix would make a text that parses stop parsing.
+    ParseWorse,
+}
+
+/// Result of applying machine-applicable fixes to one source text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedFixes {
+    /// The source with every accepted fix applied; equal to the input when none applied.
+    pub text: String,
+    /// Indexes into the diagnostics slice whose first fix was applied, in application order.
+    pub applied: Vec<usize>,
+    /// Indexes of diagnostics whose first fix was not applied, with the reason.
+    pub skipped: Vec<(usize, FixSkipReason)>,
+}
+
+/// Apply the first (most likely) machine-applicable fix of each diagnostic to `source`.
+///
+/// Diagnostics are visited in source order, so an earlier fix wins a conflict. A fix is
+/// skipped when any of its edits overlaps an edit already accepted, when its spans are
+/// invalid, or when the text would stop parsing although the text before it parsed.
+/// Only the text inside accepted edit spans changes. On CRLF text, newlines that a
+/// replacement introduces become CRLF too. This is a single pass: the caller re-checks.
+pub fn apply_machine_fixes(source: &str, diagnostics: &[Diagnostic]) -> AppliedFixes {
+    let crlf = source.contains("\r\n");
+    let mut candidates: Vec<(usize, &SuggestedFix)> = diagnostics
+        .iter()
+        .enumerate()
+        .filter_map(|(index, diagnostic)| diagnostic.fixes.first().map(|fix| (index, fix)))
+        .collect();
+    candidates.sort_by_key(|(index, fix)| {
+        let first = fix
+            .edits
+            .iter()
+            .map(|edit| edit.span.start_byte)
+            .min()
+            .unwrap_or(usize::MAX);
+        (first, *index)
+    });
+
+    let mut current = source.to_owned();
+    let mut accepted: Vec<(usize, usize, String)> = Vec::new();
+    let mut applied = Vec::new();
+    let mut skipped = Vec::new();
+    for (index, fix) in candidates {
+        let mut edits: Vec<(usize, usize, String)> = Vec::with_capacity(fix.edits.len());
+        let mut reason = None;
+        for edit in &fix.edits {
+            let (start, end) = (edit.span.start_byte, edit.span.end_byte);
+            // `get` rejects reversed, out-of-range and mid-character spans alike.
+            if source.get(start..end).is_none() {
+                reason = Some(FixSkipReason::InvalidSpan);
+                break;
+            }
+            let replacement = if crlf {
+                crlf_newlines(&edit.replacement)
+            } else {
+                edit.replacement.clone()
+            };
+            edits.push((start, end, replacement));
+        }
+        if reason.is_none() {
+            let overlaps_fix = edits.iter().enumerate().any(|(position, (start, end, _))| {
+                edits[position + 1..]
+                    .iter()
+                    .any(|(other_start, other_end, _)| {
+                        edits_overlap((*start, *end), (*other_start, *other_end))
+                    })
+            });
+            let overlaps_applied = edits.iter().any(|(start, end, _)| {
+                accepted.iter().any(|(other_start, other_end, _)| {
+                    edits_overlap((*start, *end), (*other_start, *other_end))
+                })
+            });
+            if overlaps_fix || overlaps_applied {
+                reason = Some(FixSkipReason::Overlap);
+            }
+        }
+        if reason.is_none() {
+            let mut combined = accepted.clone();
+            combined.extend(edits.iter().cloned());
+            let candidate = splice(source, &combined);
+            if parses(&candidate) || !parses(&current) {
+                accepted = combined;
+                current = candidate;
+                applied.push(index);
+            } else {
+                reason = Some(FixSkipReason::ParseWorse);
+            }
+        }
+        if let Some(reason) = reason {
+            skipped.push((index, reason));
+        }
+    }
+    AppliedFixes {
+        text: current,
+        applied,
+        skipped,
+    }
+}
+
+/// Whether two edit ranges conflict. Two insertions conflict only at the same point.
+fn edits_overlap(first: (usize, usize), second: (usize, usize)) -> bool {
+    if first.0 == first.1 && second.0 == second.1 {
+        return first.0 == second.0;
+    }
+    first.0 < second.1 && second.0 < first.1
+}
+
+/// Splice non-overlapping edits into `source`. The caller has validated the spans.
+fn splice(source: &str, edits: &[(usize, usize, String)]) -> String {
+    let mut ordered: Vec<&(usize, usize, String)> = edits.iter().collect();
+    ordered.sort_by_key(|(start, end, _)| (*start, *end));
+    let mut output = String::with_capacity(source.len());
+    let mut position = 0;
+    for (start, end, replacement) in ordered {
+        output.push_str(&source[position..*start]);
+        output.push_str(replacement);
+        position = *end;
+    }
+    output.push_str(&source[position..]);
+    output
+}
+
+/// Make every newline in `replacement` a CRLF pair, keeping existing CRLF pairs as they are.
+fn crlf_newlines(replacement: &str) -> String {
+    let mut output = String::with_capacity(replacement.len());
+    let mut previous = '\0';
+    for character in replacement.chars() {
+        if character == '\n' && previous != '\r' {
+            output.push('\r');
+        }
+        output.push(character);
+        previous = character;
+    }
+    output
+}
+
+fn parses(source: &str) -> bool {
+    parser::parse(source).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8125,6 +8273,111 @@ mod tests {
             "nme"
         );
         assert_eq!(diagnostic.fixes[0].edits[0].replacement, "name");
+    }
+
+    fn machine_fix_span(start: usize, end: usize) -> SourceSpan {
+        SourceSpan {
+            start_byte: start,
+            end_byte: end,
+            line: 1,
+            column: 1,
+            end_line: 1,
+            end_column: 1,
+            precision: SpanPrecision::Token,
+            path: None,
+            path_bytes: None,
+        }
+    }
+
+    fn machine_fix_diagnostic(fix: SuggestedFix) -> Diagnostic {
+        Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: "test.fix".to_owned(),
+            message: "test".to_owned(),
+            span: machine_fix_span(0, 0),
+            fixes: vec![fix],
+            related: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn machine_fix_applies_every_first_fix_in_one_pass() {
+        let source = "accept name as text\naccept title as text\nrun \"printf\" with arguments [\"%s %s\", nme, ttle]\n";
+        let diagnostics = analyze_source(source, &Registry::default());
+        let applied = apply_machine_fixes(source, &diagnostics);
+        assert_eq!(
+            applied.text,
+            "accept name as text\naccept title as text\nrun \"printf\" with arguments [\"%s %s\", name, title]\n"
+        );
+        assert_eq!(applied.applied.len(), 2);
+        assert!(applied.skipped.is_empty());
+        let after = analyze_source(&applied.text, &Registry::default());
+        assert!(after.len() <= diagnostics.len());
+        assert!(after
+            .iter()
+            .all(|diagnostic| diagnostic.code != "check.undefined_name"));
+    }
+
+    #[test]
+    fn machine_fix_skips_overlapping_and_out_of_range_edits() {
+        let source = "accept name as text\n";
+        let diagnostics = vec![
+            machine_fix_diagnostic(SuggestedFix::replace(
+                "first",
+                machine_fix_span(7, 11),
+                "title",
+            )),
+            machine_fix_diagnostic(SuggestedFix::replace(
+                "overlap",
+                machine_fix_span(9, 13),
+                "x",
+            )),
+            machine_fix_diagnostic(SuggestedFix::replace("bad", machine_fix_span(15, 99), "y")),
+        ];
+        let applied = apply_machine_fixes(source, &diagnostics);
+        assert_eq!(applied.text, "accept title as text\n");
+        assert_eq!(applied.applied, vec![0]);
+        assert_eq!(
+            applied.skipped,
+            vec![(1, FixSkipReason::Overlap), (2, FixSkipReason::InvalidSpan)]
+        );
+    }
+
+    #[test]
+    fn machine_fix_refuses_an_edit_that_stops_a_parseable_text_parsing() {
+        let source = "accept name as text\n";
+        assert!(parser::parse(source).is_ok());
+        assert!(parser::parse("accept name\n").is_err());
+        let diagnostics = vec![machine_fix_diagnostic(SuggestedFix::replace(
+            "drop the type",
+            machine_fix_span(11, 19),
+            "",
+        ))];
+        let applied = apply_machine_fixes(source, &diagnostics);
+        assert_eq!(applied.text, source);
+        assert!(applied.applied.is_empty());
+        assert_eq!(applied.skipped, vec![(0, FixSkipReason::ParseWorse)]);
+    }
+
+    #[test]
+    fn machine_fix_keeps_crlf_text_and_writes_crlf_newlines() {
+        let source = "accept name as text\r\naccept title as text\r\nrun \"printf\" with arguments [\"%s %s\", nme, ttle]\r\n";
+        let diagnostics = analyze_source(source, &Registry::default());
+        let applied = apply_machine_fixes(source, &diagnostics);
+        assert_eq!(
+            applied.text,
+            "accept name as text\r\naccept title as text\r\nrun \"printf\" with arguments [\"%s %s\", name, title]\r\n"
+        );
+        assert_eq!(applied.applied.len(), 2);
+
+        let inserted = vec![machine_fix_diagnostic(SuggestedFix::replace(
+            "add a blank line",
+            machine_fix_span(19, 19),
+            "\n",
+        ))];
+        let applied = apply_machine_fixes("accept name as text\r\n", &inserted);
+        assert_eq!(applied.text, "accept name as text\r\n\r\n");
+        assert_eq!(crlf_newlines("a\nb\r\nc"), "a\r\nb\r\nc");
     }
 
     #[test]

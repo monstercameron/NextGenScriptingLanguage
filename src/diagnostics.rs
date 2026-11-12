@@ -6716,12 +6716,15 @@ fn collect_pipeline_step_pairs(
             StepKind::Invoke { call: producer, .. },
             StepKind::Invoke {
                 call: consumer,
-                connection: Connection::Pipe,
+                connection,
             },
         ) = (&pair[0].kind, &pair[1].kind)
         else {
             continue;
         };
+        if !matches!(connection, Connection::Pipe | Connection::Then) {
+            continue;
+        }
         if producer.direct || consumer.direct {
             continue;
         }
@@ -6731,14 +6734,30 @@ fn collect_pipeline_step_pairs(
         ) else {
             continue;
         };
-        if producer_manifest.execution_contract().is_none() {
+        let Some(producer_contract) = producer_manifest.execution_contract() else {
             continue;
-        }
-        if consumer_manifest
+        };
+        let Some(input) = consumer_manifest
             .ports()
             .and_then(|ports| ports.inputs.get("stdin"))
-            .is_none()
-        {
+        else {
+            continue;
+        };
+        if *connection == Connection::Then {
+            // A then edge passes bytes or in-process values, so only the declared
+            // schema is compared here; native framing is checked for pipe edges.
+            if producer_contract.then_edge_accepts(&input.schema) {
+                continue;
+            }
+            diagnostics.push(Diagnostic::error(
+                "applet.then.type_mismatch",
+                format!(
+                    "then connects {:?} output to {:?} stdin, but the declared output schema does not fit the typed stdin input",
+                    producer_manifest.name,
+                    consumer_manifest.name,
+                ),
+                line_starts.span(source, pair[1].line),
+            ));
             continue;
         }
         let reasons = producer_manifest.native_pipe_compatibility_issues(consumer_manifest);

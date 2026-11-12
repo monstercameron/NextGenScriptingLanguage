@@ -1,6 +1,7 @@
 use super::state::*;
 use crate::ast::{ListenSource, Program, Trigger};
 use crate::runtime::{self, RunOptions};
+use crate::schedule::advance_cron_minute;
 use anyhow::{bail, Context, Result};
 use chrono::Local;
 use std::sync::{
@@ -280,8 +281,8 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
                 }
                 Trigger::Cron { expression, .. } => {
                     let now = Local::now();
-                    let minute = now.timestamp().div_euclid(60);
-                    let due = minute > last_minute
+                    let (minute, fresh) = advance_cron_minute(last_minute, now.timestamp());
+                    let due = fresh
                         && crate::schedule::CronSchedule::parse(expression)
                             .is_ok_and(|s| s.matches(&now));
                     last_minute = minute;

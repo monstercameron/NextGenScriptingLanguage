@@ -157,10 +157,43 @@ fn validate_bound(value: u32, min: u32, max: u32, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Advances a cron minute high-water mark for the wall clock reading `now_unix`
+/// (seconds since the epoch). Returns the new mark and whether the observed minute
+/// is newly reached, that is strictly later than `mark`. A clock observed earlier
+/// than `mark` (an NTP step back) lowers the mark to the observed minute, so the
+/// schedule resumes at the next minute instead of waiting for the old mark.
+pub(crate) fn advance_cron_minute(mark: i64, now_unix: i64) -> (i64, bool) {
+    let observed = now_unix.div_euclid(60);
+    (observed, observed > mark)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn cron_mark_advances_on_forward_and_holds_within_a_minute() {
+        let now = 1_700_000_040; // Minute-aligned, so +5 and +59 stay in this minute.
+        let mark = now / 60;
+        assert_eq!(advance_cron_minute(mark, now + 60), (mark + 1, true));
+        assert_eq!(advance_cron_minute(mark, now + 5), (mark, false));
+        assert_eq!(advance_cron_minute(mark, now + 59), (mark, false));
+    }
+
+    #[test]
+    fn cron_mark_resets_when_the_clock_steps_back_an_hour() {
+        let now = 1_700_000_040;
+        let mark = now / 60;
+        let stepped_back = now - 3600;
+        // The mark follows the earlier clock, so the held minute is not reported as fresh.
+        assert_eq!(advance_cron_minute(mark, stepped_back), (mark - 60, false));
+        // Scheduling continues: the next real minute after the step fires.
+        assert_eq!(
+            advance_cron_minute(mark - 60, stepped_back + 60),
+            (mark - 59, true)
+        );
+    }
 
     fn local(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Local> {
         Local

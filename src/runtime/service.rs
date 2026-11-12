@@ -2,7 +2,7 @@
 use super::checkpoint::{CheckpointOptions, Journal};
 use super::resume;
 use super::*;
-use crate::schedule::CronSchedule;
+use crate::schedule::{advance_cron_minute, CronSchedule};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use std::collections::{BTreeSet, VecDeque};
 #[cfg(unix)]
@@ -1033,9 +1033,8 @@ fn run_service_with_signals(
             let mut pending_ticks = VecDeque::new();
             loop {
                 stopped(&signals)?;
-                let now = Local::now();
-                let minute = now.timestamp().div_euclid(60);
-                if minute > last_minute {
+                let (minute, fresh) = advance_cron_minute(last_minute, Local::now().timestamp());
+                if fresh {
                     let first_minute = match schedule_options.missed_ticks {
                         MissedTickPolicy::Skip => minute,
                         MissedTickPolicy::Coalesce | MissedTickPolicy::CatchUp { .. } => {
@@ -1052,7 +1051,6 @@ fn run_service_with_signals(
                         };
                         matched.push(candidate);
                     }
-                    last_minute = minute;
                     match schedule_options.missed_ticks {
                         MissedTickPolicy::Skip => {
                             if let Some(candidate) = matched.into_iter().last() {
@@ -1073,6 +1071,8 @@ fn run_service_with_signals(
                         }
                     }
                 }
+                // Also lowers the mark when the clock was stepped back.
+                last_minute = minute;
                 if let Some(candidate) = pending_ticks.pop_front() {
                     trace_event(
                         options.trace,

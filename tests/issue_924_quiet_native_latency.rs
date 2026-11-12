@@ -35,11 +35,14 @@ fn quiet_native_command_finishes_without_a_fixed_sleep() {
     };
     // Warm-up pays one-time loader and first-spawn costs outside the samples.
     run_once();
-    let mut samples: Vec<Duration> = (0..7).map(|_| run_once()).collect();
+    // The fastest sample is the measurement: a fixed 100 ms supervision sleep puts a floor of
+    // 100 ms under every run, while machine load only ever makes individual runs slower. A
+    // median would fail on a busy test host without any regression.
+    let mut samples: Vec<Duration> = (0..15).map(|_| run_once()).collect();
     samples.sort();
-    let median = samples[samples.len() / 2];
+    let fastest = samples[0];
     assert!(
-        median < Duration::from_millis(60),
-        "quiet native command median {median:?} exceeds the 60 ms budget; samples {samples:?}"
+        fastest < Duration::from_millis(90),
+        "fastest quiet native command took {fastest:?}, so a fixed wait of about 100 ms is back; samples {samples:?}"
     );
 }

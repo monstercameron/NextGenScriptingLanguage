@@ -101,19 +101,85 @@ must all match. For example:
 }
 ```
 
-Predicates are `present`, `absent`, `nonempty` (string or path),
-`negative_integer`, `positive_integer`, `nonnegative_integer`,
-`nonzero_integer`, `boolean` (with a `value`), and `number_range` (with
-inclusive `minimum` and `maximum` integer bounds). The integer-domain
+Each predicate names one `parameter` and has a `test` field. `src/manifest.rs`
+accepts exactly the eleven tests below and refuses unknown tests and unknown
+fields.
+
+| Test | Extra fields | Matches when |
+| --- | --- | --- |
+| `present` | none | The parameter is supplied. |
+| `absent` | none | The parameter is not supplied. |
+| `nonempty` | none | The parameter is a string or path with at least one byte. Type must be `string` or `path`. |
+| `positive_integer` | none | The parameter is an exact JSON integer greater than zero. Type must be `integer` or `unsigned_integer`. |
+| `nonnegative_integer` | none | The parameter is an exact JSON integer zero or greater. Type must be `integer` or `unsigned_integer`. |
+| `nonzero_integer` | none | The parameter is an exact JSON integer other than zero. Type must be `integer` or `unsigned_integer`. |
+| `negative_integer` | none | The parameter is an exact JSON integer less than zero. Type must be `integer`. |
+| `boolean` | `value` (boolean) | The parameter is the JSON boolean `value`. Type must be `boolean`. |
+| `string_not_equals` | `value` (string) | The parameter is absent, or it is a string other than `value`. Type must be `string` or `path`. |
+| `number_range` | `minimum`, `maximum` (integers) | The parameter is a number within the inclusive bounds. Type must be `integer`, `unsigned_integer`, `number` or `json`. |
+| `number_range_by_representation` | `based_on` (string), `representation` (`integer` or `float`), `minimum`, `maximum` (integers) | The parameter is a number within the inclusive bounds, and the `based_on` value has the stated representation. Type must be `integer`, `number` or `json`. |
+
+A value predicate does not match when its parameter is absent, except that
+`string_not_equals` matches an absent parameter. Apart from `present` and
+`absent`, a predicate whose parameter is a reference is checked after the
+reference resolves. `number_range` and `number_range_by_representation` bounds
+must fit within ±2^53 so integer-to-binary64 conversion is exact. The integer
 predicates match exact signed or unsigned JSON integers without converting
-through floating point. `number_range` bounds must fit within ±2^53 so
-integer-to-binary64 conversion is exact. A manifest is refused
-if a rule names an undeclared parameter, has the wrong parameter type, or has
-empty or oversized branches. Checking rejects a call only when every branch is
-known to fail; values supplied by references are checked after resolution before
-execution. Inspection exposes the rules and their JSON Schema equivalent.
-Helper invocations bypass manifests, so applet implementations must continue
-to validate their own inputs.
+through floating point. For `number_range_by_representation`, `based_on` must
+name a different parameter declared as `json`. Its value has the `integer`
+representation when it is a JSON integer such as `2`, and the `float`
+representation for any other JSON number such as `2.0` or `2.5`. A `based_on`
+value that is not a number does not match.
+
+For example, this rule refuses the value `stdout` for a string parameter named
+`output`:
+
+```json
+{
+  "message": "output must not be stdout",
+  "any_of": [[{"test": "string_not_equals", "parameter": "output", "value": "stdout"}]]
+}
+```
+
+The shipped `number.round` manifest (`manifests/core.number_round.json`) uses
+`number_range_by_representation` to bound `digits` by the form of `value`: -38
+through 38 for integer values and -308 through 308 for fractional values. Its
+rule also has an `absent` branch, so omitting `digits` is accepted.
+
+A manifest is refused if a rule names an undeclared parameter, has the wrong
+parameter type, has an empty or oversized message, or exceeds 32 rules, 32
+branches per rule or 32 predicates per branch. Checking rejects a call only when
+every branch is known to fail; values supplied by references are checked after
+resolution before execution.
+
+Inspection shows the raw rules under `parameter_alternatives` and a JSON Schema
+projection under `parameters_schema.allOf`. Each rule becomes an `anyOf` over its
+branches, and each branch becomes an `allOf` over its predicate schemas. Most
+predicates use standard keywords: `present` requires the name, `absent` forbids
+it, `nonempty` uses `minLength` 1, the integer predicates use `type` `integer`
+with `exclusiveMinimum`, `exclusiveMaximum` or `not` and `const` for zero,
+`boolean` uses `const`, `string_not_equals` uses `not` and `const`, and
+`number_range` uses `type` `number` with `minimum` and `maximum`. A standard
+validator can check these projections against a literal document with two
+exceptions:
+
+- `number_range_by_representation` projects only `required` entries for the
+  parameter and `based_on`, plus the Execute extension
+  `x-number-range-by-representation`, which records the parameter, `based_on`,
+  representation and bounds. Standard JSON Schema cannot distinguish the JSON
+  integer `2` from `2.0` as a representation, and it ignores unknown `x-`
+  keywords. A standard validator therefore enforces only that both parameters
+  are present. Execute enforces the range itself, and a validator must
+  understand the extension to enforce it.
+- The integer predicates project to `type` `integer`. Draft 6 and later JSON
+  Schema accept `1.0` as an integer, but Execute's integer predicates match only
+  exact JSON integers, so a standard validator can accept a value that Execute
+  refuses.
+
+Projections cannot evaluate references, which are resolved only at runtime.
+Use the projection for external checks as a partial check, not as a
+replacement for Execute's checks. Helper invocations bypass manifests, so
+applet implementations must continue to validate their own inputs.
 
 Applet parameter types `integer` and `unsigned_integer` accept exact signed
 64-bit and nonnegative platform-sized integer values respectively. Workflow

@@ -1,6 +1,7 @@
 //! #252: a program that declares `# execute-policy: allow none` performs no write. The
 //! header is enforced by `run` before the first effect, so a file write fails and leaves
 //! no file behind.
+#![cfg(feature = "agent-advisory")]
 
 use std::fs;
 use std::path::Path;
@@ -16,7 +17,6 @@ fn run(directory: &Path, program: &str) -> std::process::Output {
         .expect("execute starts")
 }
 
-#[cfg(feature = "agent-advisory")]
 #[test]
 fn allow_none_program_that_writes_a_file_fails_before_the_write() {
     let directory = tempfile::tempdir().unwrap();

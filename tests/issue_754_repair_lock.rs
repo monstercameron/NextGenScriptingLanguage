@@ -5,6 +5,7 @@
 //! The repair CLI lives in the binary crate, so these tests drive the public
 //! `flow::repair` API that the CLI calls, in the same order: acquire the lock,
 //! plan, check the program is unchanged, then commit.
+#![cfg(feature = "records")]
 
 use flow::manifest::Registry;
 use flow::repair::{self, Operation};

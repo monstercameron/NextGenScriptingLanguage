@@ -1,8 +1,10 @@
 use super::list::usize_within;
 use super::{
-    checkpoint_work, invalid, optional_string, required_string, AppletError, ExecutionContext,
+    checkpoint_work, invalid, io_error, optional_string, required_string, AppletError,
+    ExecutionContext,
 };
 use serde_json::{Map, Value};
+use std::io::{Read, Write};
 use unicode_width::UnicodeWidthStr;
 
 const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
@@ -590,6 +592,129 @@ pub(super) fn upper(args: &Map<String, Value>, input: &[u8]) -> Result<Value, Ap
     }
 }
 
+/// The longest UTF-8 character is four bytes, so an unfinished tail is at most three.
+const UTF8_CARRY_BYTES: usize = 3;
+
+/// Streaming form of [`upper`]. The input is read in pieces of at most
+/// `chunk_size` bytes; a character cut at a piece boundary is carried into the
+/// next read, so every character is mapped whole. Uppercase mapping is decided
+/// one character at a time, so the concatenated output equals [`upper`] over
+/// the whole input. Errors match the buffered path: invalid UTF-8 reports its
+/// absolute offset, a character truncated at end of input is reported at its
+/// start, and output over the byte limit is refused after the input is read to
+/// the end. Unlike the buffered path, output from earlier pieces may already be
+/// in `output` when an error is returned.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn upper_stream(
+    args: &Map<String, Value>,
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+    context: &ExecutionContext<'_>,
+    chunk_size: usize,
+) -> Result<(), AppletError> {
+    if args.contains_key("text") {
+        // text_input takes args.text in preference to the stream, so the stream is not read.
+        let text = text_input(args, &[])?;
+        let mut mapped = Vec::with_capacity(text.len());
+        push_upper(text, &mut mapped);
+        check_text_size(mapped.len())?;
+        return write_output(output, &mapped);
+    }
+    let chunk_size = chunk_size.max(1);
+    // buf[..carry] holds an unfinished character; the next read fills the rest.
+    let mut buf = vec![0u8; chunk_size + UTF8_CARRY_BYTES];
+    let mut carry = 0usize;
+    // Input offset of buf[0], used for error positions.
+    let mut consumed = 0usize;
+    let mut produced = 0usize;
+    let mut mapped = Vec::new();
+    loop {
+        context.checkpoint()?;
+        let read = match input.read(&mut buf[carry..carry + chunk_size]) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(io_error(error, "reading applet input")),
+        };
+        let filled = carry + read;
+        let (text, tail) = split_utf8(&buf[..filled], consumed)?;
+        let tail_len = tail.len();
+        mapped.clear();
+        push_upper(text, &mut mapped);
+        emit(output, &mapped, &mut produced)?;
+        consumed += filled - tail_len;
+        buf.copy_within(filled - tail_len..filled, 0);
+        carry = tail_len;
+    }
+    if carry > 0 {
+        return Err(utf8_error(consumed, None));
+    }
+    check_text_size(produced)
+}
+
+/// Append the uppercase UTF-8 of `text`. ASCII maps bytewise, exactly as
+/// [`str::to_ascii_uppercase`] does, and other characters use their Unicode
+/// mapping, which may change the byte length.
+#[cfg_attr(not(test), allow(dead_code))]
+fn push_upper(text: &str, out: &mut Vec<u8>) {
+    let mut encoded = [0u8; 4];
+    for character in text.chars() {
+        if character.is_ascii() {
+            out.push(character.to_ascii_uppercase() as u8);
+        } else {
+            for mapped in character.to_uppercase() {
+                out.extend_from_slice(mapped.encode_utf8(&mut encoded).as_bytes());
+            }
+        }
+    }
+}
+
+/// Split `bytes`, which start at input offset `start`, into the text before
+/// any unfinished character and the unfinished tail (at most three bytes).
+/// Invalid UTF-8 is an error at its absolute offset.
+#[cfg_attr(not(test), allow(dead_code))]
+fn split_utf8(bytes: &[u8], start: usize) -> Result<(&str, &[u8]), AppletError> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Ok((text, &[])),
+        Err(error) => {
+            let valid = error.valid_up_to();
+            if let Some(length) = error.error_len() {
+                return Err(utf8_error(start + valid, Some(length)));
+            }
+            let text = std::str::from_utf8(&bytes[..valid])
+                .map_err(|error| utf8_error(start + error.valid_up_to(), error.error_len()))?;
+            Ok((text, &bytes[valid..]))
+        }
+    }
+}
+
+/// The message `text_input` produces for the same failure in the buffered path.
+#[cfg_attr(not(test), allow(dead_code))]
+fn utf8_error(index: usize, error_len: Option<usize>) -> AppletError {
+    let detail = match error_len {
+        Some(length) => format!("invalid utf-8 sequence of {length} bytes from index {index}"),
+        None => format!("incomplete utf-8 byte sequence from index {index}"),
+    };
+    invalid(format!("stdin must be UTF-8: {detail}"))
+}
+
+/// Write `bytes` to `produced`'s budget. Output beyond the byte limit is not
+/// written, and `produced` keeps counting so the final size check refuses it.
+#[cfg_attr(not(test), allow(dead_code))]
+fn emit(output: &mut dyn Write, bytes: &[u8], produced: &mut usize) -> Result<(), AppletError> {
+    let room = super::shared::MAX_BYTES.saturating_sub(*produced);
+    write_output(output, &bytes[..bytes.len().min(room)])?;
+    *produced = produced.saturating_add(bytes.len());
+    Ok(())
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn write_output(output: &mut dyn Write, bytes: &[u8]) -> Result<(), AppletError> {
+    output
+        .write_all(bytes)
+        .map_err(|error| io_error(error, "writing applet output"))
+}
+
 fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletError> {
     *work += 1;
     if *work == 256 {
@@ -606,6 +731,7 @@ pub(super) fn check_text_size(length: usize) -> Result<(), AppletError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Read};
 
     #[test]
     fn substring_indices_past_usize_are_out_of_range_not_wrapped() {
@@ -790,6 +916,195 @@ mod tests {
         assert_eq!(
             pad("\u{1F469}", 4, "right", "\u{1F4BB}"),
             text("\u{1F469}\u{1F4BB}")
+        );
+    }
+
+    /// Valid UTF-8 of exactly `length` bytes built from 1-, 2-, 3- and 4-byte
+    /// characters, including characters whose uppercase has another length.
+    fn mixed_utf8(length: usize) -> Vec<u8> {
+        const PIECES: [&str; 7] = ["a", "é", "ﬃ", "𐐨", "€", "😀", "ŉ"];
+        let mut bytes = Vec::with_capacity(length);
+        let mut next = 0;
+        while bytes.len() < length {
+            let piece = PIECES[next % PIECES.len()];
+            next += 1;
+            let piece = if piece.len() <= length - bytes.len() {
+                piece
+            } else {
+                "a"
+            };
+            bytes.extend_from_slice(piece.as_bytes());
+        }
+        bytes
+    }
+
+    fn buffered_upper(input: &[u8]) -> Result<Vec<u8>, (&'static str, String)> {
+        match upper(&Map::new(), input) {
+            Ok(Value::String(text)) => Ok(text.into_bytes()),
+            Ok(other) => panic!("upper returned {other:?}"),
+            Err(error) => Err((error.code, error.message)),
+        }
+    }
+
+    /// Returns at most one byte per read, whatever the buffer size.
+    struct OneByte<'a>(&'a [u8]);
+
+    impl Read for OneByte<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.split_first() {
+                Some((&first, rest)) if !buf.is_empty() => {
+                    buf[0] = first;
+                    self.0 = rest;
+                    Ok(1)
+                }
+                _ => Ok(0),
+            }
+        }
+    }
+
+    fn streamed_upper(
+        input: &[u8],
+        chunk_size: usize,
+        one_byte: bool,
+    ) -> (Result<(), (&'static str, String)>, Vec<u8>) {
+        let mut sink = Vec::new();
+        let context = ExecutionContext::unrestricted();
+        let result = if one_byte {
+            upper_stream(
+                &Map::new(),
+                &mut OneByte(input),
+                &mut sink,
+                &context,
+                chunk_size,
+            )
+        } else {
+            upper_stream(
+                &Map::new(),
+                &mut Cursor::new(input),
+                &mut sink,
+                &context,
+                chunk_size,
+            )
+        };
+        (result.map_err(|error| (error.code, error.message)), sink)
+    }
+
+    fn assert_stream_matches_buffered(input: &[u8]) {
+        let expected = buffered_upper(input);
+        for chunk_size in 1..=9 {
+            for one_byte in [false, true] {
+                let (result, sink) = streamed_upper(input, chunk_size, one_byte);
+                match (&expected, &result) {
+                    (Ok(bytes), Ok(())) => {
+                        assert_eq!(&sink, bytes, "input {input:?}, chunk {chunk_size}")
+                    }
+                    (Err(expected_error), Err(actual_error)) => {
+                        assert_eq!(
+                            actual_error, expected_error,
+                            "input {input:?}, chunk {chunk_size}"
+                        );
+                        // Output written before the error must be a prefix of the
+                        // output for the valid text that precedes the bad byte.
+                        let valid = match std::str::from_utf8(input) {
+                            Ok(_) => input.len(),
+                            Err(error) => error.valid_up_to(),
+                        };
+                        let prefix = buffered_upper(&input[..valid]).expect("valid prefix");
+                        assert!(
+                            prefix.starts_with(&sink),
+                            "input {input:?}, chunk {chunk_size}"
+                        );
+                    }
+                    _ => panic!(
+                        "streaming and buffered disagree for {input:?}, chunk {chunk_size}: \
+                         buffered {expected:?}, streamed {result:?}"
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_upper_matches_buffered_for_every_length_and_chunk_size() {
+        for length in 0..=70 {
+            let valid = mixed_utf8(length);
+            let middle = length / 2;
+            let mut stray_continuation = valid.clone();
+            stray_continuation.insert(middle, 0x80);
+            let mut invalid_byte = valid.clone();
+            invalid_byte.insert(middle, 0xFF);
+            let mut truncated_four = valid.clone();
+            truncated_four.extend_from_slice(&[0xF0, 0x9F, 0x98]);
+            let mut truncated_three = valid.clone();
+            truncated_three.push(0xE2);
+            let mut bad_continuation = valid.clone();
+            bad_continuation.extend_from_slice(&[0xC3, 0x28]);
+            for input in [
+                valid,
+                stray_continuation,
+                invalid_byte,
+                truncated_four,
+                truncated_three,
+                bad_continuation,
+            ] {
+                assert_stream_matches_buffered(&input);
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_upper_refuses_output_over_the_limit_like_the_buffered_path() {
+        let input = vec![b'a'; crate::applets::shared::MAX_BYTES + 1];
+        let expected = buffered_upper(&input).expect_err("buffered output over limit");
+        let (result, sink) = streamed_upper(&input, 64 * 1024, false);
+        assert_eq!(result.expect_err("streamed output over limit"), expected);
+        assert_eq!(sink.len(), crate::applets::shared::MAX_BYTES);
+        assert!(sink.iter().all(|&byte| byte == b'A'));
+    }
+
+    #[test]
+    fn streaming_upper_observes_cancellation_before_reading() {
+        let checkpoint = || -> Result<(), crate::applets::ExecutionBudgetExceeded> {
+            Err(crate::applets::ExecutionBudgetExceeded::Cancelled)
+        };
+        let context = ExecutionContext::new(&checkpoint);
+        let mut sink = Vec::new();
+        let error = upper_stream(
+            &Map::new(),
+            &mut Cursor::new(b"abc".as_slice()),
+            &mut sink,
+            &context,
+            2,
+        )
+        .expect_err("cancelled before the first read");
+        assert_eq!(error.kind, crate::applets::AppletErrorKind::Cancelled);
+        assert!(sink.is_empty());
+    }
+
+    #[test]
+    fn streaming_upper_with_text_argument_does_not_read_the_stream() {
+        let args = Map::from_iter([("text".to_owned(), Value::String("straße €".to_owned()))]);
+        let mut sink = Vec::new();
+        upper_stream(
+            &args,
+            &mut Cursor::new([0xFF_u8].as_slice()),
+            &mut sink,
+            &ExecutionContext::unrestricted(),
+            4,
+        )
+        .expect("args.text takes precedence over the stream");
+        assert_eq!(sink, "STRASSE €".as_bytes());
+    }
+
+    #[test]
+    fn lower_is_not_chunk_safe_because_of_final_sigma() {
+        // The final-sigma rule looks at the neighbours of a capital sigma, so a
+        // piece boundary inside a word changes the result. Uppercase has no such
+        // rule, which is why only upper is streamed.
+        assert_eq!("AΣ".to_lowercase(), "aς");
+        assert_eq!(
+            format!("{}{}", "A".to_lowercase(), "Σ".to_lowercase()),
+            "aσ"
         );
     }
 }

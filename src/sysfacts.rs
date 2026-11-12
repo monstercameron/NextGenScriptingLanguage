@@ -18,6 +18,8 @@ const SYSFS_ATTR_LIMIT: u64 = 4 * 1024;
 const CPUINFO_LIMIT: u64 = 8 * 1024 * 1024;
 /// Most entries read from one listing (`power_supply`, `drm`). Real machines have a handful.
 const MAX_LISTED: usize = 1024;
+/// Largest `os-release` read. The file is a few hundred bytes; this is a ceiling.
+const OS_RELEASE_LIMIT: u64 = 64 * 1024;
 
 /// Machine facts. The first four fields are the first slice; the rest were
 /// added later and default to empty when absent from older serialised data.
@@ -36,6 +38,23 @@ pub struct Facts {
     /// Hypervisor evidence from DMI and `sys/hypervisor/type`.
     #[serde(default)]
     pub virtualization: Virtualization,
+    /// Distribution identity from `os-release`.
+    #[serde(default)]
+    pub os: Os,
+}
+
+/// Distribution identity from `etc/os-release`, or `usr/lib/os-release` when
+/// the first is absent. Each field is absent when its key is missing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Os {
+    /// `ID`, e.g. `ubuntu`.
+    pub id: Option<String>,
+    /// `ID_LIKE` split on whitespace, e.g. `["debian"]`.
+    pub id_like: Option<Vec<String>>,
+    /// `VERSION_ID`, e.g. `24.04`.
+    pub version_id: Option<String>,
+    /// `VERSION_CODENAME`, e.g. `noble`.
+    pub codename: Option<String>,
 }
 
 /// Identity from `sys/class/dmi/id`.
@@ -363,7 +382,59 @@ pub fn facts(root: &Path) -> Facts {
         power_supplies: power_supplies(&root),
         drm_outputs: drm_outputs(&root),
         virtualization,
+        os: os_release(&root),
     }
+}
+
+/// Reads `etc/os-release`, falling back to `usr/lib/os-release`. A file that
+/// is missing, unreadable, too large or a symlink leaving `root` is skipped.
+fn os_release(root: &Path) -> Os {
+    let candidates: [&[&str]; 2] = [&["etc", "os-release"], &["usr", "lib", "os-release"]];
+    let text = candidates.iter().find_map(|parts| {
+        let path = join_checked(root, parts)?;
+        read_bounded(&path, OS_RELEASE_LIMIT)
+    });
+    text.map(|text| parse_os_release(&text)).unwrap_or_default()
+}
+
+/// Parses `KEY=value` lines. Blank lines and `#` comments are skipped, values
+/// may be wrapped in one pair of matching quotes, and the first value of each
+/// key wins.
+fn parse_os_release(text: &str) -> Os {
+    let mut os = Os::default();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = unquote(value.trim());
+        match key.trim() {
+            "ID" => keep_first(&mut os.id, value),
+            "ID_LIKE" if os.id_like.is_none() && !value.is_empty() => {
+                os.id_like = Some(value.split_whitespace().map(str::to_owned).collect());
+            }
+            "VERSION_ID" => keep_first(&mut os.version_id, value),
+            "VERSION_CODENAME" => keep_first(&mut os.codename, value),
+            _ => {}
+        }
+    }
+    os
+}
+
+/// Removes one pair of matching surrounding double or single quotes.
+fn unquote(value: &str) -> &str {
+    for quote in ['"', '\''] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    value
 }
 
 fn power_supplies(root: &Path) -> Vec<PowerSupply> {

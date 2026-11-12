@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use flow::sysfacts::{
-    facts, BatteryStatus, ChassisKind, DrmStatus, Facts, SupplyKind, Virtualization,
+    facts, BatteryStatus, ChassisKind, DrmStatus, Facts, Os, SupplyKind, Virtualization,
 };
 
 fn write(root: &Path, rel: &str, text: &str) {
@@ -605,6 +605,74 @@ fn first_slice_field_names_survive_serialisation() {
 
     let back: Facts = serde_json::from_value(value).expect("deserialise");
     assert_eq!(back, f);
+}
+
+#[test]
+fn os_release_reports_id_like_and_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "etc/os-release",
+        "# Ubuntu\nNAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n",
+    );
+    let f = facts(dir.path());
+    assert_eq!(f.os.id.as_deref(), Some("ubuntu"));
+    assert_eq!(f.os.id_like, Some(vec!["debian".to_owned()]));
+    assert_eq!(f.os.version_id.as_deref(), Some("24.04"));
+    assert_eq!(f.os.codename.as_deref(), Some("noble"));
+
+    let multi = tempfile::tempdir().expect("tempdir");
+    write(
+        multi.path(),
+        "etc/os-release",
+        "ID='fedora'\nID_LIKE=\"rhel fedora\"\nVERSION_ID=40\n",
+    );
+    let f = facts(multi.path());
+    assert_eq!(f.os.id.as_deref(), Some("fedora"));
+    assert_eq!(
+        f.os.id_like,
+        Some(vec!["rhel".to_owned(), "fedora".to_owned()])
+    );
+    assert_eq!(f.os.version_id.as_deref(), Some("40"));
+    assert_eq!(f.os.codename, None, "no VERSION_CODENAME key");
+}
+
+#[test]
+fn usr_lib_os_release_is_the_fallback() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), "usr/lib/os-release", "ID=arch\n");
+    let f = facts(dir.path());
+    assert_eq!(f.os.id.as_deref(), Some("arch"));
+    assert_eq!(f.os.id_like, None);
+}
+
+#[test]
+fn missing_os_release_gives_null_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), "etc/os-release", "NAME=\"Only a name\"\n");
+    let f = facts(dir.path());
+    assert_eq!(f.os, Os::default());
+    assert_eq!(f.os.id, None);
+    assert_eq!(f.os.id_like, None);
+    assert_eq!(f.os.version_id, None);
+
+    let empty = tempfile::tempdir().expect("tempdir");
+    assert_eq!(facts(empty.path()).os, Os::default());
+}
+
+#[cfg(unix)]
+#[test]
+fn os_release_symlink_leaving_the_root_is_refused() {
+    let outside = tempfile::tempdir().expect("outside dir");
+    let secret = outside.path().join("os-release");
+    fs::write(&secret, "ID=evil\nVERSION_ID=1\n").expect("write outside file");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(dir.path().join("etc")).expect("create dir");
+    std::os::unix::fs::symlink(&secret, dir.path().join("etc/os-release")).expect("symlink");
+
+    let f = facts(dir.path());
+    assert_eq!(f.os, Os::default());
 }
 
 #[test]

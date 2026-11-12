@@ -121,6 +121,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                         "renameProvider": { "prepareProvider": true },
                         "codeActionProvider": { "codeActionKinds": ["quickfix"] },
                         "documentSymbolProvider": true,
+                        "foldingRangeProvider": true,
                     "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } }
                     },
                     "serverInfo": { "name": "execute-language-server", "version": env!("CARGO_PKG_VERSION") }
@@ -315,6 +316,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             },
             "textDocument/codeAction" => Some(code_actions(&params, &documents, &registry)),
             "textDocument/documentSymbol" => Some(document_symbols(&params, &documents)),
+            "textDocument/foldingRange" => Some(folding_ranges(&params, &documents)),
             _ if id.is_some() => {
                 write_error(
                     &mut writer,
@@ -3803,6 +3805,79 @@ fn document_symbols_in(source: &str) -> Vec<JsonValue> {
     symbols.extend(labelled_step_symbols(source, &raw.steps));
     symbols.sort_by_key(|(line, _)| *line);
     symbols.into_iter().map(|(_, symbol)| symbol).collect()
+}
+
+fn folding_ranges(params: &JsonValue, documents: &BTreeMap<String, Document>) -> JsonValue {
+    let Some(uri) = params
+        .pointer("/textDocument/uri")
+        .and_then(JsonValue::as_str)
+    else {
+        return json!([]);
+    };
+    let Some(document) = documents.get(uri) else {
+        return json!([]);
+    };
+    json!(folding_ranges_in(&document.text))
+}
+
+/// One region per `if`, `run ... succeeds|fails` branch, loop and `try` block in the
+/// top-level program and in its own reusable definitions. The region runs from the
+/// header line to the line of the block's last body step, so the closing marker line
+/// (EndIf, EndLoop, EndTry) is not folded away. Lines are 0-based.
+fn folding_ranges_in(source: &str) -> Vec<JsonValue> {
+    let Ok(raw) = crate::parser::parse_raw(source) else {
+        return Vec::new();
+    };
+    let mut bodies: Vec<&[crate::ast::Step]> = vec![raw.steps.as_slice()];
+    bodies.extend(
+        raw.definitions
+            .iter()
+            .filter(|(name, _)| !name.starts_with(crate::parser::PROGRAM_FILE_PREFIX))
+            .map(|(_, definition)| definition.steps.as_slice()),
+    );
+    let mut ranges = Vec::new();
+    for steps in bodies {
+        for (index, step) in steps.iter().enumerate() {
+            let end = match &step.kind {
+                crate::ast::StepKind::If { end, .. }
+                | crate::ast::StepKind::IfCommand { end, .. }
+                | crate::ast::StepKind::Loop { end, .. }
+                | crate::ast::StepKind::Try { end, .. } => *end,
+                _ => continue,
+            };
+            // `end` points just beyond the closing marker, relative to this header.
+            let Some(closing) = index.checked_add(end).and_then(|past| past.checked_sub(1)) else {
+                continue;
+            };
+            let (Some(marker), Some(last_body)) = (
+                steps.get(closing),
+                closing.checked_sub(1).and_then(|i| steps.get(i)),
+            ) else {
+                continue;
+            };
+            let closes = match &step.kind {
+                crate::ast::StepKind::If { .. } | crate::ast::StepKind::IfCommand { .. } => {
+                    matches!(marker.kind, crate::ast::StepKind::EndIf)
+                }
+                crate::ast::StepKind::Loop { .. } => {
+                    matches!(marker.kind, crate::ast::StepKind::EndLoop { .. })
+                }
+                _ => matches!(marker.kind, crate::ast::StepKind::EndTry),
+            };
+            if !closes || closing < index + 2 {
+                continue;
+            }
+            let (Some(first), Some(last)) =
+                (step.line.checked_sub(1), last_body.line.checked_sub(1))
+            else {
+                continue;
+            };
+            if last > first {
+                ranges.push(json!({ "startLine": first, "endLine": last }));
+            }
+        }
+    }
+    ranges
 }
 
 fn labelled_step_symbols(source: &str, steps: &[crate::ast::Step]) -> Vec<(usize, JsonValue)> {

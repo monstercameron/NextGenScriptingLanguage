@@ -42,6 +42,9 @@ pub enum DesktopError {
     EmbeddedFieldCode(char),
     /// %f or %u with several items. The caller must launch once per item.
     SingleFieldCodeWithSeveralItems(char),
+    InvalidGroup(String),
+    InvalidMimeType(String),
+    InvalidDesktopId(String),
 }
 
 impl fmt::Display for DesktopError {
@@ -64,6 +67,9 @@ impl fmt::Display for DesktopError {
             Self::SingleFieldCodeWithSeveralItems(c) => {
                 write!(f, "field code %{c} takes one item but several were given")
             }
+            Self::InvalidGroup(group) => write!(f, "invalid group name: {group:?}"),
+            Self::InvalidMimeType(mime) => write!(f, "invalid MIME type: {mime:?}"),
+            Self::InvalidDesktopId(id) => write!(f, "invalid desktop file id: {id:?}"),
         }
     }
 }
@@ -194,7 +200,7 @@ enum Kind<'a> {
     Key { key: &'a str, value: &'a str },
 }
 
-fn classify(line: &str) -> Result<Kind<'_>, &'static str> {
+fn classify(line: &str, key_ok: fn(&str) -> bool) -> Result<Kind<'_>, &'static str> {
     let text = line.trim_matches(is_space_or_cr);
     if text.is_empty() {
         return Ok(Kind::Blank);
@@ -216,7 +222,7 @@ fn classify(line: &str) -> Result<Kind<'_>, &'static str> {
         .split_once('=')
         .ok_or("line is neither a key=value pair nor a group header")?;
     let key = key.trim_end_matches(is_space_or_cr);
-    if !is_valid_key(key) {
+    if !key_ok(key) {
         return Err("invalid key name");
     }
     Ok(Kind::Key {
@@ -225,12 +231,12 @@ fn classify(line: &str) -> Result<Kind<'_>, &'static str> {
     })
 }
 
-/// Classifies every line. Keys must come after a group header.
-fn scan(text: &str) -> Result<Vec<Kind<'_>>, DesktopError> {
+/// Classifies every line, checking keys with `key_ok`. Keys must come after a group header.
+fn scan_with(text: &str, key_ok: fn(&str) -> bool) -> Result<Vec<Kind<'_>>, DesktopError> {
     let mut kinds = Vec::new();
     let mut in_group = false;
     for (index, line) in text.split('\n').enumerate() {
-        let kind = classify(line).map_err(|reason| DesktopError::MalformedLine {
+        let kind = classify(line, key_ok).map_err(|reason| DesktopError::MalformedLine {
             line: index + 1,
             reason,
         })?;
@@ -249,11 +255,25 @@ fn scan(text: &str) -> Result<Vec<Kind<'_>>, DesktopError> {
     Ok(kinds)
 }
 
+/// Classifies every line of a Desktop Entry file. Keys must come after a group header.
+fn scan(text: &str) -> Result<Vec<Kind<'_>>, DesktopError> {
+    scan_with(text, is_valid_key)
+}
+
+/// Rejects a group name that the specification does not allow.
+fn check_group(group: &str) -> Result<(), DesktopError> {
+    if is_valid_group(group) {
+        Ok(())
+    } else {
+        Err(DesktopError::InvalidGroup(group.to_string()))
+    }
+}
+
 /// Returns the header index and the index one past the group's last line.
-fn entry_group(kinds: &[Kind<'_>]) -> Option<(usize, usize)> {
+fn group_range(kinds: &[Kind<'_>], group: &str) -> Option<(usize, usize)> {
     let header = kinds
         .iter()
-        .position(|kind| matches!(kind, Kind::Group(name) if *name == DESKTOP_ENTRY_GROUP))?;
+        .position(|kind| matches!(kind, Kind::Group(name) if *name == group))?;
     let end = kinds
         .iter()
         .enumerate()
@@ -263,9 +283,9 @@ fn entry_group(kinds: &[Kind<'_>]) -> Option<(usize, usize)> {
     Some((header, end))
 }
 
-/// Line indexes of every `key` line in the Desktop Entry group.
-fn key_lines(kinds: &[Kind<'_>], key: &str) -> Vec<usize> {
-    let Some((header, end)) = entry_group(kinds) else {
+/// Line indexes of every `key` line in `group`.
+fn key_lines(kinds: &[Kind<'_>], group: &str, key: &str) -> Vec<usize> {
+    let Some((header, end)) = group_range(kinds, group) else {
         return Vec::new();
     };
     (header + 1..end)
@@ -273,9 +293,9 @@ fn key_lines(kinds: &[Kind<'_>], key: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The raw (still escaped, trimmed) value of the first matching key.
-fn first_value<'a>(kinds: &[Kind<'a>], key: &str) -> Option<&'a str> {
-    let index = *key_lines(kinds, key).first()?;
+/// The raw (still escaped, trimmed) value of the first matching key in `group`.
+fn first_value<'a>(kinds: &[Kind<'a>], group: &str, key: &str) -> Option<&'a str> {
+    let index = *key_lines(kinds, group, key).first()?;
     match kinds.get(index) {
         Some(Kind::Key { value, .. }) => Some(*value),
         _ => None,
@@ -284,14 +304,24 @@ fn first_value<'a>(kinds: &[Kind<'a>], key: &str) -> Option<&'a str> {
 
 /// Reads a string value from the Desktop Entry group, unescaped.
 pub fn get_string(text: &str, key: &str) -> Result<Option<String>, DesktopError> {
+    get_string_in(text, DESKTOP_ENTRY_GROUP, key)
+}
+
+/// Reads a string value from the named group, unescaped. Other groups are never read.
+pub fn get_string_in(text: &str, group: &str, key: &str) -> Result<Option<String>, DesktopError> {
+    check_group(group)?;
     let kinds = scan(text)?;
-    first_value(&kinds, key).map(unescape_string).transpose()
+    first_value(&kinds, group, key)
+        .map(unescape_string)
+        .transpose()
 }
 
 /// Reads a list value from the Desktop Entry group.
 pub fn get_list(text: &str, key: &str) -> Result<Option<Vec<String>>, DesktopError> {
     let kinds = scan(text)?;
-    first_value(&kinds, key).map(split_list).transpose()
+    first_value(&kinds, DESKTOP_ENTRY_GROUP, key)
+        .map(split_list)
+        .transpose()
 }
 
 /// Checks the syntax of every line.
@@ -309,16 +339,63 @@ fn set_encoded(
     encoded: &str,
     same: impl Fn(&str) -> bool,
 ) -> Result<Option<String>, DesktopError> {
-    if !is_valid_key(key) {
+    set_encoded_in(
+        text,
+        DESKTOP_ENTRY_GROUP,
+        key,
+        encoded,
+        same,
+        is_valid_key,
+        NewGroup::Top,
+    )
+}
+
+/// Where a group that the text does not have yet is created.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NewGroup {
+    /// Before the existing text (the Desktop Entry group comes first).
+    Top,
+    /// After the existing text, separated by one blank line.
+    End,
+}
+
+/// Sets `key` in `group` to an already encoded value, checking the key with `key_ok`.
+fn set_encoded_in(
+    text: &str,
+    group: &str,
+    key: &str,
+    encoded: &str,
+    same: impl Fn(&str) -> bool,
+    key_ok: fn(&str) -> bool,
+    new_group: NewGroup,
+) -> Result<Option<String>, DesktopError> {
+    if !key_ok(key) {
         return Err(DesktopError::InvalidKey(key.to_string()));
     }
-    let kinds = scan(text)?;
+    check_group(group)?;
+    let kinds = scan_with(text, key_ok)?;
     let new_line = format!("{key}={encoded}");
-    let found = key_lines(&kinds, key);
+    let found = key_lines(&kinds, group, key);
 
     if found.is_empty() {
-        let Some((header, end)) = entry_group(&kinds) else {
-            return Ok(Some(format!("[{DESKTOP_ENTRY_GROUP}]\n{new_line}\n{text}")));
+        let Some((header, end)) = group_range(&kinds, group) else {
+            let mut out = match new_group {
+                NewGroup::Top => format!("[{group}]\n{new_line}\n{text}"),
+                NewGroup::End => {
+                    let mut out = text.to_string();
+                    if !out.is_empty() {
+                        if !out.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        out.push('\n');
+                    }
+                    out
+                }
+            };
+            if new_group == NewGroup::End {
+                out.push_str(&format!("[{group}]\n{new_line}\n"));
+            }
+            return Ok(Some(out));
         };
         let at = (header + 1..end)
             .rev()
@@ -352,6 +429,26 @@ pub fn set_string(text: &str, key: &str, value: &str) -> Result<Option<String>, 
     })
 }
 
+/// Sets a string value in the named group. A missing group is created at the end of the
+/// text. Other groups are never changed. `None` means nothing changed.
+pub fn set_string_in(
+    text: &str,
+    group: &str,
+    key: &str,
+    value: &str,
+) -> Result<Option<String>, DesktopError> {
+    let encoded = escape_string(value)?;
+    set_encoded_in(
+        text,
+        group,
+        key,
+        &encoded,
+        |raw| unescape_string(raw).is_ok_and(|v| v == value),
+        is_valid_key,
+        NewGroup::End,
+    )
+}
+
 /// Sets a list value in the Desktop Entry group. `None` means nothing changed.
 pub fn set_list(text: &str, key: &str, items: &[&str]) -> Result<Option<String>, DesktopError> {
     let encoded = join_list(items)?;
@@ -364,11 +461,17 @@ pub fn set_list(text: &str, key: &str, items: &[&str]) -> Result<Option<String>,
 /// Removes every line that sets `key` in the Desktop Entry group. `None` means the
 /// key was absent.
 pub fn remove_key(text: &str, key: &str) -> Result<Option<String>, DesktopError> {
+    remove_key_in(text, DESKTOP_ENTRY_GROUP, key)
+}
+
+/// Removes every line that sets `key` in `group`. `None` means the key was absent.
+pub fn remove_key_in(text: &str, group: &str, key: &str) -> Result<Option<String>, DesktopError> {
     if !is_valid_key(key) {
         return Err(DesktopError::InvalidKey(key.to_string()));
     }
+    check_group(group)?;
     let kinds = scan(text)?;
-    let found = key_lines(&kinds, key);
+    let found = key_lines(&kinds, group, key);
     if found.is_empty() {
         return Ok(None);
     }
@@ -582,6 +685,284 @@ pub fn exec_argv(text: &str, ctx: &FieldContext<'_>) -> Result<Option<Vec<String
         Some(exec) => expand_exec(&parse_exec(&exec)?, ctx).map(Some),
         None => Ok(None),
     }
+}
+
+/// Expands the Exec key of the Desktop Entry group and fills the context codes from the
+/// entry itself: `%i` becomes `--icon` and the Icon value, `%c` the translated Name, and
+/// `%k` is `desktop_file`, the path the entry was read from. `locale` is a POSIX locale
+/// such as `de_DE.UTF-8`; a localized key is preferred over the plain key. Returns `None`
+/// when there is no Exec key. Each substituted value stays exactly one argument.
+pub fn exec_argv_in_entry(
+    text: &str,
+    files: &[&str],
+    urls: &[&str],
+    desktop_file: &str,
+    locale: Option<&str>,
+) -> Result<Option<Vec<String>>, DesktopError> {
+    let Some(exec) = get_string(text, "Exec")? else {
+        return Ok(None);
+    };
+    let icon = localized_string(text, "Icon", locale)?.filter(|icon| !icon.is_empty());
+    let name = localized_string(text, "Name", locale)?;
+    let ctx = FieldContext {
+        files,
+        urls,
+        icon: icon.as_deref(),
+        name: name.as_deref(),
+        desktop_file: Some(desktop_file),
+    };
+    expand_exec(&parse_exec(&exec)?, &ctx).map(Some)
+}
+
+/// The localized value of `key` for the first locale candidate that has one, else the
+/// plain value.
+fn localized_string(
+    text: &str,
+    key: &str,
+    locale: Option<&str>,
+) -> Result<Option<String>, DesktopError> {
+    for candidate in locale.map_or_else(Vec::new, locale_candidates) {
+        if let Some(value) = get_string(text, &format!("{key}[{candidate}]"))? {
+            return Ok(Some(value));
+        }
+    }
+    get_string(text, key)
+}
+
+/// The lookup order for a POSIX locale, as the specification gives it:
+/// `lang_COUNTRY.ENCODING@MODIFIER` first, then each part dropped in turn, then `lang`.
+/// Empty candidates are skipped and duplicates removed.
+pub fn locale_candidates(locale: &str) -> Vec<String> {
+    let (rest, modifier) = match locale.split_once('@') {
+        Some((rest, modifier)) => (rest, Some(modifier)),
+        None => (locale, None),
+    };
+    let (rest, encoding) = match rest.split_once('.') {
+        Some((rest, encoding)) => (rest, Some(encoding)),
+        None => (rest, None),
+    };
+    let (lang, country) = match rest.split_once('_') {
+        Some((lang, country)) => (lang, Some(country)),
+        None => (rest, None),
+    };
+    let mut heads = Vec::new();
+    if let Some(country) = country {
+        heads.push(format!("{lang}_{country}"));
+    }
+    heads.push(lang.to_string());
+    let mut out: Vec<String> = Vec::new();
+    for head in &heads {
+        for (enc, modi) in [
+            (encoding, modifier),
+            (None, modifier),
+            (encoding, None),
+            (None, None),
+        ] {
+            let mut candidate = head.clone();
+            if let Some(enc) = enc {
+                candidate.push('.');
+                candidate.push_str(enc);
+            }
+            if let Some(modi) = modi {
+                candidate.push('@');
+                candidate.push_str(modi);
+            }
+            if !candidate.is_empty() && !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
+/// The `mimeapps.list` group that sets default applications.
+pub const DEFAULT_APPLICATIONS: &str = "Default Applications";
+/// The `mimeapps.list` group that adds applications to a MIME type's list.
+pub const ADDED_ASSOCIATIONS: &str = "Added Associations";
+/// The `mimeapps.list` group that removes applications from a MIME type's list.
+pub const REMOVED_ASSOCIATIONS: &str = "Removed Associations";
+
+fn is_association_group(name: &str) -> bool {
+    matches!(
+        name,
+        DEFAULT_APPLICATIONS | ADDED_ASSOCIATIONS | REMOVED_ASSOCIATIONS
+    )
+}
+
+fn is_mime_part(part: &str) -> bool {
+    !part.is_empty()
+        && part
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+}
+
+/// Checks `type/subtype`. Each side uses ASCII letters, digits and `-_.+`.
+pub fn is_valid_mime_type(mime_type: &str) -> bool {
+    mime_type
+        .split_once('/')
+        .is_some_and(|(kind, subtype)| is_mime_part(kind) && is_mime_part(subtype))
+}
+
+/// Checks a desktop file id: `name.desktop`, where the name does not start with `.` and
+/// uses ASCII letters, digits and `-_.+@`. Path separators, `;`, `%`, spaces and control
+/// characters are refused, so an id can never name a path or inject a list item.
+pub fn is_valid_desktop_id(id: &str) -> bool {
+    id.strip_suffix(".desktop").is_some_and(|stem| {
+        !stem.is_empty()
+            && !stem.starts_with('.')
+            && stem
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+' | '@'))
+    })
+}
+
+/// Splits a `;`-separated `mimeapps.list` value. The format has no escapes. Items are
+/// trimmed of spaces and tabs, and empty items are dropped.
+fn list_items(raw: &str) -> Vec<&str> {
+    raw.split(';')
+        .map(|item| item.trim_matches(|c| c == ' ' || c == '\t'))
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+/// One `type/subtype=ids` line of a `mimeapps.list` file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MimeEntry {
+    /// `Default Applications`, `Added Associations` or `Removed Associations`.
+    pub group: String,
+    pub mime_type: String,
+    /// The desktop file ids in file order. Items that are not valid ids are dropped.
+    pub desktop_ids: Vec<String>,
+}
+
+/// The association lines of one `mimeapps.list` file, in file order. Only the three
+/// association groups are kept; other groups are checked for syntax and then ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MimeApps {
+    pub entries: Vec<MimeEntry>,
+}
+
+/// Parses a `mimeapps.list` text. Every key must be a valid MIME type and every line must
+/// be well formed.
+pub fn parse_mimeapps(text: &str) -> Result<MimeApps, DesktopError> {
+    let kinds = scan_with(text, is_valid_mime_type)?;
+    let mut entries = Vec::new();
+    let mut group = None;
+    for kind in kinds {
+        match kind {
+            Kind::Group(name) => group = Some(name),
+            Kind::Key { key, value } => {
+                if let Some(name) = group.filter(|name| is_association_group(name)) {
+                    entries.push(MimeEntry {
+                        group: name.to_string(),
+                        mime_type: key.to_string(),
+                        desktop_ids: list_items(value)
+                            .into_iter()
+                            .filter(|id| is_valid_desktop_id(id))
+                            .map(str::to_string)
+                            .collect(),
+                    });
+                }
+            }
+            Kind::Blank | Kind::Comment => {}
+        }
+    }
+    Ok(MimeApps { entries })
+}
+
+/// The ids that `list` gives for `mime_type` in `group`, in file order.
+fn ids_in<'a>(
+    list: &'a MimeApps,
+    group: &'a str,
+    mime_type: &'a str,
+) -> impl Iterator<Item = &'a str> + 'a {
+    list.entries
+        .iter()
+        .filter(move |entry| entry.group == group && entry.mime_type == mime_type)
+        .flat_map(|entry| entry.desktop_ids.iter().map(String::as_str))
+}
+
+/// Whether `id` is removed for `mime_type` by the file at `upto` or by a file of higher
+/// precedence (a lower index). A removal in a lower-precedence file does not count.
+fn is_removed(lists: &[MimeApps], upto: usize, mime_type: &str, id: &str) -> bool {
+    lists
+        .iter()
+        .take(upto + 1)
+        .any(|list| ids_in(list, REMOVED_ASSOCIATIONS, mime_type).any(|removed| removed == id))
+}
+
+/// The default application for `mime_type`. `lists` are the parsed files in precedence
+/// order, highest first: `~/.config/mimeapps.list`, then `$XDG_CONFIG_DIRS/mimeapps.list`,
+/// then `$XDG_DATA_HOME/applications/mimeapps.list`, then the same file under
+/// `$XDG_DATA_DIRS`. The first id of the highest-precedence file's `Default Applications`
+/// entry wins, unless a removal in that file or a higher one hides it; then the next id
+/// and the next file are tried. The caller checks that the application is installed.
+/// `None` means the caller should fall back to the association caches.
+pub fn default_for(mime_type: &str, lists: &[MimeApps]) -> Option<String> {
+    for (index, list) in lists.iter().enumerate() {
+        let found = ids_in(list, DEFAULT_APPLICATIONS, mime_type)
+            .find(|id| !is_removed(lists, index, mime_type, id));
+        if let Some(id) = found {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
+/// Every application for `mime_type` in order of preference: the default applications of
+/// all files first, then the added associations of all files, in precedence order. An
+/// application appears once. A removal hides an application in its own file and in every
+/// file of lower precedence, so a removal in a higher file hides an addition in a lower
+/// one, while a removal in a lower file never hides a higher file's entry.
+pub fn associations_for(mime_type: &str, lists: &[MimeApps]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for group in [DEFAULT_APPLICATIONS, ADDED_ASSOCIATIONS] {
+        for (index, list) in lists.iter().enumerate() {
+            for id in ids_in(list, group, mime_type) {
+                if !is_removed(lists, index, mime_type, id) && !out.iter().any(|seen| seen == id) {
+                    out.push(id.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Makes `desktop_id` the first default application for `mime_type` in one `mimeapps.list`
+/// text. The ids already listed for the type follow it. Only the `Default Applications`
+/// group changes: comments, other groups and other keys are kept, and the group is created
+/// at the end of the text when it is missing. `None` means the file already has this
+/// default in front. Invalid MIME types and desktop ids are errors.
+pub fn set_default_text(
+    text: &str,
+    mime_type: &str,
+    desktop_id: &str,
+) -> Result<Option<String>, DesktopError> {
+    if !is_valid_mime_type(mime_type) {
+        return Err(DesktopError::InvalidMimeType(mime_type.to_string()));
+    }
+    if !is_valid_desktop_id(desktop_id) {
+        return Err(DesktopError::InvalidDesktopId(desktop_id.to_string()));
+    }
+    let kinds = scan_with(text, is_valid_mime_type)?;
+    let mut wanted = vec![desktop_id];
+    if let Some(raw) = first_value(&kinds, DEFAULT_APPLICATIONS, mime_type) {
+        wanted.extend(
+            list_items(raw)
+                .into_iter()
+                .filter(|item| *item != desktop_id),
+        );
+    }
+    let encoded: String = wanted.iter().map(|item| format!("{item};")).collect();
+    set_encoded_in(
+        text,
+        DEFAULT_APPLICATIONS,
+        mime_type,
+        &encoded,
+        |raw| list_items(raw) == wanted,
+        is_valid_mime_type,
+        NewGroup::End,
+    )
 }
 
 #[cfg(test)]
@@ -1003,6 +1384,459 @@ Exec=webapp --new
         assert_eq!(
             out,
             EXAMPLE.replace("Name[de]=Beispiel-Webapp\n", "Name[de]=Neue App\n")
+        );
+    }
+
+    const LAUNCH: &str =
+        "[Desktop Entry]\nName=Plain Name\nName[de]=Deutscher Name\nIcon=web-icon\nExec=app %i %c %k\n";
+
+    #[test]
+    fn named_group_reads_and_edits_only_that_group() {
+        let action = "Desktop Action New";
+        assert_eq!(
+            get_string_in(EXAMPLE, action, "Exec").unwrap().as_deref(),
+            Some("webapp --new")
+        );
+        assert_eq!(get_string_in(EXAMPLE, action, "Icon").unwrap(), None);
+        assert_eq!(
+            get_string_in(EXAMPLE, DESKTOP_ENTRY_GROUP, "Exec")
+                .unwrap()
+                .as_deref(),
+            Some("\"/opt/My Apps/webapp\" --app=https://example.com/ %U")
+        );
+        let out = set_string_in(EXAMPLE, action, "Exec", "webapp --other")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            out,
+            EXAMPLE.replace("Exec=webapp --new\n", "Exec=webapp --other\n")
+        );
+        assert_eq!(
+            set_string_in(EXAMPLE, action, "Name", "New Window").unwrap(),
+            None
+        );
+        assert_eq!(
+            remove_key_in(EXAMPLE, action, "Name").unwrap().unwrap(),
+            EXAMPLE.replace("Name=New Window\n", "")
+        );
+        assert_eq!(remove_key_in(EXAMPLE, action, "Icon").unwrap(), None);
+    }
+
+    #[test]
+    fn named_group_is_created_at_the_end_when_missing() {
+        let out = set_string_in(EXAMPLE, "Desktop Action Quit", "Name", "Quit")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            out,
+            format!("{EXAMPLE}\n[Desktop Action Quit]\nName=Quit\n")
+        );
+        assert_eq!(
+            get_string_in(&out, "Desktop Action Quit", "Name")
+                .unwrap()
+                .as_deref(),
+            Some("Quit")
+        );
+        let bare = set_string_in(
+            "[Desktop Entry]\nName=a",
+            "Desktop Action Quit",
+            "Exec",
+            "q",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            bare,
+            "[Desktop Entry]\nName=a\n\n[Desktop Action Quit]\nExec=q\n"
+        );
+        assert_eq!(
+            set_string_in("", "G", "K", "V").unwrap().unwrap(),
+            "[G]\nK=V\n"
+        );
+    }
+
+    #[test]
+    fn named_group_refuses_hostile_group_names() {
+        for group in ["A]", "A[B", "", "A\nExec=/bin/evil", "A\tB", "Ünïcode"] {
+            assert!(
+                matches!(
+                    set_string_in(EXAMPLE, group, "Name", "x"),
+                    Err(DesktopError::InvalidGroup(_))
+                ),
+                "{group:?}"
+            );
+            assert!(matches!(
+                get_string_in(EXAMPLE, group, "Name"),
+                Err(DesktopError::InvalidGroup(_))
+            ));
+            assert!(matches!(
+                remove_key_in(EXAMPLE, group, "Name"),
+                Err(DesktopError::InvalidGroup(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn named_group_value_newlines_cannot_inject_a_key() {
+        let out = set_string_in(EXAMPLE, "Desktop Action New", "Name", "x\nExec=/bin/evil")
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.lines().filter(|l| l.starts_with("Exec=")).count(), 2);
+        assert_eq!(
+            get_string_in(&out, "Desktop Action New", "Name")
+                .unwrap()
+                .as_deref(),
+            Some("x\nExec=/bin/evil")
+        );
+        assert_eq!(
+            get_string_in(&out, DESKTOP_ENTRY_GROUP, "Exec").unwrap(),
+            get_string(EXAMPLE, "Exec").unwrap()
+        );
+    }
+
+    #[test]
+    fn exec_context_fills_icon_name_and_path_once_each() {
+        let none: &[&str] = &[];
+        let out = exec_argv_in_entry(
+            LAUNCH,
+            none,
+            none,
+            "/usr/share/applications/x.desktop",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            out,
+            vec![
+                "app",
+                "--icon",
+                "web-icon",
+                "Plain Name",
+                "/usr/share/applications/x.desktop"
+            ]
+        );
+        let german = exec_argv_in_entry(LAUNCH, none, none, "/x.desktop", Some("de_DE.UTF-8"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            german,
+            vec!["app", "--icon", "web-icon", "Deutscher Name", "/x.desktop"]
+        );
+        let bare = "[Desktop Entry]\nExec=app %i %c %k\nIcon=\n";
+        assert_eq!(
+            exec_argv_in_entry(bare, none, none, "/x.desktop", None)
+                .unwrap()
+                .unwrap(),
+            vec!["app", "/x.desktop"]
+        );
+        assert_eq!(
+            exec_argv_in_entry("[Desktop Entry]\nName=x\n", none, none, "/x", None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn exec_context_values_are_never_split_or_reparsed() {
+        let none: &[&str] = &[];
+        let hostile =
+            "[Desktop Entry]\nName=a b %U $HOME;rm\nIcon=evil name\nExec=app %c %i --x=%k\n";
+        assert_eq!(
+            exec_argv_in_entry(hostile, none, none, "/p/My %U Apps/x.desktop", None)
+                .unwrap()
+                .unwrap(),
+            vec![
+                "app",
+                "a b %U $HOME;rm",
+                "--icon",
+                "evil name",
+                "--x=/p/My %U Apps/x.desktop"
+            ]
+        );
+        let injected = "[Desktop Entry]\nName=x\\nExec=/bin/evil\nExec=app %c\n";
+        assert_eq!(
+            exec_argv_in_entry(injected, none, none, "/x", None)
+                .unwrap()
+                .unwrap(),
+            vec!["app", "x\nExec=/bin/evil"]
+        );
+        let embedded = "[Desktop Entry]\nIcon=x\nExec=app --icon=%i\n";
+        assert_eq!(
+            exec_argv_in_entry(embedded, none, none, "/x", None),
+            Err(DesktopError::EmbeddedFieldCode('i'))
+        );
+    }
+
+    #[test]
+    fn locale_candidates_follow_the_specification_order() {
+        assert_eq!(
+            locale_candidates("de_DE.UTF-8@euro"),
+            vec![
+                "de_DE.UTF-8@euro",
+                "de_DE@euro",
+                "de_DE.UTF-8",
+                "de_DE",
+                "de.UTF-8@euro",
+                "de@euro",
+                "de.UTF-8",
+                "de"
+            ]
+        );
+        assert_eq!(locale_candidates("fr"), vec!["fr"]);
+        assert_eq!(locale_candidates(""), Vec::<String>::new());
+    }
+
+    const USER_MIME: &str = "\
+# per-user choices
+[Default Applications]
+text/html=firefox.desktop;chromium.desktop;
+image/png=gimp.desktop;
+
+[Added Associations]
+text/html=code.desktop;
+x-scheme-handler/https=firefox.desktop;
+
+[Removed Associations]
+image/png=eog.desktop;
+";
+
+    const SYSTEM_MIME: &str = "\
+[Default Applications]
+text/html=vivaldi.desktop;
+image/png=eog.desktop;
+video/mp4=vlc.desktop;
+
+[Added Associations]
+image/png=eog.desktop;gimp.desktop;
+text/plain=gedit.desktop;
+";
+
+    #[test]
+    fn mimeapps_parse_keeps_the_association_groups_in_order() {
+        let user = parse_mimeapps(USER_MIME).unwrap();
+        assert_eq!(user.entries.len(), 5);
+        assert_eq!(
+            user.entries[0],
+            MimeEntry {
+                group: DEFAULT_APPLICATIONS.to_string(),
+                mime_type: "text/html".to_string(),
+                desktop_ids: vec![
+                    "firefox.desktop".to_string(),
+                    "chromium.desktop".to_string()
+                ],
+            }
+        );
+        assert_eq!(user.entries[4].group, REMOVED_ASSOCIATIONS);
+    }
+
+    #[test]
+    fn mimeapps_drops_hostile_ids_and_refuses_bad_keys() {
+        let text = "[Default Applications]\ntext/html=x.desktop;%U.desktop;../evil.desktop;a b.desktop;a.desktop;;\n";
+        let parsed = parse_mimeapps(text).unwrap();
+        assert_eq!(
+            parsed.entries[0].desktop_ids,
+            vec!["x.desktop", "a.desktop"]
+        );
+        assert!(matches!(
+            parse_mimeapps("[Default Applications]\nnot a mime=x.desktop\n"),
+            Err(DesktopError::MalformedLine { line: 2, .. })
+        ));
+        assert!(matches!(
+            parse_mimeapps("text/html=x.desktop\n"),
+            Err(DesktopError::MalformedLine { line: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn mime_types_and_desktop_ids_are_validated() {
+        assert!(is_valid_mime_type("text/html"));
+        assert!(is_valid_mime_type("x-scheme-handler/https"));
+        assert!(is_valid_mime_type("application/vnd.ms-excel+xml"));
+        for bad in [
+            "text",
+            "text/",
+            "/html",
+            "text/html/x",
+            "te xt/html",
+            "text/ht\nml",
+            "a=b/c",
+            "a%/b",
+        ] {
+            assert!(!is_valid_mime_type(bad), "{bad:?}");
+        }
+        assert!(is_valid_desktop_id("firefox.desktop"));
+        assert!(is_valid_desktop_id("org.gnome.Nautilus.desktop"));
+        assert!(is_valid_desktop_id("app-1_x+y@z.desktop"));
+        for bad in [
+            "",
+            ".desktop",
+            ".hidden.desktop",
+            "../x.desktop",
+            "a/b.desktop",
+            "a\\b.desktop",
+            "a b.desktop",
+            "a%U.desktop",
+            "a;b.desktop",
+            "a.desktop;b.desktop",
+            "a\nb.desktop",
+            "x.DESKTOP",
+            "x.desktop.txt",
+        ] {
+            assert!(!is_valid_desktop_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn default_for_follows_precedence_and_removals() {
+        let user = parse_mimeapps(USER_MIME).unwrap();
+        let system = parse_mimeapps(SYSTEM_MIME).unwrap();
+        let lists = [user, system.clone()];
+        assert_eq!(
+            default_for("text/html", &lists),
+            Some("firefox.desktop".to_string())
+        );
+        assert_eq!(
+            default_for("video/mp4", &lists),
+            Some("vlc.desktop".to_string())
+        );
+        assert_eq!(
+            default_for("image/png", &lists),
+            Some("gimp.desktop".to_string())
+        );
+        assert_eq!(default_for("text/plain", &lists), None);
+        let hide = parse_mimeapps("[Removed Associations]\nimage/png=eog.desktop;\n").unwrap();
+        assert_eq!(
+            default_for("image/png", &[hide.clone(), system.clone()]),
+            None
+        );
+        assert_eq!(
+            default_for("image/png", &[system, hide]),
+            Some("eog.desktop".to_string())
+        );
+    }
+
+    #[test]
+    fn associations_put_defaults_first_and_apply_removals_downward() {
+        let lists = [
+            parse_mimeapps(USER_MIME).unwrap(),
+            parse_mimeapps(SYSTEM_MIME).unwrap(),
+        ];
+        assert_eq!(
+            associations_for("text/html", &lists),
+            vec![
+                "firefox.desktop",
+                "chromium.desktop",
+                "vivaldi.desktop",
+                "code.desktop"
+            ]
+        );
+        // The user file removes eog, which hides the system's default and addition of eog.
+        assert_eq!(associations_for("image/png", &lists), vec!["gimp.desktop"]);
+        assert_eq!(
+            associations_for("text/plain", &lists),
+            vec!["gedit.desktop"]
+        );
+        let hide = parse_mimeapps("[Removed Associations]\ntext/plain=gedit.desktop;\n").unwrap();
+        assert_eq!(
+            associations_for("text/plain", &[hide, lists[1].clone()]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn set_default_changes_only_the_default_group() {
+        let out = set_default_text(USER_MIME, "text/html", "chromium.desktop")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            out,
+            USER_MIME.replace(
+                "text/html=firefox.desktop;chromium.desktop;\n",
+                "text/html=chromium.desktop;firefox.desktop;\n"
+            )
+        );
+        assert_eq!(
+            set_default_text(USER_MIME, "text/html", "firefox.desktop").unwrap(),
+            None
+        );
+        let added = set_default_text(USER_MIME, "video/ogg", "mpv.desktop")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            added,
+            USER_MIME.replace(
+                "image/png=gimp.desktop;\n",
+                "image/png=gimp.desktop;\nvideo/ogg=mpv.desktop;\n"
+            )
+        );
+        assert_eq!(
+            set_default_text("", "text/html", "a.desktop")
+                .unwrap()
+                .unwrap(),
+            "[Default Applications]\ntext/html=a.desktop;\n"
+        );
+    }
+
+    #[test]
+    fn set_default_keeps_comments_and_refuses_hostile_input() {
+        let text = "# mine\n[Default Applications]\n# keep\ntext/html=a.desktop;\n";
+        let out = set_default_text(text, "video/mp4", "mpv.desktop")
+            .unwrap()
+            .unwrap();
+        assert!(out.starts_with("# mine\n[Default Applications]\n# keep\ntext/html=a.desktop;\n"));
+        assert!(out.ends_with("video/mp4=mpv.desktop;\n"));
+        for id in [
+            "a%U.desktop",
+            "../a.desktop",
+            "a.desktop;b.desktop",
+            "a b.desktop",
+            "a\nb.desktop",
+            "a.desktop\n[Removed Associations]",
+        ] {
+            assert!(
+                matches!(
+                    set_default_text(text, "text/html", id),
+                    Err(DesktopError::InvalidDesktopId(_))
+                ),
+                "{id:?}"
+            );
+        }
+        assert!(matches!(
+            set_default_text(text, "text/html\n", "a.desktop"),
+            Err(DesktopError::InvalidMimeType(_))
+        ));
+        assert!(matches!(
+            set_default_text(text, "text/html=x", "a.desktop"),
+            Err(DesktopError::InvalidMimeType(_))
+        ));
+    }
+
+    #[test]
+    fn set_default_round_trips_through_default_for() {
+        let system = parse_mimeapps(SYSTEM_MIME).unwrap();
+        assert_eq!(
+            default_for("video/mp4", std::slice::from_ref(&system)),
+            Some("vlc.desktop".to_string())
+        );
+        let edited = set_default_text(SYSTEM_MIME, "video/mp4", "mpv.desktop")
+            .unwrap()
+            .unwrap();
+        let reread = parse_mimeapps(&edited).unwrap();
+        assert_eq!(
+            default_for("video/mp4", std::slice::from_ref(&reread)),
+            Some("mpv.desktop".to_string())
+        );
+        let user = parse_mimeapps(USER_MIME).unwrap();
+        assert_eq!(
+            default_for("video/mp4", &[user, reread]),
+            Some("mpv.desktop".to_string())
+        );
+        let front = set_default_text(SYSTEM_MIME, "image/png", "gimp.desktop")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            associations_for("image/png", &[parse_mimeapps(&front).unwrap()]),
+            vec!["gimp.desktop", "eog.desktop"]
         );
     }
 }

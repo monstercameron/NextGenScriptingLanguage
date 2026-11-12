@@ -316,6 +316,56 @@ pub(crate) fn launch_detached(mut command: Command, output: Option<File>) -> Res
     Ok(child.id())
 }
 
+/// Longest unit name systemd accepts, counting the `.scope` suffix.
+const MAX_UNIT_NAME_LEN: usize = 256;
+
+/// Build the `systemd-run` argument vector that starts `argv` detached as a transient
+/// user scope called `unit`. The arguments are kept apart from systemd-run's own
+/// options by `--`, so a program argument that begins with a dash reaches the child
+/// unchanged. Pure: it spawns nothing and is platform-neutral.
+///
+/// `unit` may carry a `.scope` suffix or omit it. Only letters, digits, `:`, `_`
+/// and `-` are allowed in the stem, which avoids the names systemd refuses (empty
+/// stems, dots, slashes, whitespace, control characters and over-long names).
+#[allow(dead_code)] // Not wired into the launch path yet (issue #353).
+pub(crate) fn systemd_run_scope_args(
+    unit: &str,
+    description: &str,
+    argv: &[String],
+) -> Result<Vec<String>> {
+    let stem = unit.strip_suffix(".scope").unwrap_or(unit);
+    let stem_ok = !stem.is_empty()
+        && stem
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-'));
+    if !stem_ok || unit.len() > MAX_UNIT_NAME_LEN {
+        bail!(
+            "invalid systemd unit name `{unit}`: use letters, digits, `:`, `_` and `-` \
+             (optionally ending in `.scope`), at most {MAX_UNIT_NAME_LEN} characters"
+        );
+    }
+    if description.contains('\0') {
+        bail!("the systemd scope description contains a NUL byte");
+    }
+    match argv.first() {
+        None => bail!("no command given for the systemd scope"),
+        Some(program) if program.is_empty() => bail!("the systemd scope command is empty"),
+        Some(_) => {}
+    }
+    if argv.iter().any(|arg| arg.contains('\0')) {
+        bail!("a systemd scope argument contains a NUL byte");
+    }
+    let mut args = vec![
+        "--user".to_owned(),
+        "--scope".to_owned(),
+        format!("--unit={unit}"),
+        format!("--description={description}"),
+        "--".to_owned(),
+    ];
+    args.extend(argv.iter().cloned());
+    Ok(args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,5 +788,77 @@ mod tests {
             let command = Command::new(OsString::from("execute-no-such-program-for-handoff"));
             assert!(hand_over(command, &signals).is_err());
         }
+    }
+
+    fn owned(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    #[test]
+    fn systemd_scope_args_put_the_command_after_a_separator() {
+        let argv = owned(&["spotify", "--no-zygote", "-", "--"]);
+        let args = systemd_run_scope_args("app-spotify-1", "Spotify", &argv).unwrap();
+        assert_eq!(
+            args,
+            owned(&[
+                "--user",
+                "--scope",
+                "--unit=app-spotify-1",
+                "--description=Spotify",
+                "--",
+                "spotify",
+                "--no-zygote",
+                "-",
+                "--",
+            ])
+        );
+    }
+
+    #[test]
+    fn systemd_scope_args_keep_a_dash_led_description_in_one_argument() {
+        let argv = owned(&["true"]);
+        let args = systemd_run_scope_args("app-x", "--help", &argv).unwrap();
+        assert_eq!(args[3], "--description=--help");
+    }
+
+    #[test]
+    fn systemd_scope_args_accept_a_scope_suffix_and_colons() {
+        let argv = owned(&["true"]);
+        assert!(systemd_run_scope_args("app-x.scope", "d", &argv).is_ok());
+        assert!(systemd_run_scope_args("app:x_y-1", "d", &argv).is_ok());
+        let longest = format!("{}.scope", "a".repeat(MAX_UNIT_NAME_LEN - ".scope".len()));
+        assert!(systemd_run_scope_args(&longest, "d", &argv).is_ok());
+    }
+
+    #[test]
+    fn systemd_scope_args_reject_names_systemd_would_refuse() {
+        let argv = owned(&["true"]);
+        let too_long = format!("{}.scope", "a".repeat(MAX_UNIT_NAME_LEN));
+        for unit in [
+            "",
+            ".scope",
+            ".hidden",
+            "a.b",
+            "app.scope.scope",
+            "a/b",
+            "a b",
+            "a\nb",
+            "a\0b",
+            "ünit",
+            too_long.as_str(),
+        ] {
+            assert!(
+                systemd_run_scope_args(unit, "d", &argv).is_err(),
+                "unit {unit:?} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn systemd_scope_args_reject_an_empty_or_nul_command() {
+        assert!(systemd_run_scope_args("app-x", "d", &[]).is_err());
+        assert!(systemd_run_scope_args("app-x", "d", &owned(&[""])).is_err());
+        assert!(systemd_run_scope_args("app-x", "d", &owned(&["a\0b"])).is_err());
+        assert!(systemd_run_scope_args("app-x", "d\0", &owned(&["true"])).is_err());
     }
 }

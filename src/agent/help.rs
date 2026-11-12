@@ -62,7 +62,10 @@ pub fn cli_with_access(
         bail!("--json and --format are different outputs; {USAGE}");
     }
     let file = file.ok_or_else(|| anyhow!("{USAGE}"))?;
+    let registry = access.registry;
     let program = crate::program_files::parse_file(Path::new(file), Some(access))?;
+    let source = std::fs::read_to_string(file)?;
+    super::errors::static_gate_without_manifests(&source, Path::new(file), &program, registry)?;
     if omarchy_metadata {
         io::stdout().write_all(render_omarchy_metadata(&program).as_bytes())?;
         return Ok(0);

@@ -9,25 +9,49 @@
   "properties": {
     "protocol": { "const": "execute.error/1" },
     "code": {
-      "type": "string",
-      "enum": [
-        "command_failed",
-        "applet_invocation_failed",
-        "applet_failed",
-        "policy_denied",
-        "remote_failed",
-        "auth_failed",
-        "execution_failed",
-        "task_failed",
-        "interrupted",
-        "execute_error"
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "command_failed",
+            "applet_invocation_failed",
+            "applet_failed",
+            "policy_denied",
+            "remote_failed",
+            "auth_failed",
+            "execution_failed",
+            "task_failed",
+            "interrupted",
+            "execute_error"
+          ]
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$",
+          "description": "A diagnostic registry code, reported with category static."
+        }
       ]
     },
     "category": {
       "type": "string",
-      "enum": ["process", "applet", "policy", "remote", "auth", "execution", "signal", "runtime"]
+      "enum": ["process", "applet", "policy", "remote", "auth", "execution", "signal", "runtime", "static"]
     },
     "message": { "type": "string" },
-    "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 }
+    "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "span": {
+      "type": "object",
+      "description": "Present with category static: the source location of the diagnostic. Line and column are one-based.",
+      "required": ["start_byte", "end_byte", "line", "column", "end_line", "end_column", "precision"],
+      "properties": {
+        "start_byte": { "type": "integer", "minimum": 0 },
+        "end_byte": { "type": "integer", "minimum": 0 },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "end_column": { "type": "integer", "minimum": 1 },
+        "precision": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    }
   }
 }

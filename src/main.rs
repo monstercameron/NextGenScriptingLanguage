@@ -1790,6 +1790,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }),
     )
     .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
+    if matches!(args.command, "explain" | "inspect") {
+        // The same static errors `check` reports fail here too, with their code and span.
+        flow::agent::errors::static_gate(&source, &args.file, &program, &registry)?;
+    }
     if args.checkpoint_dir.is_some() {
         flow::security::install_panic_hook("checkpoint", Some(&program.steps));
     } else if program.trigger.is_some() {

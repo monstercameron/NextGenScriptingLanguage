@@ -103,6 +103,9 @@ struct Row {
     parameters: Option<Json>,
     effects: Option<Vec<String>>,
     capabilities: Option<Vec<String>>,
+    /// Effects the applet contract declares irreversible, in declared order.
+    /// Empty unless the contract declares one.
+    irreversible_effects: Vec<String>,
     writes: Option<bool>,
     network: Option<bool>,
     reads: Option<bool>,
@@ -199,6 +202,9 @@ impl Row {
         }
         if self.resolved_path_inferred {
             row["resolved_path_inferred"] = json!(true);
+        }
+        if !self.irreversible_effects.is_empty() {
+            row["irreversible_effects"] = json!(self.irreversible_effects);
         }
         if let Some(condition) = &self.condition {
             row["condition"] = condition.clone();
@@ -1427,6 +1433,10 @@ impl Walker<'_> {
             Some(contract) => {
                 row.effects = Some(contract.effects.clone());
                 row.capabilities = Some(contract.capabilities.clone());
+                row.irreversible_effects = crate::contracts::irreversible_effects(contract)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
                 row.writes = Some(
                     contract
                         .effects
@@ -1955,6 +1965,7 @@ fn row_privileged(row: &Row) -> bool {
 fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {
     let mut executables = BTreeSet::new();
     let mut write_effects = BTreeSet::new();
+    let mut irreversible_effects = BTreeSet::new();
     let mut write_paths = Vec::new();
     let mut runtime_write_paths = 0usize;
     let mut escaping_write_paths = 0usize;
@@ -2003,6 +2014,7 @@ fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {
                 write_effects.insert(effect.clone());
             }
         }
+        irreversible_effects.extend(row.irreversible_effects.iter().cloned());
         if row.writes == Some(true) && matches!(row.kind, "save" | "append" | "redirect") {
             if row.path_is_runtime {
                 runtime_write_paths += 1;
@@ -2015,7 +2027,7 @@ fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {
         }
     }
     let steps: Vec<Json> = rows.iter().map(|row| row.to_json(legacy)).collect();
-    json!({
+    let mut plan = json!({
         "protocol": if legacy { LEGACY_PROTOCOL } else { PROTOCOL },
         "language_version": crate::parser::LANGUAGE_VERSION,
         "program": program_path,
@@ -2038,7 +2050,13 @@ fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {
             "privileged": privileged_invocations > 0,
             "privileged_invocations": privileged_invocations
         }
-    })
+    });
+    // Published only when a contract declares an irreversible effect, so plans
+    // without one keep the existing summary shape.
+    if !irreversible_effects.is_empty() {
+        plan["summary"]["irreversible_effects"] = json!(irreversible_effects);
+    }
+    plan
 }
 
 #[cfg(test)]

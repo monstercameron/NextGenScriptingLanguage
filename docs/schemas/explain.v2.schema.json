@@ -440,6 +440,12 @@
           "binds": {
             "type": "string"
           },
+          "irreversible_effects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "reads_bindings": {
             "type": "array",
             "items": {
@@ -533,6 +539,12 @@
         "privileged_invocations": {
           "type": "integer",
           "minimum": 0
+        },
+        "irreversible_effects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

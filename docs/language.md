@@ -563,7 +563,7 @@ separate capture flags, per-stage results, `message`, and `effect_certainty`.
 65, `no_input` 66, `unavailable` 69, `software` 70, `temp_fail` 75,
 `no_permission` 77, `config` 78, `not_executable` 126, `not_found` 127,
 `interrupted` 130) and null for any other status; `signal_name` names the
-signal, such as `SIGTERM`, and is null when there is none.
+signal, such as `SIGTERM`, and is null when there is none. `errno_name` is the portable errno name (such as `ENOENT`) of a launch or file I/O error, and `os_error` is that error's raw platform number (errno on Unix, a Win32 code on Windows), so `os_error` differs between platforms; both are null when there is no such error.
 For a failed native command whose stdout is captured, `stdout` holds what it
 printed before it failed, up to `--max-output-bytes`, as with `keep result`;
 stderr is included when it is captured.

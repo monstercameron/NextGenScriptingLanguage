@@ -546,6 +546,22 @@ pub(super) fn attach_abort_stdout(mut error: anyhow::Error, output: &[u8]) -> an
     error
 }
 
+/// Keep the kind and raw OS number of a launch's I/O error on the failure it
+/// became, so the caught record can name the errno. The message is unchanged.
+/// Errors that are not an execution failure pass through untouched.
+pub(super) fn attach_launch_io_error(
+    mut error: anyhow::Error,
+    io: Option<&std::io::Error>,
+) -> anyhow::Error {
+    if let (Some(failure), Some(io)) = (
+        error.downcast_mut::<execution_result::ExecutionFailure>(),
+        io,
+    ) {
+        failure.io = Some(execution_result::IoErrorDetail::from_io(io));
+    }
+    error
+}
+
 pub(super) fn native_spawn_failure(
     message: String,
     index: usize,
@@ -953,14 +969,15 @@ pub(super) fn execute_group_with_sink(
         command.stdin(stdin);
         check_native_abort(calls, &children, &observed_stages, signals)?;
         let mut child = command.spawn().map_err(|error| {
-            native_spawn_failure(
+            let failure = native_spawn_failure(
                 format!("line {line}: spawning {}: {error}", binary.display()),
                 index,
                 calls,
                 &children,
                 &mut observed_stages,
                 signals,
-            )
+            );
+            attach_launch_io_error(failure, Some(&error))
         })?;
         if let Some(foreground) = terminal_foreground.as_ref() {
             if let Err(error) = foreground.give(child.id()) {

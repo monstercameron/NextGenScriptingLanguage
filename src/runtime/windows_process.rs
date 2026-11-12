@@ -707,14 +707,15 @@ fn execute_group_with_sink(
             };
             command.stdin(stdin);
             let (mut child, job) = Job::spawn(&mut command).map_err(|error| {
-                native_spawn_failure(
+                let failure = native_spawn_failure(
                     format!("line {line}: spawning {}: {error:#}", binary.display()),
                     index,
                     calls,
                     &children,
                     &mut observed_stages,
                     signals,
-                )
+                );
+                spawn::attach_launch_io_error(failure, error.downcast_ref::<std::io::Error>())
             })?;
             let pid = child.id();
             signals.record_process_launch();

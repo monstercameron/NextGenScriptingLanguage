@@ -724,6 +724,7 @@ impl ExecutionResult {
             "effect_certainty".into(),
             Value::String(self.effect_certainty.as_str().into()),
         );
+        insert_io_fields(&mut fields, None);
         Value::Record(fields)
     }
 
@@ -762,16 +763,68 @@ impl ExecutionResult {
 #[derive(Debug, Clone)]
 pub struct ExecutionFailure {
     pub result: ExecutionResult,
+    /// The I/O error behind a launch failure, when one was observed. It is kept
+    /// beside the result, not inside it, so the result's shape stays unchanged.
+    pub(crate) io: Option<IoErrorDetail>,
 }
 
 impl ExecutionFailure {
     pub fn new(result: ExecutionResult) -> Self {
-        Self { result }
+        Self { result, io: None }
     }
 
     pub fn error_value(&self) -> Value {
-        self.result.to_value()
+        let mut value = self.result.to_value();
+        if let Value::Record(fields) = &mut value {
+            insert_io_fields(fields, self.io);
+        }
+        value
     }
+}
+
+/// The I/O error behind a launch or file failure: its kind and raw OS error number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IoErrorDetail {
+    pub(crate) kind: std::io::ErrorKind,
+    pub(crate) os_error: Option<i32>,
+}
+
+impl IoErrorDetail {
+    pub(crate) fn from_io(error: &std::io::Error) -> Self {
+        Self {
+            kind: error.kind(),
+            os_error: error.raw_os_error(),
+        }
+    }
+}
+
+/// Adds the two I/O error fields to a failure record. `os_error` is the raw
+/// platform number: errno on Unix, a Win32 error code on Windows, so it differs
+/// between platforms. `errno_name` is the portable name, derived from the kind
+/// through `errno_name_for_kind`, and is null when the kind is ambiguous. Both
+/// are null when the record has no I/O error, including every successful result.
+fn insert_io_fields(fields: &mut BTreeMap<String, Value>, io: Option<IoErrorDetail>) {
+    fields.insert(
+        "errno_name".into(),
+        optional_text(io.and_then(|io| errno_name_for_kind(io.kind))),
+    );
+    fields.insert(
+        "os_error".into(),
+        optional_integer(io.and_then(|io| io.os_error)),
+    );
+}
+
+/// The I/O detail of a runtime error, looking through an applet invocation wrapper.
+fn io_detail_for_error(error: &anyhow::Error) -> Option<IoErrorDetail> {
+    if let Some(failure) = error.downcast_ref::<ExecutionFailure>() {
+        return failure.io;
+    }
+    if let Some(error) = error.downcast_ref::<super::AppletInvocationError>() {
+        return io_detail_for_error(&error.source);
+    }
+    error
+        .downcast_ref::<std::io::Error>()
+        .map(IoErrorDetail::from_io)
 }
 
 /// Classify a rejected successful response while retaining the actual
@@ -859,6 +912,9 @@ impl std::error::Error for ExecutionFailure {}
 /// failed task, outcome, uncertainty and redacted partial results.
 pub fn error_value(error: &anyhow::Error) -> Value {
     let mut value = result_for_error(error).to_value();
+    if let Value::Record(fields) = &mut value {
+        insert_io_fields(fields, io_detail_for_error(error));
+    }
     if let (Value::Record(fields), Some(failure)) = (
         &mut value,
         error.downcast_ref::<super::tasks::TaskGroupFailure>(),
@@ -1402,13 +1458,6 @@ pub(crate) fn signal_name(_signal: i32) -> Option<&'static str> {
 /// one errno. Ambiguous kinds (`WouldBlock`, `InvalidInput`, `Unsupported`,
 /// `Other`, and anything new) have no name. std maps Windows error codes to
 /// these kinds, so the names match across platforms.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "wired by NEEDS: the io::Error branch of result_for_error"
-    )
-)]
 pub(crate) fn errno_name_for_kind(kind: std::io::ErrorKind) -> Option<&'static str> {
     use std::io::ErrorKind;
     Some(match kind {
@@ -2235,5 +2284,94 @@ mod tests {
             Some(&Value::String("SIGPIPE".into()))
         );
         assert_eq!(result.get("code"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn io_errors_carry_their_errno_name_and_raw_os_number() {
+        use std::io::{Error, ErrorKind};
+
+        // A missing file: ENOENT is 2 on Unix and maps to NotFound on Windows too.
+        let missing = fields(error_value(&anyhow::Error::new(Error::from_raw_os_error(
+            2,
+        ))));
+        assert_eq!(
+            missing.get("errno_name"),
+            Some(&Value::String("ENOENT".into()))
+        );
+        assert_eq!(missing.get("os_error"), Some(&Value::Integer(2)));
+        assert_eq!(missing.get("kind"), Some(&Value::String("io_error".into())));
+
+        let denied = fields(error_value(&anyhow::Error::new(Error::new(
+            ErrorKind::PermissionDenied,
+            "denied",
+        ))));
+        assert_eq!(
+            denied.get("errno_name"),
+            Some(&Value::String("EACCES".into()))
+        );
+        assert_eq!(denied.get("os_error"), Some(&Value::Null));
+
+        // No OS code: the kind still names the errno, but os_error stays null.
+        let bare = fields(error_value(&anyhow::Error::new(Error::new(
+            ErrorKind::NotFound,
+            "gone",
+        ))));
+        assert_eq!(
+            bare.get("errno_name"),
+            Some(&Value::String("ENOENT".into()))
+        );
+        assert_eq!(bare.get("os_error"), Some(&Value::Null));
+
+        // An ambiguous kind has no name, and a non-I/O error has neither field.
+        let ambiguous = fields(error_value(&anyhow::Error::new(Error::new(
+            ErrorKind::InvalidInput,
+            "bad",
+        ))));
+        assert_eq!(ambiguous.get("errno_name"), Some(&Value::Null));
+        let other = fields(error_value(&anyhow::anyhow!("opaque runtime failure")));
+        assert_eq!(other.get("errno_name"), Some(&Value::Null));
+        assert_eq!(other.get("os_error"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn launch_failure_keeps_the_io_kind_and_os_number_of_its_spawn_error() {
+        let mut failure = ExecutionFailure::new(ExecutionResult::runtime_failure(
+            ExecutionKind::SpawnError,
+            "line 2: spawning tool: not found",
+            EffectCertainty::NotStarted,
+        ));
+        failure.io = Some(IoErrorDetail::from_io(&std::io::Error::from_raw_os_error(
+            2,
+        )));
+        let caught = fields(error_value(&anyhow::Error::new(failure.clone())));
+        let direct = fields(failure.error_value());
+
+        for record in [caught, direct] {
+            assert_eq!(
+                record.get("kind"),
+                Some(&Value::String("spawn_error".into()))
+            );
+            assert_eq!(
+                record.get("errno_name"),
+                Some(&Value::String("ENOENT".into()))
+            );
+            assert_eq!(record.get("os_error"), Some(&Value::Integer(2)));
+            assert_eq!(record.get("status"), Some(&Value::Null));
+        }
+    }
+
+    #[test]
+    fn successful_results_have_no_io_fields() {
+        let outcome = Outcome {
+            status: 0,
+            name: "success".into(),
+            kind: OutcomeKind::Success,
+            effect_certainty: EffectCertainty::Uncertain,
+        };
+        let result =
+            fields(ExecutionResult::from_outcome(outcome, None, None, None, Vec::new()).to_value());
+
+        assert_eq!(result.get("errno_name"), Some(&Value::Null));
+        assert_eq!(result.get("os_error"), Some(&Value::Null));
     }
 }

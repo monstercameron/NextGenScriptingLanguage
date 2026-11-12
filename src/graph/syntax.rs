@@ -801,7 +801,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
             OutputType::Path
         }
         Some("string") => OutputType::Text,
-        Some("integer") => OutputType::Integer,
+        Some("integer") => integer_kind(value),
         Some("unsigned_integer") => OutputType::UnsignedInteger,
         Some("usize") => OutputType::Usize,
         Some("number") => OutputType::Number,
@@ -868,7 +868,9 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
         None
     };
     let enum_values = parse_string_enum(value)?;
-    let minimum = parse_numeric_minimum(value)?;
+    // The unsigned kinds carry their range in the kind itself; `validate`
+    // rejects a separate minimum on them.
+    let minimum = parse_numeric_minimum(value)?.filter(|_| kind != OutputType::Usize);
     Ok(ValueSchema {
         min_items: None,
         scalar_only: false,
@@ -886,6 +888,19 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
         minimum,
         pattern: None,
     })
+}
+
+/// Recover the unsigned kind of a projected `integer` schema. Parameter
+/// projections emit `usize` parameters as nonnegative integers bounded by
+/// `usize::MAX`; only that exact range maps back to `Usize`, so signed and
+/// other integer ranges stay `Integer`.
+fn integer_kind(value: &serde_json::Value) -> OutputType {
+    let nonnegative = value.get("minimum").and_then(serde_json::Value::as_u64) == Some(0);
+    let maximum = value.get("maximum").and_then(serde_json::Value::as_u64);
+    match maximum {
+        Some(maximum) if nonnegative && maximum == usize::MAX as u64 => OutputType::Usize,
+        _ => OutputType::Integer,
+    }
 }
 
 fn parse_numeric_minimum(value: &serde_json::Value) -> Result<Option<serde_json::Number>> {
@@ -1295,5 +1310,72 @@ mod tests {
                 .map(|value| value.kind),
             Some(OutputType::Json)
         );
+    }
+
+    fn text_repeat_registry(count_port: &str) -> Result<Registry> {
+        let mut descriptor: serde_json::Value =
+            serde_json::from_str(include_str!("../../manifests/core.text_repeat.json")).unwrap();
+        descriptor["contract"]["ports"]["inputs"]["count"]["schema"]["type"] =
+            serde_json::Value::from(count_port);
+        Registry::from_sources(&[descriptor.to_string()])
+    }
+
+    const TEXT_REPEAT_GRAPH: &str =
+        "graph repeat\n  run text.repeat with text \"ha\" and count 3 as repeated\nend graph\n";
+
+    #[test]
+    fn usize_input_port_is_admitted_for_unsigned_parameter() {
+        let registry = text_repeat_registry("usize").unwrap();
+        parse(TEXT_REPEAT_GRAPH, &registry).unwrap();
+    }
+
+    #[test]
+    fn unsigned_input_port_is_admitted_for_unsigned_parameter() {
+        let registry = text_repeat_registry("unsigned_integer").unwrap();
+        parse(TEXT_REPEAT_GRAPH, &registry).unwrap();
+    }
+
+    #[test]
+    fn signed_input_port_is_rejected_for_unsigned_parameter() {
+        // Registry load compares port and parameter schemas, so the mismatch
+        // may surface there or at graph admission.
+        let error = match text_repeat_registry("integer") {
+            Err(error) => error,
+            Ok(registry) => parse(TEXT_REPEAT_GRAPH, &registry).unwrap_err(),
+        };
+        let error = format!("{error:#}");
+        assert!(error.contains("does not match"), "{error}");
+    }
+
+    #[test]
+    fn unsigned_parameter_projection_keeps_nonnegative_usize_range() {
+        let schema = value_schema_from_json_schema(&serde_json::json!({
+            "type": "integer", "minimum": 0, "maximum": usize::MAX as u64
+        }))
+        .unwrap();
+        assert_eq!(schema.kind, OutputType::Usize);
+        schema
+            .validate_value(&crate::ast::Value::Integer(0))
+            .unwrap();
+        schema
+            .validate_value(&crate::ast::Value::Integer(3))
+            .unwrap();
+        assert!(schema
+            .validate_value(&crate::ast::Value::Integer(-1))
+            .is_err());
+    }
+
+    #[test]
+    fn signed_and_narrow_integer_projections_stay_integer() {
+        for projected in [
+            serde_json::json!({"type": "integer", "minimum": i64::MIN, "maximum": i64::MAX}),
+            serde_json::json!({"type": "integer", "minimum": 0, "maximum": 100}),
+            serde_json::json!({"type": "integer", "minimum": 0}),
+        ] {
+            assert_eq!(
+                value_schema_from_json_schema(&projected).unwrap().kind,
+                OutputType::Integer
+            );
+        }
     }
 }

@@ -553,7 +553,20 @@ pub(super) struct DependencyStamp(Vec<(u64, SystemTime, (i64, i64))>);
 /// Missing dependencies are unsettled too: a file created and removed during
 /// execution would otherwise look unchanged.
 pub(super) fn dependency_stamp(manifest: &Manifest, cwd: &Path) -> Option<DependencyStamp> {
-    let dependencies = manifest.cache_dependencies();
+    stamp_dependencies(manifest.cache_dependencies(), cwd, SystemTime::now())
+}
+
+/// Coarsest modification-time granularity a dependency's filesystem may use
+/// (FAT stores two-second steps). A file modified more recently than this
+/// could be rewritten during execution and still carry the same stamp, so its
+/// stamp cannot prove the run saw stable bytes.
+const DEPENDENCY_TIMESTAMP_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn stamp_dependencies(
+    dependencies: &[String],
+    cwd: &Path,
+    now: SystemTime,
+) -> Option<DependencyStamp> {
     if dependencies.is_empty() || dependencies.len() > MAX_CACHE_DEPENDENCIES {
         return None;
     }
@@ -576,6 +589,12 @@ pub(super) fn dependency_stamp(manifest: &Manifest, cwd: &Path) -> Option<Depend
             return None;
         }
         let modified = metadata.modified().ok()?;
+        // Fail closed: a dependency written within the window (or stamped in
+        // the future) leaves caching disabled rather than trusting its stamp.
+        match now.duration_since(modified) {
+            Ok(age) if age >= DEPENDENCY_TIMESTAMP_WINDOW => {}
+            _ => return None,
+        }
         #[cfg(unix)]
         let changed = (metadata.ctime(), metadata.ctime_nsec());
         #[cfg(not(unix))]
@@ -1342,6 +1361,34 @@ mod tests {
                 .unwrap()
                 .is_none());
         }
+    }
+
+    #[test]
+    fn dependency_stamp_refuses_a_dependency_written_within_the_timestamp_window() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let path = root.join("state.txt");
+        fs::write(&path, b"before").unwrap();
+        let dependencies = vec!["state.txt".to_owned()];
+        // Written just now: a rewrite during the run could share this stamp,
+        // so no stamp is issued and the run must not be stored.
+        assert!(stamp_dependencies(&dependencies, &root, SystemTime::now()).is_none());
+        // Once the write is older than the window the stamp is trusted again.
+        let old = SystemTime::now() - std::time::Duration::from_secs(10);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(stamp_dependencies(&dependencies, &root, SystemTime::now()).is_some());
+        // A stamp taken before the modification time (clock skew) fails closed.
+        assert!(stamp_dependencies(
+            &dependencies,
+            &root,
+            old - std::time::Duration::from_secs(1)
+        )
+        .is_none());
     }
 
     #[test]

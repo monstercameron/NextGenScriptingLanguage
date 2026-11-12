@@ -37,3 +37,51 @@ fn omarchy_quickstart_is_registered_and_linked() {
         "README.md does not link the quickstart"
     );
 }
+
+/// The first fenced `text` block in section 2 is the program the guide asks the reader to
+/// save as `toggle-floating.program`.
+fn toggle_program_source(guide: &str) -> String {
+    let section = guide
+        .split("## 2. Write a toggle")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("section 2 of the quickstart");
+    section
+        .split("```text\n")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .expect("a text block in section 2")
+        .to_string()
+}
+
+fn bundled_registry(directory: &Path) -> flow::manifest::Registry {
+    let index = flow::bundled_manifests::index().expect("bundled index");
+    for (position, entry) in index.entries().iter().enumerate() {
+        let body = index.body(position).expect("bundled manifest body");
+        fs::write(directory.join(entry.file()), body).expect("write bundled manifest");
+    }
+    flow::manifest::Registry::from_bundled(directory).expect("bundled registry")
+}
+
+#[test]
+fn omarchy_quickstart_toggle_program_validates_against_bundled_registry() {
+    let guide = read("docs/omarchy-quickstart.md");
+    let source = toggle_program_source(&guide);
+    assert!(
+        source.contains("run hypr.dispatch with arguments [\"togglefloating\"]"),
+        "unexpected quickstart program:\n{source}"
+    );
+    let directory = tempfile::tempdir().expect("temp directory");
+    let registry = bundled_registry(directory.path());
+    let program = flow::parser::parse(&source).expect("quickstart toggle parses");
+    flow::runtime::ExecutionPlan::prepare(&program, &registry)
+        .expect("quickstart toggle validates against the bundled registry");
+
+    // The guide says a dispatcher that is not on the allowlist is refused before hyprctl starts.
+    let refused = source.replace("togglefloating", "keyword");
+    let program = flow::parser::parse(&refused).expect("refused variant parses");
+    assert!(
+        flow::runtime::ExecutionPlan::prepare(&program, &registry).is_err(),
+        "a dispatcher outside the allowlist must fail validation"
+    );
+}

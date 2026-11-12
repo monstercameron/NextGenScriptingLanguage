@@ -43,6 +43,15 @@ fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
         (None, b) => b,
     }
 }
+
+/// Block a timer node until its next tick is due, or until its wake signal
+/// fires (cancellation, external cancel or an input change). The wait is not a
+/// timed poll, so an idle timer does not wake every few milliseconds (#556).
+fn wait_for_timer_tick(io: &NodeIo, observed: u64, due: Instant) {
+    io.input_signal
+        .wait_past(observed, io.input_wait_until(Some(due)));
+}
+
 /// Absolute ceiling for per-graph declared listener-port reader admission.
 pub const MAX_GRAPH_LISTENER_READERS: usize = 128;
 /// Maximum declared event ports on one applet listener. Remote listeners
@@ -3183,10 +3192,16 @@ impl GraphExecutor for RuntimeGraphExecutor {
                     .checked_add(delay)
                     .ok_or_else(|| anyhow!("timer interval exceeds monotonic clock range"))?;
                 let mut tick: i64 = 0;
-                while !io.is_cancelled() {
+                loop {
+                    // The epoch is read before the checks, so a cancellation after
+                    // this point makes the wait below return at once.
+                    let observed = io.input_signal.epoch();
+                    if io.is_cancelled() {
+                        break;
+                    }
                     let remaining = due.saturating_duration_since(Instant::now());
                     if !remaining.is_zero() {
-                        thread::sleep(remaining.min(QUEUE_POLL));
+                        wait_for_timer_tick(io, observed, due);
                         continue;
                     }
                     tick = tick
@@ -5043,6 +5058,52 @@ mod issue_556_wait_tests {
         assert!(
             wakeups <= 2,
             "idle receive returned {wakeups} times in 300 ms"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn idle_timer_wait_returns_once_per_tick() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let io = node_io(BTreeMap::new(), scope.cancellation_token());
+        let started = Instant::now();
+        let due = started + Duration::from_millis(300);
+        let observed = io.input_signal.epoch();
+        wait_for_timer_tick(&io, observed, due);
+        assert!(
+            started.elapsed() >= Duration::from_millis(280),
+            "timer wait returned before its tick was due"
+        );
+        let wakeups = io.input_signal.wakeups();
+        assert!(
+            wakeups <= 2,
+            "idle timer wait returned {wakeups} times in 300 ms"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_timer_wait_returns_promptly() -> Result<()> {
+        let scope = TaskScope::new(1, None)?;
+        let token = scope.cancellation_token();
+        let io = node_io(BTreeMap::new(), token.clone());
+        let node_wake = Arc::clone(&io.input_signal);
+        token.on_cancel(Arc::new(move || node_wake.notify()));
+        let waiter = thread::spawn(move || {
+            let observed = io.input_signal.epoch();
+            wait_for_timer_tick(&io, observed, Instant::now() + Duration::from_secs(30));
+            io.is_cancelled()
+        });
+        thread::sleep(Duration::from_millis(100));
+        let requested = Instant::now();
+        token.request_cancel();
+        let cancelled = waiter
+            .join()
+            .map_err(|_| anyhow!("waiter thread panicked"))?;
+        assert!(cancelled, "the timer wait must see the cancellation");
+        assert!(
+            requested.elapsed() < Duration::from_millis(500),
+            "cancelled timer wait did not return promptly"
         );
         Ok(())
     }

@@ -143,7 +143,11 @@ fn systemd_timer_renders_timer_and_oneshot_service_for_cron_workflows() {
     assert!(persistent.contains("Persistent=true\n"), "{persistent}");
 
     let interval = work.path().join("interval.program");
-    fs::write(&interval, "every 5 minutes\n  then encode \"body\" as json\n").unwrap();
+    fs::write(
+        &interval,
+        "every 5 minutes\n  then encode \"body\" as json\n",
+    )
+    .unwrap();
     let refused = render_for_workflow(&request(
         ServiceFormat::SystemdTimer,
         &interval,

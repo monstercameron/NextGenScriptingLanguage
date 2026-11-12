@@ -920,10 +920,8 @@ fn lock_targets<'a>(
     context: &ExecutionContext<'_>,
 ) -> Result<Vec<PathLock>, AppletError> {
     context.checkpoint()?;
-    let mut locks: Vec<_> = paths
-        .into_iter()
-        .map(filesystem::default_lock_path)
-        .collect::<Result<_, _>>()?;
+    let targets: Vec<&Path> = paths.into_iter().collect();
+    let mut locks = target_lock_paths(&targets)?;
     locks.sort();
     locks.dedup();
     let started = Instant::now();
@@ -993,7 +991,32 @@ fn reject_path_collisions(journal: &Path, operations: &[PlannedEntry]) -> Result
             return Err(invalid("transaction journal overlaps a target lock file"));
         }
     }
+    let targets: Vec<&Path> = operations
+        .iter()
+        .map(|operation| operation.path.as_path())
+        .collect();
+    target_lock_paths(&targets)?;
     Ok(())
+}
+
+/// Derives the advisory lock path of every target. A target may not be the lock
+/// path of any target in the same transaction: the transaction holds that lock
+/// while it replaces the file, so a cooperating writer would lock the new inode
+/// while the old one is still held.
+fn target_lock_paths(targets: &[&Path]) -> Result<Vec<PathBuf>, AppletError> {
+    let locks = targets
+        .iter()
+        .map(|target| filesystem::default_lock_path(target))
+        .collect::<Result<Vec<_>, _>>()?;
+    if targets
+        .iter()
+        .any(|target| locks.iter().any(|lock| lock.as_path() == *target))
+    {
+        return Err(invalid(
+            "transaction target cannot be another target's lock file",
+        ));
+    }
+    Ok(locks)
 }
 
 fn journal_path(path: &str, cwd: &Path) -> Result<PathBuf, AppletError> {
@@ -2162,6 +2185,46 @@ mod tests {
             read_journal(&journal, &context).unwrap().state,
             TransactionState::Prepared
         );
+    }
+
+    #[test]
+    fn target_that_is_another_targets_lock_file_is_rejected_on_apply_and_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let journal = temp.path().join("journal");
+        let config = temp.path().join("config");
+        let lock = temp.path().join(".config.execute-applet.lock");
+        fs::write(&config, "before").unwrap();
+        fs::write(&lock, "lock").unwrap();
+        let plan = args(
+            &journal,
+            &[
+                (config.as_path(), "before", "after"),
+                (lock.as_path(), "lock", "replaced"),
+            ],
+        );
+        let context = ExecutionContext::unrestricted();
+
+        let error = apply(&plan, temp.path(), &context).unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("lock file"));
+        assert!(fs::symlink_metadata(&journal).is_err());
+        assert_eq!(fs::read_to_string(&config).unwrap(), "before");
+        assert_eq!(fs::read_to_string(&lock).unwrap(), "lock");
+
+        let error = lock_targets(
+            [config.as_path(), lock.as_path()],
+            Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+            &context,
+        )
+        .err()
+        .expect("recovery must refuse a target that is another target's lock file");
+        assert_eq!(error.code, "invalid_request");
+        assert!(lock_targets(
+            [config.as_path()],
+            Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+            &context,
+        )
+        .is_ok());
     }
 
     fn remove_args(journal: &Path, path: &Path, old: &[u8]) -> Map<String, Value> {

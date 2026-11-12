@@ -1627,13 +1627,117 @@ impl Drop for Signals {
         }
     }
 }
+/// Terminal restore for a panic, run by the panic hook (see
+/// `security::register_terminal_restore`). Unwinding never runs `Drop` under
+/// `panic = "abort"`, so this is the only restore on that path. It writes the
+/// escape sequences straight to the terminal handle and re-applies the mode saved
+/// before raw mode was enabled: no `std::io` locks, no formatting, no allocation.
+#[cfg(feature = "tui")]
+mod panic_restore {
+    use std::sync::OnceLock;
+
+    /// Leave the alternate screen and show the cursor.
+    const SEQUENCE: &[u8] = b"\x1b[?1049l\x1b[?25h";
+
+    #[cfg(unix)]
+    static PRE_RAW_MODE: OnceLock<libc::termios> = OnceLock::new();
+    #[cfg(windows)]
+    static PRE_RAW_MODE: OnceLock<u32> = OnceLock::new();
+
+    /// Capture the input mode before raw mode is enabled. The first capture wins,
+    /// so it is always the user's original mode.
+    #[cfg(unix)]
+    pub(super) fn save_mode() {
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: tcgetattr writes a termios into the valid `termios` pointer and is read only on a 0 return.
+        if unsafe { libc::tcgetattr(libc::STDIN_FILENO, termios.as_mut_ptr()) } == 0 {
+            // SAFETY: tcgetattr returned 0, so it fully initialized `termios`.
+            let _ = PRE_RAW_MODE.set(unsafe { termios.assume_init() });
+        }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn save_mode() {
+        use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
+        let mut mode = 0u32;
+        // SAFETY: GetStdHandle takes no pointers; GetConsoleMode writes one u32 through the valid `&mut mode`.
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        // SAFETY: `handle` is the standard input handle from GetStdHandle and `mode` is a valid out pointer.
+        if unsafe { GetConsoleMode(handle, &mut mode) } != 0 {
+            let _ = PRE_RAW_MODE.set(mode);
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(super) fn save_mode() {}
+
+    /// Write the restore sequence to the terminal output handle, ignoring errors.
+    #[cfg(unix)]
+    fn write_output(bytes: &[u8]) {
+        // SAFETY: `bytes` is valid for `bytes.len()` reads for the duration of the call, and fd 1 is only written to.
+        let _ = unsafe { libc::write(libc::STDOUT_FILENO, bytes.as_ptr().cast(), bytes.len()) };
+    }
+
+    #[cfg(windows)]
+    fn write_output(bytes: &[u8]) {
+        use windows_sys::Win32::Storage::FileSystem::WriteFile;
+        use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+        let mut written = 0u32;
+        let len = u32::try_from(bytes.len()).unwrap_or(0);
+        // SAFETY: GetStdHandle takes no pointers.
+        let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        // SAFETY: `bytes` is valid for `len` bytes, and `written` is a valid out pointer; no overlapped I/O.
+        let _ = unsafe {
+            WriteFile(
+                handle,
+                bytes.as_ptr(),
+                len,
+                &mut written,
+                std::ptr::null_mut(),
+            )
+        };
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn write_output(_bytes: &[u8]) {}
+
+    /// Restore the input mode captured by `save_mode`, if any.
+    #[cfg(unix)]
+    fn restore_mode() {
+        if let Some(termios) = PRE_RAW_MODE.get() {
+            // SAFETY: `termios` is a value read back from the terminal by tcgetattr; tcsetattr only reads it.
+            let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, termios) };
+        }
+    }
+
+    #[cfg(windows)]
+    fn restore_mode() {
+        use windows_sys::Win32::System::Console::{GetStdHandle, SetConsoleMode, STD_INPUT_HANDLE};
+        if let Some(&mode) = PRE_RAW_MODE.get() {
+            // SAFETY: GetStdHandle takes no pointers; SetConsoleMode takes a handle and a plain mode value.
+            let _ = unsafe { SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), mode) };
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn restore_mode() {}
+
+    /// The restore step registered by `TerminalGuard::enter`.
+    pub(super) fn restore() {
+        write_output(SEQUENCE);
+        restore_mode();
+    }
+}
+
 #[cfg(feature = "tui")]
 struct TerminalGuard;
 #[cfg(feature = "tui")]
 impl TerminalGuard {
     fn enter() -> Result<Self> {
+        panic_restore::save_mode();
         terminal::enable_raw_mode()?;
         let guard = Self;
+        crate::security::register_terminal_restore(panic_restore::restore);
         execute!(io::stdout(), EnterAlternateScreen, Hide)?;
         Ok(guard)
     }
@@ -1641,6 +1745,7 @@ impl TerminalGuard {
 #[cfg(feature = "tui")]
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        crate::security::unregister_terminal_restore();
         let _ = terminal::disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
     }

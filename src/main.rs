@@ -1593,7 +1593,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 )?;
                 Ok(())
             }
-            "run" => flow::ui::run(&screen, &registry, &options, args.max_runs),
+            "run" => {
+                // The interactive screen takes over the terminal: a panic must restore it.
+                flow::security::install_panic_hook("screen", None);
+                flow::ui::run(&screen, &registry, &options, args.max_runs)
+            }
             _ => unreachable!(),
         };
     }

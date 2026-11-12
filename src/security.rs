@@ -18,9 +18,58 @@ use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
+
+/// Slot holding one host's terminal restore step, as a function pointer address
+/// (0 when empty). Atomic operations only, so the panic hook can take it without
+/// locks the panicking thread may already hold.
+pub(crate) struct TerminalRestore(AtomicUsize);
+
+impl TerminalRestore {
+    pub(crate) const fn new() -> Self {
+        Self(AtomicUsize::new(0))
+    }
+
+    pub(crate) fn register(&self, step: fn()) {
+        self.0.store(step as usize, Ordering::Release);
+    }
+
+    pub(crate) fn unregister(&self) {
+        self.0.store(0, Ordering::Release);
+    }
+
+    /// Run the registered step at most once. The slot is emptied before the call,
+    /// so a second panic or an unregister during the step cannot run it again.
+    /// Returns whether a step ran.
+    pub(crate) fn run(&self) -> bool {
+        let raw = self.0.swap(0, Ordering::AcqRel);
+        if raw == 0 {
+            return false;
+        }
+        // SAFETY: a nonzero `raw` was stored by `register` from a `fn()` value, and
+        // function pointers are never null, so it is a valid `fn()` of the same size.
+        let step: fn() = unsafe { std::mem::transmute::<usize, fn()>(raw) };
+        step();
+        true
+    }
+}
+
+static TERMINAL_RESTORE: TerminalRestore = TerminalRestore::new();
+
+/// Register the step that puts the terminal back in a usable state (leave the
+/// alternate screen, show the cursor, disable raw mode). The panic hook runs it
+/// before writing its diagnostic, so the diagnostic lands on the normal screen.
+/// The step must not allocate or take locks the panicking thread may hold.
+pub fn register_terminal_restore(step: fn()) {
+    TERMINAL_RESTORE.register(step);
+}
+
+/// Remove the terminal restore step once the host has restored the terminal itself.
+pub fn unregister_terminal_restore() {
+    TERMINAL_RESTORE.unregister();
+}
 
 /// Install once at a CLI host boundary, before starting its threads. Abort builds
 /// cannot recover a panicking worker: the supervisor must restart the process.
@@ -41,6 +90,8 @@ pub fn install_panic_hook(host: &'static str, steps: Option<&[crate::ast::Step]>
     let force_abort = false;
     std::panic::set_hook(Box::new(move |information| {
         use std::io::Write;
+        // Restore the terminal first so the diagnostic below lands on the normal screen.
+        TERMINAL_RESTORE.run();
         let step = crate::runtime::current_step_id();
         let line = step.as_deref().and_then(|id| lines.get(id)).copied();
         let abort = cfg!(panic = "abort") || force_abort;
@@ -4434,5 +4485,23 @@ mod tests {
             !windows_owner_sid_is_trusted(CURRENT_USER, ""),
             "an empty current-user SID must not self-trust"
         );
+    }
+
+    #[test]
+    fn issue_927_terminal_restore_registry_runs_once_and_unregisters() {
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn step() {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+        let slot = TerminalRestore::new();
+        assert!(!slot.run(), "an empty slot runs nothing");
+        slot.register(step);
+        assert!(slot.run(), "a registered restore step runs");
+        assert!(!slot.run(), "the step is taken by the first run");
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+        slot.register(step);
+        slot.unregister();
+        assert!(!slot.run(), "an unregistered restore step never runs");
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     }
 }

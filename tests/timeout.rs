@@ -67,7 +67,7 @@ fn fixture() -> tempfile::TempDir {
         dir.path().join("manifests/cat.json"),
     )
     .unwrap();
-    fs::write(dir.path().join("worker"), "#!/usr/bin/env python3\nimport os, sys, time\nopen('pid', 'w').write(str(os.getpid()))\nopen('effect', 'a').write('started\\n')\nif sys.argv[1] == 'closed':\n os.close(1)\n time.sleep(30)\nelif sys.argv[1] == 'grandchild':\n import subprocess\n child = subprocess.Popen(['sleep', '30'])\n open('grandchild_pid', 'w').write(str(child.pid))\n time.sleep(30)\nelse:\n while True:\n  os.write(1, b'x' * 1000)\n  time.sleep(.01)\n").unwrap();
+    fs::write(dir.path().join("worker"), "#!/usr/bin/env python3\nimport os, sys, time\nopen('pid', 'w').write(str(os.getpid()))\nopen('effect', 'ab').write(b'started\\n')\nif sys.argv[1] == 'closed':\n os.close(1)\n time.sleep(30)\nelif sys.argv[1] == 'grandchild':\n import subprocess\n child = subprocess.Popen(['sleep', '30'])\n open('grandchild_pid', 'w').write(str(child.pid))\n time.sleep(30)\nelse:\n while True:\n  os.write(1, b'x' * 1000)\n  time.sleep(.01)\n").unwrap();
     #[cfg(unix)]
     fs::set_permissions(dir.path().join("worker"), fs::Permissions::from_mode(0o700)).unwrap();
     // The worker runs through the pinned interpreter on Windows; direct

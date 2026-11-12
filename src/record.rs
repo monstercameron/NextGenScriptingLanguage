@@ -1770,6 +1770,11 @@ impl Observer for Recorder {
             state.trace_truncated = true;
             state.truncated = true;
         }
+        if let Some(event) =
+            model_decision_for_step(&request.applets, &request.argv, &result.stdout)
+        {
+            self.append_model_decision_locked(&mut state, &event)?;
+        }
         // Publish newly pinned executables — and a freshly hit size bound — so
         // a run killed after this step still pins what it ran and cannot pass
         // a truncated trace as a clean interruption. Steady-state steps write
@@ -3231,6 +3236,98 @@ fn bounded_model_id(model: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"-._:/@+".contains(&byte))
 }
 
+/// The request parameters of one model call, read from its resolved argument
+/// vector. Only the fields the decision event is checked against are kept.
+struct ModelCallArguments {
+    model: String,
+    labels: Vec<String>,
+    levels: Vec<String>,
+    minimum: u8,
+}
+
+/// Read the classify, judge or score request parameters from one call's argv.
+/// Flags that take one value are skipped by position, so a question that looks
+/// like a flag is never read as one. A list runs until the next `--` token,
+/// which labels and levels cannot begin with. `None` when a value is missing or
+/// the minimum is not a percentage.
+fn model_call_arguments(call: &[String]) -> Option<ModelCallArguments> {
+    let mut parsed = ModelCallArguments {
+        model: String::new(),
+        labels: Vec::new(),
+        levels: Vec::new(),
+        minimum: 0,
+    };
+    let mut index = 0;
+    while let Some(token) = call.get(index) {
+        index += 1;
+        match token.as_str() {
+            "--labels" | "--levels" => {
+                let mut items = Vec::new();
+                while let Some(item) = call.get(index).filter(|item| !item.starts_with("--")) {
+                    items.push(item.clone());
+                    index += 1;
+                }
+                if token == "--labels" {
+                    parsed.labels = items;
+                } else {
+                    parsed.levels = items;
+                }
+            }
+            "--criteria" => {
+                let value = call.get(index)?;
+                index += 1;
+                let object: Json = serde_json::from_str(value).ok()?;
+                parsed.labels = object.as_object()?.keys().cloned().collect();
+            }
+            "--minimum" => {
+                let value = call.get(index)?;
+                index += 1;
+                parsed.minimum = value.parse::<u8>().ok().filter(|minimum| *minimum <= 100)?;
+            }
+            "--model" => {
+                parsed.model = call.get(index)?.clone();
+                index += 1;
+            }
+            "--question" | "--fixture" | "--env-file" | "--timeout-ms" | "--max-bytes"
+            | "--max-tokens" | "--temperature" | "--effort" | "--endpoint" | "--schema"
+            | "--questions" => index += 1,
+            _ => {}
+        }
+    }
+    Some(parsed)
+}
+
+/// The `model_decision` event for a step, or `None` when the step is not a
+/// single jev classify, judge or score call whose stdout is its result. A
+/// pipeline's stdout is its last stage's, so only a one-call group qualifies.
+fn model_decision_for_step(
+    applets: &[String],
+    argv: &[Vec<String>],
+    stdout: &[u8],
+) -> Option<Json> {
+    let [applet] = applets else { return None };
+    let kind = match applet.as_str() {
+        "jev.classify" => "classify",
+        "jev.judge" => "judge",
+        "jev.score" => "score",
+        _ => return None,
+    };
+    let [call] = argv else { return None };
+    if stdout.len() > MAX_BLOB_BYTES {
+        return None;
+    }
+    let result: Json = serde_json::from_slice(stdout).ok()?;
+    let arguments = model_call_arguments(call)?;
+    let request = ModelDecisionRequest {
+        kind,
+        model: &arguments.model,
+        labels: &arguments.labels,
+        levels: &arguments.levels,
+        minimum: arguments.minimum,
+    };
+    model_decision_event(&result, &request)
+}
+
 impl Recorder {
     /// Append one `model_decision` event to the trace, in order with the steps.
     /// It is not a step: it never moves the step count, and the record seal
@@ -3239,6 +3336,13 @@ impl Recorder {
     /// match step lines: past the trace limit the event is dropped and the
     /// record is marked truncated.
     pub fn record_model_decision(&self, event: &Json) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.append_model_decision_locked(&mut state, event)
+    }
+
+    /// The locked form of `record_model_decision`, used by the step observer so
+    /// the decision lands directly after its step line.
+    fn append_model_decision_locked(&self, state: &mut RecorderState, event: &Json) -> Result<()> {
         if event.get("event").and_then(Json::as_str) != Some(MODEL_DECISION_EVENT) {
             bail!("only a model_decision event can be recorded as one");
         }
@@ -3250,7 +3354,6 @@ impl Recorder {
         }
         let mut line = serde_json::to_vec(&redacted)?;
         line.push(b'\n');
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.trace_truncated || state.trace_bytes.saturating_add(line.len()) > MAX_TRACE_BYTES {
             state.trace_truncated = true;
             state.truncated = true;
@@ -4013,7 +4116,8 @@ mod policy_audit_tests {
     }
 
     use crate::record::{
-        model_decision_event, model_request_sha256, ModelDecisionRequest, RecordVerification,
+        model_decision_event, model_decision_for_step, model_request_sha256, ModelDecisionRequest,
+        RecordVerification,
     };
 
     fn model_labels(names: &[&str]) -> Vec<String> {
@@ -4098,6 +4202,64 @@ mod policy_audit_tests {
                 output: Vec::new(),
             })
             .unwrap();
+    }
+
+    #[test]
+    fn model_decision_for_step_reads_the_call_argv_and_only_a_one_call_result() {
+        let applets = vec!["jev.classify".to_string()];
+        // The question is a value that looks like a flag: it must not be read as one.
+        let call: Vec<String> = [
+            "execute-model",
+            "classify",
+            "--provider",
+            "jev",
+            "--model",
+            "jev-classifier-1",
+            "--question",
+            "--labels",
+            "--labels",
+            "refund",
+            "billing",
+            "other",
+            "--minimum",
+            "80",
+        ]
+        .iter()
+        .map(|argument| argument.to_string())
+        .collect();
+        let stdout = serde_json::to_vec(&classify_result()).unwrap();
+        let event =
+            model_decision_for_step(&applets, std::slice::from_ref(&call), &stdout).unwrap();
+        assert_eq!(event["label_count"], 3);
+        assert_eq!(event["minimum"], 80);
+        assert_eq!(event["accepted"], true);
+        assert_eq!(event["model"], "jev-classifier-1");
+
+        let pipeline = vec!["jev.classify".to_string(), "printf".to_string()];
+        assert!(
+            model_decision_for_step(&pipeline, &[call.clone(), call.clone()], &stdout).is_none()
+        );
+        let mismatch = serde_json::to_vec(&json!({
+            "protocol": "execute.model/1",
+            "provider": "jev",
+            "model": "jev-classifier-1",
+            "kind": "classify",
+            "transport": "fixture",
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "label": "refund",
+            "confidence_percent": 91,
+            "accepted": true,
+        }))
+        .unwrap();
+        let mut stricter = call.clone();
+        let minimum = stricter.len() - 1;
+        stricter[minimum] = "95".to_string();
+        assert!(
+            model_decision_for_step(&applets, std::slice::from_ref(&stricter), &mismatch).is_none()
+        );
+        assert!(
+            model_decision_for_step(&applets, std::slice::from_ref(&call), b"not json").is_none()
+        );
     }
 
     #[test]

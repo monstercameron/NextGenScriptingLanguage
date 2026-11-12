@@ -412,6 +412,224 @@ needs a preceding step". It is therefore looser than the parser in those places.
 applet name form (`text.trim_final_lf`) allows dots, which the NAME notation above
 does not show.
 
+## Stream, screen and graph files
+
+A `.program` file can instead be one of three other kinds. Each has its own
+parser, and none of them is covered by the `program` table or the GBNF above.
+The grammars below were written from the parsers, not from the language
+reference:
+
+- stream: `flow::stream::parse` in `src/stream.rs`, detected by `is_stream`
+- screen: `flow::ui::syntax::parse` in `src/ui/syntax.rs`, detected by `is_screen`
+- graph: `flow::graph::parse` in `src/graph/syntax.rs`, detected by `is_graph`
+
+Every stream, screen and graph example below uses its own fence (```` ```stream ````,
+```` ```screen ````, ```` ```graph ````). `tests/issue_476_grammar_file_kinds.rs` parses each
+one with the parser for its kind and fails with that parser's message. Blocks
+marked `text` are fragments and are not parsed.
+
+### Stream files
+
+```text
+stream      = { declaration } header { stage } [ take ] sink
+header      = "stream" "from" source
+source      = target [ "with" argument { "and" argument } ]
+stage       = "pipe" "to" target [ "with" argument { "and" argument } ]
+take        = "take" "the" "first" INTEGER ( "line" | "lines" )
+sink        = "show" "each" "line"
+```
+
+`declaration` is an `accept` line as in the program structure, and it must come
+before the header. `target`, `argument` and `INTEGER` have the meanings given in
+the native commands section. The header and each stage are parsed as the
+finite `run` and `pipe to` forms, with the `run` or `pipe to` word removed.
+
+- Statements are not indented. Blank lines and `#` comments are allowed.
+- `take` appears at most once, and only after every stage. `show each line`
+  appears exactly once and is the last statement.
+- `take the first N lines` needs N to be a positive integer.
+- Validation, which is separate from parsing, requires the header to be a
+  direct or applet `run` and every later stage to be `pipe to`. It rejects
+  `as NAME`, `and cache` and status or result bindings on any stage, and it
+  requires external applets.
+
+```stream
+stream from "printf" with arguments ["alpha\nbeta\ngamma\n"]
+pipe to "tr" with arguments ["a-z", "A-Z"]
+take the first 2 lines
+show each line
+```
+
+```stream
+accept word as text
+stream from "printf" with arguments ["%s\n", word]
+show each line
+```
+
+### Screen files
+
+```text
+screen      = title { layout } { component }
+title       = "open" "a" "screen" "titled" TEXT
+layout      = "divide" "the" "screen" "into" "two" "columns"
+            | "place" NAME "on" "the" ( "left" | "right" )
+            | "give" NAME INTEGER "percent" "of" "the" "width"
+            | "connect" NAME "from" NAME "to" NAME "in" NAME
+component   = "define" "a" "program" "named" NAME { member }
+member      = ( "accept" | "offer" ) NAME "as" "text"
+            | "show" "a" KIND "named" NAME [ property ] { item }
+            | "give" NAME INTEGER "rows"
+            | "label" "the" ( "horizontal" | "vertical" ) "axis" "of" NAME TEXT
+            | handler
+KIND        = "heading" | "text" "field" | "list" | "table" | "text" "panel"
+            | "badge" | "button" | "line" "chart" | "bar" "chart"
+property    = "with" "text" TEXT | "with" "value" TEXT
+            | "labelled" TEXT | "with" "key" TEXT
+item        = "include" TEXT                        (list only)
+            | "column" TEXT "from" TEXT             (table only)
+            | "label" "each" "bar" "from" TEXT      (bar chart only, required)
+            | "size" "each" "bar" "from" TEXT       (bar chart only, required)
+            | "label" "bar" "values" "with" TEXT    (bar chart only)
+handler     = event { action }                      (at least one action)
+event       = "whenever" "the" "program" "opens"
+            | "whenever" "key" TEXT "is" "pressed"
+            | "whenever" NAME "arrives"
+            | "whenever" NAME "is" ( "submitted" | "pressed" )
+            | "whenever" "an" "item" "is" "chosen" "in" NAME
+            | "whenever" "a" "command" "fails"
+            | "every" INTEGER UNIT
+action      = "close" "the" "screen"
+            | [ "then" ] "press" NAME
+            | "show" "JSON" "as" ( "rows" | "bars" ) "in" NAME
+            | "show" "the" "result" "as" ( "rows" | "bars" ) "in" NAME
+            | "show" "field" TEXT "in" NAME
+            | "add" "field" TEXT "to" NAME
+            | "send" VALUE "as" NAME
+            | "show" VALUE "in" NAME
+            | finite-statement
+VALUE       = TEXT | "the" "value" "of" NAME | "that" "item" | "the" "result"
+            | "the" "error" | "its" "error"
+```
+
+Indentation carries the structure. Each `define` member is indented exactly two
+spaces. Each widget item, event, and action is indented exactly four spaces.
+Any other statement, or a statement with a bad indent, is an error. A
+`finite-statement` is any single statement from the native commands and control
+sections. An `if`, `repeat`, `for` or `while` block is also accepted as an
+action, and its body is indented further than the action.
+
+Limits the parser enforces: the title must be nonempty, and there must be one or
+two placed components. `give NAME N percent of the width` takes N from 10 to 90 and
+must name the left component. `give NAME N rows` takes N from 1 to 40. A component
+needs 1 to 32 widgets and at most 32 handlers. A screen has at most 16 components
+and 32 `connect` lines. A text field's initial value is at most 512 bytes, and a
+list has at most 256 items. A table needs at least one column and at most 16. The
+`every` interval uses the same units as the trigger form in the program
+section.
+
+The `connect` line reads `connect OUTPUT from SOURCE to INPUT in TARGET`. The name
+after `from` is a placed component, and the name after `in` is the component that
+receives the value. Whether a name is a placed component or a declared port is
+checked by the screen's validation step, not by the parser.
+
+```screen
+open a screen titled "Greeter"
+place form on the left
+place log on the right
+give form 40 percent of the width
+connect greeting from form to greeting in log
+define a program named form
+  offer greeting as text
+  show a text field named name labelled "Name"
+  show a button named send labelled "Send"
+  give name 1 rows
+  whenever send is pressed
+    send the value of name as greeting
+define a program named log
+  accept greeting as text
+  show a text panel named panel with text "waiting"
+  whenever greeting arrives
+    show the result in panel
+```
+
+```screen
+open a screen titled "Report"
+place summary on the left
+define a program named summary
+  show a heading named title with text "Totals"
+  show a table named results
+    column "Name" from "name"
+    column "Count" from "count"
+  give results 8 rows
+  show a bar chart named bars
+    label each bar from "name"
+    size each bar from "count"
+    label bar values with " items"
+  show a line chart named trend
+  label the vertical axis of trend "count"
+  show a list named choices
+    include "one"
+  whenever the program opens
+    run "printf" with arguments ["a\n"] as result
+    show the result as rows in results
+  whenever an item is chosen in choices
+    show that item in title
+  every 5 seconds
+    show field "name" in results
+```
+
+### Graph files
+
+```text
+graph       = [ version ] { declaration } "graph" NAME { statement } "end" "graph"
+version     = "execute" INTEGER                     (first statement only)
+statement   = run | every | listen | render | stream | emit | bind
+run         = "run" target [ "with" argument { "and" argument } ] "as" NODE
+every       = "every" INTEGER UNIT "as" NODE        (literal interval)
+listen      = "listen" "to" ( "stdin" | target [ "with" argument { "and" argument } ] ) "as" NODE
+render      = "render" BACKEND ":" COMPONENT [ "with" "properties" RECORD ] "as" NODE
+BACKEND     = "quickshell" | "tui"
+COMPONENT   = "text" | "button"
+stream      = "stream" "from" source "as" NODE
+              { "pipe" "to" target [ "with" argument { "and" argument } ] | "take" ... }
+              "show" "each" "line"                (the stream lines above)
+emit        = "emit" "result" "from" NODE "to" PORT
+bind        = "bind" NODE "." PORT "to" NODE "." PORT
+              [ "with" "capacity" INTEGER [ POLICY ] ]
+POLICY      = "lossless" | "drop" "newest" | "drop" "oldest" | "latest"
+UNIT        = "millisecond" | "milliseconds" | "second" | "seconds"
+            | "minute" | "minutes" | "hour" | "hours"
+NODE, PORT  = identifier (a letter or "_", then letters, digits, "_" or "-")
+```
+
+Each statement is one line. Every node statement ends with `as NODE`, and
+the node name must be unique. A `run` must be one applet invocation, and it
+rejects `and retry`, `and cache` and status or result bindings. The `every`
+interval must be a positive integer followed by one unit, and it cannot name
+a graph input. `bind` defaults to `with capacity 16 lossless` when the capacity
+clause is absent. The capacity must be positive. `stream` takes the same stage and
+`take` lines as a stream file. Its header and stages must be literal, so a
+graph input cannot appear in them. The file ends with `end graph`, and nothing may
+follow it. At least one node is required. Edges are checked against the port
+contracts after every node is added, so a `bind` can fail even when it parses.
+
+```graph
+graph ticks
+every 1 second as clock
+listen to stdin as input
+run text.trim_final_lf with text "hello\n" as trimmed
+end graph
+```
+
+```graph
+graph panel
+render tui:text with properties {"text": "Hello"} as label
+stream from text.trim_final_lf with text "a\nb\n" as lines
+take the first 1 lines
+show each line
+end graph
+```
+
 ## Reading the examples
 
 The examples use `"` for text, and each example is one complete program. The test

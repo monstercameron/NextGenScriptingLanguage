@@ -4102,6 +4102,7 @@ fn collect_program_diagnostics(
         .map(|input| input.name.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     known_names.extend(declared_input_names(source));
+    known_names.extend(listener_trigger_binding(program));
     collect_non_call_bindings(&program.steps, &mut known_names);
     for definition in program.definitions.values() {
         known_names.extend(definition.inputs.iter().map(|input| input.name.clone()));
@@ -4367,6 +4368,7 @@ fn collect_program_diagnostics(
         .map(|input| input.name.clone())
         .collect::<BTreeSet<_>>();
     step_names.extend(declared_input_names(source));
+    step_names.extend(listener_trigger_binding(program));
     collect_non_call_bindings(&program.steps, &mut step_names);
     for definition in program.definitions.values() {
         step_names.extend(definition.inputs.iter().map(|input| input.name.clone()));
@@ -4766,6 +4768,15 @@ fn missing_program_input_edit(
     let replacement = format!("{join}{name} {placeholder}");
     let span = starts.span_at(source, offset, offset, SpanPrecision::Token);
     Some(TextEdit { span, replacement })
+}
+
+/// The name a `whenever ... as <name>` listener binds for each source record. The
+/// handler body reads it, so the undefined-result check must know it.
+fn listener_trigger_binding(program: &Program) -> Option<String> {
+    match program.trigger.as_ref() {
+        Some(crate::ast::Trigger::Listen { binding, .. }) => Some(binding.clone()),
+        _ => None,
+    }
 }
 
 fn collect_non_call_bindings(steps: &[Step], known_names: &mut BTreeSet<String>) {

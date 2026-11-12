@@ -286,6 +286,17 @@ impl BoundedQueue {
         Ok(state)
     }
 
+    /// True when a send would wait for space: a full lossless queue that still
+    /// has a reader. Producers deliver to every other edge first, so a full
+    /// lossless edge delays only its own delivery (#561).
+    fn lossless_full(&self) -> bool {
+        if !matches!(self.policy, BufferPolicy::Lossless) {
+            return false;
+        }
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        !state.closed && !state.consumer_detached && state.items.len() >= self.capacity
+    }
+
     fn send(
         &self,
         mut envelope: EventEnvelope,
@@ -1020,13 +1031,38 @@ impl NodeIo {
             payload,
         };
         let mut report = PortEmitReport::default();
-        let (last_sink, earlier_sinks) = sinks
-            .split_last()
-            .expect("nonempty output sink list was checked above");
-        for sink in earlier_sinks {
+        // Deliver to every edge with room before waiting on any full lossless
+        // edge, so a slow subscriber does not hold back its siblings (#561).
+        // The producer still waits on each full edge in turn, so the event is
+        // accepted by every edge before this call returns and per-edge order holds.
+        // The envelope is moved into the last send that needs it, as before.
+        let last_index = sinks.len() - 1;
+        let mut envelope = Some(envelope);
+        let mut waiting = Vec::new();
+        for (index, sink) in sinks.iter().enumerate() {
+            if sink.queue.lossless_full() {
+                waiting.push(sink);
+                continue;
+            }
+            let copy = if index == last_index && waiting.is_empty() {
+                envelope.take()
+            } else {
+                envelope.clone()
+            };
+            if let Some(copy) = copy {
+                sink.send_and_update_report(copy, &self.token, &mut report)?;
+            }
+        }
+        let Some((last_waiting, earlier_waiting)) = waiting.split_last() else {
+            return Ok(report);
+        };
+        let Some(envelope) = envelope else {
+            return Ok(report);
+        };
+        for sink in earlier_waiting {
             sink.send_and_update_report(envelope.clone(), &self.token, &mut report)?;
         }
-        last_sink.send_and_update_report(envelope, &self.token, &mut report)?;
+        last_waiting.send_and_update_report(envelope, &self.token, &mut report)?;
         Ok(report)
     }
 

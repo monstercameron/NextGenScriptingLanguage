@@ -1359,14 +1359,18 @@ impl GraphSession {
     }
 
     /// Read one terminal output without allowing stale revisions into the
-    /// current session. Returns `None` once every terminal has closed.
+    /// current session. Returns `None` once every terminal has closed, every
+    /// terminal queue is drained, and no worker is still active (#684): a
+    /// terminal producer finishing does not end the graph while an internal
+    /// sink still has queued work, and a graph without terminal ports stays
+    /// open until its workers finish or the session is cancelled.
     ///
     /// Queued events are delivered before a recorded worker failure or
     /// cancellation surfaces: a worker that emits and then fails must have
     /// its events observed first, and a failure that lands while events are
     /// still queued must not discard them. Once the queues are drained, the
-    /// failure or cancellation is reported; a clean EOF needs both drained
-    /// queues and a clean bill of health.
+    /// failure or cancellation is reported; a clean EOF needs drained queues,
+    /// no active worker, and a clean bill of health.
     ///
     /// When several terminals hold events, the one with the lowest sequence
     /// number (the earliest emitted) is returned first, regardless of which
@@ -1382,14 +1386,17 @@ impl GraphSession {
                 return Ok(Some(event));
             }
             self.cancellation_check()?;
-            if self
+            // A terminal queue closes when its producer finishes, so closed
+            // terminals alone do not mean the graph is done: an internal sink
+            // may still be draining its queue. Wait for every worker too.
+            let terminals_closed = self
                 .terminals
                 .iter()
                 .map(|(_, queue)| queue.is_closed_and_empty())
                 .collect::<Result<Vec<_>>>()?
                 .iter()
-                .all(|closed| *closed)
-            {
+                .all(|closed| *closed);
+            if terminals_closed && !self.workers_active() {
                 // A worker may have failed after the poll above but before
                 // its queues closed (failure-at-EOF). Re-poll and drain once
                 // more so a late failure surfaces as an error instead of a
@@ -1407,10 +1414,9 @@ impl GraphSession {
                 self.cancellation_check()?;
                 return Ok(None);
             }
-            if self.terminals.is_empty() {
-                self.cancellation_check()?;
-                return Ok(None);
-            }
+            // Workers report exit only through their task handles, which are
+            // polled at the top of this loop; this is the same short poll the
+            // loop already used while terminal queues were open.
             thread::sleep(Duration::from_millis(2));
         }
     }
@@ -1694,6 +1700,13 @@ impl GraphSession {
             bail!("graph session cancelled")
         }
         Ok(())
+    }
+
+    /// Whether any spawned worker has not yet been joined. A worker is cleared
+    /// from its slot only after it has finished and its result was taken, so
+    /// `false` here means every worker has exited.
+    fn workers_active(&self) -> bool {
+        self.tasks.iter().any(Option::is_some)
     }
 
     fn poll_finished_workers(&mut self) -> Result<()> {

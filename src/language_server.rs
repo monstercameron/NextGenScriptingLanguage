@@ -128,6 +128,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                         "documentSymbolProvider": true,
                         "foldingRangeProvider": true,
                         "inlayHintProvider": true,
+                        "codeLensProvider": { "resolveProvider": false },
                     "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } }
                     },
                     "serverInfo": { "name": "execute-language-server", "version": env!("CARGO_PKG_VERSION") }
@@ -328,6 +329,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             } else {
                 json!([])
             }),
+            "textDocument/codeLens" => Some(code_lenses(&params, &documents, &registry)),
             _ if id.is_some() => {
                 write_error(
                     &mut writer,
@@ -3298,6 +3300,25 @@ fn step_effects_markdown(
 ) -> Option<String> {
     let program = crate::parser::parse(source).ok()?;
     let plan = crate::agent::explain::explain_json(&program, registry, program_path).ok()?;
+    let (categories, undeclared) = plan_line_effects(&plan, line)?;
+    let mut lines = Vec::new();
+    if !categories.is_empty() {
+        let names = categories
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("**Effects:** {names}"));
+    }
+    if undeclared {
+        lines.push("**Undeclared:** the effects of this step cannot be stated.".to_owned());
+    }
+    (!lines.is_empty()).then(|| lines.join("\n\n"))
+}
+
+/// The effect categories and the undeclared flag that the explain plan rows on
+/// `line` (1-based) state. None when the plan has no step rows.
+fn plan_line_effects(plan: &JsonValue, line: usize) -> Option<(BTreeSet<String>, bool)> {
     let mut categories = BTreeSet::new();
     let mut undeclared = false;
     for row in plan["steps"]
@@ -3327,19 +3348,67 @@ fn step_effects_markdown(
         }
         undeclared |= row["undeclared"] == true;
     }
-    let mut lines = Vec::new();
-    if !categories.is_empty() {
-        let names = categories
-            .iter()
-            .map(|name| format!("`{name}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("**Effects:** {names}"));
-    }
-    if undeclared {
-        lines.push("**Undeclared:** the effects of this step cannot be stated.".to_owned());
-    }
-    (!lines.is_empty()).then(|| lines.join("\n\n"))
+    Some((categories, undeclared))
+}
+
+/// Code lenses for the request's document: one per step with an effect in the
+/// explain plan, titled with its categories. The lens text reads the same rows as
+/// the hover does.
+fn code_lenses(
+    params: &JsonValue,
+    documents: &BTreeMap<String, Document>,
+    registry: &Registry,
+) -> JsonValue {
+    let Some(uri) = params
+        .pointer("/textDocument/uri")
+        .and_then(JsonValue::as_str)
+    else {
+        return json!([]);
+    };
+    let Some(document) = documents.get(uri) else {
+        return json!([]);
+    };
+    let program_path =
+        local_file_path(uri).map_or_else(|| uri.to_owned(), |path| path.display().to_string());
+    json!(code_lenses_in(&document.text, &program_path, registry))
+}
+
+/// The lenses for `source`, one per 1-based step line of the explain plan that has a
+/// category or an undeclared flag. A document that does not parse gets none.
+fn code_lenses_in(source: &str, program_path: &str, registry: &Registry) -> Vec<JsonValue> {
+    let Ok(program) = crate::parser::parse(source) else {
+        return Vec::new();
+    };
+    let Ok(plan) = crate::agent::explain::explain_json(&program, registry, program_path) else {
+        return Vec::new();
+    };
+    let Some(rows) = plan["steps"].as_array() else {
+        return Vec::new();
+    };
+    let lines = rows
+        .iter()
+        .filter_map(|row| row["line"].as_u64())
+        .collect::<BTreeSet<u64>>();
+    lines
+        .into_iter()
+        .filter_map(|line| {
+            let line = usize::try_from(line).ok()?;
+            let line_index = line.checked_sub(1)?;
+            let (categories, undeclared) = plan_line_effects(&plan, line)?;
+            if categories.is_empty() && !undeclared {
+                return None;
+            }
+            let mut parts = categories.into_iter().collect::<Vec<_>>();
+            if undeclared {
+                parts.push("undeclared".to_owned());
+            }
+            let position = json!({ "line": line_index, "character": 0 });
+            Some(json!({
+                "range": { "start": position, "end": position },
+                "command": { "title": parts.join(" · "), "command": "" },
+            }))
+        })
+        .collect()
 }
 
 fn hover(

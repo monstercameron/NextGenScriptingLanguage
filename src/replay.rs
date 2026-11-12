@@ -10,7 +10,7 @@
 use crate::ast::Program;
 use crate::manifest::Registry;
 use crate::record::{StoredRecord, StoredStep};
-use crate::runtime::observe::{Observer, StepRequest, StepResult};
+use crate::runtime::observe::{InputKeyPolicy, Observer, StepRequest, StepResult};
 use crate::runtime::ProgramExit;
 use crate::security::{self, SecretRedactor};
 use crate::terminal_text::escape_controls;
@@ -66,6 +66,7 @@ pub struct Replayer {
 struct ReplayState {
     cursor: usize,
     stop: Option<Stop>,
+    warned_unverified_input: bool,
 }
 
 impl Replayer {
@@ -130,6 +131,10 @@ impl Replayer {
 }
 
 impl Observer for Replayer {
+    fn input_key_policy(&self) -> InputKeyPolicy {
+        InputKeyPolicy::Existing
+    }
+
     fn replay(&self, request: &StepRequest) -> Result<Option<StepResult>> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(limit) = self.until {
@@ -152,18 +157,26 @@ impl Observer for Replayer {
             }));
             bail!("replay diverged at step {index}: the record has no step for this group");
         };
-        if !same_group(recorded, request, &actual) {
+        let input = input_check(recorded, request);
+        if !same_group(recorded, request, &actual) || input == InputCheck::Changed {
             let divergence = Divergence {
                 step: index,
                 line: request.line,
-                expected: describe_recorded(recorded),
-                actual: describe_request(request, &actual),
+                expected: describe_recorded_input(recorded, input),
+                actual: describe_request_input(request, &actual, input),
             };
             state.stop = Some(Stop::Diverged(divergence.clone()));
             bail!(
                 "replay diverged at step {index}: expected {}, got {}",
                 divergence.expected,
                 divergence.actual
+            );
+        }
+        if input == InputCheck::Unverified && !state.warned_unverified_input {
+            state.warned_unverified_input = true;
+            eprintln!(
+                "warning: replay cannot check the input of the group at line {}; the record holds no comparable input digest for it, so changed input is not detected",
+                request.line
             );
         }
         let stdout = self
@@ -219,8 +232,61 @@ fn same_group(recorded: &StoredStep, request: &StepRequest, actual_argv: &[Vec<S
         && recorded.argv == actual_argv
 }
 
+/// How the replayed group's input compares with the recorded input digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputCheck {
+    /// Both digests were made under the same key and are equal.
+    Matches,
+    /// Both digests were made under the same key and differ: the input changed.
+    Changed,
+    /// The input cannot be compared: an older record without a digest, a stdin or
+    /// file input, or a digest made under a different key. Replay still
+    /// substitutes the recorded output, and warns once.
+    Unverified,
+}
+
+fn input_check(recorded: &StoredStep, request: &StepRequest) -> InputCheck {
+    let (Some(recorded), Some(actual)) = (&recorded.input_digest, &request.input_digest) else {
+        return InputCheck::Unverified;
+    };
+    match (recorded.split_once(':'), actual.split_once(':')) {
+        (Some((key, digest)), Some((actual_key, actual_digest))) if key == actual_key => {
+            if digest == actual_digest {
+                InputCheck::Matches
+            } else {
+                InputCheck::Changed
+            }
+        }
+        _ => InputCheck::Unverified,
+    }
+}
+
 fn describe_recorded(step: &StoredStep) -> String {
     describe(step.line, &step.applets, &step.argv)
+}
+
+/// The recorded description, naming the input when the input changed. Digests and
+/// input contents never appear in it.
+fn describe_recorded_input(step: &StoredStep, input: InputCheck) -> String {
+    let text = describe_recorded(step);
+    if input == InputCheck::Changed {
+        format!("{text} with the recorded input")
+    } else {
+        text
+    }
+}
+
+fn describe_request_input(
+    request: &StepRequest,
+    argv: &[Vec<String>],
+    input: InputCheck,
+) -> String {
+    let text = describe_request(request, argv);
+    if input == InputCheck::Changed {
+        format!("{text} with changed input")
+    } else {
+        text
+    }
 }
 
 fn describe_request(request: &StepRequest, argv: &[Vec<String>]) -> String {
@@ -341,6 +407,7 @@ pub struct PrefixReplayer {
 struct PrefixState {
     cursor: usize,
     resumed: bool,
+    warned_unverified_input: bool,
 }
 
 impl PrefixReplayer {
@@ -410,6 +477,10 @@ impl PrefixReplayer {
 }
 
 impl Observer for PrefixReplayer {
+    fn input_key_policy(&self) -> InputKeyPolicy {
+        InputKeyPolicy::Existing
+    }
+
     fn replay(&self, request: &StepRequest) -> Result<Option<StepResult>> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.resumed || state.cursor >= self.prefix {
@@ -421,17 +492,25 @@ impl Observer for PrefixReplayer {
         let Some(recorded) = self.record.steps.get(index) else {
             bail!("resume reached step {index} past the end of the record; the completed prefix cannot be replayed");
         };
-        if !same_group(recorded, request, &actual) {
+        let input = input_check(recorded, request);
+        if !same_group(recorded, request, &actual) || input == InputCheck::Changed {
             let divergence = Divergence {
                 step: index,
                 line: request.line,
-                expected: describe_recorded(recorded),
-                actual: describe_request(request, &actual),
+                expected: describe_recorded_input(recorded, input),
+                actual: describe_request_input(request, &actual, input),
             };
             bail!(
                 "resume diverged at step {index}: expected {}, got {}; the completed prefix no longer matches, so it cannot be skipped",
                 divergence.expected,
                 divergence.actual
+            );
+        }
+        if input == InputCheck::Unverified && !state.warned_unverified_input {
+            state.warned_unverified_input = true;
+            eprintln!(
+                "warning: resume cannot check the input of the group at line {}; the record holds no comparable input digest for it, so changed input is not detected",
+                request.line
             );
         }
         let stdout = self
@@ -630,6 +709,74 @@ mod tests {
             let program = crate::parser::parse(source).unwrap();
             assert!(unsupported_reason(&program).is_some(), "{source}");
         }
+    }
+
+    fn stored_step(input_digest: Option<&str>) -> StoredStep {
+        StoredStep {
+            index: 0,
+            line: 1,
+            applets: vec!["cat".into()],
+            binaries: vec!["cat".into()],
+            argv: vec![vec!["cat".into()]],
+            input_digest: input_digest.map(str::to_owned),
+            status: Some(0),
+            outcome: None,
+            failed: false,
+            wall_us: 0,
+            stdout: Json::Null,
+            stderr: Json::Null,
+        }
+    }
+
+    fn request_with_digest(input_digest: Option<&str>) -> StepRequest {
+        StepRequest {
+            line: 1,
+            applets: vec!["cat".into()],
+            binaries: vec!["cat".into()],
+            argv: vec![vec!["cat".into()]],
+            input_digest: input_digest.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn changed_upstream_input_is_detected_and_unchanged_input_is_not() {
+        let recorded = stored_step(Some("0123456789abcdef:aaaa"));
+        assert_eq!(
+            input_check(
+                &recorded,
+                &request_with_digest(Some("0123456789abcdef:bbbb"))
+            ),
+            InputCheck::Changed
+        );
+        assert_eq!(
+            input_check(
+                &recorded,
+                &request_with_digest(Some("0123456789abcdef:aaaa"))
+            ),
+            InputCheck::Matches
+        );
+    }
+
+    #[test]
+    fn records_without_comparable_input_are_unverified_not_divergent() {
+        let legacy = stored_step(None);
+        assert_eq!(
+            input_check(&legacy, &request_with_digest(Some("0123456789abcdef:aaaa"))),
+            InputCheck::Unverified
+        );
+        let recorded = stored_step(Some("0123456789abcdef:aaaa"));
+        // A different key, or input that is not in memory, cannot be compared.
+        assert_eq!(
+            input_check(
+                &recorded,
+                &request_with_digest(Some("fedcba9876543210:aaaa"))
+            ),
+            InputCheck::Unverified
+        );
+        assert_eq!(
+            input_check(&recorded, &request_with_digest(None)),
+            InputCheck::Unverified
+        );
     }
 
     #[test]

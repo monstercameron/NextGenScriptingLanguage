@@ -7,8 +7,9 @@
 //! nothing is observed unless one is installed with [`install`].
 
 use super::*;
+use crate::agent::what_if_key::{hmac_sha256, load_existing, load_or_create, KEY_BYTES};
 use crate::contracts::Outcome;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 /// An applet group about to run, or one that has just finished.
@@ -22,6 +23,57 @@ pub struct StepRequest {
     pub binaries: Vec<String>,
     /// Resolved argument vector of each call, when it can be computed.
     pub argv: Vec<Vec<String>>,
+    /// Keyed digest of the group's input, as `<key check>:<digest>` in hex. Only
+    /// the digest is kept, never the input. `None` when the input is not held in
+    /// memory (stdin or a file handle) or no per-user key is available.
+    pub input_digest: Option<String>,
+}
+
+/// Which per-user key, if any, keys the input digest of each group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputKeyPolicy {
+    /// No digest is computed.
+    Unkeyed,
+    /// Recording: create the per-user key when it is missing.
+    CreateIfMissing,
+    /// Replay: use the existing key only, so replay never creates one.
+    Existing,
+}
+
+/// Domain separators for the input digest, so a key check and a digest never share
+/// a message.
+const KEY_CHECK_DOMAIN: &[u8] = b"execute input key check v1";
+const INPUT_DIGEST_DOMAIN: &[u8] = b"execute group input v1\0";
+
+static CREATED_KEY: OnceLock<Option<[u8; KEY_BYTES]>> = OnceLock::new();
+static EXISTING_KEY: OnceLock<Option<[u8; KEY_BYTES]>> = OnceLock::new();
+
+/// The per-user key for a policy. A key that cannot be read or created is `None`,
+/// so the digest is omitted rather than failing the group.
+fn input_key(policy: InputKeyPolicy) -> Option<[u8; KEY_BYTES]> {
+    match policy {
+        InputKeyPolicy::Unkeyed => None,
+        InputKeyPolicy::CreateIfMissing => *CREATED_KEY.get_or_init(|| load_or_create().ok()),
+        InputKeyPolicy::Existing => *EXISTING_KEY.get_or_init(|| load_existing().ok()),
+    }
+}
+
+/// The keyed digest of a group's input, or `None` when the input is not in memory.
+fn input_digest(key: &[u8; KEY_BYTES], input: &Input) -> Option<String> {
+    let bytes: &[u8] = match input {
+        Input::Empty => &[],
+        Input::Bytes(bytes) => bytes,
+        Input::File(_) | Input::Stdin => return None,
+    };
+    let check = hmac_sha256(key, KEY_CHECK_DOMAIN);
+    let mut message = INPUT_DIGEST_DOMAIN.to_vec();
+    message.extend_from_slice(bytes);
+    let digest = hmac_sha256(key, &message);
+    Some(format!("{}:{}", hex_text(&check[..8]), hex_text(&digest)))
+}
+
+fn hex_text(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Captured result of one applet group.
@@ -83,6 +135,12 @@ pub trait Observer: Send + Sync {
     /// an earlier run already showed it.
     fn suppresses_terminal_output(&self, _line: usize) -> bool {
         false
+    }
+
+    /// Which per-user key keys the input digest of each group. Observers that do
+    /// not compare input leave this unkeyed.
+    fn input_key_policy(&self) -> InputKeyPolicy {
+        InputKeyPolicy::Unkeyed
     }
 }
 
@@ -164,8 +222,10 @@ pub(super) fn captures_streamed_stdout() -> bool {
 fn request_for(
     calls: &[(&Invocation, &Manifest, usize)],
     bindings: &BTreeMap<String, Value>,
+    input_digest: Option<String>,
 ) -> StepRequest {
     StepRequest {
+        input_digest,
         line: calls.first().map_or(0, |(_, _, line)| *line),
         applets: calls
             .iter()
@@ -211,7 +271,9 @@ pub(super) fn execute_call_group(group: GroupRequest<'_>) -> Result<GroupOutput>
             signals,
         });
     };
-    let request = request_for(calls, bindings);
+    let input_digest =
+        input_key(observer.input_key_policy()).and_then(|key| input_digest(&key, &input));
+    let request = request_for(calls, bindings, input_digest);
     if let Some(recorded) = observer.replay(&request)? {
         return replayed_output(calls, recorded);
     }
@@ -344,5 +406,40 @@ fn exit_status(code: i32) -> std::process::ExitStatus {
     {
         use std::os::windows::process::ExitStatusExt;
         std::process::ExitStatus::from_raw(code as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_input_changes_the_digest_and_unchanged_input_does_not() {
+        let key = [7u8; KEY_BYTES];
+        let old = input_digest(&key, &Input::Bytes(b"old".to_vec()));
+        let new = input_digest(&key, &Input::Bytes(b"new".to_vec()));
+        let again = input_digest(&key, &Input::Bytes(b"old".to_vec()));
+        assert!(old.is_some());
+        assert_ne!(old, new);
+        assert_eq!(old, again);
+    }
+
+    #[test]
+    fn digests_hide_the_input_and_depend_on_the_key() {
+        let key = [7u8; KEY_BYTES];
+        let other_key = [8u8; KEY_BYTES];
+        let digest = input_digest(&key, &Input::Bytes(b"secret-value".to_vec())).unwrap();
+        assert!(!digest.contains("secret"));
+        assert_ne!(
+            input_digest(&other_key, &Input::Bytes(b"secret-value".to_vec())),
+            Some(digest)
+        );
+    }
+
+    #[test]
+    fn input_not_held_in_memory_has_no_digest() {
+        let key = [7u8; KEY_BYTES];
+        assert_eq!(input_digest(&key, &Input::Stdin), None);
+        assert!(input_digest(&key, &Input::Empty).is_some());
     }
 }

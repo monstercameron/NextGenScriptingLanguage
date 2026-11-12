@@ -52,7 +52,7 @@
 //! redaction, not detection, so an undeclared secret is recorded as it was.
 
 use crate::manifest::Registry;
-use crate::runtime::observe::{Observer, StepRequest, StepResult};
+use crate::runtime::observe::{InputKeyPolicy, Observer, StepRequest, StepResult};
 use crate::security::{self, PersistenceKind, SecretRedactor, SensitivitySet};
 pub use crate::security::{register_sensitive_inputs, register_sensitive_program};
 use anyhow::{anyhow, bail, Context, Result};
@@ -1593,6 +1593,10 @@ impl Observer for Recorder {
         Ok(None)
     }
 
+    fn input_key_policy(&self) -> InputKeyPolicy {
+        InputKeyPolicy::CreateIfMissing
+    }
+
     fn finished(&self, request: &StepRequest, wall: Duration, result: &StepResult) -> Result<()> {
         // Redact each buffer in full before it is hashed, tailed or stored.
         let stdout = self.redactor.redact_bytes(&result.stdout);
@@ -1663,6 +1667,7 @@ impl Observer for Recorder {
             "applets": request.applets,
             "binaries": request.binaries,
             "argv": argv,
+            "input_digest": request.input_digest,
             "status": result.status,
             "outcome": outcome,
             "failed": result.failed,
@@ -1722,6 +1727,9 @@ pub struct StoredStep {
     pub applets: Vec<String>,
     pub binaries: Vec<String>,
     pub argv: Vec<Vec<String>>,
+    /// Keyed digest of the group's input, `<key check>:<digest>`. `None` for records
+    /// written before input digests, and for groups whose input was not in memory.
+    pub input_digest: Option<String>,
     pub status: Option<i32>,
     pub outcome: Option<Json>,
     /// The group ended as a typed failure, which stops the program unless caught.
@@ -2010,6 +2018,7 @@ impl StoredRecord {
                     .as_array()
                     .map(|items| items.iter().map(strings).collect())
                     .unwrap_or_default(),
+                input_digest: value["input_digest"].as_str().map(str::to_owned),
                 status: value["status"].as_i64().map(|code| code as i32),
                 outcome: (!value["outcome"].is_null()).then(|| value["outcome"].clone()),
                 wall_us: value["wall_us"].as_u64().unwrap_or(0),

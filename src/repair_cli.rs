@@ -9,17 +9,17 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 const USAGE: &str =
-    "usage: execute repair CHECKPOINT --op '<operation>' [--dry-run] [--manifest-dir DIR]\n\
-    usage: execute repair --from-record DIR --program FILE --op '<operation>' [--dry-run] [--manifest-dir DIR]\n\
+    "usage: execute repair CHECKPOINT --op '<operation>' [--op '<operation>' ...] [--dry-run] [--manifest-dir DIR]\n\
+    usage: execute repair --from-record DIR --program FILE --op '<operation>' [--op '<operation>' ...] [--dry-run] [--manifest-dir DIR]\n\
     operations: set-parameter LINE NAME VALUE | replace-command LINE STATEMENT | \
     insert-before LINE STATEMENT | remove LINE | add-retry LINE N \
-    (LINE is a physical line, or a step id or label such as fetch)";
+    (LINE is a physical line, or a step id or label such as fetch; repeated --op values apply in order and the result is checked once)";
 
 pub fn repair(arguments: &[String]) -> Result<()> {
     let mut directory = None;
     let mut from_record = None;
     let mut program_override = None;
-    let mut operation_text = None;
+    let mut operation_texts: Vec<String> = Vec::new();
     let mut manifest_dir = None;
     let mut dry_run = false;
     let mut index = 0;
@@ -28,9 +28,7 @@ pub fn repair(arguments: &[String]) -> Result<()> {
             "--op" => {
                 index += 1;
                 let text = arguments.get(index).context("--op requires an operation")?;
-                if operation_text.replace(text.clone()).is_some() {
-                    bail!("--op may be given only once; {USAGE}");
-                }
+                operation_texts.push(text.clone());
             }
             "--from-record" => {
                 index += 1;
@@ -73,8 +71,15 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         }
         index += 1;
     }
-    let operation_text = operation_text.with_context(|| USAGE.to_owned())?;
-    let operation = Operation::parse(&operation_text)?;
+    if operation_texts.is_empty() {
+        bail!("{USAGE}");
+    }
+    let operations = operation_texts
+        .iter()
+        .map(|text| Operation::parse(text))
+        .collect::<Result<Vec<_>>>()?;
+    // The audit record keeps every operation's text, one per line, in the order applied.
+    let operation_text = operation_texts.join("\n");
     let registry = crate::load_workflow_registry(
         manifest_dir,
         None,
@@ -93,7 +98,7 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         return repair_from_record(
             &record,
             &program_path,
-            &operation,
+            &operations,
             &operation_text,
             dry_run,
             &registry,
@@ -120,7 +125,7 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         &source,
         &program_path,
         completed_steps,
-        &operation,
+        &operations,
         &registry,
     )?;
     if !dry_run {
@@ -156,7 +161,7 @@ pub fn repair(arguments: &[String]) -> Result<()> {
 fn repair_from_record(
     record_directory: &Path,
     program_path: &Path,
-    operation: &Operation,
+    operations: &[Operation],
     operation_text: &str,
     dry_run: bool,
     registry: &flow::manifest::Registry,
@@ -191,7 +196,7 @@ fn repair_from_record(
     }
     let text = std::str::from_utf8(&source).context("the program is not UTF-8")?;
     let (boundary, failed_line) = repair::from_record_boundary(text, Some(program_path), &record)?;
-    let plan = repair::apply_at(text, Some(program_path), operation, boundary, registry)?;
+    let plan = repair::apply_all_at(text, Some(program_path), operations, boundary, registry)?;
     if let Some(line) = failed_line {
         eprintln!(
             "repair: the record failed at line {line}; lines before {boundary} are completed and unchanged"
@@ -245,11 +250,11 @@ fn plan_repair(
     source: &str,
     program_path: &std::path::Path,
     completed_steps: usize,
-    operation: &Operation,
+    operations: &[Operation],
     registry: &flow::manifest::Registry,
 ) -> Result<repair::Plan> {
     let boundary = repair::boundary_line_at(source, Some(program_path), completed_steps)?;
-    repair::apply_at(source, Some(program_path), operation, boundary, registry)
+    repair::apply_all_at(source, Some(program_path), operations, boundary, registry)
 }
 
 #[cfg(test)]
@@ -268,7 +273,7 @@ mod tests {
             file_call,
             &path,
             1,
-            &Operation::parse("replace-command 2 run \"true\"").unwrap(),
+            &[Operation::parse("replace-command 2 run \"true\"").unwrap()],
             &flow::manifest::Registry::default(),
         )
         .unwrap();
@@ -283,7 +288,7 @@ mod tests {
             multiline,
             &path,
             1,
-            &Operation::parse("replace-command 5 run \"true\"").unwrap(),
+            &[Operation::parse("replace-command 5 run \"true\"").unwrap()],
             &flow::manifest::Registry::default(),
         )
         .unwrap();
@@ -296,7 +301,7 @@ mod tests {
             raw_block,
             &path,
             1,
-            &Operation::parse("replace-command 6 run \"true\"").unwrap(),
+            &[Operation::parse("replace-command 6 run \"true\"").unwrap()],
             &flow::manifest::Registry::default(),
         )
         .unwrap();
@@ -314,12 +319,49 @@ mod tests {
             source,
             &path,
             1,
-            &Operation::parse("remove fetch").unwrap(),
+            &[Operation::parse("remove fetch").unwrap()],
             &flow::manifest::Registry::default(),
         )
         .unwrap();
         assert_eq!(plan.line, 2);
         assert_eq!(plan.after, "run \"true\"\nrun \"true\"\n");
+    }
+
+    #[test]
+    fn repeated_ops_apply_in_order_and_a_failing_one_refuses_the_batch() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.program");
+        let source = "fetch: run \"true\"\nrun \"false\"\nrun \"true\"\n";
+        fs::write(&path, source).unwrap();
+        // The label is looked up in the text the first operation produced, so it
+        // still names the fetch step after the insert moved it to line 2.
+        let plan = plan_repair(
+            source,
+            &path,
+            0,
+            &[
+                Operation::parse("insert-before 1 run \"true\"").unwrap(),
+                Operation::parse("remove fetch").unwrap(),
+            ],
+            &flow::manifest::Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.line, 2);
+        assert_eq!(plan.after, "run \"true\"\nrun \"false\"\nrun \"true\"\n");
+
+        let error = plan_repair(
+            source,
+            &path,
+            0,
+            &[
+                Operation::parse("remove 1").unwrap(),
+                Operation::parse("remove 9").unwrap(),
+            ],
+            &flow::manifest::Registry::default(),
+        )
+        .expect_err("a failing second operation must refuse the batch");
+        assert!(format!("{error:#}").contains("past the end"), "{error:#}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
     }
 
     #[test]
@@ -336,7 +378,7 @@ mod tests {
         let error = repair_from_record(
             &record,
             &path,
-            &Operation::parse(operation_text).unwrap(),
+            &[Operation::parse(operation_text).unwrap()],
             operation_text,
             false,
             &flow::manifest::Registry::default(),

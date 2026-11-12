@@ -190,14 +190,25 @@ fn resolve_target(
 /// A repair that has been applied to text and checked, but not yet written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
-    pub operation: Operation,
-    /// The physical line the operation applied to, after resolving a step target.
+    /// The operations applied, in order.
+    pub operations: Vec<Operation>,
+    /// The physical line the last operation applied to, after resolving a step target.
     pub line: usize,
     pub before: String,
     pub after: String,
     /// The first unexecuted top-level statement's line. Earlier lines are untouched.
     pub boundary_line: usize,
     pub diff: String,
+}
+
+impl Plan {
+    /// The kind recorded in the audit: the operation's own kind, or `batch` for several.
+    fn kind(&self) -> &'static str {
+        match self.operations.as_slice() {
+            [only] => only.kind(),
+            _ => "batch",
+        }
+    }
 }
 
 /// Apply one operation to program text, restricted to lines from `boundary_line`.
@@ -218,6 +229,57 @@ pub fn apply_at(
     boundary_line: usize,
     registry: &Registry,
 ) -> Result<Plan> {
+    apply_all_at(
+        source,
+        path,
+        std::slice::from_ref(operation),
+        boundary_line,
+        registry,
+    )
+}
+
+/// Apply `operations` in order to an in-memory copy of the program, then check the
+/// final text once. Each operation resolves its target against the text the earlier
+/// operations produced, so a step label keeps naming its step and a line number
+/// refers to the file as edited so far. Intermediate texts are not checked, so a
+/// batch may pass through text that does not check. Nothing is written here: an
+/// error in any operation, or a final text that does not check, returns no plan.
+pub fn apply_all_at(
+    source: &str,
+    path: Option<&Path>,
+    operations: &[Operation],
+    boundary_line: usize,
+    registry: &Registry,
+) -> Result<Plan> {
+    if operations.is_empty() {
+        bail!("a repair needs at least one operation");
+    }
+    let mut after = source.to_owned();
+    let mut line = 0;
+    for operation in operations {
+        (line, after) = edit_text(&after, path, operation, boundary_line, registry)?;
+    }
+    check(&after, path, registry)?;
+    let diff = line_diff(source, &after);
+    Ok(Plan {
+        operations: operations.to_vec(),
+        line,
+        before: source.to_owned(),
+        after,
+        boundary_line,
+        diff,
+    })
+}
+
+/// One operation's text edit, without the final check. Returns the physical line
+/// the operation applied to and the edited text.
+fn edit_text(
+    source: &str,
+    path: Option<&Path>,
+    operation: &Operation,
+    boundary_line: usize,
+    registry: &Registry,
+) -> Result<(usize, String)> {
     let line = resolve_target(source, path, operation.target(), registry)?;
     if line < boundary_line {
         bail!(
@@ -313,17 +375,7 @@ pub fn apply_at(
             lines.remove(index);
         }
     }
-    let after = lines.concat();
-    check(&after, path, registry)?;
-    let diff = line_diff(source, &after);
-    Ok(Plan {
-        operation: operation.clone(),
-        line,
-        before: source.to_owned(),
-        after,
-        boundary_line,
-        diff,
-    })
+    Ok((line, lines.concat()))
 }
 
 /// The repaired program must parse and pass the static checks `execute check` runs.
@@ -779,7 +831,7 @@ pub fn commit(
             .map(|duration| duration.as_millis())
             .unwrap_or(0),
         operation: operation_text,
-        kind: plan.operation.kind(),
+        kind: plan.kind(),
         line: plan.line,
         boundary_line: plan.boundary_line,
         program_path: program_path.display().to_string(),
@@ -1315,6 +1367,35 @@ mod tests {
             "{error:#}"
         );
         assert!(Operation::parse("remove 0").is_err());
+    }
+
+    #[test]
+    fn a_batch_checks_only_its_final_text() {
+        let source = "run \"true\"\nrun \"false\"\n";
+        let operations = [
+            Operation::parse("replace-command 1 run fixture.count").unwrap(),
+            Operation::parse("replace-command 1 run \"true\"").unwrap(),
+        ];
+        // The first operation alone leaves a statement missing its required count.
+        assert!(apply(source, &operations[0], 1, &registry()).is_err());
+        let plan = apply_all_at(source, None, &operations, 1, &registry()).unwrap();
+        assert_eq!(plan.after, "run \"true\"\nrun \"false\"\n");
+        assert_eq!(plan.line, 1);
+        assert_eq!(plan.kind(), "batch");
+
+        // A failing second operation refuses the whole batch and writes nothing.
+        let error = apply_all_at(
+            source,
+            None,
+            &[
+                Operation::parse("remove 1").unwrap(),
+                Operation::parse("remove 9").unwrap(),
+            ],
+            1,
+            &Registry::default(),
+        )
+        .expect_err("a failing operation must refuse the batch");
+        assert!(format!("{error:#}").contains("past the end"), "{error:#}");
     }
 
     #[test]

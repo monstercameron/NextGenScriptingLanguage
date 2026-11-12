@@ -16,6 +16,11 @@ use std::fmt;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod narrate;
 
+/// Decision core for faults no recovery policy row matches (#390). Pure: the
+/// runtime that calls it is not built, so the non-test build allows dead code.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod recovery;
+
 #[derive(Debug)]
 pub(crate) struct DuplicateJsonKey;
 

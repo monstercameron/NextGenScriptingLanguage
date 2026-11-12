@@ -297,6 +297,31 @@ impl Document {
         }
         result
     }
+    // The caller holds the state mutex. The event is pushed onto the queue in place and
+    // popped again if `check` rejects the edited document, so an event never copies the
+    // rest of the document (sources, bindings, input, inbox, user data).
+    pub fn queue_ui_event(
+        &mut self,
+        event: Option<Json>,
+        check: impl FnOnce(&Document) -> Result<()>,
+    ) -> Result<()> {
+        let events = self
+            .ui
+            .get_mut("events")
+            .and_then(Json::as_array_mut)
+            .context("missing UI events queue")?;
+        if events.len() >= MAX_QUEUE {
+            bail!("UI event queue is full");
+        }
+        events.push(event.context("event requires value")?);
+        if let Err(error) = check(self) {
+            if let Some(events) = self.ui.get_mut("events").and_then(Json::as_array_mut) {
+                events.pop();
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
     pub fn replace_ui(&mut self, ui: Json) -> Result<bool> {
         let previous = std::mem::replace(&mut self.ui, ui);
         let result = within_state_limit(self);
@@ -1534,28 +1559,17 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             if state.plan.screen.is_none() {
                 bail!("event requires a live UI program");
             }
-            let mut candidate = state.doc.clone();
-            let events = candidate
-                .ui
-                .get_mut("events")
-                .and_then(Json::as_array_mut)
-                .context("missing UI events queue")?;
-            if events.len() >= MAX_QUEUE {
-                bail!("UI event queue is full");
-            }
-            events.push(
-                request
-                    .value
-                    .into_option()
-                    .context("event requires value")?,
-            );
-            validate(
-                &candidate,
-                &shared.registry,
-                shared.max_bytes,
-                shared.run_mode,
-            )?;
-            state.doc = candidate;
+            state
+                .doc
+                .queue_ui_event(request.value.into_option(), |candidate| {
+                    validate(
+                        candidate,
+                        &shared.registry,
+                        shared.max_bytes,
+                        shared.run_mode,
+                    )
+                    .map(|_| ())
+                })?;
             state.ui_dirty = true;
             state.changed("ui_event_queued");
         }
@@ -1820,6 +1834,37 @@ mod capacity_tests {
         let previous = doc.ui.clone();
         assert!(doc.replace_ui(json!({"new": "view"})).is_err());
         assert_eq!(doc.ui, previous);
+    }
+
+    #[test]
+    fn ui_events_queue_in_place_and_never_copy_the_document() {
+        let mut doc = document();
+        doc.ui = json!({"events": []});
+        doc.user
+            .insert("padding".into(), json!("x".repeat(4 * 1024 * 1024)));
+        let padding = doc.user["padding"].as_str().unwrap().as_ptr();
+        for _ in 0..1000 {
+            doc.queue_ui_event(Some(json!({"type": "press"})), |_| Ok(()))
+                .unwrap();
+            // The UI worker drains the queue; draining here keeps the capacity limit out of the way.
+            doc.ui["events"] = json!([]);
+        }
+        // A copied document would own a fresh buffer for its padding.
+        assert_eq!(doc.user["padding"].as_str().unwrap().as_ptr(), padding);
+    }
+
+    #[test]
+    fn rejected_ui_event_leaves_queue_and_document_unchanged() {
+        let mut doc = document();
+        doc.ui = json!({"events": [{"type": "press"}]});
+        let before = serde_json::to_vec(&doc).unwrap();
+        let error = doc
+            .queue_ui_event(Some(json!({"type": "submit"})), |_| bail!("rejected"))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "rejected");
+        assert_eq!(serde_json::to_vec(&doc).unwrap(), before);
+        assert!(doc.queue_ui_event(None, |_| Ok(())).is_err());
+        assert_eq!(serde_json::to_vec(&doc).unwrap(), before);
     }
 
     #[test]

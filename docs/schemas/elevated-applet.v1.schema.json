@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/elevated-applet.v1.schema.json",
+  "title": "Execute elevated applet request, protocol execute.elevated_applet/1",
+  "description": "The one-object request that `execute` writes to the standard input of the elevated helper for a single applet call. It names exactly one applet and a JSON object of its arguments. Keys are written in sorted order, so the same request always gives the same bytes. The helper refuses any other top-level key, a repeated key, a different protocol or a different version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "version", "applet", "arguments"],
+  "properties": {
+    "protocol": { "const": "execute.elevated_applet/1" },
+    "version": { "const": 1 },
+    "applet": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Lowercase ASCII letters, digits, underscore and dot, within the applet name length limit."
+    },
+    "arguments": {
+      "type": "object",
+      "description": "The applet arguments, keyed by parameter name. Path arguments are absolute and free of '..' by the time the helper runs them."
+    }
+  }
+}

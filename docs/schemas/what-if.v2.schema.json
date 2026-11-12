@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/what-if.v2.schema.json",
+  "title": "Execute what-if review report, protocol execute.what_if/2",
+  "description": "The report from `execute run --what-if` on a plan built from execute.explain/2. It names the program, the fingerprint a later `--confirm` must match, the plan the fingerprint covers (an execute.explain/2 object, with the per-row PATH review tokens removed), and the settings the fingerprint covers: resolved inputs (sensitive values as an HMAC, never plain), the working directory, each resolved executable with its SHA-256, the policy files, the manifest files and the loop budget. The fingerprint is the SHA-256 hex digest of the plan and these settings. A plan built from the legacy execute.explain/1 form reports execute.what_if/1 and is outside this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "program", "fingerprint", "plan", "settings"],
+  "properties": {
+    "protocol": { "const": "execute.what_if/2" },
+    "program": { "type": "string" },
+    "fingerprint": { "type": "string" },
+    "plan": {
+      "type": "object",
+      "required": ["protocol", "steps"],
+      "properties": {
+        "protocol": { "const": "execute.explain/2" },
+        "steps": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputs",
+        "cwd",
+        "executables",
+        "capability_policy",
+        "data_flow_policy",
+        "manifests",
+        "max_loop_iterations",
+        "loop_budget_scope",
+        "version"
+      ],
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "type", "source", "value"],
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string" },
+              "source": { "enum": ["environment", "secret_prompt", "other"] },
+              "value": {}
+            }
+          }
+        },
+        "cwd": { "type": "string" },
+        "executables": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256", "effective_path_hmac_sha256"],
+            "properties": {
+              "path": { "type": "string" },
+              "sha256": { "type": "string" },
+              "effective_path_hmac_sha256": { "type": "string" }
+            }
+          }
+        },
+        "capability_policy": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string" },
+            "sha256": { "type": "string" }
+          }
+        },
+        "data_flow_policy": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string" },
+            "sha256": { "type": "string" }
+          }
+        },
+        "manifests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "file": { "type": ["string", "null"] },
+              "sha256": { "type": "string" },
+              "catalog": { "type": "object" },
+              "path": { "type": "string" }
+            }
+          }
+        },
+        "max_loop_iterations": { "type": "integer", "minimum": 0 },
+        "loop_budget_scope": { "enum": ["per_loop", "legacy_shared_run"] },
+        "version": { "type": "string" }
+      }
+    }
+  }
+}

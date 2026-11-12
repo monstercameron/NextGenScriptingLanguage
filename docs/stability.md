@@ -33,7 +33,7 @@ recorded in [CHANGELOG.md](../CHANGELOG.md) under Unreleased.
 | Explain output | `docs/schemas/explain.v1.schema.json` and `explain.v2.schema.json` | Versioned |
 | Graph event stream | `execute.graph-event/1`; `docs/schemas/graph-event.v1.schema.json` | Versioned |
 | Live control protocol | `execute.live/1`; see [live-control.md](live-control.md) | Versioned |
-| Other published schemas | `docs/schemas/checkpoint-status.v1.schema.json`, `error.v1.schema.json`, `repl.v1.schema.json`, `inspect.v1.schema.json`, `gate.v1.schema.json` | Versioned |
+| Other published schemas | `docs/schemas/checkpoint-status.v1.schema.json`, `error.v1.schema.json`, `repl.v1.schema.json`, `inspect.v1.schema.json`, `gate.v1.schema.json`, `doctor.v1.schema.json`, `what-if.v2.schema.json`, `elevated-applet.v1.schema.json`, `migrate-scan.v1.schema.json` | Versioned |
 | Checkpoint journal | `version` field. The current build writes version 6 and reads versions 1 through 6. | Versioned |
 | Run record seal | `record_seal_version` (currently 1). No published schema. | Versioned |
 | Diagnostic codes | Stable `code` field on each diagnostic, as the [README](../README.md) states | Stated stable |

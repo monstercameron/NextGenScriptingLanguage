@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/migrate-scan.v1.schema.json",
+  "title": "Execute customisation migration scan, protocol execute.migrate-scan/1",
+  "description": "The read-only report of a scan of one home directory for shell customisations (hook files, hook .d directories and ~/.local/bin scripts). Nothing is executed or written. Each entry has a verdict from its shell features; `reason` is a string when the verdict needs explaining and null otherwise. `features` lists the shell features a script uses, each with its category and what Execute offers instead. `findings` lists links, unreadable files and limits that stopped the walk, and `truncated` is true when the entry cap stopped it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "home", "totals", "truncated", "entries", "findings"],
+  "properties": {
+    "protocol": { "const": "execute.migrate-scan/1" },
+    "home": { "type": "string" },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "portable", "partial", "blocked", "unknown", "not_a_script"],
+      "properties": {
+        "entries": { "type": "integer", "minimum": 0 },
+        "portable": { "type": "integer", "minimum": 0 },
+        "partial": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "unknown": { "type": "integer", "minimum": 0 },
+        "not_a_script": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "truncated": { "type": "boolean" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind", "verdict", "reason", "crlf", "features", "external_commands"],
+        "properties": {
+          "path": { "type": "string" },
+          "kind": { "enum": ["hook", "hook_d", "local_bin"] },
+          "verdict": { "enum": ["portable", "partial", "blocked", "unknown", "not_a_script"] },
+          "reason": { "type": ["string", "null"] },
+          "crlf": { "type": "boolean" },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "category", "need"],
+              "properties": {
+                "name": { "type": "string" },
+                "category": { "enum": ["supported", "partial", "unsupported"] },
+                "need": { "type": "string" }
+              }
+            }
+          },
+          "external_commands": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "path", "detail"],
+        "properties": {
+          "kind": {
+            "enum": ["link_leaves_home", "link_not_followed", "unreadable", "not_walked", "depth_limit", "truncated"]
+          },
+          "path": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

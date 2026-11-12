@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/doctor.v1.schema.json",
+  "title": "Execute installation and desktop-session check report, protocol execute.doctor/1",
+  "description": "The result of `execute doctor --json`. Each check has a stable id, a status and one line of detail. `remedy` is present as a string for a problem and null otherwise. `ok` is false exactly when one check has status fail; warnings and skipped checks do not fail the run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "execute_version", "ok", "counts", "checks"],
+  "properties": {
+    "protocol": { "const": "execute.doctor/1" },
+    "execute_version": { "type": "string" },
+    "ok": { "type": "boolean" },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "warn", "fail", "skipped"],
+      "properties": {
+        "ok": { "type": "integer", "minimum": 0 },
+        "warn": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "status", "detail", "remedy"],
+        "properties": {
+          "id": {
+            "enum": [
+              "helpers.execute-applet",
+              "helpers.execute-applet.trust",
+              "helpers.execute-model",
+              "helpers.execute-model.trust",
+              "manifests.bundled-index",
+              "manifests.directory",
+              "dirs.home",
+              "dirs.state",
+              "dirs.cache",
+              "desktop.xdg-runtime-dir",
+              "desktop.xdg-runtime-dir.private",
+              "desktop.hyprland-signature",
+              "desktop.wayland-display",
+              "build.features"
+            ]
+          },
+          "title": { "type": "string" },
+          "status": { "enum": ["ok", "warn", "fail", "skipped"] },
+          "detail": { "type": "string" },
+          "remedy": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

@@ -7057,6 +7057,75 @@ mod resolved_json_argument_tests {
         let error = resolved_json_arguments(&referenced, &manifest, &BTreeMap::new()).unwrap_err();
         assert!(error.to_string().contains("undefined result \"missing\""));
     }
+
+    /// For each applet with a typed JSON parameter, the bound document is handed to the
+    /// applet as the bound value itself: it is not in the converted argument map, so no
+    /// serde tree is built for it. The converted path still builds that tree.
+    #[test]
+    fn typed_json_documents_are_passed_by_reference_not_converted() {
+        let cases = [
+            ("json.get", ("pointer", Value::String("/items/0".into()))),
+            ("json.map", ("select", Value::String("/id".into()))),
+            ("json.filter", ("where", Value::List(Vec::new()))),
+        ];
+        // Inline manifests: the bundled registry reads the repository's manifests folder,
+        // which this machine's trust gate refuses.
+        let parameters = serde_json::json!({
+            "document": {"type": "json", "required": true},
+            "pointer": {"type": "string"},
+            "select": {"type": "string"},
+            "where": {"type": "json"}
+        });
+        for (applet, (extra_name, extra_value)) in cases {
+            let source = serde_json::json!({
+                "name": applet,
+                "binary": "unused",
+                "parameters": parameters,
+                "arguments": [{"literal": applet}]
+            })
+            .to_string();
+            let manifest = Registry::from_sources(&[source])
+                .unwrap()
+                .resolve(applet)
+                .unwrap()
+                .clone();
+            let mut call = invocation(BTreeMap::from([
+                ("document".into(), Value::Reference("doc".into())),
+                (extra_name.into(), extra_value),
+            ]));
+            call.operation = applet.into();
+            let bindings = BTreeMap::from([(
+                "doc".to_owned(),
+                Value::List(vec![Value::Record(BTreeMap::from([(
+                    "id".into(),
+                    Value::Integer(1),
+                )]))]),
+            )]);
+
+            let (parameter, typed) = typed_json_argument(&call, &manifest, &bindings)
+                .expect("a bound document takes the typed path");
+            assert_eq!(parameter, "document", "{applet}");
+            assert!(
+                std::ptr::eq(typed, &bindings["doc"]),
+                "{applet} receives the bound value itself"
+            );
+
+            let skipped =
+                resolved_json_arguments_skipping(&call, &manifest, &bindings, Some(parameter))
+                    .expect("skipped arguments resolve");
+            let converted = resolved_json_arguments(&call, &manifest, &bindings)
+                .expect("converted arguments resolve");
+            assert!(
+                !skipped.contains_key("document"),
+                "{applet} converts no document"
+            );
+            assert!(
+                converted.contains_key("document"),
+                "{applet} converts the document"
+            );
+            assert_eq!(skipped.len() + 1, converted.len(), "{applet}");
+        }
+    }
 }
 
 #[cfg(all(test, unix))]

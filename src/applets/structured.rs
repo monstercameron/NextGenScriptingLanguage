@@ -159,13 +159,19 @@ pub(super) fn get_typed(
                 saw_null = true;
                 continue;
             }
-            return crate::structured::to_json(selected)
-                .map_err(|error| invalid(format!("JSON value cannot be converted: {error}")));
+            return typed_value_json(selected);
         }
     }
     checked_default(args, context)?
         .or_else(|| saw_null.then_some(Value::Null))
         .ok_or_else(|| absence("not_found", "no JSON Pointer identifies a value"))
+}
+
+/// Convert one value selected from a checked typed document. Such a value holds no
+/// reference, so the conversion cannot fail in practice; the error keeps the result typed.
+fn typed_value_json(value: &TypedValue) -> Result<Value, AppletError> {
+    crate::structured::to_json(value)
+        .map_err(|error| invalid(format!("JSON value cannot be converted: {error}")))
 }
 
 fn get_from_pointers(
@@ -357,14 +363,9 @@ pub(super) fn map(
     for (index, item) in array.iter().enumerate() {
         checkpoint_work(context, index)?;
         let value = match lookup(item, &selection_pointer)? {
-            Some(Value::Null) => args.get("default").cloned().unwrap_or(Value::Null),
+            Some(Value::Null) => mapped_default(args),
             Some(value) => value.clone(),
-            None => args.get("default").cloned().ok_or_else(|| {
-                absence(
-                    "not_found",
-                    format!("select pointer is absent from array item {index}"),
-                )
-            })?,
+            None => mapped_absent(args, index)?,
         };
         output_bytes = add_output_item_size(output_bytes, &value)?;
         mapped.push(value);
@@ -372,6 +373,54 @@ pub(super) fn map(
     let result = Value::Array(mapped);
     check_size_and_depth(&result, context)?;
     Ok(result)
+}
+
+/// `json.map` over a bound document, read in place from the typed tree. Only each
+/// selected value is converted, so the result, the errors and their order equal `map`
+/// over the converted document.
+pub(super) fn map_typed(
+    args: &Map<String, Value>,
+    document: &TypedValue,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    check_typed_size_and_depth(document, context)?;
+    let array_pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
+    let selection_pointer = parse_pointer(required_string(args, "select")?)?;
+    let items = match lookup_typed(document, &array_pointer)? {
+        Some(TypedValue::List(items)) => items,
+        _ => return Err(invalid("the selected JSON value must be an array")),
+    };
+    let mut mapped = Vec::new();
+    let mut output_bytes = 2usize;
+    for (index, item) in items.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        let value = match lookup_typed(item, &selection_pointer)? {
+            Some(TypedValue::Null) => mapped_default(args),
+            Some(value) => typed_value_json(value)?,
+            None => mapped_absent(args, index)?,
+        };
+        output_bytes = add_output_item_size(output_bytes, &value)?;
+        mapped.push(value);
+    }
+    let result = Value::Array(mapped);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+/// The value `json.map` yields for a selected `null`.
+fn mapped_default(args: &Map<String, Value>) -> Value {
+    args.get("default").cloned().unwrap_or(Value::Null)
+}
+
+/// The value `json.map` yields for an absent selection, or the error when no default is set.
+fn mapped_absent(args: &Map<String, Value>, index: usize) -> Result<Value, AppletError> {
+    args.get("default").cloned().ok_or_else(|| {
+        absence(
+            "not_found",
+            format!("select pointer is absent from array item {index}"),
+        )
+    })
 }
 
 pub(super) fn filter(
@@ -385,21 +434,7 @@ pub(super) fn filter(
     let Some(array) = lookup(&document, &array_pointer)?.and_then(Value::as_array) else {
         return Err(invalid("the selected JSON value must be an array"));
     };
-    let clauses = args
-        .get("where")
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid("args.where must be an array of predicate objects"))?;
-    if clauses.len() > MAX_FILTER_CLAUSES {
-        return Err(invalid(format!(
-            "args.where exceeds the {MAX_FILTER_CLAUSES}-predicate limit"
-        )));
-    }
-    let mut predicates = Vec::with_capacity(clauses.len());
-    for (index, clause) in clauses.iter().enumerate() {
-        context.checkpoint()?;
-        check_size_and_depth(clause, context)?;
-        predicates.push(parse_predicate(clause, index)?);
-    }
+    let predicates = parse_where(args, context)?;
     let mut selected = Vec::new();
     let mut output_bytes = 2usize;
     let mut work = 0usize;
@@ -423,6 +458,70 @@ pub(super) fn filter(
     let result = Value::Array(selected);
     check_size_and_depth(&result, context)?;
     Ok(result)
+}
+
+/// `json.filter` over a bound document, read in place from the typed tree. Only matching
+/// items are converted into the result; the errors and their order equal `filter` over
+/// the converted document.
+pub(super) fn filter_typed(
+    args: &Map<String, Value>,
+    document: &TypedValue,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    check_typed_size_and_depth(document, context)?;
+    let array_pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
+    let Some(TypedValue::List(items)) = lookup_typed(document, &array_pointer)? else {
+        return Err(invalid("the selected JSON value must be an array"));
+    };
+    let predicates = parse_where(args, context)?;
+    let mut selected = Vec::new();
+    let mut output_bytes = 2usize;
+    let mut work = 0usize;
+    for item in items {
+        checkpoint_work(context, work)?;
+        work += 1;
+        let mut matches = true;
+        for predicate in &predicates {
+            checkpoint_work(context, work)?;
+            work += 1;
+            if !predicate.matches_typed(item, context, &mut work)? {
+                matches = false;
+                break;
+            }
+        }
+        if matches {
+            let value = typed_value_json(item)?;
+            output_bytes = add_output_item_size(output_bytes, &value)?;
+            selected.push(value);
+        }
+    }
+    let result = Value::Array(selected);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+/// The `where` clauses of `json.filter`, checked and parsed in order.
+fn parse_where(
+    args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Vec<Predicate>, AppletError> {
+    let clauses = args
+        .get("where")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("args.where must be an array of predicate objects"))?;
+    if clauses.len() > MAX_FILTER_CLAUSES {
+        return Err(invalid(format!(
+            "args.where exceeds the {MAX_FILTER_CLAUSES}-predicate limit"
+        )));
+    }
+    let mut predicates = Vec::with_capacity(clauses.len());
+    for (index, clause) in clauses.iter().enumerate() {
+        context.checkpoint()?;
+        check_size_and_depth(clause, context)?;
+        predicates.push(parse_predicate(clause, index)?);
+    }
+    Ok(predicates)
 }
 
 pub(super) fn keys(
@@ -1145,6 +1244,50 @@ impl Predicate {
                 lookup(item, pointer)?.is_some_and(|value| json_type(value) == expected)
             }
         })
+    }
+
+    /// `matches` for an item of a bound document. The same lookups and comparisons run
+    /// on the typed tree; a selected value is converted only where equality needs it.
+    fn matches_typed(
+        &self,
+        item: &TypedValue,
+        context: &ExecutionContext<'_>,
+        work: &mut usize,
+    ) -> Result<bool, AppletError> {
+        Ok(match self {
+            Self::Exists(pointer, expected) => lookup_typed(item, pointer)?.is_some() == *expected,
+            Self::Equals(pointer, expected) => match lookup_typed(item, pointer)? {
+                Some(actual) => {
+                    let actual = typed_value_json(actual)?;
+                    super::shared::json_equal(&actual, expected, context, work)?
+                }
+                None => false,
+            },
+            Self::NotEquals(pointer, expected) => match lookup_typed(item, pointer)? {
+                Some(actual) => {
+                    let actual = typed_value_json(actual)?;
+                    !super::shared::json_equal(&actual, expected, context, work)?
+                }
+                None => true,
+            },
+            Self::Type(pointer, expected) => {
+                lookup_typed(item, pointer)?.is_some_and(|value| typed_json_type(value) == expected)
+            }
+        })
+    }
+}
+
+/// The JSON type name `json_type` gives the converted value of a typed node.
+fn typed_json_type(value: &TypedValue) -> &'static str {
+    match value {
+        TypedValue::Null => "null",
+        TypedValue::Bool(_) => "boolean",
+        TypedValue::Integer(_) | TypedValue::Number(_) => "number",
+        TypedValue::String(_) => "string",
+        TypedValue::List(_) => "array",
+        TypedValue::Record(_) => "object",
+        // A checked document holds no reference; this name matches no predicate type.
+        TypedValue::Reference(_) => "reference",
     }
 }
 
@@ -2028,5 +2171,355 @@ mod tests {
         let walk = crate::structured::walk_pointer(&nested_bytes(MAX_DEPTH - 1), &[])
             .expect("walk parses the document");
         assert_eq!(walk.max_depth, MAX_DEPTH - 1);
+    }
+
+    /// Runs `json.map` or `json.filter` over `typed` on both paths. The converted path gets
+    /// the document as a serde tree, as the runtime passes it without a typed parameter.
+    /// Returns the converted outcome, then the typed one, as the runtime reports them.
+    fn applet_both_ways(
+        applet: &str,
+        args: &Map<String, Value>,
+        typed: &TypedValue,
+        context: &ExecutionContext<'_>,
+    ) -> (Result<Value, String>, Result<Value, String>) {
+        let mut converted_args = args.clone();
+        converted_args.insert(
+            "document".to_owned(),
+            crate::structured::to_json(typed).expect("document converts"),
+        );
+        let (converted, typed_result) = match applet {
+            "json.map" => (
+                map(&converted_args, &[], context),
+                map_typed(args, typed, context),
+            ),
+            "json.filter" => (
+                filter(&converted_args, &[], context),
+                filter_typed(args, typed, context),
+            ),
+            other => panic!("{other} has no typed path"),
+        };
+        (
+            converted.map_err(|error| error.to_string()),
+            typed_result.map_err(|error| error.to_string()),
+        )
+    }
+
+    /// The same document as the runtime may bind it: parsed into the typed tree, and built
+    /// from a serde tree.
+    fn typed_forms(bytes: &[u8]) -> [TypedValue; 2] {
+        let json: Value = serde_json::from_slice(bytes).expect("document is JSON");
+        [
+            crate::structured::parse(bytes).expect("typed parse succeeds"),
+            crate::structured::from_json(json),
+        ]
+    }
+
+    fn argument_objects(values: Vec<Value>) -> Vec<Map<String, Value>> {
+        values
+            .into_iter()
+            .map(|value| value.as_object().cloned().expect("arguments are an object"))
+            .collect()
+    }
+
+    fn map_arguments() -> Vec<Map<String, Value>> {
+        argument_objects(vec![
+            serde_json::json!({"select": "/id"}),
+            serde_json::json!({"pointer": "/items", "select": "/id"}),
+            serde_json::json!({"pointer": "/items", "select": "/tags/0"}),
+            serde_json::json!({"pointer": "/items", "select": "/name", "default": "none"}),
+            serde_json::json!({"select": "/v", "default": 0}),
+            serde_json::json!({"select": "/missing"}),
+            serde_json::json!({"select": "/missing", "default": null}),
+            serde_json::json!({"select": ""}),
+            serde_json::json!({"select": "/0"}),
+            serde_json::json!({"select": "/a~1b"}),
+            serde_json::json!({"select": "/ok", "default": {"x": [1, 2.5]}}),
+            serde_json::json!({"select": "/n"}),
+            serde_json::json!({"pointer": "/items/01", "select": "/id"}),
+            serde_json::json!({"pointer": "items", "select": "/id"}),
+            serde_json::json!({"pointer": "/missing/x", "select": "/id"}),
+            serde_json::json!({"pointer": "/n", "select": "/id"}),
+            serde_json::json!({"pointer": "/items/-", "select": "/id"}),
+            serde_json::json!({"select": 5}),
+            serde_json::json!({}),
+        ])
+    }
+
+    fn filter_arguments() -> Vec<Map<String, Value>> {
+        argument_objects(vec![
+            serde_json::json!({"where": []}),
+            serde_json::json!({"where": [{"pointer": "/ok", "equals": true}]}),
+            serde_json::json!({"where": [{"pointer": "/name", "exists": false}]}),
+            serde_json::json!({"where": [{"pointer": "/tags/0", "exists": true}]}),
+            serde_json::json!({"where": [{"pointer": "/v", "equals": 1.5}]}),
+            serde_json::json!({"where": [{"pointer": "/v", "equals": 1}]}),
+            serde_json::json!({"where": [{"pointer": "/id", "not_equals": 1}]}),
+            serde_json::json!({"where": [{"pointer": "/k", "type": "number"}]}),
+            serde_json::json!({"where": [{"pointer": "/n", "type": "number"}]}),
+            serde_json::json!({"where": [{"pointer": "/0", "type": "string"}]}),
+            serde_json::json!({"where": [{"equals": {"a": 1}}]}),
+            serde_json::json!({"where": [{"equals": null}]}),
+            serde_json::json!({"where": [{"pointer": "/tags/x", "exists": true}]}),
+            serde_json::json!({"where": [{"pointer": "/tags/01", "exists": true}]}),
+            serde_json::json!({"where": [{"pointer": "bad", "exists": true}]}),
+            serde_json::json!({"where": "nope"}),
+            serde_json::json!({}),
+            serde_json::json!({"where": [{"pointer": "/ok"}]}),
+            serde_json::json!({"where": [{"exists": true}, {"pointer": "/id", "exists": "yes"}]}),
+            serde_json::json!({"where": [{"pointer": "/id", "type": "bogus"}]}),
+            serde_json::json!({"pointer": "/items", "where": [{"pointer": "/ok", "equals": true}]}),
+            serde_json::json!({"pointer": "/missing", "where": []}),
+            serde_json::json!({"pointer": "/items/01", "where": []}),
+            serde_json::json!({"pointer": "/n", "where": [{"exists": true}]}),
+            serde_json::json!({"where": vec![serde_json::json!({"exists": true}); MAX_FILTER_CLAUSES + 1]}),
+        ])
+    }
+
+    /// Documents with edge shapes: empty containers, duplicate-looking and unusual keys,
+    /// numbers the typed tree and serde represent differently, and escapes.
+    const PARITY_DOCUMENTS: [&str; 11] = [
+        r#"[]"#,
+        r#"{}"#,
+        r#"[{}]"#,
+        r#"{"items":[]}"#,
+        r#"{"items":[{"id":1,"name":"a","tags":["x","y"],"v":1.5,"ok":true},{"id":2,"name":null,"tags":[],"v":-0.0,"ok":false}],"n":5}"#,
+        r#"{"a":1,"a ":2,"":3,"A":4,"a/b":5,"a~b":6,"0":7,"-":8,"é":9,"é":10,"ok":{"a":1}}"#,
+        r#"[{"0":"zero","1":"one"},["a","b"],"s",7,null,true]"#,
+        r#"{"items":[{"n":18446744073709551615},{"n":-9223372036854775808},{"n":9223372036854775807},{"n":1e2},{"n":-0},{"n":-0.0},{"n":1E-7},{"n":0.1},{"n":2.5e300}]}"#,
+        r#"{"items":[{"k":"\u0000 nul"},{"k":"tab\tquote\"back\\slash"},{"k":"😀"}]}"#,
+        r#"{"items":[{"k":1},{"k":1.0},{"k":"1"},{"k":[1]},{"k":{"1":1}}]}"#,
+        r#"{"items":[{"id":1,"tags":["a"]},{"name":"x","tags":[],"ok":false},{"id":3,"tags":{"0":"object"}}],"n":"text"}"#,
+    ];
+
+    #[test]
+    fn typed_map_and_filter_match_the_converted_path_on_every_shape() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let mut successes = 0usize;
+        let mut failures = 0usize;
+        for bytes in PARITY_DOCUMENTS {
+            for typed in typed_forms(bytes.as_bytes()) {
+                for (applet, arguments) in [
+                    ("json.map", map_arguments()),
+                    ("json.filter", filter_arguments()),
+                ] {
+                    for args in arguments {
+                        let (converted, typed_result) =
+                            applet_both_ways(applet, &args, &typed, &context);
+                        assert_eq!(typed_result, converted, "{applet} {args:?} over {}", bytes);
+                        if converted.is_ok() {
+                            successes += 1;
+                        } else {
+                            failures += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(successes > 0 && failures > 0, "both outcomes are covered");
+    }
+
+    #[test]
+    fn typed_map_and_filter_match_the_converted_path_on_a_120000_item_array() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let items: Vec<Value> = (0..120_000u64)
+            .map(|index| {
+                serde_json::json!({
+                    "id": index,
+                    "name": format!("n{index}"),
+                    "tags": ["a", "b"],
+                    "v": index as f64 * 1.5,
+                })
+            })
+            .collect();
+        let typed = crate::structured::from_json(serde_json::json!({"items": items}));
+        // Each case names the applet, its arguments and the length of its result.
+        let cases = [
+            (
+                "json.map",
+                serde_json::json!({"pointer": "/items", "select": "/id"}),
+                120_000,
+            ),
+            (
+                "json.map",
+                serde_json::json!({"pointer": "/items", "select": "/tags/1"}),
+                120_000,
+            ),
+            (
+                "json.map",
+                serde_json::json!({"pointer": "/items", "select": "/missing", "default": 0}),
+                120_000,
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/items", "where": [{"pointer": "/id", "equals": 119_999}]}),
+                1,
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/items", "where": [
+                    {"pointer": "/name", "exists": true},
+                    {"pointer": "/v", "type": "number"}
+                ]}),
+                120_000,
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/items", "where": [{"pointer": "/tags/0", "equals": "a"}]}),
+                120_000,
+            ),
+        ];
+        for (applet, value, length) in cases {
+            let args = value.as_object().cloned().expect("arguments are an object");
+            let (converted, typed_result) = applet_both_ways(applet, &args, &typed, &context);
+            assert_eq!(typed_result, converted, "{applet} {args:?}");
+            let result = converted.expect("the 120000-item case succeeds");
+            assert_eq!(
+                result.as_array().map(Vec::len),
+                Some(length),
+                "{applet} {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_map_and_filter_report_the_converted_paths_errors() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let typed =
+            crate::structured::parse(br#"{"items":[{"id":1,"tags":["a"]},{"name":"x"}],"n":5}"#)
+                .expect("typed JSON parses");
+        let cases = [
+            (
+                "json.map",
+                serde_json::json!({"pointer": "/items", "select": "/id"}),
+                "select pointer is absent from array item 1",
+            ),
+            (
+                "json.map",
+                serde_json::json!({"pointer": "/n", "select": "/id"}),
+                "the selected JSON value must be an array",
+            ),
+            (
+                "json.map",
+                serde_json::json!({"pointer": "/missing", "select": "/id"}),
+                "the selected JSON value must be an array",
+            ),
+            (
+                "json.map",
+                serde_json::json!({"pointer": "/items/01", "select": "/id"}),
+                "invalid JSON Pointer array index",
+            ),
+            (
+                "json.map",
+                serde_json::json!({"pointer": "items", "select": "/id"}),
+                "JSON Pointer must be empty or start with '/'",
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/items", "where": [{"pointer": "/id", "type": "bogus"}]}),
+                "must be null, boolean, number, string, array, or object",
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/items", "where": [{"pointer": "/tags/01", "exists": true}]}),
+                "invalid JSON Pointer array index",
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/n"}),
+                "the selected JSON value must be an array",
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/items"}),
+                "args.where must be an array of predicate objects",
+            ),
+            (
+                "json.filter",
+                serde_json::json!({"pointer": "/items", "where": [{"exists": true}, {"pointer": "/id", "exists": "yes"}]}),
+                "args.where[1].exists must be a boolean",
+            ),
+        ];
+        for (applet, value, expected) in cases {
+            let args = value.as_object().cloned().expect("arguments are an object");
+            let (converted, typed_result) = applet_both_ways(applet, &args, &typed, &context);
+            assert_eq!(typed_result, converted, "{applet} {args:?}");
+            let error = converted.expect_err("the case is refused");
+            assert!(
+                error.contains(expected),
+                "{error} does not contain {expected}"
+            );
+        }
+
+        // A document that is both too deep and given a malformed pointer reports the depth
+        // first, on both paths, as the converted path checks the document before the pointer.
+        let too_deep =
+            (0..=MAX_DEPTH).fold(TypedValue::Null, |value, _| TypedValue::List(vec![value]));
+        let args = Map::from_iter([("pointer".to_owned(), Value::String("x".to_owned()))]);
+        let (converted, typed_result) = applet_both_ways("json.map", &args, &too_deep, &context);
+        assert_eq!(typed_result, converted);
+        assert!(converted
+            .expect_err("deep JSON is refused")
+            .contains("depth limit"));
+        let (converted, typed_result) = applet_both_ways("json.filter", &args, &too_deep, &context);
+        assert_eq!(typed_result, converted);
+        assert!(converted
+            .expect_err("deep JSON is refused")
+            .contains("depth limit"));
+    }
+
+    /// The typed tree and serde agree on every edge number that JSON text can hold, so
+    /// the converted path and the typed path see the same values.
+    #[test]
+    fn typed_numbers_at_the_edges_match_the_converted_path() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let literals = [
+            "18446744073709551615",
+            "-9223372036854775808",
+            "9223372036854775807",
+            "1e2",
+            "-0",
+            "-0.0",
+            "1E-7",
+            "0.1",
+            "2.5e300",
+            "1.0",
+            "100",
+        ];
+        for literal in literals {
+            let bytes = format!(r#"{{"items":[{{"n":{literal}}},{{"n":100}}]}}"#);
+            let json: Value = serde_json::from_str(&bytes).expect("literal is JSON");
+            for typed in typed_forms(bytes.as_bytes()) {
+                assert_eq!(
+                    crate::structured::to_json(&typed).expect("document converts"),
+                    json,
+                    "typed tree for {literal}"
+                );
+                let number = json["items"][0]["n"].clone();
+                for (applet, value) in [
+                    (
+                        "json.filter",
+                        serde_json::json!({"pointer": "/items", "where": [{"pointer": "/n", "equals": number}]}),
+                    ),
+                    (
+                        "json.filter",
+                        serde_json::json!({"pointer": "/items", "where": [{"pointer": "/n", "not_equals": 100}]}),
+                    ),
+                    (
+                        "json.filter",
+                        serde_json::json!({"pointer": "/items", "where": [{"pointer": "/n", "type": "number"}]}),
+                    ),
+                    (
+                        "json.map",
+                        serde_json::json!({"pointer": "/items", "select": "/n"}),
+                    ),
+                ] {
+                    let args = value.as_object().cloned().expect("arguments are an object");
+                    let (converted, typed_result) =
+                        applet_both_ways(applet, &args, &typed, &context);
+                    assert_eq!(typed_result, converted, "{applet} {args:?} for {literal}");
+                    assert!(converted.is_ok(), "{literal}");
+                }
+            }
+        }
     }
 }

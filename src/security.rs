@@ -2431,6 +2431,22 @@ fn check_trusted_windows_handle(
     };
     const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
     const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
+    const ACCESS_ALLOWED_CALLBACK_ACE_TYPE: u8 = 0x9;
+    const ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE: u8 = 0xB;
+    // Deny and audit/alarm ACE types cannot grant access, so the gate skips them.
+    const ACCESS_DENIED_ACE_TYPE: u8 = 0x1;
+    const SYSTEM_AUDIT_ACE_TYPE: u8 = 0x2;
+    const SYSTEM_ALARM_ACE_TYPE: u8 = 0x3;
+    const ACCESS_DENIED_OBJECT_ACE_TYPE: u8 = 0x6;
+    const SYSTEM_AUDIT_OBJECT_ACE_TYPE: u8 = 0x7;
+    const SYSTEM_ALARM_OBJECT_ACE_TYPE: u8 = 0x8;
+    // Callback (conditional) deny and audit/alarm types likewise only restrict or log.
+    const ACCESS_DENIED_CALLBACK_ACE_TYPE: u8 = 0xA;
+    const ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE: u8 = 0xC;
+    const SYSTEM_AUDIT_CALLBACK_ACE_TYPE: u8 = 0xD;
+    const SYSTEM_ALARM_CALLBACK_ACE_TYPE: u8 = 0xE;
+    const SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE: u8 = 0xF;
+    const SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE: u8 = 0x10;
     const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
     const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
     const INHERIT_ONLY_ACE_FLAG: u8 = 0x08;
@@ -2597,11 +2613,34 @@ fn check_trusted_windows_handle(
                 continue;
             }
             // Only allow ACEs can grant writes; deny/audit ACEs are ignored.
-            let (mask, ace_sid) = if header.AceType == ACCESS_ALLOWED_ACE_TYPE {
+            // Callback allow ACEs carry the same mask and SID layout and are
+            // evaluated like ordinary allows. Any other type fails closed.
+            if matches!(
+                header.AceType,
+                ACCESS_DENIED_ACE_TYPE
+                    | SYSTEM_AUDIT_ACE_TYPE
+                    | SYSTEM_ALARM_ACE_TYPE
+                    | ACCESS_DENIED_OBJECT_ACE_TYPE
+                    | SYSTEM_AUDIT_OBJECT_ACE_TYPE
+                    | SYSTEM_ALARM_OBJECT_ACE_TYPE
+                    | ACCESS_DENIED_CALLBACK_ACE_TYPE
+                    | ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE
+                    | SYSTEM_AUDIT_CALLBACK_ACE_TYPE
+                    | SYSTEM_ALARM_CALLBACK_ACE_TYPE
+                    | SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE
+                    | SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE
+            ) {
+                continue;
+            }
+            let (mask, ace_sid) = if header.AceType == ACCESS_ALLOWED_ACE_TYPE
+                || header.AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+            {
                 // SAFETY: this ACE type guarantees the ACCESS_ALLOWED_ACE layout.
                 let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
                 (ace.Mask, std::ptr::addr_of!(ace.SidStart).cast_mut().cast())
-            } else if header.AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE {
+            } else if header.AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE
+                || header.AceType == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE
+            {
                 // Layout: header, Mask, Flags, optional 16-byte GUIDs, SidStart.
                 // SAFETY: the ACE lies inside the validated ACL; reads stay
                 // within its reported AceSize.
@@ -2634,7 +2673,12 @@ fn check_trusted_windows_handle(
                 let ace_sid = unsafe { base.add(offset) as *mut _ };
                 (mask, ace_sid)
             } else {
-                continue;
+                // Unknown ACE type: it may grant access we cannot read, so refuse.
+                bail!(
+                    "{label} {} has an unrecognised Windows ACL entry type {:#x}; refusing",
+                    path.display(),
+                    header.AceType
+                );
             };
             // Leaves refuse every write-level right; ancestors refuse only the
             // replacement/removal/takeover subset: create-only rights cannot
@@ -3136,6 +3180,175 @@ pub(crate) fn verify_bundled_helper(path: &Path, expected_sha256: Option<&str>) 
 mod tests {
     use super::*;
     use crate::manifest::Registry;
+
+    /// Replaces the DACL of `path` with a protected ACL built by `add_aces`.
+    #[cfg(windows)]
+    fn issue_926_set_dacl(
+        path: &Path,
+        add_aces: impl FnOnce(*mut windows_sys::Win32::Security::ACL),
+    ) {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Security::{
+            Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT},
+            InitializeAcl, ACL, ACL_REVISION, DACL_SECURITY_INFORMATION,
+            PROTECTED_DACL_SECURITY_INFORMATION,
+        };
+        let mut storage = vec![0u32; 256];
+        let acl = storage.as_mut_ptr().cast::<ACL>();
+        // SAFETY: storage is 1 KiB, u32-aligned, and outlives the calls below.
+        assert!(unsafe { InitializeAcl(acl, (storage.len() * 4) as u32, ACL_REVISION) } != 0);
+        add_aces(acl);
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: wide is NUL-terminated and acl is an initialized ACL; owner and group stay unchanged.
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, 0, "setting test DACL on {}", path.display());
+    }
+
+    /// Builds a well-known SID such as Everyone or Administrators (issue #926).
+    #[cfg(windows)]
+    fn issue_926_well_known_sid(
+        kind: windows_sys::Win32::Security::WELL_KNOWN_SID_TYPE,
+    ) -> Vec<u32> {
+        use windows_sys::Win32::Security::CreateWellKnownSid;
+        let mut sid = vec![0u32; 17]; // SECURITY_MAX_SID_SIZE is 68 bytes.
+        let mut size = (sid.len() * 4) as u32;
+        // SAFETY: sid has room for SECURITY_MAX_SID_SIZE bytes; no domain SID is needed.
+        assert!(
+            unsafe {
+                CreateWellKnownSid(
+                    kind,
+                    std::ptr::null_mut(),
+                    sid.as_mut_ptr().cast(),
+                    &mut size,
+                )
+            } != 0
+        );
+        sid
+    }
+
+    /// Appends a callback allow ACE (type 0x9, no condition data) for `sid`.
+    /// windows-sys has no AddAccessAllowedCallbackAce, so the ACE is built raw.
+    #[cfg(windows)]
+    fn issue_926_add_callback_allow(
+        acl: *mut windows_sys::Win32::Security::ACL,
+        mask: u32,
+        sid: *mut std::ffi::c_void,
+    ) {
+        use windows_sys::Win32::Security::{AddAce, CopySid, GetLengthSid, ACL_REVISION};
+        // SAFETY: sid is a valid SID owned by the caller.
+        let sid_len = unsafe { GetLengthSid(sid) } as usize;
+        let size = 8 + sid_len;
+        let mut ace = vec![0u8; size];
+        ace[0] = 0x9; // ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+        ace[2..4].copy_from_slice(&(size as u16).to_le_bytes());
+        ace[4..8].copy_from_slice(&mask.to_le_bytes());
+        // SAFETY: ace has 8 + sid_len bytes, so the SID fits at offset 8.
+        assert!(unsafe { CopySid(sid_len as u32, ace.as_mut_ptr().add(8).cast(), sid) } != 0);
+        // SAFETY: acl is an initialized ACL with room; ace holds one complete ACE.
+        assert!(
+            unsafe {
+                AddAce(
+                    acl,
+                    ACL_REVISION,
+                    u32::MAX,
+                    ace.as_ptr().cast(),
+                    size as u32,
+                )
+            } != 0
+        );
+    }
+
+    /// A callback allow ACE granting write to an untrusted principal must be
+    /// refused: the gate used to skip it as an unrecognised type (issue #926).
+    #[cfg(windows)]
+    #[test]
+    fn issue_926_trust_gate_refuses_callback_allow_write_for_untrusted_sid() {
+        use windows_sys::Win32::Security::{AddAccessAllowedAce, WinWorldSid, ACL_REVISION};
+        use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE};
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("module.program");
+        std::fs::write(&file, b"x").unwrap();
+        issue_926_set_dacl(&file, |acl| {
+            let mut everyone = issue_926_well_known_sid(WinWorldSid);
+            // Read grant first so the test process can open the handle (READ_CONTROL).
+            // SAFETY: acl is an initialized ACL with room; everyone is a valid SID.
+            assert!(
+                unsafe {
+                    AddAccessAllowedAce(
+                        acl,
+                        ACL_REVISION,
+                        FILE_GENERIC_READ,
+                        everyone.as_mut_ptr().cast(),
+                    )
+                } != 0
+            );
+            issue_926_add_callback_allow(acl, FILE_GENERIC_WRITE, everyone.as_mut_ptr().cast());
+        });
+        let error = verify_trusted_windows_acl(&file, "module").unwrap_err();
+        let text = format!("{error:#}");
+        assert!(text.contains("refusing"), "{text}");
+        assert!(text.contains("module.program"), "{text}");
+    }
+
+    /// Deny ACEs beside a trusted allow ACE must still pass the gate (issue #926).
+    #[cfg(windows)]
+    #[test]
+    fn issue_926_trust_gate_passes_deny_beside_trusted_allow() {
+        use windows_sys::Win32::Security::{
+            AddAccessAllowedAce, AddAccessDeniedAce, WinBuiltinAdministratorsSid, WinWorldSid,
+            ACL_REVISION,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_DATA,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("module.program");
+        std::fs::write(&file, b"x").unwrap();
+        issue_926_set_dacl(&file, |acl| {
+            let mut everyone = issue_926_well_known_sid(WinWorldSid);
+            let mut admins = issue_926_well_known_sid(WinBuiltinAdministratorsSid);
+            // SAFETY: acl is an initialized ACL with room, and both SIDs are valid.
+            unsafe {
+                // Read grant and a deny that excludes READ_CONTROL, so the test
+                // process can still open the handle to read the DACL.
+                assert!(
+                    AddAccessAllowedAce(
+                        acl,
+                        ACL_REVISION,
+                        FILE_GENERIC_READ,
+                        everyone.as_mut_ptr().cast(),
+                    ) != 0
+                );
+                assert!(
+                    AddAccessDeniedAce(
+                        acl,
+                        ACL_REVISION,
+                        FILE_WRITE_DATA | FILE_APPEND_DATA,
+                        everyone.as_mut_ptr().cast(),
+                    ) != 0
+                );
+                assert!(
+                    AddAccessAllowedAce(
+                        acl,
+                        ACL_REVISION,
+                        FILE_GENERIC_WRITE,
+                        admins.as_mut_ptr().cast(),
+                    ) != 0
+                );
+            }
+        });
+        verify_trusted_windows_acl(&file, "module").unwrap();
+    }
 
     fn policy(text: &str) -> DataFlowPolicy {
         DataFlowPolicy::from_json(text.as_bytes()).unwrap()

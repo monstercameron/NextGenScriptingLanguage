@@ -200,6 +200,14 @@ pub const CODES: &[CodeInfo] = &[
         severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
+        code: "check.literal_not_in_set",
+        family: "type",
+        meaning: "a value bound from a closed set of outputs is compared with a literal outside that set",
+        example: "if label is \"biling\"",
+        typical_fix: "Compare with one of the declared values, such as the suggested replacement.",
+        severity: DiagnosticSeverity::Error,
+    },
+    CodeInfo {
         code: "check.diagnostics.truncated",
         family: "validate",
         meaning: "more diagnostics were found than the response limit permits",
@@ -4022,6 +4030,7 @@ fn collect_program_diagnostics(
         line_starts,
         diagnostics,
     );
+    collect_closed_set_literal_lints(source, &program.steps, registry, line_starts, diagnostics);
     let mut step_names = program
         .inputs
         .iter()
@@ -4748,6 +4757,144 @@ fn collect_condition_type_mismatches(
                 }
             }
         }
+    }
+}
+
+/// A text field that a call declares as `enum_from_parameter` holds only the
+/// literal items of that call's list parameter. When a binding takes such a
+/// field, an equality test against a literal outside those items can never
+/// match, so it is reported with the closest declared value as the fix.
+fn collect_closed_set_literal_lints(
+    source: &str,
+    steps: &[Step],
+    registry: &Registry,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut calls = Vec::new();
+    collect_calls(steps, &mut calls);
+    // Binding name -> (line of the take, declared values).
+    let mut closed_sets = BTreeMap::<String, (usize, Vec<String>)>::new();
+    for (line, call) in &calls {
+        if call.binding.is_none() {
+            continue;
+        }
+        let Ok(manifest) = registry.resolve_call(call) else {
+            continue;
+        };
+        let Some(output) = manifest
+            .execution_contract()
+            .and_then(|contract| contract.output.as_ref())
+        else {
+            continue;
+        };
+        if output.enum_from_parameter.is_empty() {
+            continue;
+        }
+        let parsed = steps.iter().find_map(|step| {
+            (step.line > *line)
+                .then_some(&step.kind)
+                .and_then(|kind| match kind {
+                    StepKind::ParseJson { binding } => Some(binding.clone()),
+                    _ => None,
+                })
+        });
+        let Some(parsed) = parsed else {
+            continue;
+        };
+        for (field, parameter) in &output.enum_from_parameter {
+            let Some(Value::List(items)) = call.parameters.get(parameter.as_str()) else {
+                continue;
+            };
+            let Some(values) = items
+                .iter()
+                .map(|item| match item {
+                    Value::String(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<String>>>()
+            else {
+                continue;
+            };
+            let pointer = format!("/{field}");
+            for step in steps {
+                if let StepKind::TakeJson {
+                    pointer: taken,
+                    source: Value::Reference(source_name),
+                    binding,
+                    ..
+                } = &step.kind
+                {
+                    if step.line > *line && source_name == &parsed && taken == &pointer {
+                        closed_sets.insert(binding.clone(), (step.line, values.clone()));
+                    }
+                }
+            }
+        }
+    }
+    if closed_sets.is_empty() {
+        return;
+    }
+    for step in steps {
+        let StepKind::If { condition, .. } = &step.kind else {
+            continue;
+        };
+        if !matches!(condition.operator, crate::ast::ConditionOperator::Equals) {
+            continue;
+        }
+        let (name, literal) = match (&condition.left, &condition.right) {
+            (Value::Reference(name), Value::String(literal))
+            | (Value::String(literal), Value::Reference(name)) => (name, literal),
+            _ => continue,
+        };
+        let Some((take_line, values)) = closed_sets.get(name) else {
+            continue;
+        };
+        if step.line <= *take_line || values.contains(literal) {
+            continue;
+        }
+        let span = {
+            let encoded = serde_json::to_string(literal).unwrap_or_default();
+            let line_start = line_starts.start(step.line);
+            source
+                .get(line_start..)
+                .and_then(|rest| rest.lines().next())
+                .and_then(|text| {
+                    text.find(&encoded)
+                        .map(|offset| (line_start + offset, encoded.len()))
+                })
+                .map_or_else(
+                    || line_starts.span(source, step.line),
+                    |(start, length)| {
+                        line_starts.span_at(source, start, start + length, SpanPrecision::Token)
+                    },
+                )
+        };
+        let fixes = suggest::closest(literal, values.iter().map(String::as_str))
+            .map(|candidate| {
+                SuggestedFix::replace(
+                    format!("compare with {candidate:?}"),
+                    span.clone(),
+                    serde_json::to_string(candidate).unwrap_or_default(),
+                )
+            })
+            .into_iter()
+            .collect();
+        let listed = values
+            .iter()
+            .map(|value| format!("{value:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: "check.literal_not_in_set".into(),
+            message: format!(
+                "{name:?} can only hold [{listed}]; {literal:?} is not one of them, so this comparison never matches"
+            ),
+            span,
+            fixes,
+            related: Vec::new(),
+        });
     }
 }
 

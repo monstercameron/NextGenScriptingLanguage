@@ -51,6 +51,7 @@ fn record_output() -> OutputSchema {
         encoding: OutputEncoding::Json,
         enum_values: None,
         same_as_parameter: None,
+        enum_from_parameter: Default::default(),
         items: None,
         fields: BTreeMap::from([
             (

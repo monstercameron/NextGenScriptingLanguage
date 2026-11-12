@@ -628,6 +628,11 @@ pub struct OutputSchema {
     /// Preserve the declared item type of a named list parameter in this output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub same_as_parameter: Option<String>,
+    /// Map a text field of a record output to the list parameter whose literal
+    /// items are the only values that field can hold, such as `label` to
+    /// `labels` for a classifier. Checked statically when the list is literal.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub enum_from_parameter: BTreeMap<String, String>,
     /// Remove exactly one final LF from raw UTF-8 text or path output. No other
     /// whitespace or line ending is normalized.
     #[serde(default)]
@@ -1644,6 +1649,17 @@ impl OutputSchema {
             && !matches!(self.kind, OutputType::Json | OutputType::List)
         {
             bail!("same_as_parameter applies only to json or list output");
+        }
+        for (field, parameter) in &self.enum_from_parameter {
+            if parameter.is_empty() || parameter.contains('\0') {
+                bail!("enum_from_parameter must name a parameter");
+            }
+            let Some(schema) = self.fields.get(field) else {
+                bail!("enum_from_parameter names {field:?}, which is not an output field");
+            };
+            if schema.kind != OutputType::Text || schema.enum_values.is_some() {
+                bail!("enum_from_parameter applies only to plain text output fields");
+            }
         }
         match (self.kind, self.encoding) {
             (OutputType::Bytes, OutputEncoding::Raw)

@@ -2740,6 +2740,7 @@ mod tests {
             required: vec!["text".into(), "length".into()],
             enum_values: None,
             same_as_parameter: None,
+            enum_from_parameter: Default::default(),
             trim_final_lf: false,
         }
     }

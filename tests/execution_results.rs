@@ -651,6 +651,7 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
         ports: Some(ports),
         deprecated: false,
         replaced_by: None,
+        reversibility: Default::default(),
     };
     let mut advertised_contract = contract.clone();
     advertised_contract.remote = None;

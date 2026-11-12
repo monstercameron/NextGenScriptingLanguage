@@ -2648,6 +2648,206 @@ pub enum AppletOutput {
     Value(Value),
 }
 
+/// Whether a declared effect can be undone, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReversibilityKind {
+    /// The runtime undoes the effect by running the `compensate` applet.
+    Reversible,
+    /// The platform reverts the effect unless it is confirmed within `confirm_within_ms`.
+    Confirmable,
+    /// Nothing can undo the effect once it has happened.
+    Irreversible,
+}
+
+/// Upper bound for a confirm deadline: seven days.
+const MAX_CONFIRM_WITHIN_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Reversibility declaration for one effect the contract declares.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectReversibility {
+    pub kind: ReversibilityKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compensate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm_within_ms: Option<u64>,
+}
+
+impl EffectReversibility {
+    fn validate(&self, effect: &str) -> Result<()> {
+        match self.kind {
+            ReversibilityKind::Reversible => {
+                let Some(compensate) = self.compensate.as_deref() else {
+                    bail!("reversible effect {effect:?} requires a compensate applet");
+                };
+                if !valid_capability_id(compensate) {
+                    bail!("compensate for effect {effect:?} must be a namespaced applet name");
+                }
+                if self.confirm_within_ms.is_some() {
+                    bail!("reversible effect {effect:?} cannot declare confirm_within_ms");
+                }
+            }
+            ReversibilityKind::Confirmable => {
+                match self.confirm_within_ms {
+                    None => bail!("confirmable effect {effect:?} requires confirm_within_ms"),
+                    Some(0) => bail!("confirm_within_ms for effect {effect:?} must be positive"),
+                    Some(ms) if ms > MAX_CONFIRM_WITHIN_MS => bail!(
+                        "confirm_within_ms for effect {effect:?} must be at most {MAX_CONFIRM_WITHIN_MS}"
+                    ),
+                    Some(_) => {}
+                }
+                if self.compensate.is_some() {
+                    bail!("confirmable effect {effect:?} cannot declare compensate");
+                }
+            }
+            ReversibilityKind::Irreversible => {
+                if self.compensate.is_some() {
+                    bail!("irreversible effect {effect:?} cannot declare compensate");
+                }
+                if self.confirm_within_ms.is_some() {
+                    bail!("irreversible effect {effect:?} cannot declare confirm_within_ms");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Reversibility of one effect as callers see it. `Undeclared` is the state
+/// for an effect with no entry in the contract's `reversibility` map; it is
+/// never treated as reversible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectReversibilityStatus<'a> {
+    Reversible { compensate: &'a str },
+    Confirmable { confirm_within_ms: u64 },
+    Irreversible,
+    Undeclared,
+}
+
+/// Effects the contract declares that no runtime step can undo, in declared order.
+pub fn irreversible_effects(contract: &AppletContract) -> Vec<&str> {
+    contract
+        .effects
+        .iter()
+        .map(String::as_str)
+        .filter(|effect| {
+            contract.effect_reversibility(effect) == EffectReversibilityStatus::Irreversible
+        })
+        .collect()
+}
+
+/// One step that has already been applied, with the effect names it performed.
+#[derive(Debug, Clone, Copy)]
+pub struct AppliedStep<'a> {
+    pub applet: &'a str,
+    pub contract: &'a AppletContract,
+    pub performed_effects: &'a [String],
+}
+
+/// A compensation the caller should run to undo one performed effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedCompensation {
+    /// Index of the applied step in the list the plan was built from.
+    pub step_index: usize,
+    pub applet: String,
+    pub effect: String,
+    /// Applet to call to undo the effect.
+    pub compensate: String,
+}
+
+/// A confirmable effect that the platform reverts unless confirmed in time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedPlatformRevert {
+    pub step_index: usize,
+    pub applet: String,
+    pub effect: String,
+    pub confirm_within_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollbackBlockReason {
+    Irreversible,
+    Undeclared,
+}
+
+/// The step at which rollback must stop, because its effect cannot be undone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackBlock {
+    pub step_index: usize,
+    pub applet: String,
+    pub effect: String,
+    pub reason: RollbackBlockReason,
+}
+
+/// Rollback plan for a list of applied steps. `compensations` and
+/// `platform_reverts` run in reverse order; `blocked` is set when rollback
+/// cannot pass an irreversible or undeclared step.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CompensationPlan {
+    pub compensations: Vec<PlannedCompensation>,
+    pub platform_reverts: Vec<PlannedPlatformRevert>,
+    pub blocked: Option<RollbackBlock>,
+}
+
+/// Build the rollback plan for `steps`, given in the order they were applied.
+///
+/// The walk starts at the last applied step. A step with no performed effects
+/// contributes nothing. A step with an irreversible or undeclared performed
+/// effect ends the walk: that step and every step before it are left alone,
+/// and the block is reported. Within a step, effects are compensated in
+/// reverse performed order.
+pub fn compensation_plan(steps: &[AppliedStep<'_>]) -> CompensationPlan {
+    let mut plan = CompensationPlan::default();
+    for (step_index, step) in steps.iter().enumerate().rev() {
+        let blocking = step.performed_effects.iter().find_map(|effect| {
+            match step.contract.effect_reversibility(effect) {
+                EffectReversibilityStatus::Irreversible => {
+                    Some((effect, RollbackBlockReason::Irreversible))
+                }
+                EffectReversibilityStatus::Undeclared => {
+                    Some((effect, RollbackBlockReason::Undeclared))
+                }
+                EffectReversibilityStatus::Reversible { .. }
+                | EffectReversibilityStatus::Confirmable { .. } => None,
+            }
+        });
+        if let Some((effect, reason)) = blocking {
+            plan.blocked = Some(RollbackBlock {
+                step_index,
+                applet: step.applet.to_owned(),
+                effect: effect.clone(),
+                reason,
+            });
+            return plan;
+        }
+        for effect in step.performed_effects.iter().rev() {
+            match step.contract.effect_reversibility(effect) {
+                EffectReversibilityStatus::Reversible { compensate } => {
+                    plan.compensations.push(PlannedCompensation {
+                        step_index,
+                        applet: step.applet.to_owned(),
+                        effect: effect.clone(),
+                        compensate: compensate.to_owned(),
+                    });
+                }
+                EffectReversibilityStatus::Confirmable { confirm_within_ms } => {
+                    plan.platform_reverts.push(PlannedPlatformRevert {
+                        step_index,
+                        applet: step.applet.to_owned(),
+                        effect: effect.clone(),
+                        confirm_within_ms,
+                    });
+                }
+                // Already excluded by the blocking check above.
+                EffectReversibilityStatus::Irreversible | EffectReversibilityStatus::Undeclared => {
+                }
+            }
+        }
+    }
+    plan
+}
+
 /// Version 1 applet execution contract. A missing output schema means bytes;
 /// missing outcomes use the conventional status-zero success rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2703,6 +2903,10 @@ pub struct AppletContract {
     /// The canonical applet name that replaces this one, when `deprecated`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_by: Option<String>,
+    /// Reversibility of declared effects, keyed by effect name. An effect with
+    /// no entry is undeclared.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reversibility: BTreeMap<String, EffectReversibility>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -2823,6 +3027,12 @@ impl AppletContract {
         if !effects.is_subset(&capabilities) {
             bail!("contract effects must be included in declared capabilities");
         }
+        for (effect, reversibility) in &self.reversibility {
+            if !self.effects.iter().any(|declared| declared == effect) {
+                bail!("reversibility entry {effect:?} must name an effect the contract declares");
+            }
+            reversibility.validate(effect)?;
+        }
         if self.result_envelope
             && self
                 .output
@@ -2832,6 +3042,29 @@ impl AppletContract {
             bail!("result_envelope requires a typed non-bytes output schema");
         }
         Ok(())
+    }
+
+    /// Reversibility of one effect. A malformed entry (only possible when
+    /// validation was skipped) is reported as undeclared, so it never counts as
+    /// reversible.
+    pub fn effect_reversibility(&self, effect: &str) -> EffectReversibilityStatus<'_> {
+        match self.reversibility.get(effect) {
+            None => EffectReversibilityStatus::Undeclared,
+            Some(entry) => match (
+                entry.kind,
+                entry.compensate.as_deref(),
+                entry.confirm_within_ms,
+            ) {
+                (ReversibilityKind::Reversible, Some(compensate), _) => {
+                    EffectReversibilityStatus::Reversible { compensate }
+                }
+                (ReversibilityKind::Confirmable, _, Some(confirm_within_ms)) => {
+                    EffectReversibilityStatus::Confirmable { confirm_within_ms }
+                }
+                (ReversibilityKind::Irreversible, _, _) => EffectReversibilityStatus::Irreversible,
+                _ => EffectReversibilityStatus::Undeclared,
+            },
+        }
     }
 
     pub fn output_kind(&self) -> Option<InputType> {
@@ -3622,5 +3855,438 @@ mod deprecation_field_tests {
         let result: Result<AppletContract, _> =
             serde_json::from_value(json!({"version": 1, "deprecated": "yes"}));
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod effect_reversibility_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    /// Parse and validate a contract whose effects are all also capabilities.
+    fn parse(effects: &[&str], reversibility: Value) -> Result<AppletContract> {
+        let contract: AppletContract = serde_json::from_value(json!({
+            "version": 1,
+            "capabilities": effects,
+            "effects": effects,
+            "reversibility": reversibility,
+        }))?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    fn rejected(effects: &[&str], reversibility: Value) -> String {
+        match parse(effects, reversibility) {
+            Ok(_) => panic!("contract should have been refused"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn contract_without_reversibility_is_unchanged() {
+        let contract: AppletContract = serde_json::from_value(json!({
+            "version": 1,
+            "capabilities": ["filesystem.write"],
+            "effects": ["filesystem.write"],
+        }))
+        .unwrap();
+        contract.validate().unwrap();
+        assert!(contract.reversibility.is_empty());
+        assert_eq!(
+            contract.effect_reversibility("filesystem.write"),
+            EffectReversibilityStatus::Undeclared
+        );
+        assert!(irreversible_effects(&contract).is_empty());
+        let serialized = serde_json::to_value(&contract).unwrap();
+        assert!(serialized.get("reversibility").is_none());
+    }
+
+    #[test]
+    fn all_three_kinds_round_trip_through_json() {
+        let source = json!({
+            "version": 1,
+            "capabilities": ["filesystem.write", "network.connect", "messages.send"],
+            "effects": ["filesystem.write", "network.connect", "messages.send"],
+            "reversibility": {
+                "filesystem.write": {"kind": "reversible", "compensate": "fs.restore"},
+                "network.connect": {"kind": "confirmable", "confirm_within_ms": 120000},
+                "messages.send": {"kind": "irreversible"}
+            }
+        });
+        let contract: AppletContract = serde_json::from_value(source).unwrap();
+        contract.validate().unwrap();
+        let serialized = serde_json::to_value(&contract).unwrap();
+        assert_eq!(
+            serialized["reversibility"]["filesystem.write"],
+            json!({"kind": "reversible", "compensate": "fs.restore"})
+        );
+        assert_eq!(
+            serialized["reversibility"]["network.connect"],
+            json!({"kind": "confirmable", "confirm_within_ms": 120000})
+        );
+        assert_eq!(
+            serialized["reversibility"]["messages.send"],
+            json!({"kind": "irreversible"})
+        );
+        let reparsed: AppletContract = serde_json::from_value(serialized).unwrap();
+        assert_eq!(reparsed, contract);
+        reparsed.validate().unwrap();
+    }
+
+    #[test]
+    fn statuses_distinguish_all_four_states() {
+        let contract = parse(
+            &["fs.write", "net.up", "msg.send", "clock.set"],
+            json!({
+                "fs.write": {"kind": "reversible", "compensate": "fs.restore"},
+                "net.up": {"kind": "confirmable", "confirm_within_ms": 60000},
+                "msg.send": {"kind": "irreversible"}
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            contract.effect_reversibility("fs.write"),
+            EffectReversibilityStatus::Reversible {
+                compensate: "fs.restore"
+            }
+        );
+        assert_eq!(
+            contract.effect_reversibility("net.up"),
+            EffectReversibilityStatus::Confirmable {
+                confirm_within_ms: 60000
+            }
+        );
+        assert_eq!(
+            contract.effect_reversibility("msg.send"),
+            EffectReversibilityStatus::Irreversible
+        );
+        assert_eq!(
+            contract.effect_reversibility("clock.set"),
+            EffectReversibilityStatus::Undeclared
+        );
+        assert_eq!(irreversible_effects(&contract), vec!["msg.send"]);
+    }
+
+    #[test]
+    fn entry_must_name_a_declared_effect() {
+        let message = rejected(&["fs.write"], json!({"net.up": {"kind": "irreversible"}}));
+        assert!(
+            message.contains("must name an effect the contract declares"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn reversible_requires_compensate() {
+        let message = rejected(&["fs.write"], json!({"fs.write": {"kind": "reversible"}}));
+        assert!(
+            message.contains("requires a compensate applet"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn reversible_compensate_must_be_a_namespaced_applet_name() {
+        let message = rejected(
+            &["fs.write"],
+            json!({"fs.write": {"kind": "reversible", "compensate": "restore"}}),
+        );
+        assert!(message.contains("namespaced applet name"), "{message}");
+    }
+
+    #[test]
+    fn reversible_refuses_confirm_within_ms() {
+        let message = rejected(
+            &["fs.write"],
+            json!({"fs.write": {
+                "kind": "reversible",
+                "compensate": "fs.restore",
+                "confirm_within_ms": 1000
+            }}),
+        );
+        assert!(
+            message.contains("cannot declare confirm_within_ms"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn confirmable_requires_confirm_within_ms() {
+        let message = rejected(&["net.up"], json!({"net.up": {"kind": "confirmable"}}));
+        assert!(message.contains("requires confirm_within_ms"), "{message}");
+    }
+
+    #[test]
+    fn confirmable_deadline_must_be_positive_and_bounded() {
+        let zero = rejected(
+            &["net.up"],
+            json!({"net.up": {"kind": "confirmable", "confirm_within_ms": 0}}),
+        );
+        assert!(zero.contains("must be positive"), "{zero}");
+
+        let too_large = rejected(
+            &["net.up"],
+            json!({"net.up": {
+                "kind": "confirmable",
+                "confirm_within_ms": MAX_CONFIRM_WITHIN_MS + 1
+            }}),
+        );
+        assert!(too_large.contains("must be at most"), "{too_large}");
+
+        parse(
+            &["net.up"],
+            json!({"net.up": {
+                "kind": "confirmable",
+                "confirm_within_ms": MAX_CONFIRM_WITHIN_MS
+            }}),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn confirmable_refuses_compensate() {
+        let message = rejected(
+            &["net.up"],
+            json!({"net.up": {
+                "kind": "confirmable",
+                "confirm_within_ms": 1000,
+                "compensate": "net.down"
+            }}),
+        );
+        assert!(message.contains("cannot declare compensate"), "{message}");
+    }
+
+    #[test]
+    fn irreversible_refuses_compensate_and_confirm_within_ms() {
+        let with_compensate = rejected(
+            &["msg.send"],
+            json!({"msg.send": {"kind": "irreversible", "compensate": "msg.recall"}}),
+        );
+        assert!(
+            with_compensate.contains("cannot declare compensate"),
+            "{with_compensate}"
+        );
+
+        let with_deadline = rejected(
+            &["msg.send"],
+            json!({"msg.send": {"kind": "irreversible", "confirm_within_ms": 1000}}),
+        );
+        assert!(
+            with_deadline.contains("cannot declare confirm_within_ms"),
+            "{with_deadline}"
+        );
+    }
+
+    #[test]
+    fn unknown_kind_and_unknown_entry_keys_are_refused() {
+        let kind = serde_json::from_value::<AppletContract>(json!({
+            "version": 1,
+            "capabilities": ["fs.write"],
+            "effects": ["fs.write"],
+            "reversibility": {"fs.write": {"kind": "sometimes"}}
+        }));
+        assert!(kind.is_err());
+
+        let key = serde_json::from_value::<AppletContract>(json!({
+            "version": 1,
+            "capabilities": ["fs.write"],
+            "effects": ["fs.write"],
+            "reversibility": {"fs.write": {"kind": "irreversible", "note": "x"}}
+        }));
+        assert!(key.is_err());
+    }
+
+    #[test]
+    fn irreversible_effects_lists_only_irreversible_in_declared_order() {
+        let contract = parse(
+            &["a.write", "b.send", "c.read", "d.send"],
+            json!({
+                "b.send": {"kind": "irreversible"},
+                "a.write": {"kind": "reversible", "compensate": "a.restore"},
+                "d.send": {"kind": "irreversible"}
+            }),
+        )
+        .unwrap();
+        assert_eq!(irreversible_effects(&contract), vec!["b.send", "d.send"]);
+    }
+
+    fn steps_contract() -> (AppletContract, AppletContract, AppletContract) {
+        let writer = parse(
+            &["fs.write"],
+            json!({"fs.write": {"kind": "reversible", "compensate": "fs.restore"}}),
+        )
+        .unwrap();
+        let network = parse(
+            &["net.up"],
+            json!({"net.up": {"kind": "confirmable", "confirm_within_ms": 120000}}),
+        )
+        .unwrap();
+        let sender = parse(&["msg.send"], json!({"msg.send": {"kind": "irreversible"}})).unwrap();
+        (writer, network, sender)
+    }
+
+    #[test]
+    fn plan_runs_reversible_compensations_in_reverse_and_skips_unapplied_steps() {
+        let (writer, network, sender) = steps_contract();
+        let first = vec!["fs.write".to_string()];
+        let second = vec!["net.up".to_string()];
+        let third = vec!["fs.write".to_string()];
+        // A step that declares an irreversible effect but did not perform it.
+        let unapplied: Vec<String> = Vec::new();
+        let steps = [
+            AppliedStep {
+                applet: "file.one",
+                contract: &writer,
+                performed_effects: &first,
+            },
+            AppliedStep {
+                applet: "net.bring_up",
+                contract: &network,
+                performed_effects: &second,
+            },
+            AppliedStep {
+                applet: "file.two",
+                contract: &writer,
+                performed_effects: &third,
+            },
+            AppliedStep {
+                applet: "msg.skipped",
+                contract: &sender,
+                performed_effects: &unapplied,
+            },
+        ];
+        let plan = compensation_plan(&steps);
+        assert_eq!(plan.blocked, None);
+        assert_eq!(
+            plan.compensations,
+            vec![
+                PlannedCompensation {
+                    step_index: 2,
+                    applet: "file.two".into(),
+                    effect: "fs.write".into(),
+                    compensate: "fs.restore".into(),
+                },
+                PlannedCompensation {
+                    step_index: 0,
+                    applet: "file.one".into(),
+                    effect: "fs.write".into(),
+                    compensate: "fs.restore".into(),
+                },
+            ]
+        );
+        assert_eq!(
+            plan.platform_reverts,
+            vec![PlannedPlatformRevert {
+                step_index: 1,
+                applet: "net.bring_up".into(),
+                effect: "net.up".into(),
+                confirm_within_ms: 120000,
+            }]
+        );
+    }
+
+    #[test]
+    fn plan_stops_at_irreversible_step_and_leaves_earlier_steps_alone() {
+        let (writer, _network, sender) = steps_contract();
+        let first = vec!["fs.write".to_string()];
+        let second = vec!["msg.send".to_string()];
+        let third = vec!["fs.write".to_string()];
+        let steps = [
+            AppliedStep {
+                applet: "file.one",
+                contract: &writer,
+                performed_effects: &first,
+            },
+            AppliedStep {
+                applet: "msg.notify",
+                contract: &sender,
+                performed_effects: &second,
+            },
+            AppliedStep {
+                applet: "file.two",
+                contract: &writer,
+                performed_effects: &third,
+            },
+        ];
+        let plan = compensation_plan(&steps);
+        assert_eq!(
+            plan.compensations
+                .iter()
+                .map(|c| c.step_index)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(
+            plan.blocked,
+            Some(RollbackBlock {
+                step_index: 1,
+                applet: "msg.notify".into(),
+                effect: "msg.send".into(),
+                reason: RollbackBlockReason::Irreversible,
+            })
+        );
+    }
+
+    #[test]
+    fn plan_stops_at_undeclared_effect() {
+        let (writer, _network, _sender) = steps_contract();
+        let undeclared = parse(&["gpu.run"], json!({})).unwrap();
+        let first = vec!["fs.write".to_string()];
+        let second = vec!["gpu.run".to_string()];
+        let steps = [
+            AppliedStep {
+                applet: "file.one",
+                contract: &writer,
+                performed_effects: &first,
+            },
+            AppliedStep {
+                applet: "gpu.job",
+                contract: &undeclared,
+                performed_effects: &second,
+            },
+        ];
+        let plan = compensation_plan(&steps);
+        assert!(plan.compensations.is_empty());
+        assert_eq!(
+            plan.blocked,
+            Some(RollbackBlock {
+                step_index: 1,
+                applet: "gpu.job".into(),
+                effect: "gpu.run".into(),
+                reason: RollbackBlockReason::Undeclared,
+            })
+        );
+    }
+
+    #[test]
+    fn plan_compensates_multiple_effects_of_one_step_in_reverse() {
+        let contract = parse(
+            &["a.write", "b.write"],
+            json!({
+                "a.write": {"kind": "reversible", "compensate": "a.restore"},
+                "b.write": {"kind": "reversible", "compensate": "b.restore"}
+            }),
+        )
+        .unwrap();
+        let performed = vec!["a.write".to_string(), "b.write".to_string()];
+        let steps = [AppliedStep {
+            applet: "both.write",
+            contract: &contract,
+            performed_effects: &performed,
+        }];
+        let plan = compensation_plan(&steps);
+        assert_eq!(plan.blocked, None);
+        let order: Vec<&str> = plan
+            .compensations
+            .iter()
+            .map(|c| c.compensate.as_str())
+            .collect();
+        assert_eq!(order, vec!["b.restore", "a.restore"]);
+    }
+
+    #[test]
+    fn plan_for_no_steps_is_empty() {
+        let plan = compensation_plan(&[]);
+        assert_eq!(plan, CompensationPlan::default());
     }
 }

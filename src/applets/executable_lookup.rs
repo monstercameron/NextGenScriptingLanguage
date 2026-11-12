@@ -45,6 +45,19 @@ pub(super) fn which(
             "command names must not contain path separators; names are searched on PATH",
         ));
     }
+    // A name must be one plain file name. A drive-relative name such as `C:tool` has no
+    // separator but still names a location outside the search path.
+    if names.iter().any(|name| {
+        let mut components = Path::new(name).components();
+        !matches!(
+            (components.next(), components.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        )
+    }) {
+        return Err(invalid(
+            "command names must be plain file names; names are searched on PATH",
+        ));
+    }
     let mut all = Vec::new();
     for name in names {
         context.checkpoint()?;
@@ -71,11 +84,11 @@ fn find_all(name: &str, search_path: &std::ffi::OsStr, cwd: &Path) -> Vec<PathBu
     } else {
         let mut candidates = Vec::new();
         for directory in std::env::split_paths(search_path) {
-            let directory = if directory.is_absolute() {
-                directory
-            } else {
-                cwd.join(directory)
-            };
+            // An empty or relative entry would search the working directory, which
+            // the caller of a lookup does not control. Hardened lookups skip them.
+            if !directory.is_absolute() {
+                continue;
+            }
             for extension in extensions(name_path) {
                 let mut candidate = directory.join(name);
                 if !extension.is_empty() {
@@ -121,6 +134,7 @@ fn extensions(_: &Path) -> Vec<String> {
 mod tests {
     use super::find_all;
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn lookup_skips_directories_and_resolves_slash_names_from_cwd() {
@@ -139,6 +153,32 @@ mod tests {
         assert_eq!(
             find_all("./probe.exe", std::ffi::OsStr::new(""), temp.path()).len(),
             1
+        );
+    }
+
+    /// A relative or empty search path entry would search the working directory. The
+    /// runtime ignores such entries when it launches a bare name, and the lookup agrees.
+    #[test]
+    fn relative_and_empty_search_path_entries_are_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("probe.exe");
+        fs::write(&executable, b"fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for entry in ["", ".", "bin"] {
+            assert!(
+                find_all("probe.exe", std::ffi::OsStr::new(entry), temp.path()).is_empty(),
+                "entry {entry:?} must not search the working directory"
+            );
+        }
+        let mixed = std::env::join_paths([Path::new("."), temp.path()]).unwrap();
+        assert_eq!(
+            find_all("probe.exe", &mixed, temp.path()),
+            vec![executable],
+            "an absolute entry beside a relative one is still searched"
         );
     }
 }

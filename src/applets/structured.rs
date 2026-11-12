@@ -78,11 +78,68 @@ fn checked_default(
     args: &Map<String, Value>,
     context: &ExecutionContext<'_>,
 ) -> Result<Option<Value>, AppletError> {
-    let Some(value) = args.get("default") else {
+    checked_default_value(args.get("default"), context)
+}
+
+fn checked_default_value(
+    default: Option<&Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Option<Value>, AppletError> {
+    let Some(value) = default else {
         return Ok(None);
     };
     check_size_and_depth(value, context)?;
     Ok(Some(value.clone()))
+}
+
+/// `json.get` of one `pointer` over JSON `bytes` without building the whole typed tree.
+/// The result equals `parse` followed by `get_typed` with `{pointer, default}`, including
+/// error text and the order in which errors are reported: parse errors first, then the
+/// document's size and depth, then the pointer, then the lookup and the default.
+/// Only the single pointer form is handled; `pointers` still goes through `get_typed`.
+// Not wired: the runtime has no single-use liveness for JSON bindings (see NEEDS).
+#[allow(dead_code)]
+pub(crate) fn get_while_parsing(
+    bytes: &[u8],
+    pointer: &str,
+    default: Option<&Value>,
+    context: &ExecutionContext<'_>,
+) -> anyhow::Result<Result<Value, AppletError>> {
+    // A malformed pointer is reported only after the document has been checked, so the
+    // walk runs with no segments in that case and its selection is ignored.
+    let segments = parse_pointer(pointer);
+    let walk = crate::structured::walk_pointer(bytes, segments.as_deref().unwrap_or(&[]))?;
+    Ok(finish_while_parsing(walk, segments, default, context))
+}
+
+fn finish_while_parsing(
+    walk: crate::structured::PointerWalk,
+    segments: Result<Vec<String>, AppletError>,
+    default: Option<&Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    use crate::structured::PointerSelection;
+    context.checkpoint()?;
+    if walk.max_depth > MAX_DEPTH {
+        return Err(invalid(format!(
+            "JSON value exceeds the {MAX_DEPTH}-level depth limit"
+        )));
+    }
+    if walk.encoded_bytes > MAX_JSON_BYTES {
+        return Err(invalid(format!(
+            "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
+        )));
+    }
+    segments?;
+    match walk.selected {
+        PointerSelection::Failed(message) => Err(invalid(message)),
+        PointerSelection::Found(Value::Null) => {
+            Ok(checked_default_value(default, context)?.unwrap_or(Value::Null))
+        }
+        PointerSelection::Found(value) => Ok(value),
+        PointerSelection::Absent => checked_default_value(default, context)?
+            .ok_or_else(|| absence("not_found", "no JSON Pointer identifies a value")),
+    }
 }
 
 /// `json.get` fast path for a parsed runtime binding. It still checks the complete
@@ -1658,5 +1715,318 @@ mod tests {
             .expect_err("default beyond the size limit is refused")
             .message
             .contains(&format!("{MAX_JSON_BYTES}-byte limit")),);
+    }
+
+    /// `parse` followed by `get_typed`, with errors rendered as the runtime reports them.
+    fn parse_then_get(
+        bytes: &[u8],
+        pointer: &str,
+        default: Option<&Value>,
+        context: &ExecutionContext<'_>,
+    ) -> Result<Value, String> {
+        let typed = crate::structured::parse(bytes).map_err(|error| format!("{error:#}"))?;
+        let mut args = Map::from_iter([("pointer".to_owned(), Value::String(pointer.to_owned()))]);
+        if let Some(default) = default {
+            args.insert("default".to_owned(), default.clone());
+        }
+        get_typed(&args, &typed, context).map_err(|error| error.to_string())
+    }
+
+    fn while_parsing(
+        bytes: &[u8],
+        pointer: &str,
+        default: Option<&Value>,
+        context: &ExecutionContext<'_>,
+    ) -> Result<Value, String> {
+        match get_while_parsing(bytes, pointer, default, context) {
+            Ok(result) => result.map_err(|error| error.to_string()),
+            Err(error) => Err(format!("{error:#}")),
+        }
+    }
+
+    /// Both paths must return the same value, or the same error text.
+    fn assert_parity(
+        bytes: &[u8],
+        pointer: &str,
+        default: Option<&Value>,
+    ) -> Result<Value, String> {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let expected = parse_then_get(bytes, pointer, default, &context);
+        let actual = while_parsing(bytes, pointer, default, &context);
+        let shown = String::from_utf8_lossy(&bytes[..bytes.len().min(80)]).into_owned();
+        assert_eq!(actual, expected, "pointer {pointer:?} over {shown:?}");
+        expected
+    }
+
+    fn nested_bytes(depth: usize) -> Vec<u8> {
+        let mut bytes = vec![b'['; depth];
+        bytes.push(b'0');
+        bytes.extend(std::iter::repeat_n(b']', depth));
+        bytes
+    }
+
+    #[test]
+    fn fused_pointer_resolution_matches_parse_then_get() {
+        let document = br#"{"a":{"b":[1,{"c":"x"},null]},"n":null,"s":"text","\u00e9":{"\u65e5":true},"z":{"b":2,"a":1}}"#;
+        let fallback = Value::String("fallback".to_owned());
+        let pointers = [
+            "/a/b/1/c",
+            "/a",
+            "/a/b/0",
+            "/a/b/2",
+            "/n",
+            "/s/x",
+            "/é/日",
+            "/z",
+            "",
+            "/a/b/-",
+            "/a/b/5",
+            "/a/b/01",
+            "/a/b/x",
+            "/a/b/99999999999999999999999",
+            "/a/b/1/c/deeper",
+            "/missing",
+            "a",
+            "/a~2",
+        ];
+        for pointer in pointers {
+            let _ = assert_parity(document, pointer, None);
+            let _ = assert_parity(document, pointer, Some(&fallback));
+        }
+        assert_eq!(
+            assert_parity(document, "/a/b/1/c", None),
+            Ok(Value::String("x".to_owned()))
+        );
+        assert_eq!(assert_parity(document, "/n", None), Ok(Value::Null));
+        assert_eq!(
+            assert_parity(document, "/n", Some(&fallback)),
+            Ok(fallback.clone())
+        );
+        assert_eq!(
+            assert_parity(document, "/missing", Some(&fallback)),
+            Ok(fallback.clone())
+        );
+        assert!(assert_parity(document, "/missing", None)
+            .unwrap_err()
+            .contains("not_found"));
+    }
+
+    #[test]
+    fn fused_pointer_unescapes_segments_like_the_applet() {
+        let document = br#"{"a/b":{"m~n":{"":5}},"x\"y":1}"#;
+        assert_eq!(
+            assert_parity(document, "/a~1b/m~0n/", None),
+            Ok(serde_json::json!(5))
+        );
+        assert_eq!(
+            assert_parity(document, "/x\"y", None),
+            Ok(serde_json::json!(1))
+        );
+        assert_eq!(
+            assert_parity(document, "/a~1b/m~0n", None).map(|value| value.to_string()),
+            Ok(r#"{"":5}"#.to_owned())
+        );
+    }
+
+    #[test]
+    fn fused_pointer_reports_duplicate_keys_wherever_they_occur() {
+        let documents: [&[u8]; 7] = [
+            br#"{"a":1,"a":2}"#,
+            br#"{"skip":{"x":1,"x":2},"a":1}"#,
+            br#"{"a":1,"skip":[{"y":1,"y":2}]}"#,
+            br#"{"a":1,"b":2,"a":3}"#,
+            br#"{"a":{"x":1,"x":2}}"#,
+            br#"{"a":1,"a":2}"#,
+            br#"{"x":{"k":1},"x":{"k":1}}"#,
+        ];
+        for document in documents {
+            for pointer in ["/a", "/x", ""] {
+                let result = assert_parity(document, pointer, None);
+                assert!(
+                    result.clone().unwrap_err().contains("duplicate key"),
+                    "{pointer:?} over {document:?}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fused_pointer_reports_malformed_input_and_tails_like_parse() {
+        let documents: [&[u8]; 8] = [
+            br#"{"a":1} x"#,
+            br#"{"a":1,"b":[1,}"#,
+            br#"{"a":1"#,
+            br#"{"a":1}}"#,
+            br#"{"a":1,"b":tru}"#,
+            br#"{"a":1,"b":1e400}"#,
+            b"",
+            b"   ",
+        ];
+        for document in documents {
+            for pointer in ["/a", ""] {
+                assert!(assert_parity(document, pointer, None).is_err());
+            }
+        }
+        assert_eq!(
+            assert_parity(br#"{"a":1}   "#, "/a", None),
+            Ok(serde_json::json!(1))
+        );
+        assert_eq!(
+            assert_parity(b"\xef\xbb\xbf{\"a\":1}", "/a", None),
+            Ok(serde_json::json!(1))
+        );
+    }
+
+    #[test]
+    fn fused_pointer_applies_the_depth_limit_as_parse_does() {
+        // serde_json's recursion limit (127 nested containers) decides these before the
+        // walk measures depth, and the fused walk reports the same error.
+        assert!(assert_parity(&nested_bytes(MAX_DEPTH - 1), "", None).is_ok());
+        assert!(assert_parity(&nested_bytes(MAX_DEPTH), "", None)
+            .unwrap_err()
+            .contains("recursion limit"));
+        assert!(assert_parity(&nested_bytes(MAX_DEPTH + 1), "", None)
+            .unwrap_err()
+            .contains("recursion limit"));
+        let mut document = br#"{"a":1,"deep":"#.to_vec();
+        document.extend(nested_bytes(MAX_DEPTH + 1));
+        document.push(b'}');
+        assert!(assert_parity(&document, "/a", None)
+            .unwrap_err()
+            .contains("recursion limit"));
+    }
+
+    #[test]
+    fn fused_pointer_applies_the_size_limit_to_the_whole_document() {
+        let oversized = format!(r#"{{"a":1,"big":"{}"}}"#, "x".repeat(MAX_JSON_BYTES));
+        for pointer in ["/a", "/big", ""] {
+            assert!(assert_parity(oversized.as_bytes(), pointer, None)
+                .unwrap_err()
+                .contains(&format!("{MAX_JSON_BYTES}-byte limit")));
+        }
+
+        // The limit is the compact encoding, so a document with more raw bytes than the
+        // limit is accepted when its compact form fits.
+        let mut padded = br#"{"a":1"#.to_vec();
+        padded.extend(std::iter::repeat_n(b' ', MAX_JSON_BYTES));
+        padded.push(b'}');
+        assert_eq!(assert_parity(&padded, "/a", None), Ok(serde_json::json!(1)));
+
+        // Exactly at the compact limit is accepted; one byte more is refused.
+        let base = serde_json::to_vec(&serde_json::json!({"a": 1, "big": ""}))
+            .expect("base encodes")
+            .len();
+        let at_limit = format!(r#"{{"a":1,"big":"{}"}}"#, "x".repeat(MAX_JSON_BYTES - base));
+        assert!(assert_parity(at_limit.as_bytes(), "/a", None).is_ok());
+        let over_limit = format!(
+            r#"{{"a":1,"big":"{}"}}"#,
+            "x".repeat(MAX_JSON_BYTES - base + 1)
+        );
+        assert!(assert_parity(over_limit.as_bytes(), "/a", None).is_err());
+    }
+
+    #[test]
+    fn fused_pointer_orders_parse_size_pointer_and_lookup_errors_like_get_typed() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let oversized = format!(r#"{{"a":1,"big":"{}"}}"#, "x".repeat(MAX_JSON_BYTES));
+        let fallback = Value::String("fallback".to_owned());
+        // Parse errors come before a malformed pointer.
+        assert_eq!(
+            parse_then_get(br#"{"a":1"#, "a", None, &context),
+            while_parsing(br#"{"a":1"#, "a", None, &context)
+        );
+        assert!(assert_parity(br#"{"a":1"#, "a", None).is_err());
+        // A malformed pointer comes before the lookup but after the document checks.
+        assert!(assert_parity(br#"{"a":1}"#, "a", None)
+            .unwrap_err()
+            .contains("must be empty or start with"));
+        assert!(assert_parity(oversized.as_bytes(), "a", None)
+            .unwrap_err()
+            .contains("byte limit"));
+        // The size check runs before the default is consulted.
+        assert!(
+            assert_parity(oversized.as_bytes(), "/missing", Some(&fallback))
+                .unwrap_err()
+                .contains("byte limit")
+        );
+        // A default that cannot be returned is refused only when it would be used.
+        let deep_default = nested_array(MAX_DEPTH + 1);
+        assert!(
+            assert_parity(br#"{"a":1}"#, "/missing", Some(&deep_default))
+                .unwrap_err()
+                .contains("level depth limit")
+        );
+        assert_eq!(
+            assert_parity(br#"{"a":1}"#, "/a", Some(&deep_default)),
+            Ok(serde_json::json!(1))
+        );
+        let oversized_default = Value::String("x".repeat(MAX_JSON_BYTES));
+        assert!(
+            assert_parity(br#"{"a":null}"#, "/a", Some(&oversized_default))
+                .unwrap_err()
+                .contains("byte limit")
+        );
+        // A lookup error through a list is reported, not replaced by the default.
+        assert!(assert_parity(br#"{"x":[1]}"#, "/x/01", Some(&fallback))
+            .unwrap_err()
+            .contains("invalid JSON Pointer array index"));
+    }
+
+    #[test]
+    fn fused_pointer_checks_cancellation_after_a_successful_parse_only() {
+        let cancelled =
+            ExecutionContext::new(&|| Err(crate::applets::ExecutionBudgetExceeded::Cancelled));
+        let documents: [&[u8]; 2] = [br#"{"a":1}"#, br#"{"a":1"#];
+        for bytes in documents {
+            assert_eq!(
+                while_parsing(bytes, "/a", None, &cancelled),
+                parse_then_get(bytes, "/a", None, &cancelled)
+            );
+        }
+        assert!(while_parsing(br#"{"a":1}"#, "/a", None, &cancelled).is_err());
+    }
+
+    #[test]
+    fn fused_pointer_selects_numbers_and_key_order_like_the_typed_tree() {
+        let document =
+            br#"{"n":[18446744073709551615,-0,1.0,-2.5e3,-9223372036854775808],"z":{"b":1,"a":2}}"#;
+        for pointer in ["/n", "/z", "", "/n/2", "/n/4"] {
+            assert!(assert_parity(document, pointer, None).is_ok());
+        }
+        assert_eq!(
+            assert_parity(document, "/z", None).map(|value| value.to_string()),
+            Ok(r#"{"a":2,"b":1}"#.to_owned())
+        );
+    }
+
+    /// The walk's measured size and depth equal the applet's measurement of the same value.
+    #[test]
+    fn walked_size_and_depth_equal_the_measured_value() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let documents: Vec<Vec<u8>> = vec![
+            b"null".to_vec(),
+            br#"{"a":[1,-2,3.5,1e300,0.1,18446744073709551615,false,{}]}"#.to_vec(),
+            br#"{"quote\"key":"tab\t nl\n cr\r bell\u0007 \\ \u0008\u000c \u00e9 \u65e5\u672c"}"#
+                .to_vec(),
+            br#"[[[{"x":{"y":[null,"","\u0000\u001f"]}}]]]"#.to_vec(),
+            br#"{"meta":{"count":5000},"items":[{"id":1,"tags":["a","b"]}]}"#.to_vec(),
+            nested_bytes(MAX_DEPTH - 1),
+        ];
+        for bytes in documents {
+            let value: Value = serde_json::from_slice(&bytes).expect("document parses");
+            let measured = check_size_and_depth(&value, &context).expect("value is within limits");
+            for segments in [Vec::new(), vec!["a".to_owned()]] {
+                let walk = crate::structured::walk_pointer(&bytes, &segments)
+                    .expect("walk parses the document");
+                assert_eq!(walk.encoded_bytes, measured, "{value}");
+                assert_eq!(
+                    walk.encoded_bytes,
+                    serde_json::to_vec(&value).unwrap().len()
+                );
+            }
+        }
+        let walk = crate::structured::walk_pointer(&nested_bytes(MAX_DEPTH - 1), &[])
+            .expect("walk parses the document");
+        assert_eq!(walk.max_depth, MAX_DEPTH - 1);
     }
 }

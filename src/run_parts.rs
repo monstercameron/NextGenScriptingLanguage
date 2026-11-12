@@ -1,5 +1,7 @@
 //! `execute run-parts DIR [--once STATE_DIR] [--continue] [--json]`: run the
 //! `*.program` files directly inside DIR in lexical order, like `run-parts(8)`.
+//! `--pending` with `--once` lists the programs no completion record covers and exits 0
+//! when there are any, 1 when there are none. It runs nothing and takes no lock.
 //!
 //! Each program runs in its own `execute` process. The run stops at the first
 //! failure unless `--continue` is given. With `--once`, each completed program's name
@@ -28,6 +30,7 @@ struct Options {
     once: Option<PathBuf>,
     continue_after_failure: bool,
     json: bool,
+    pending: bool,
     manifest_dir: Option<PathBuf>,
     policy: crate::execution_policy_options::ExecutionPolicyOptions,
 }
@@ -63,11 +66,14 @@ struct Entry {
 /// Entry point for `execute run-parts ...`. Exits with status 1 when a program fails.
 pub fn cli(arguments: &[String]) -> Result<()> {
     let options = parse(arguments)?;
-    options.policy.load()?;
     let directory = options
         .directory
         .clone()
         .context("run-parts requires a directory")?;
+    if options.pending {
+        return report_pending(&directory, options.once.as_deref(), options.json);
+    }
+    options.policy.load()?;
     let programs = list_programs(&directory)?;
     let executable = std::env::current_exe().context("locating the execute executable")?;
 
@@ -137,6 +143,35 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// `--pending`: print the programs that no completion record in the state directory
+/// covers, in run order. Exits 1 when none are pending. The state is only read, so this
+/// never waits on the lock held by a running invocation.
+fn report_pending(directory: &Path, state_dir: Option<&Path>, json: bool) -> Result<()> {
+    let state_dir = state_dir.context("--pending requires --once STATE_DIR")?;
+    let recorded = load_state(&state_dir.join(STATE_FILE))?;
+    let pending: Vec<String> = list_programs(directory)?
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| !recorded.contains_key(name))
+        .collect();
+    if json {
+        let report = json!({
+            "protocol": "execute.run-parts/1",
+            "directory": directory.display().to_string(),
+            "pending": pending,
+        });
+        writeln!(io::stdout(), "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        for name in &pending {
+            writeln!(io::stdout(), "{name}")?;
+        }
+    }
+    if pending.is_empty() {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn parse(arguments: &[String]) -> Result<Options> {
     let mut options = Options::default();
     let mut index = 0;
@@ -160,6 +195,7 @@ fn parse(arguments: &[String]) -> Result<Options> {
             }
             "--continue" => options.continue_after_failure = true,
             "--json" => options.json = true,
+            "--pending" => options.pending = true,
             _ if options.policy.parse_option(arguments, &mut index)? => {}
             option if option.starts_with("--") => bail!("unknown run-parts option {option:?}"),
             directory => {

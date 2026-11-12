@@ -3692,8 +3692,7 @@ mod cleanup_retry_gate_tests {
         std::fs::create_dir(&work).unwrap();
         let program_path = directory.path().join("cleanup.program");
         std::fs::write(&program_path, source).unwrap();
-        let registry =
-            Registry::from_sources(&[include_str!("../../manifests/cd.json")]).unwrap();
+        let registry = Registry::from_sources(&[include_str!("../../manifests/cd.json")]).unwrap();
         let program = crate::parser::parse(source).unwrap();
         let checkpoint = checkpoint::CheckpointOptions {
             directory: directory.path().join("ck"),
@@ -3746,13 +3745,13 @@ mod cleanup_retry_gate_tests {
             retry_uncertain: false,
         };
         let work = directory.path().join("work");
-        let journal = checkpoint::Journal::open_with_inputs(&options, &work, "finite", 4096, None)
-            .unwrap();
+        let journal =
+            checkpoint::Journal::open_with_inputs(&options, &work, "finite", 4096, None).unwrap();
         assert!(journal.ensure_retry_allowed().is_err());
         drop(journal);
         options.retry_uncertain = true;
-        let journal = checkpoint::Journal::open_with_inputs(&options, &work, "finite", 4096, None)
-            .unwrap();
+        let journal =
+            checkpoint::Journal::open_with_inputs(&options, &work, "finite", 4096, None).unwrap();
         assert!(journal.ensure_retry_allowed().is_ok());
         drop(journal);
     }

@@ -1,0 +1,1 @@
+run "cmd" with arguments ["/c", "echo %FOO%"] and environment {"FOO": "bar"}

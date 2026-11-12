@@ -1,0 +1,11 @@
+define a program named exit_three
+  exit with status 3
+define a program named return_value
+  use value "returned"
+  return
+define a program named return_empty
+  return
+run program exit_three as exit_outcome and keep status as exit_status
+run program return_value as returned
+run program return_empty as empty_return and keep status as return_status
+then "printf" with arguments ["%s|%s|%s", exit_status, return_status, returned]

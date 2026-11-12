@@ -1,0 +1,2 @@
+accept verbose as boolean with default false
+then encode verbose as json

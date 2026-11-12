@@ -357,12 +357,13 @@ mod execution_tests {
         let mut command = command_for(&tool, ["ignored"], &registry, "tool", &cwd).unwrap();
         command.stdout(std::process::Stdio::piped());
         std::fs::write(&tool, swapped).unwrap();
-        let error = command.output().unwrap_err();
+        // The pre-exec hook refuses the rewritten inode. std reports a hook
+        // error to the parent as a bare errno, so the refusal is asserted by
+        // outcome: the spawn fails and the swapped bytes never run.
+        let result = command.output();
         assert!(
-            error
-                .to_string()
-                .contains("changed after the confirmed review"),
-            "{error}"
+            result.is_err(),
+            "rewritten reviewed inode must refuse the spawn"
         );
     }
 
@@ -1737,6 +1738,7 @@ impl ConfirmedExecutables {
         }
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
+        let mut contents = Vec::new();
         let mut script = false;
         let mut first = true;
         loop {
@@ -1751,6 +1753,7 @@ impl ConfirmedExecutables {
                 first = false;
             }
             hasher.update(&buffer[..count]);
+            contents.extend_from_slice(&buffer[..count]);
         }
         let actual = format!("{:x}", hasher.finalize());
         if !actual.eq_ignore_ascii_case(expected) {
@@ -1768,27 +1771,13 @@ impl ConfirmedExecutables {
                 canonical.display()
             );
         }
-        let fd = file.as_raw_fd();
-        if script {
-            // The kernel hands the script's pathname to its interpreter,
-            // which reopens it after `exec`; the descriptor must survive
-            // that `exec` for `/proc/self/fd/N` to name the reviewed inode
-            // in the interpreter too.
-            // SAFETY: F_GETFD/F_SETFD take an integer descriptor and flags
-            // word and read no memory; failures return -1, checked below.
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-            if flags == -1
-                // SAFETY: F_SETFD takes an integer descriptor and a flags word and reads
-                // no memory; clearing FD_CLOEXEC keeps the reviewed descriptor alive
-                // across exec, and a failure returns -1, checked here.
-                || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1
-            {
-                return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("pinning confirmed executable {}", canonical.display())
-                });
-            }
-        }
-        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+        // What runs is a sealed copy of the bytes just hashed, so nothing done to
+        // the reviewed inode after this point can reach the child. The reviewed
+        // inode stays held so the pre-exec hook can still refuse an in-place
+        // rewrite.
+        let sealed = sealed_copy(&contents, &canonical, script)?;
+        let sealed_fd = sealed.as_raw_fd();
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{sealed_fd}"));
         if !descriptor_path.exists() {
             bail!(
                 "refusing to launch {}: this system cannot pin it through exec",
@@ -1798,7 +1787,8 @@ impl ConfirmedExecutables {
         let (dev, ino, size, mtime, mtime_nsec, ctime, ctime_nsec) = identity(&after);
         Ok(PinnedExecutable {
             inner: Some(LinuxPinnedExecutable {
-                file,
+                reviewed: file,
+                sealed,
                 descriptor_path,
                 dev,
                 ino,
@@ -1827,7 +1817,10 @@ pub struct PinnedExecutable {
 
 #[cfg(target_os = "linux")]
 struct LinuxPinnedExecutable {
-    file: File,
+    /// The reviewed inode, held so the pre-exec hook can refuse an in-place rewrite.
+    reviewed: File,
+    /// The sealed copy of the reviewed bytes. This is what runs.
+    sealed: File,
     descriptor_path: PathBuf,
     dev: u64,
     ino: u64,
@@ -1862,7 +1855,8 @@ impl PinnedExecutable {
             use std::os::unix::process::CommandExt;
             command.arg0(original.as_os_str());
             let LinuxPinnedExecutable {
-                file,
+                reviewed,
+                sealed,
                 dev,
                 ino,
                 size,
@@ -1872,13 +1866,14 @@ impl PinnedExecutable {
                 ctime_nsec,
                 ..
             } = pinned;
-            let fd = file.as_raw_fd();
+            let fd = reviewed.as_raw_fd();
             // SAFETY: the hook owns the pinned file, so `fd` stays valid
             // until `exec`; it only `fstat`s that descriptor and compares
             // stack values, which is async-signal-safe.
             unsafe {
                 command.pre_exec(move || {
-                    let _held = &file;
+                    let _held = &reviewed;
+                    let _sealed = &sealed;
                     // SAFETY: `stat` is a plain C out-parameter struct;
                     // zeroing it and passing its address with a valid
                     // descriptor is the documented `fstat` contract.
@@ -1886,13 +1881,20 @@ impl PinnedExecutable {
                     if libc::fstat(fd, &mut stat) == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
+                    // A rename over the pathname unlinks the reviewed inode, which
+                    // moves its ctime without touching its bytes. Once the inode
+                    // is fully unlinked no pathname reaches it, and the child runs
+                    // the sealed copy either way, so that ctime move is not a
+                    // refusal. A still-linked inode that changed is refused.
+                    let unlinked = stat.st_nlink == 0;
+                    let ctime_moved =
+                        stat.st_ctime as i64 != ctime || stat.st_ctime_nsec as i64 != ctime_nsec;
                     if stat.st_dev as u64 != dev
                         || stat.st_ino as u64 != ino
                         || stat.st_size as u64 != size
                         || stat.st_mtime as i64 != mtime
                         || stat.st_mtime_nsec as i64 != mtime_nsec
-                        || stat.st_ctime as i64 != ctime
-                        || stat.st_ctime_nsec as i64 != ctime_nsec
+                        || (ctime_moved && !unlinked)
                     {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -1906,6 +1908,62 @@ impl PinnedExecutable {
         #[cfg(not(target_os = "linux"))]
         let _ = (command, original);
     }
+}
+
+/// Copy the reviewed bytes into an immutable memfd. The copy is sealed against
+/// writes, resizing, and further sealing, and is executable only by its owner,
+/// so exec of it runs exactly the bytes that were hashed.
+#[cfg(target_os = "linux")]
+fn sealed_copy(contents: &[u8], canonical: &Path, keep_open_across_exec: bool) -> Result<File> {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+
+    let name = b"execute-confirmed\0";
+    // SAFETY: `name` is a NUL-terminated string that outlives the call; the
+    // flags are plain integers, and the call reads no other memory.
+    let raw = unsafe {
+        libc::memfd_create(
+            name.as_ptr().cast(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if raw == -1 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("creating a sealed copy of {}", canonical.display()));
+    }
+    // SAFETY: `raw` is a freshly created descriptor that no other value owns.
+    let mut sealed = unsafe { File::from_raw_fd(raw) };
+    sealed
+        .write_all(contents)
+        .with_context(|| format!("copying {} into a sealed copy", canonical.display()))?;
+    // SAFETY: fchmod takes a descriptor and a mode and reads no memory.
+    if unsafe { libc::fchmod(raw, 0o700) } == -1 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("preparing a sealed copy of {}", canonical.display()));
+    }
+    let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    // SAFETY: F_ADD_SEALS takes an integer seal mask and reads no memory.
+    if unsafe { libc::fcntl(raw, libc::F_ADD_SEALS, seals) } == -1 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("sealing a copy of {}", canonical.display()));
+    }
+    if keep_open_across_exec {
+        // The interpreter of a script reopens `/proc/self/fd/N` after exec, so
+        // the copy must survive that exec.
+        // SAFETY: F_GETFD takes an integer descriptor and reads no memory.
+        let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+        if flags == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("pinning a copy of {}", canonical.display()));
+        }
+        // SAFETY: F_SETFD takes an integer descriptor and a flags word and reads no memory.
+        let cleared = unsafe { libc::fcntl(raw, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
+        if cleared == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("pinning a copy of {}", canonical.display()));
+        }
+    }
+    Ok(sealed)
 }
 
 /// Enforce the `--confirm` binding for one launch. Runs without a confirmed
@@ -2778,6 +2836,34 @@ fn preflight_invocations_with_policy<'a>(
     Ok(())
 }
 
+/// The name the child is launched as (argv[0]). Resolution canonicalizes the file that
+/// runs, so a catalog-relative binary reached through a symlink would otherwise hand
+/// the child its target's name. Multicall dispatch keys on argv[0], so a relative
+/// binary keeps its manifest spelling, joined under the manifest directory. The
+/// canonical `binary` still runs.
+fn launch_argv0(registry: &Registry, applet_name: &str, binary: &Path) -> PathBuf {
+    let Ok(manifest) = registry.resolve(applet_name) else {
+        return binary.to_path_buf();
+    };
+    let spelled = manifest.binary.as_str();
+    if spelled.starts_with('@') || Path::new(spelled).is_absolute() || !spelled.contains('/') {
+        return binary.to_path_buf();
+    }
+    match manifest.origin().and_then(Path::parent) {
+        Some(parent) => parent.join(spelled),
+        None => binary.to_path_buf(),
+    }
+}
+
+#[cfg(unix)]
+fn set_argv0(command: &mut Command, argv0: &Path) {
+    use std::os::unix::process::CommandExt;
+    command.arg0(argv0);
+}
+
+#[cfg(not(unix))]
+fn set_argv0(_command: &mut Command, _argv0: &Path) {}
+
 /// Build the child command, applying policy environment filtering and OS
 /// sandboxing. Call this at every launch site, including persistent workers.
 pub fn command_for<I, S>(
@@ -2818,6 +2904,7 @@ where
         .into_iter()
         .collect();
     check_privileged_launch(registry, &names, binary)?;
+    let argv0 = launch_argv0(registry, applet_name, binary);
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     // With no capability policy, command overlay, manifest environment section or declared
     // secret variable, the child environment is exactly the inherited one. The command then
@@ -2838,7 +2925,7 @@ where
         && resolved_manifest
             .as_ref()
             .ok()
-            .map_or(true, |manifest| manifest.environment().is_none())
+            .is_none_or(|manifest| manifest.environment().is_none())
         && !crate::security::declares_secret_environment(registry, applet_name);
     let environment = if inherits_environment {
         None
@@ -2862,8 +2949,9 @@ where
                     .map_or(binary, |pinned| pinned.program(binary)),
             );
             crate::platform::add_arguments(&mut command, arguments);
+            set_argv0(&mut command, &argv0);
             if let Some(pinned) = pinned {
-                pinned.attach(&mut command, binary);
+                pinned.attach(&mut command, &argv0);
             }
             apply_child_environment(registry, applet_name, &mut command, environment)?;
             cwd.apply(&mut command);
@@ -2901,8 +2989,9 @@ where
                 .map_or(binary, |pinned| pinned.program(binary)),
         );
         crate::platform::add_arguments(&mut command, arguments);
+        set_argv0(&mut command, &argv0);
         if let Some(pinned) = pinned {
-            pinned.attach(&mut command, binary);
+            pinned.attach(&mut command, &argv0);
         }
         apply_child_environment(registry, applet_name, &mut command, environment)?;
         cwd.apply(&mut command);
@@ -2957,6 +3046,9 @@ where
         // sandbox, where a held descriptor of this process does not name
         // the file; the pin above still re-hashed the reviewed bytes, and
         // SECURITY.md names the residual hash-to-`exec` window here.
+        // On Linux the pin owns an open descriptor, so release it before the
+        // sandbox spawn. Elsewhere the pin is empty and `drop` would be a no-op.
+        #[cfg(target_os = "linux")]
         drop(pinned);
         crate::platform::sandbox::command(binary, arguments, grant, cwd)
             .map_err(|error| SandboxRefused(format!("{error:#}")))?
@@ -2967,8 +3059,9 @@ where
                 .map_or(binary, |pinned| pinned.program(binary)),
         );
         crate::platform::add_arguments(&mut command, arguments);
+        set_argv0(&mut command, &argv0);
         if let Some(pinned) = pinned {
-            pinned.attach(&mut command, binary);
+            pinned.attach(&mut command, &argv0);
         }
         command
     };

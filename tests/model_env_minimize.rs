@@ -269,8 +269,13 @@ fn model_cli_parses_env_allow_and_launches_the_trusted_sibling_helper() {
     assert!(!headers.contains("unselected-default-key"));
 }
 
+// Ignored on Windows runners: the trusted-executable gate refuses every location a
+// stock runner can offer. Ancestors of `C:\` grant Authenticated Users Modify, which
+// includes DELETE, and `D:\` is owned by NETWORK SERVICE. The refusal is the intended
+// production behavior, so this helper cannot run from the Cargo target tree there.
 #[cfg(windows)]
 #[test]
+#[ignore = "runner ancestors fail the trusted-executable gate; see the comment above"]
 fn windows_model_cli_launches_the_real_sibling_helper() {
     let (_directory, executable) = stage_real_model_binaries();
     let output = Command::new(executable)

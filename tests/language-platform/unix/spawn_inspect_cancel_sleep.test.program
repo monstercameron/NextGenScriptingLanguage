@@ -1,0 +1,6 @@
+spawn as job
+  run "sleep" with arguments ["5"]
+inspect job as state
+cancel job
+use value "cancelled"
+then encode "cancelled" as json

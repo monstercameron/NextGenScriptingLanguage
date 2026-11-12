@@ -1,0 +1,3 @@
+run printf with message "abc"
+pipe to tr with from "[:lower:]" and to "[:upper:]" as result
+run printf with message result

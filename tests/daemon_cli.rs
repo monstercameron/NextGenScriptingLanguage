@@ -706,7 +706,9 @@ fn implicit_persistent_graph_streams_on_the_client() {
     // stdout open and a closed reader is its normal stop.
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _daemon = serve_in_background(runtime.path());
+    // Let the daemon start the forwarded child; the child must decline the
+    // persistent stream so it can run with the client's stdout lifetime.
+    let _daemon = serve_in_background_accepting(runtime.path());
     let program = work.path().join("ticks.graph");
     fs::write(
         &program,

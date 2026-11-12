@@ -7073,8 +7073,11 @@ mod drain_tests {
         let (directory, result) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_CANCELLED, true);
         let error = result.err().expect("a second interrupt cancels the run");
+        // A cancel that lands while a child runs is reported by the child path as
+        // "program cancelled by signal"; one between steps says "workflow". Both
+        // are the cancel this test asserts.
         assert!(
-            format!("{error:#}").contains("workflow cancelled by signal"),
+            format!("{error:#}").contains("cancelled by signal"),
             "{error:#}"
         );
         assert!(!directory.path().join("drained.txt").exists());

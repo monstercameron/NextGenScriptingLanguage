@@ -1,0 +1,2 @@
+accept data as json with default {"ok": true, "count": 3}
+then encode data as json

@@ -434,6 +434,7 @@ fn ledgers_match(shape: Shape, expected: &[String], actual: &[String]) -> bool {
 /// attempt, and plain-vs-retry attribution (`phase`) so a rare interleaving
 /// (e.g. the parallel edited refusal) can be classified from the failure text
 /// alone without weakening the untouched-ledger requirement.
+#[allow(clippy::too_many_arguments)]
 fn check_refusal(
     output: &Output,
     ledger_before: &[String],
@@ -730,6 +731,7 @@ fn id_set(shape: Shape, items: &[String]) -> BTreeSet<String> {
 /// After an edit, a successful resume completes the edited program: final bindings
 /// match its uninterrupted run, removed effects stay frozen at their kill-point counts,
 /// shared effects run at most once more, and new effects run exactly once.
+#[allow(clippy::too_many_arguments)]
 fn check_edited_success(
     output: &Output,
     killed: &[String],
@@ -1128,8 +1130,7 @@ fn crash_kill_window_lands_in_flight() {
                 "trial {trial}: the kill invented a foreign effect {line:?}: {killed:?}"
             );
         }
-        if alive && !killed.is_empty() && is_strict_subrun(Shape::Sequential, &expected, &killed)
-        {
+        if alive && !killed.is_empty() && is_strict_subrun(Shape::Sequential, &expected, &killed) {
             interrupted += 1;
         }
     }

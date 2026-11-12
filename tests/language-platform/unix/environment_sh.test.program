@@ -1,0 +1,1 @@
+run "sh" with arguments ["-c", "printf %s \"$FOO\""] and environment {"FOO": "bar"}

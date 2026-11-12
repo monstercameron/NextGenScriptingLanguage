@@ -1,0 +1,7 @@
+accept items as list of text with default ["red", "green"]
+if items does not contain "blue"
+  use value "absent"
+  then encode "absent" as json
+otherwise
+  use value "present"
+  then encode "present" as json

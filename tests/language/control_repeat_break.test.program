@@ -1,0 +1,4 @@
+repeat 5 times
+  break
+use value "after"
+then encode "after" as json

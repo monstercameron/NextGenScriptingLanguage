@@ -67,8 +67,10 @@ pub(crate) struct Args {
     /// `run --control --break-at LINE`: pause before these source lines from the start.
     pub(crate) break_at: Vec<usize>,
     /// `run --control --agent-policy FILE`: require this agent policy on the endpoint.
+    #[cfg_attr(not(feature = "live"), allow(dead_code))]
     pub(crate) agent_policy: Option<PathBuf>,
     /// `run --control --allow-unauthenticated`: legacy same-user endpoint mode.
+    #[cfg_attr(not(feature = "live"), allow(dead_code))]
     pub(crate) allow_unauthenticated: bool,
     /// `run --events document|jsonl`: graph terminal-event rendering. `document`
     /// keeps the closing `execute.graph-run/1` document; `jsonl` prints one

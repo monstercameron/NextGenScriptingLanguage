@@ -1,0 +1,2 @@
+run hash.sha256 with text "" as digest
+then encode digest as json

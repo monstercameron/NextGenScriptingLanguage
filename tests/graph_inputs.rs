@@ -514,6 +514,7 @@ fn graph_execution_apis_authorize_environment_inputs_before_resolution() {
                     network: false,
                     network_origins: BTreeSet::new(),
                     sandbox_required: false,
+                    resource_limits: None,
                 },
             )]),
             host: None,

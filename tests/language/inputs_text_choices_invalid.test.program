@@ -1,0 +1,2 @@
+accept mode as text one of ["light", "dark"]
+use value "must not run"

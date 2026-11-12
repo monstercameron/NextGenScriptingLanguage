@@ -1,0 +1,3 @@
+run "cmd" with arguments ["/c", "exit 3"] and keep status as code
+take integer at "" from code as exit_code
+then encode exit_code as json

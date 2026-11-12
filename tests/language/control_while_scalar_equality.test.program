@@ -1,0 +1,11 @@
+accept integer_value as integer with default 1
+accept text_value as text with default "start"
+while integer_value is 1
+  use value 2 as integer_value
+while integer_value is not 3
+  use value 3 as integer_value
+while text_value is "start"
+  use value "done" as text_value
+while text_value is not "stop"
+  use value "stop" as text_value
+then encode text_value as json

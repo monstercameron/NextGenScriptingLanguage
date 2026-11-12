@@ -3,9 +3,12 @@ use flow::{
     manifest::Registry,
     parser, runtime, stream,
 };
-use std::{fs, path::Path, process::Command, time::Duration};
 #[cfg(unix)]
-use std::{collections::BTreeMap, sync::{atomic::AtomicBool, Arc}};
+use std::{
+    collections::BTreeMap,
+    sync::{atomic::AtomicBool, Arc},
+};
+use std::{fs, path::Path, process::Command, time::Duration};
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {

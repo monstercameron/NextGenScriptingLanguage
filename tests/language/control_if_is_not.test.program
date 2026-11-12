@@ -1,0 +1,7 @@
+accept mode as text with default "dark"
+if mode is not "dark"
+  use value "not dark"
+  then encode "not dark" as json
+otherwise
+  use value "dark"
+  then encode "dark" as json

@@ -16,21 +16,22 @@ fn run(directory: &Path, catalog: &Path, source: &str) -> Output {
         .unwrap()
 }
 
-// Unix-only: a symlinked multicall applet reports its invoked name; Windows
-// cannot execute the script target directly.
-#[cfg(unix)]
+// Unix-only: a symlinked multicall applet reports the name it was launched as. The
+// worker is a real ELF copy of the test fixture, because a shell script's `$0` is the
+// path the kernel executed, not argv[0].
+#[cfg(all(unix, feature = "test-fixtures"))]
 #[test]
 fn symlink_applet_identity_is_preserved_for_commands_and_listeners() {
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path();
     let worker = directory.join("multicall-worker");
-    fs::write(&worker, "#!/bin/sh\nprintf '%s\\n' \"${0##*/}\"\n").unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_native-fixture"), &worker).unwrap();
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
     symlink(&worker, directory.join("aliased")).unwrap();
     let manifest = directory.join("alias.json");
     fs::write(
         &manifest,
-        r#"{"name":"aliased","binary":"./aliased","arguments":[]}"#,
+        r#"{"name":"aliased","binary":"./aliased","arguments":[{"literal":"invoked-as"}]}"#,
     )
     .unwrap();
     for source in [

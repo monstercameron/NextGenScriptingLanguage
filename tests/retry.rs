@@ -179,7 +179,11 @@ fn exhausted_retry_history_includes_the_final_failed_attempt() {
     let final_attempt = result.executions.last().unwrap();
     assert_eq!(final_attempt.status, Some(75));
     assert_eq!(final_attempt.stages.len(), 1, "{final_attempt:?}");
-    assert_eq!(final_attempt.stages[0].status, Some(75), "{final_attempt:?}");
+    assert_eq!(
+        final_attempt.stages[0].status,
+        Some(75),
+        "{final_attempt:?}"
+    );
 }
 
 #[test]

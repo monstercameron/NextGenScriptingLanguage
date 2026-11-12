@@ -869,9 +869,11 @@ mod imp {
                 || stream.set_read_timeout(Some(IO_TIMEOUT)).is_err()
                 || stream.set_write_timeout(Some(IO_TIMEOUT)).is_err()
             {
+                trace_stage("daemon-setup-failed");
                 return Flow::Continue;
             }
             if !peer_is_owner(&stream) {
+                trace_stage("daemon-peer-refused");
                 let _ = write_line(
                     &mut stream,
                     &json!({"ok": false, "error": "peer is not the daemon's owner"}),
@@ -881,6 +883,7 @@ mod imp {
             let (request, descriptors) = match receive_request(&stream) {
                 Ok(received) => received,
                 Err(detail) => {
+                    trace_stage(&format!("daemon-request-error {detail}"));
                     let _ = write_line(&mut stream, &json!({"ok": false, "error": detail}));
                     return Flow::Continue;
                 }

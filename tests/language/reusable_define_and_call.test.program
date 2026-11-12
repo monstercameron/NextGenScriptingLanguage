@@ -1,0 +1,6 @@
+define a program named greet
+  accept name as text
+  use value name
+  then encode name as json
+run program greet with name "world" as out
+then encode out as json

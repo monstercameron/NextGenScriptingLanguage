@@ -1,0 +1,3 @@
+run "cmd" with arguments ["/c", "echo from-file"]
+then save to "input.txt"
+run "cmd" with arguments ["/c", "findstr", "."] and stdin from "input.txt"

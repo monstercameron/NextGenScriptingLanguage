@@ -787,10 +787,7 @@ fn uncertain_in_flight_invocation_requires_explicit_retry() {
             serde_json::json!([{"literal": applet.to_str().unwrap()}]),
         )
     } else {
-        (
-            applet.to_string_lossy().into_owned(),
-            serde_json::json!([]),
-        )
+        (applet.to_string_lossy().into_owned(), serde_json::json!([]))
     };
     fs::write(
         manifest_dir.join("controlled.json"),
@@ -904,10 +901,7 @@ fn scheduled_pending_tick_is_resumed_before_waiting_for_a_new_interval() {
             serde_json::json!([{"literal": applet.to_str().unwrap()}]),
         )
     } else {
-        (
-            applet.to_string_lossy().into_owned(),
-            serde_json::json!([]),
-        )
+        (applet.to_string_lossy().into_owned(), serde_json::json!([]))
     };
     fs::write(
         manifest_dir.join("scheduled.json"),

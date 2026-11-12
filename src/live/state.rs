@@ -1443,13 +1443,10 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                     // removing the declaration cannot declassify a value in
                     // the middle of the same batch.
                     let candidate_plan = Plan::parse(current_source)?;
-                    secret_names.extend(
-                        crate::runtime::sensitive_binding_names(
-                            &candidate_plan.program,
-                            &state.registry,
-                        )
-                        .into_iter(),
-                    );
+                    secret_names.extend(crate::runtime::sensitive_binding_names(
+                        &candidate_plan.program,
+                        &state.registry,
+                    ));
                     source_is_redacted |=
                         candidate_plan.program.inputs.iter().any(|input| {
                             crate::ast::is_sensitive(input) && input.default.is_some()

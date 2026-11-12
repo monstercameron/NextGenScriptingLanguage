@@ -21,10 +21,7 @@ fn registry(directory: &Path, worker: &Path) -> Registry {
             serde_json::json!([{"literal": worker.to_str().unwrap()}]),
         )
     } else {
-        (
-            worker.to_string_lossy().into_owned(),
-            serde_json::json!([]),
-        )
+        (worker.to_string_lossy().into_owned(), serde_json::json!([]))
     };
     fs::write(
         directory.join("worker.json"),

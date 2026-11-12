@@ -1,0 +1,3 @@
+run printf with message "payload" and keep result as execution
+take boolean at "/stdout_captured" from execution as captured
+then encode captured as json

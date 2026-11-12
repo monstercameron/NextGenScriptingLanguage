@@ -1,0 +1,1 @@
+run "printf" with arguments ["%s-%s\n", "a", "b"]

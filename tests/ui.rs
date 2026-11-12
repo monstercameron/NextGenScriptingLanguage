@@ -6,13 +6,13 @@
 //! the overlay manifest below keeps the repo `gh.repo.json` arguments and only
 //! swaps the binary to `python` with the script as the first literal argument.
 //! `sys.argv[1:]` is identical on both platforms, so the fixture is unchanged.
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 const TRACKER: &str = include_str!("../examples/github-stars.program");
 fn fixture() -> TempDir {
@@ -20,11 +20,7 @@ fn fixture() -> TempDir {
     fs::write(dir.path().join("gh"), include_str!("fixtures/gh.py")).unwrap();
     fs::write(dir.path().join("gh.py"), include_str!("fixtures/gh.py")).unwrap();
     #[cfg(unix)]
-    fs::set_permissions(
-        dir.path().join("gh"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
+    fs::set_permissions(dir.path().join("gh"), fs::Permissions::from_mode(0o755)).unwrap();
     dir
 }
 /// Manifest directory for `invoke`: the repo manifests on Unix, and a small
@@ -41,10 +37,8 @@ fn manifest_dir(dir: &Path) -> PathBuf {
         let overlay = dir.join("manifests-overlay");
         fs::create_dir_all(&overlay).unwrap();
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
-        let mut gh: serde_json::Value = serde_json::from_slice(
-            &fs::read(repo.join("gh.repo.json")).unwrap(),
-        )
-        .unwrap();
+        let mut gh: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.join("gh.repo.json")).unwrap()).unwrap();
         let script = dir.join("gh.py").to_string_lossy().into_owned();
         gh["binary"] = serde_json::Value::String("python".to_owned());
         if let Some(arguments) = gh.get_mut("arguments").and_then(|a| a.as_array_mut()) {

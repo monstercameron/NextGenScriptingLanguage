@@ -2754,7 +2754,7 @@ fn applet_signature_with_description(contract: &serde_json::Value) -> String {
 }
 
 fn compact_applet_description(description: &str, max_bytes: usize) -> String {
-    const ELLIPSIS: &str = "â€¦";
+    const ELLIPSIS: &str = "…";
     let words = description.split_whitespace().collect::<Vec<_>>();
     let mut summary = String::new();
     let mut consumed = 0;

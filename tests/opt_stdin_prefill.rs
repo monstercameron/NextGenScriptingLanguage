@@ -8,6 +8,12 @@ use flow::{
     runtime::{self, RunOptions, RunResult},
 };
 use serde_json::json;
+#[cfg(unix)]
+use std::collections::BTreeSet;
+#[cfg(unix)]
+use std::hint::black_box;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::BTreeMap,
     fs,
@@ -17,12 +23,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-#[cfg(unix)]
-use std::hint::black_box;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::collections::BTreeSet;
 
 #[path = "common/portable_shell.rs"]
 mod portable_shell;
@@ -30,6 +30,7 @@ mod portable_shell;
 // Anonymous-pipe atomic-write boundary: the Unix PIPE_BUF where it exists,
 // the matching Windows pipe quantum otherwise.
 #[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // libc's PIPE_BUF is usize on some Unix targets and c_int on others.
 const PIPE_BUF: usize = libc::PIPE_BUF as usize;
 #[cfg(windows)]
 const PIPE_BUF: usize = 4096;
@@ -352,7 +353,7 @@ fn benchmark_run_with_context_cat_payloads() {
     assert!(sample_count > 0, "sample count must be positive");
 
     let directory = tempfile::tempdir().unwrap();
-    let registry = registry(directory.path(), "/bin/cat");
+    let registry = cat_registry(directory.path());
     let program = parser::parse("then worker\n").unwrap();
     let options = RunOptions {
         max_output_bytes: 4 * 1024 * 1024,

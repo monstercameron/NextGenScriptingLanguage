@@ -7,13 +7,13 @@
 //! swaps the binary to `python` with the script as the first literal argument.
 //! `sys.argv[1:]` is identical on both platforms, so the fixture is unchanged.
 //! The ranking stage still uses the real `jq` binary on both platforms.
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 const SOURCE: &str = include_str!("../examples/top-cpu.program");
 fn fixture() -> TempDir {
@@ -21,11 +21,7 @@ fn fixture() -> TempDir {
     fs::write(dir.path().join("ps"), include_str!("fixtures/ps.py")).unwrap();
     fs::write(dir.path().join("ps.py"), include_str!("fixtures/ps.py")).unwrap();
     #[cfg(unix)]
-    fs::set_permissions(
-        dir.path().join("ps"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
+    fs::set_permissions(dir.path().join("ps"), fs::Permissions::from_mode(0o755)).unwrap();
     dir
 }
 /// Manifest directory for `invoke`: the repo manifests on Unix, and a small
@@ -50,17 +46,9 @@ fn manifest_dir(dir: &Path) -> PathBuf {
         if let Some(arguments) = ps.get_mut("arguments").and_then(|a| a.as_array_mut()) {
             arguments.insert(0, serde_json::json!({"literal": script}));
         }
-        fs::write(
-            overlay.join("ps.json"),
-            serde_json::to_string(&ps).unwrap(),
-        )
-        .unwrap();
+        fs::write(overlay.join("ps.json"), serde_json::to_string(&ps).unwrap()).unwrap();
         for name in ["jq.ps.json", "jq.json"] {
-            fs::write(
-                overlay.join(name),
-                fs::read(repo.join(name)).unwrap(),
-            )
-            .unwrap();
+            fs::write(overlay.join(name), fs::read(repo.join(name)).unwrap()).unwrap();
         }
         overlay
     }

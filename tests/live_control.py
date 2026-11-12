@@ -223,14 +223,18 @@ class LiveControl(unittest.TestCase):
                 {'op': 'test', 'path': '/ui/events', 'value': [event]},
                 {'op': 'test', 'path': '/ui/events/~10', 'value': 'press'},
             ]
-            denied = [app.call('patch', auth=editor, operations=[guess]) for guess in guesses]
+            queued_event = {'op': 'add', 'path': '/ui/events/-', 'value': event}
+            denied = [app.call('patch', auth=editor, operations=[queued_event, guess]) for guess in guesses]
             self.assertEqual(
                 [result['error'] for result in denied],
                 [{'code': 'invalid_request', 'message': 'live request is unauthorized: live request is not authorized'}] * len(guesses),
             )
-            self.assertTrue(app.ok('patch', auth=authorized, operations=[guesses[0]])['ok'])
+            # The live UI worker consumes queued events asynchronously. Add
+            # the event and test it in one atomic patch so the fixture remains
+            # present even when the worker has already published its state.
+            self.assertTrue(app.ok('patch', auth=authorized, operations=[queued_event, guesses[0]])['ok'])
             self.assertEqual(
-                app.call('patch', auth=authorized, operations=[guesses[1]])['error']['code'],
+                app.call('patch', auth=authorized, operations=[queued_event, guesses[1]])['error']['code'],
                 'test_failed',
             )
 
@@ -355,10 +359,11 @@ class LiveControl(unittest.TestCase):
             deadline = time.monotonic() + 8
             snapshot = None
             while time.monotonic() < deadline:
-                snapshot = app.ok('read', auth=runner)['result']
+                response = app.ok('read', auth=runner)
+                snapshot = response['result']
                 if snapshot['runtime']['status'] == 'completed':
                     break
-                app.ok('wait', auth=runner, after=snapshot['revision'], timeout_ms=50)
+                app.ok('wait', auth=runner, after=response['revision'], timeout_ms=50)
             self.assertEqual(snapshot['runtime']['status'], 'completed', snapshot)
             self.assertEqual(snapshot['state']['input'], {'withheld': 'secret'})
             self.assertNotIn(secret, json.dumps(snapshot))

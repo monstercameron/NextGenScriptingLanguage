@@ -1,3 +1,7 @@
+// The wasm build compiles a subset of the native modules, so helpers that only
+// the excluded modules call are dead there. Native builds keep the lint.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agent;
 #[cfg(not(target_arch = "wasm32"))]

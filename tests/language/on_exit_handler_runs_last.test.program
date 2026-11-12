@@ -1,0 +1,5 @@
+on exit
+  use value "bye"
+  then encode "bye" as json
+use value "main"
+then encode "main" as json

@@ -1,0 +1,3 @@
+accept mode as text one of ["light", "dark"] with default "light" described as "Theme"
+use value mode
+then encode mode as json

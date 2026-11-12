@@ -1,0 +1,5 @@
+race at most 2 as race_result
+  run hash.sha256 with text "a" as first_digest
+  run hash.sha256 with text "b" as second_digest
+take text at "/mode" from race_result as mode
+then encode mode as json

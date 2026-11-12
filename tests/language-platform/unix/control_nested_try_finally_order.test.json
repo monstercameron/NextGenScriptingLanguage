@@ -1,0 +1,1 @@
+{"expect": {"status": 0, "stdout": "\"outer-finally\"", "files": {"caught-kind.json": "\"failure\""}}}

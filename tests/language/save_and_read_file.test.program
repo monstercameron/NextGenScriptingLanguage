@@ -1,0 +1,5 @@
+use value "hello file"
+then save to "copy.txt"
+read "copy.txt" as text_read
+use value text_read
+then encode text_read as json

@@ -1,0 +1,6 @@
+define a program named shout
+  accept word as text
+  run text.replace with text word and old "a" and new "A" as result
+  use value result
+run program shout with word "banana" as out
+then encode out as json

@@ -1,0 +1,1 @@
+{"expect": {"status": 0, "stdout": "captured bytes\n", "files": {"copy.txt": "captured bytes\n"}}}

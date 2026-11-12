@@ -1,0 +1,4 @@
+use value {"users": [{"name": "Ada", "active": true}]} as document
+take text at "/users/0/name" from document as name
+take boolean at "/users/0/active" from document as active
+then encode [name, active] as json

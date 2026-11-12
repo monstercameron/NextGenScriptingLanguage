@@ -1,0 +1,1 @@
+{"inputs": {"mode": "light"}, "expect": {"status": 0, "stdout": "\"not dark\""}}

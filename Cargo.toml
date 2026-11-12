@@ -177,6 +177,10 @@ name = "kill_grace"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "issue_738_caught_task_group_outcome"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "checkpoint_resolve_elements"
 required-features = ["test-fixtures", "agent-advisory"]
 

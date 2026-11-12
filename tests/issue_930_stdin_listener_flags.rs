@@ -40,7 +40,9 @@ fn killed_stdin_listener_leaves_shared_stdin_blocking() {
     )
     .unwrap();
 
-    let (reader, mut writer) = pipe();
+    let (reader, writer) = pipe();
+    // A raw descriptor has no `Write`; a `File` over the write end does.
+    let mut writer = std::fs::File::from(writer);
     // SAFETY: `reader` is the live read end of the test pipe; F_DUPFD_CLOEXEC returns a second
     // descriptor for the same open file description, which stands in for the surviving end.
     let surviving = unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };

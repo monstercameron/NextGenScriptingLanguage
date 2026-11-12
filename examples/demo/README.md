@@ -16,7 +16,7 @@ author intends to use: the program reads templates, writes files and starts a pr
 anything; approvals come only from `--allow`. The direct commands
 `hyprctl` and `printf` state no effects of their own, so the gate counts them as
 `undeclared`, and the header declares them openly. The reload fails until
-the config is fixed, so a run stops there, and the checkpoint lets the run continue.
+the config is fixed, so a run stops there, and the run record lets the run continue after a repair.
 
 ## Run the whole loop
 
@@ -31,18 +31,25 @@ at the first step that does not behave as expected. It walks:
 1. **write**: the program, with its policy header, goes into the work folder.
 2. **validate**: `execute check` runs the static checks with no effects.
 3. **what-if**: `execute run --what-if` prints the plan and its fingerprint. Nothing runs.
-4. **confirm**: `execute run --confirm FINGERPRINT --checkpoint DIR` runs exactly the
-   plan that was reviewed. The reload fails, and the link already points at the new theme.
-5. **repair**: `execute repair DIR --op 'replace-command LINE ...'` retries the reload
-   with `--recover`. The repair is a text edit to the program, validated, shown as a
-   diff, and recorded in the checkpoint folder. Only the failed step may change.
-6. **resume**: `execute resume --checkpoint DIR --retry-uncertain` continues from the
-   failed step. The reload is a native command that is not retry-safe, so running it
-   again needs `--retry-uncertain`.
+4. **confirm**: `execute run --confirm FINGERPRINT --record DIR` runs exactly the plan
+   that was reviewed and writes a run record to `DIR`. The reload fails, and the link
+   already points at the new theme.
+5. **repair**: `execute repair --from-record DIR --program FILE --op 'replace-command LINE ...'`
+   retries the reload with `--recover`. The repair is a text edit to the program,
+   validated, and logged in `DIR/repairs.jsonl`. The run record itself is not changed.
+   Only the failed step and the steps after it may change.
+6. **resume**: `execute resume FILE --from-record DIR` continues from the failed step.
+   The completed steps before it are replayed from the record. The record takes the
+   inputs of the original run, so the resume passes no `--input` flags.
 7. **verify**: the link, the rendered template and the two reload calls are checked.
 
 The fake compositor accepts `reload --recover`, which is the repair the walkthrough
 applies. Setting `DEMO_RELOAD_OK=1` also makes it succeed, as a hand fix would.
+
+`--record` and `--checkpoint` cannot be combined. The walkthrough uses `--record`
+because the record keeps the run's inputs, plan fingerprint and captured output, and
+the repair and resume read them from there. The checkpoint form is described under
+"What exists and what does not".
 
 ## Inputs
 
@@ -83,13 +90,14 @@ with_demo_inputs() {
 
 with_demo_inputs execute check "$program"
 with_demo_inputs execute run "$program" --what-if
-with_demo_inputs execute run "$program" --confirm FINGERPRINT --checkpoint "$demo_root/state"
-execute repair "$demo_root/state" --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
-with_demo_inputs execute resume "$program" --checkpoint "$demo_root/state" --retry-uncertain
+with_demo_inputs execute run "$program" --confirm FINGERPRINT --record "$demo_root/record"
+execute repair --from-record "$demo_root/record" --program "$program" \
+  --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
+execute resume "$program" --from-record "$demo_root/record"
 ```
 
-The line number in the repair is the `run "hyprctl"` line of the program. The walkthrough
-finds it with `grep`.
+Replace `FINGERPRINT` with the fingerprint that `--what-if` printed. The line number in
+the repair is the `run "hyprctl"` line of the program. The walkthrough finds it with `grep`.
 
 ## What exists and what does not
 
@@ -97,9 +105,13 @@ finds it with `grep`.
   diagnostic may carry suggested fixes.
 - `explain` prints one line per resolved step. `explain --json` gives the same plan as
   JSON, and `--policy-header` makes the program's policy header a declaration: any category it does not declare is a violation.
-- `run --checkpoint` and `resume --checkpoint` record completed steps and restart from the
-  failed one. The checkpoint records the program text and its inputs. A repair may change
-  only the failed or unexecuted suffix, so completed steps keep their fingerprints.
+- `run --record DIR` writes a run record. `repair --from-record DIR` edits the failed
+  suffix of the program, and `resume --from-record DIR` restarts from the failed step.
+  The record keeps the program text, the inputs and the plan fingerprint. A repair may
+  change only the failed or unexecuted suffix, so completed steps keep their fingerprints.
+- `run --checkpoint` and `resume --checkpoint` are the older form of the same loop. They
+  record completed steps in a checkpoint folder, and they accept `--retry-uncertain`,
+  which the record form does not. The walkthrough does not use them.
 - The fake `hyprctl` stands in for the compositor. A real reload needs a running
   Hyprland session, which CI does not have.
 - The CI tests run the walkthrough (`tests/demo_walkthrough.rs`) and the step-by-step

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Walk the whole loop with the theme refresh: write the program, validate it, review
-# its plan with --what-if, run exactly that plan with --confirm, watch the run fail at
-# the compositor reload, repair the failed step, and resume from the checkpoint.
+# its plan with --what-if, run exactly that plan with --confirm and --record, watch the
+# run fail at the compositor reload, repair the failed step from the record, and resume
+# from the record.
 #
 # No network and no models. The compositor is the fake `hyprctl` in fixtures/bin.
 # Usage: sh examples/demo/walkthrough.sh   (set EXECUTE to choose the binary)
@@ -12,7 +13,7 @@ repo=$(cd "$here/../.." && pwd)
 execute=${EXECUTE:-execute}
 work=$(mktemp -d "${TMPDIR:-/tmp}/execute-demo.XXXXXX")
 program="$work/theme-refresh.program"
-checkpoint="$work/checkpoint"
+record="$work/record"
 themes="$work/themes"
 link="$work/current/theme"
 templates="$here/templates/*.tpl"
@@ -64,26 +65,30 @@ fingerprint=$(sed -n 's/.*"fingerprint": "\([0-9a-f]*\)".*/\1/p' "$work/what-if.
 [ ! -e "$link" ] || fail "--what-if created the link"
 echo "   fingerprint $fingerprint"
 
-echo "== 4. confirm: run exactly the plan that was reviewed, with a checkpoint"
-if run_execute run --confirm "$fingerprint" --checkpoint "$checkpoint" 2>"$work/failed.err"; then
+echo "== 4. confirm: run exactly the plan that was reviewed, with a run record"
+if run_execute run --confirm "$fingerprint" --record "$record" 2>"$work/failed.err"; then
   fail "the reload was expected to fail"
 fi
 grep -q "reload failed" "$work/failed.err" || fail "the failure is not the reload"
+[ -f "$record/run.json" ] || fail "the run record was not written"
 [ "$(readlink "$link")" = "$themes/dark" ] || fail "the link swap did not happen before the failure"
 echo "   the reload failed; the link already points at $themes/dark"
+echo "   run record: $record/run.json"
 
 echo "== 5. repair: retry the failed reload with --recover, as a structured edit"
 line=$(grep -n '^run "hyprctl"' "$program" | head -n 1 | cut -d: -f1)
 [ -n "$line" ] || fail "the reload line was not found"
-"$execute" repair "$checkpoint" --manifest-dir "$repo/manifests" \
+"$execute" repair --from-record "$record" --program "$program" --manifest-dir "$repo/manifests" \
   --op "replace-command $line run \"hyprctl\" with arguments [\"reload\", \"--recover\"]" \
   > "$work/repair.out" || fail "the repair was refused"
 grep -q "repair 1 applied" "$work/repair.out" || fail "the repair was not recorded"
+[ -f "$record/repairs.jsonl" ] || fail "the repair was not written beside the record"
 
-echo "== 6. resume: continue from the failed step"
-# The failed reload is a native command, so its outcome is not retry-safe: running it
-# again is an explicit decision, made here with --retry-uncertain.
-out=$(run_execute resume --checkpoint "$checkpoint" --retry-uncertain) || fail "the resumed run failed"
+echo "== 6. resume: continue from the failed step, replaying the completed prefix"
+# The resume takes its inputs from the record. The failed reload is re-run once, and the
+# steps before it are replayed from the record without running their tools again.
+out=$("$execute" resume "$program" --from-record "$record" --manifest-dir "$repo/manifests") \
+  || fail "the resumed run failed"
 printf '%s\n' "$out" | grep -q "theme dark active" || fail "the resumed run did not finish"
 
 echo "== 7. verify: the link, the rendered files and the compositor calls"

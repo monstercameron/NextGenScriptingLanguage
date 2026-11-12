@@ -37,6 +37,29 @@ running a program requires no shell evaluation, LLM or API key.
 [Download](https://github.com/monstercameron/NextGenScriptingLanguage/releases) ·
 [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
 
+## Flagship demo: a theme refresh that fails, is repaired and resumes
+
+[`examples/demo`](examples/demo/README.md) runs one Omarchy-style theme refresh end to
+end, with fake desktop tools. It needs no network and no models. The walkthrough,
+[`examples/demo/walkthrough.sh`](examples/demo/walkthrough.sh), takes the program through
+seven steps:
+
+1. **write**: the program, with its policy header, goes into a work folder.
+2. **validate**: `execute check` runs static checks with no effects.
+3. **what-if**: `execute run --what-if` prints the plan and its fingerprint. Nothing runs.
+4. **confirm**: `execute run --confirm FINGERPRINT --record DIR` runs the reviewed plan
+   and writes a run record. The compositor reload fails.
+5. **repair**: `execute repair --from-record DIR` edits the failed reload step and logs
+   the edit beside the record.
+6. **resume**: `execute resume FILE --from-record DIR` continues from the failed step.
+7. **verify**: the link, the rendered template and the reload calls are checked.
+
+The fake compositor is a shell script, so the walkthrough runs on Unix only. The Rust
+test [`tests/demo_walkthrough.rs`](tests/demo_walkthrough.rs) runs it as part of the
+test suite on Unix, with the `agent-advisory` and `records` features. On other platforms
+that test is skipped. The step-by-step checks are in
+[`tests/lane_a_demo.rs`](tests/lane_a_demo.rs).
+
 ## Quickstart
 
 Download a matching archive from [Releases](https://github.com/monstercameron/NextGenScriptingLanguage/releases)

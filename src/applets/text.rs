@@ -728,6 +728,24 @@ pub(super) fn check_text_size(length: usize) -> Result<(), AppletError> {
     super::shared::check_bytes(length)
 }
 
+/// Whether `text` starts with `needle`. Pure in-process helper for a
+/// `text.starts_with` applet; an empty needle always matches.
+#[allow(dead_code)] // Not registered as an applet yet; registration is a follow-up.
+pub(super) fn starts_with_needle(text: &str, needle: &str) -> Result<bool, AppletError> {
+    check_text_size(text.len())?;
+    check_text_size(needle.len())?;
+    Ok(text.starts_with(needle))
+}
+
+/// Whether `text` ends with `needle`. Pure in-process helper for a
+/// `text.ends_with` applet; an empty needle always matches.
+#[allow(dead_code)] // Not registered as an applet yet; registration is a follow-up.
+pub(super) fn ends_with_needle(text: &str, needle: &str) -> Result<bool, AppletError> {
+    check_text_size(text.len())?;
+    check_text_size(needle.len())?;
+    Ok(text.ends_with(needle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1106,5 +1124,51 @@ mod tests {
             format!("{}{}", "A".to_lowercase(), "Σ".to_lowercase()),
             "aσ"
         );
+    }
+
+    #[test]
+    fn prefix_and_suffix_helpers_agree_with_std_over_table() {
+        // (text, needle, starts_with, ends_with)
+        let cases: &[(&str, &str, bool, bool)] = &[
+            ("", "", true, true),
+            ("abc", "", true, true),
+            ("", "a", false, false),
+            ("abc", "abc", true, true),
+            ("abc", "abcd", false, false),
+            ("abc", "ab", true, false),
+            ("abc", "bc", false, true),
+            ("abc", "b", false, false),
+            ("abc", "ABC", false, false),
+            ("caf\u{e9}", "caf", true, false),
+            ("caf\u{e9}", "\u{e9}", false, true),
+            ("caf\u{e9}", "f\u{e9}", false, true),
+            ("\u{65e5}\u{672c}\u{8a9e}", "\u{65e5}", true, false),
+            ("\u{65e5}\u{672c}\u{8a9e}", "\u{672c}", false, false),
+            ("\u{65e5}\u{672c}\u{8a9e}", "\u{8a9e}", false, true),
+            ("\u{1f980}crab", "\u{1f980}", true, false),
+            ("crab\u{1f980}", "\u{1f980}", false, true),
+            ("a\u{301}", "a", true, false),
+            ("a\u{301}", "\u{301}", false, true),
+            ("e\u{301}", "e\u{301}", true, true),
+            ("x\u{0}y", "\u{0}", false, false),
+            ("line\n", "\n", false, true),
+            ("line\n", "line", true, false),
+            ("\u{df}", "ss", false, false),
+        ];
+        assert!(cases.len() >= 20);
+        for &(text, needle, starts, ends) in cases {
+            assert_eq!(
+                starts_with_needle(text, needle).unwrap(),
+                starts,
+                "starts_with({text:?}, {needle:?})"
+            );
+            assert_eq!(text.starts_with(needle), starts);
+            assert_eq!(
+                ends_with_needle(text, needle).unwrap(),
+                ends,
+                "ends_with({text:?}, {needle:?})"
+            );
+            assert_eq!(text.ends_with(needle), ends);
+        }
     }
 }

@@ -1,19 +1,24 @@
-//! `execute help FILE [--json]`: usage generated from a program's accept
-//! declarations. The command parses the program and runs nothing. It reports
+//! `execute help FILE [--json | --format omarchy-metadata]`: usage generated from a
+//! program's accept declarations. The command parses the program and runs nothing. It reports
 //! each input's name, type, whether it is required or its default, and its
-//! source. A `described as` text would be shown here once the grammar carries it;
-//! until then every input reports `description: null`.
+//! source, and shows each input's `described as` text. `--format omarchy-metadata`
+//! prints the `# omarchy:` command-metadata lines that the declarations can supply.
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
 use crate::terminal_text::{escape_controls, escape_terminal_field};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 
 /// Protocol identifier of the `--json` object.
 pub const PROTOCOL: &str = "execute.help/1";
-const USAGE: &str = "usage: execute help FILE [--json]";
+const USAGE: &str = "usage: execute help FILE [--json | --format omarchy-metadata]";
+/// The `--format` value that prints Omarchy command-metadata comment lines.
+const OMARCHY_METADATA: &str = "omarchy-metadata";
+/// Omarchy reads its metadata from the first 80 lines of a command file.
+const OMARCHY_WINDOW: usize = 80;
 
 /// Run the `help` subcommand and return the process exit status.
 pub fn cli(arguments: &[String]) -> Result<i32> {
@@ -34,10 +39,17 @@ pub fn cli_with_access(
     access: crate::program_files::Access<'_>,
 ) -> Result<i32> {
     let mut as_json = false;
+    let mut omarchy_metadata = false;
     let mut file = None;
-    for argument in arguments {
+    let mut remaining = arguments.iter();
+    while let Some(argument) = remaining.next() {
         match argument.as_str() {
             "--json" => as_json = true,
+            "--format" => match remaining.next().map(String::as_str) {
+                Some(OMARCHY_METADATA) => omarchy_metadata = true,
+                Some(other) => bail!("unknown format {other}; {USAGE}"),
+                None => bail!("--format needs a value; {USAGE}"),
+            },
             other if other.starts_with("--") => bail!("unknown option {other}; {USAGE}"),
             other => {
                 if file.replace(other).is_some() {
@@ -46,8 +58,15 @@ pub fn cli_with_access(
             }
         }
     }
+    if as_json && omarchy_metadata {
+        bail!("--json and --format are different outputs; {USAGE}");
+    }
     let file = file.ok_or_else(|| anyhow!("{USAGE}"))?;
     let program = crate::program_files::parse_file(Path::new(file), Some(access))?;
+    if omarchy_metadata {
+        io::stdout().write_all(render_omarchy_metadata(&program).as_bytes())?;
+        return Ok(0);
+    }
     let description = describe(&program, Path::new(file).to_string_lossy().as_ref());
     if as_json {
         writeln!(
@@ -224,6 +243,101 @@ fn push_description(text: &mut String, input: &Value) {
     text.push('\n');
 }
 
+/// The `# omarchy:` lines the declarations can supply, one per line. `summary` joins
+/// the `described as` texts, and `args` lists the positional inputs. Keys that need
+/// information the language does not declare (group, alias, hidden, requires-sudo)
+/// are not emitted.
+pub fn render_omarchy_metadata(program: &Program) -> String {
+    let mut lines = Vec::new();
+    let summary: Vec<String> = program
+        .inputs
+        .iter()
+        .filter_map(|input| input.description.as_deref().map(header_value))
+        .collect();
+    if !summary.is_empty() {
+        lines.push(format!("# omarchy:summary={}", summary.join("; ")));
+    }
+    let args: Vec<String> = program.inputs.iter().filter_map(argument_token).collect();
+    if !args.is_empty() {
+        lines.push(format!("# omarchy:args={}", args.join(" ")));
+    }
+    lines.iter().map(|line| format!("{line}\n")).collect()
+}
+
+/// Problems with `# omarchy:` lines already in a command file: a line past the first
+/// 80 lines, or a line that differs from what `render_omarchy_metadata` generates.
+pub fn omarchy_metadata_problems(source: &str, program: &Program) -> Vec<String> {
+    let generated = render_omarchy_metadata(program);
+    let expected: BTreeMap<&str, &str> = generated
+        .lines()
+        .filter_map(|line| Some((metadata_key(line)?, line)))
+        .collect();
+    let mut problems = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        let Some(key) = metadata_key(line) else {
+            continue;
+        };
+        let number = index + 1;
+        if index >= OMARCHY_WINDOW {
+            problems.push(format!(
+                "line {number}: `# omarchy:` metadata must sit within the first {OMARCHY_WINDOW} lines"
+            ));
+        }
+        if expected.get(key).copied() != Some(line) {
+            problems.push(format!(
+                "line {number}: `# omarchy:{key}` does not match the program's declarations"
+            ));
+        }
+    }
+    problems
+}
+
+/// The key of an `# omarchy:KEY=VALUE` line, or `None` for any other line.
+fn metadata_key(line: &str) -> Option<&str> {
+    line.strip_prefix("# omarchy:")?
+        .split_once('=')
+        .map(|(key, _)| key)
+}
+
+/// One positional input as Omarchy writes it: `<name>` when required, `[name]` when
+/// it has a default, and `a|b|c` for `one of` choices. A variadic input is `[name...]`.
+fn argument_token(input: &InputDeclaration) -> Option<String> {
+    let body = match &input.source {
+        Some(InputSource::Argument(_)) => match input.choices.as_deref() {
+            Some(choices) if !choices.is_empty() => choices
+                .iter()
+                .map(|choice| header_value(choice))
+                .collect::<Vec<_>>()
+                .join("|"),
+            _ => header_value(&input.name),
+        },
+        Some(InputSource::Arguments) => format!("{}...", header_value(&input.name)),
+        _ => return None,
+    };
+    let variadic = matches!(input.source, Some(InputSource::Arguments));
+    Some(if input.default.is_none() && !variadic {
+        format!("<{body}>")
+    } else {
+        format!("[{body}]")
+    })
+}
+
+/// Makes text safe inside one `#` comment line: control characters and line
+/// separators become spaces, so no text can end the comment early.
+fn header_value(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{describe, render_text};
@@ -282,5 +396,57 @@ mod tests {
         assert!(rendered.contains(r"name\u{a}Injected"));
         assert!(rendered.contains(r"environment NAME\u{a}Injected"));
         assert!(rendered.contains(r"first\u{a}second\u{9}column\u{2028}line\u{2029}paragraph"));
+    }
+
+    #[test]
+    fn omarchy_metadata_lists_described_inputs_and_positional_arguments() {
+        let program = crate::parser::parse(
+            "accept name as text from argument 1 described as \"Web app name\"\n\
+             accept mode as text from argument 2 with default \"toggle\" described as \"Mode to apply\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            super::render_omarchy_metadata(&program),
+            "# omarchy:summary=Web app name; Mode to apply\n# omarchy:args=<name> [mode]\n"
+        );
+    }
+
+    #[test]
+    fn omarchy_metadata_is_empty_without_described_or_positional_inputs() {
+        let program =
+            crate::parser::parse("accept verbose as boolean from flag \"--verbose\"\n").unwrap();
+        assert_eq!(super::render_omarchy_metadata(&program), "");
+    }
+
+    #[test]
+    fn omarchy_metadata_text_cannot_end_the_comment_line() {
+        assert_eq!(super::header_value("a\nb\u{2028}c\r"), "a b c");
+    }
+
+    #[test]
+    fn omarchy_lint_accepts_matching_lines_within_the_window() {
+        let program = crate::parser::parse(
+            "accept name as text from argument 1 described as \"Web app name\"\n",
+        )
+        .unwrap();
+        let source = "#!/bin/sh\n# omarchy:summary=Web app name\n# omarchy:args=<name>\n";
+        assert!(super::omarchy_metadata_problems(source, &program).is_empty());
+    }
+
+    #[test]
+    fn omarchy_lint_reports_disagreeing_and_late_lines() {
+        let program = crate::parser::parse(
+            "accept name as text from argument 1 described as \"Web app name\"\n",
+        )
+        .unwrap();
+        let disagreeing = "# omarchy:summary=Other text\n";
+        let problems = super::omarchy_metadata_problems(disagreeing, &program);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("line 1"), "{problems:?}");
+
+        let late = format!("{}# omarchy:summary=Web app name\n", "\n".repeat(80));
+        let problems = super::omarchy_metadata_problems(&late, &program);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("first 80 lines"), "{problems:?}");
     }
 }

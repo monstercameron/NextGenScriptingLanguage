@@ -52,6 +52,14 @@ actual desktop effects, or package operations. The `setsid` example proves
 argument forwarding only; the fake backend never starts Nautilus. No system
 commands are replaced or installed by this directory.
 
+## Command metadata
+
+`execute help FILE --format omarchy-metadata` prints the `# omarchy:summary=` and
+`# omarchy:args=` comment lines that a port's declarations supply: the `described as`
+texts and the positional inputs. Copy them into the first 80 lines of a port to give
+Omarchy its summary and usage text. The output has no `group`, `alias`, `hidden` or
+`requires-sudo` lines yet, because the language does not declare those.
+
 ## Ports compared with their Bash originals
 
 Twenty more scripts live in subdirectories, `omarchy-ports/<script>/`, each with three

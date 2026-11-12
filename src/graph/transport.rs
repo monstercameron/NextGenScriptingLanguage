@@ -3170,22 +3170,23 @@ fn emit_applet_result_counted(
         return Ok(());
     }
     for (name, schema) in &node.outputs {
-        let payload = if name == "status" {
-            Some(PortValue::Value(Value::Integer(i64::from(result.status))))
-        } else if name == "stdout" {
-            Some(if schema.schema.kind == OutputType::Bytes {
-                PortValue::Bytes(result.output.clone())
-            } else {
-                PortValue::Value(result.value.clone().ok_or_else(|| {
-                    anyhow!(
-                        "applet returned bytes but graph output {name:?} requires {:?}",
-                        schema.schema.kind
-                    )
-                })?)
-            })
+        // Raw bytes go out unchanged for stdout and for any unpointed port.
+        // Every other port selects its declared pointer, stdout included, and
+        // a records port fans a selected list out one item per event.
+        let raw_bytes = schema.schema.kind == OutputType::Bytes
+            && (name == "stdout" || schema.pointer.is_none());
+        let payloads = if name == "status" {
+            vec![PortValue::Value(Value::Integer(i64::from(result.status)))]
+        } else if raw_bytes {
+            vec![PortValue::Bytes(result.output.clone())]
         } else {
-            let Some(value) = result.value.as_ref() else {
-                continue;
+            let value = match result.value.as_ref() {
+                Some(value) => value,
+                None if name == "stdout" => bail!(
+                    "applet returned bytes but graph output {name:?} requires {:?}",
+                    schema.schema.kind
+                ),
+                None => continue,
             };
             let selected = schema
                 .pointer
@@ -3194,9 +3195,14 @@ fn emit_applet_result_counted(
                 .transpose()?
                 .unwrap_or(value)
                 .clone();
-            Some(PortValue::Value(selected))
+            match (schema.delivery, selected) {
+                (PortDelivery::Records, Value::List(items)) => {
+                    items.into_iter().map(PortValue::Value).collect()
+                }
+                (_, selected) => vec![PortValue::Value(selected)],
+            }
         };
-        if let Some(payload) = payload {
+        for payload in payloads {
             let count = emitted.entry(name.clone()).or_default();
             if schema.delivery == PortDelivery::Single && *count > 0 {
                 bail!("single output {}.{} emitted more than once", node.id, name);

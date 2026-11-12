@@ -648,6 +648,13 @@ impl RendererProtocol {
             if event.cursor <= last_cursor || event.cursor > *next_cursor {
                 bail!("renderer event cursors are not strictly increasing");
             }
+            if event.cursor != last_cursor.saturating_add(1) {
+                bail!(
+                    "renderer event cursor has a gap (expected {}, got {})",
+                    last_cursor.saturating_add(1),
+                    event.cursor
+                );
+            }
             last_cursor = event.cursor;
             if self.validate_event(event)? {
                 accepted.push(event.clone());
@@ -2448,6 +2455,159 @@ mod terminal_tests {
         release_tui_terminal_lease();
         acquire_tui_terminal_lease().unwrap();
         release_tui_terminal_lease();
+    }
+}
+
+#[cfg(test)]
+mod renderer_event_cursor_tests {
+    use super::{
+        ProtocolRange, RendererCommand, RendererEvent, RendererProtocol, RendererReply,
+        RendererResponse, RENDERER_PROTOCOL,
+    };
+    use serde_json::Value;
+
+    fn protocol() -> RendererProtocol {
+        let mut protocol =
+            RendererProtocol::new("session745", ProtocolRange::new(1, 1).unwrap()).unwrap();
+        protocol.negotiated = Some(1);
+        protocol
+    }
+
+    // Generation 0 never matches the protocol's generation 1, so validate_event
+    // filters these out without needing a widget. The cursor contract still applies.
+    fn event(cursor: u64) -> RendererEvent {
+        RendererEvent {
+            cursor,
+            applet_id: "applet".into(),
+            widget_id: "main".into(),
+            signal: "pressed".into(),
+            generation: 0,
+            source_revision: 0,
+            payload: Value::Null,
+        }
+    }
+
+    fn poll(protocol: &mut RendererProtocol, after_cursor: u64) -> super::RendererRequest {
+        let revision = protocol.revision;
+        protocol
+            .request(
+                1,
+                revision,
+                RendererCommand::PollEvents {
+                    after_cursor,
+                    limit: 16,
+                },
+            )
+            .unwrap()
+    }
+
+    fn batch(
+        request: &super::RendererRequest,
+        events: Vec<RendererEvent>,
+        next_cursor: u64,
+        oldest_cursor: u64,
+        overflow: bool,
+    ) -> RendererResponse {
+        RendererResponse {
+            protocol: RENDERER_PROTOCOL.into(),
+            version: 1,
+            request_id: request.request_id,
+            session_id: request.session_id.clone(),
+            generation: request.generation,
+            revision: request.revision,
+            body: RendererReply::EventBatch {
+                events,
+                next_cursor,
+                oldest_cursor,
+                overflow,
+            },
+        }
+    }
+
+    #[test]
+    fn contiguous_batch_is_accepted_and_acknowledges_last_cursor() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 0);
+        let response = batch(&request, vec![event(1), event(2), event(3)], 3, 1, false);
+        let (accepted, next) = protocol.accept_event_batch(&request, &response).unwrap();
+        assert!(accepted.is_empty());
+        assert_eq!(next, 3);
+    }
+
+    #[test]
+    fn contiguous_batch_after_nonzero_cursor_is_accepted() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 5);
+        let response = batch(&request, vec![event(6), event(7)], 7, 6, false);
+        let (_, next) = protocol.accept_event_batch(&request, &response).unwrap();
+        assert_eq!(next, 7);
+    }
+
+    #[test]
+    fn empty_batch_without_cursor_advance_is_accepted() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 4);
+        let response = batch(&request, Vec::new(), 4, 1, false);
+        let (accepted, next) = protocol.accept_event_batch(&request, &response).unwrap();
+        assert!(accepted.is_empty());
+        assert_eq!(next, 4);
+    }
+
+    #[test]
+    fn empty_batch_that_advances_cursor_is_rejected() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 0);
+        let response = batch(&request, Vec::new(), 2, 1, false);
+        assert!(protocol.accept_event_batch(&request, &response).is_err());
+        assert_eq!(protocol.last_polled_cursor, 0);
+    }
+
+    #[test]
+    fn internal_gap_is_rejected_without_acknowledging() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 0);
+        let response = batch(&request, vec![event(1), event(3)], 3, 1, false);
+        let error = protocol
+            .accept_event_batch(&request, &response)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("gap"), "unexpected error: {error}");
+        assert_eq!(protocol.last_polled_cursor, 0);
+    }
+
+    #[test]
+    fn initial_gap_is_rejected_without_acknowledging() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 0);
+        let response = batch(&request, vec![event(2)], 2, 1, false);
+        let error = protocol
+            .accept_event_batch(&request, &response)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("gap"), "unexpected error: {error}");
+        assert_eq!(protocol.last_polled_cursor, 0);
+    }
+
+    #[test]
+    fn duplicate_cursor_is_rejected() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 0);
+        let response = batch(&request, vec![event(1), event(1)], 1, 1, false);
+        assert!(protocol.accept_event_batch(&request, &response).is_err());
+        assert_eq!(protocol.last_polled_cursor, 0);
+    }
+
+    #[test]
+    fn overflow_is_rejected() {
+        let mut protocol = protocol();
+        let request = poll(&mut protocol, 0);
+        let response = batch(&request, vec![event(1)], 1, 1, true);
+        let error = protocol
+            .accept_event_batch(&request, &response)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("overflowed"), "unexpected error: {error}");
+        assert_eq!(protocol.last_polled_cursor, 0);
     }
 }
 

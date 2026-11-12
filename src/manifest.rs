@@ -1760,6 +1760,98 @@ impl Registry {
     }
 }
 
+const EXECUTE_MODULES_HEADER: &str = "execute-modules:";
+
+/// The catalog directory named by a program's leading `# execute-modules: <path>` header.
+/// The path is relative to the program file. Exactly one header may appear, in the
+/// leading comment block; a program without one returns `None`.
+pub fn execute_modules_header(source: &str) -> Result<Option<PathBuf>> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    let mut headers = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(comment) = trimmed.strip_prefix('#') else {
+            break;
+        };
+        if let Some(rest) = comment.trim_start().strip_prefix(EXECUTE_MODULES_HEADER) {
+            headers.push(rest.trim().to_owned());
+        } else if trimmed.contains("execute-modules") {
+            // A leading comment that names the header but does not parse is an error,
+            // so a typo cannot silently drop the catalog.
+            bail!("malformed `# {EXECUTE_MODULES_HEADER}` header: {trimmed}");
+        }
+    }
+    let path = match headers.as_slice() {
+        [] => return Ok(None),
+        [single] => single,
+        _ => bail!("more than one `# {EXECUTE_MODULES_HEADER}` header in the leading comments"),
+    };
+    if path.is_empty() {
+        bail!("`# {EXECUTE_MODULES_HEADER}` header names no catalog directory");
+    }
+    let path = PathBuf::from(path);
+    if path.has_root() || path.is_absolute() {
+        bail!(
+            "`# {EXECUTE_MODULES_HEADER}` path {} must be relative to the program file",
+            path.display()
+        );
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!(
+            "`# {EXECUTE_MODULES_HEADER}` path {} must not contain `..`",
+            path.display()
+        );
+    }
+    Ok(Some(path))
+}
+
+/// Resolve an `# execute-modules:` path against the program's directory. The result is
+/// an existing directory whose symlink-resolved location is inside the program's own
+/// tree; anything else is refused.
+pub fn resolve_execute_modules_dir(program_dir: &Path, relative: &Path) -> Result<PathBuf> {
+    let root = fs::canonicalize(program_dir)
+        .with_context(|| format!("canonicalizing program directory {}", program_dir.display()))?;
+    let catalog = fs::canonicalize(root.join(relative))
+        .with_context(|| format!("reading execute-modules catalog {}", relative.display()))?;
+    if !catalog.starts_with(&root) {
+        bail!(
+            "execute-modules catalog {} is outside the program's directory tree",
+            relative.display()
+        );
+    }
+    if !catalog.is_dir() {
+        bail!(
+            "execute-modules catalog {} is not a directory",
+            relative.display()
+        );
+    }
+    Ok(catalog)
+}
+
+/// A program catalog adds applet names and never replaces shipped ones: refuse any
+/// catalog applet whose name the shipped catalog already defines.
+pub fn ensure_no_shadowed_applets(shipped: &[&str], catalog: &[&str]) -> Result<()> {
+    let shipped: BTreeSet<&str> = shipped.iter().copied().collect();
+    let shadowed: Vec<&str> = catalog
+        .iter()
+        .copied()
+        .filter(|name| shipped.contains(name))
+        .collect();
+    if shadowed.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "execute-modules catalog shadows shipped applet(s): {}",
+        shadowed.join(", ")
+    );
+}
+
 fn normalized_description_words(value: &str) -> BTreeSet<String> {
     value
         .split(|character: char| !character.is_ascii_alphanumeric())

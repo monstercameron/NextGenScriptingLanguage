@@ -321,6 +321,8 @@ struct WorkerSlot {
     key: WorkerKey,
     worker: Option<WorkerProcess>,
     busy: bool,
+    /// Recency tick of the last release; the least recent idle slot is evicted first.
+    last_used: u64,
 }
 
 #[cfg(any(unix, windows))]
@@ -328,6 +330,7 @@ struct WorkerSlot {
 struct PoolState {
     slots: Vec<WorkerSlot>,
     next_id: u64,
+    clock: u64,
 }
 
 /// A fixed-size cache of persistent worker processes.
@@ -611,7 +614,8 @@ impl WorkerPool {
         cancelled: &AtomicBool,
         deadline: Option<Instant>,
     ) -> Result<WorkerLease<'_>> {
-        let pool_deadline = min_deadline(deadline, Instant::now().checked_add(MAX_POOL_WAIT));
+        let capacity_until = Instant::now().checked_add(MAX_POOL_WAIT);
+        let pool_deadline = min_deadline(deadline, capacity_until);
         loop {
             check_cancel_deadline(cancelled, pool_deadline)
                 .context("waiting for persistent worker pool capacity")?;
@@ -643,21 +647,59 @@ impl WorkerPool {
                     key: key.clone(),
                     worker: None,
                     busy: true,
+                    last_used: 0,
                 });
                 return Ok(WorkerLease::new(self, id, None));
             }
 
-            return Err(WorkerError::new(
-                WorkerErrorKind::CapacityError,
-                false,
-                None,
-                format!(
-                    "persistent worker pool capacity {} is full; request was not started",
-                    self.capacity
-                ),
-            )
-            .into());
+            // The pool is full. Destroy the least recently released idle worker to make
+            // room. The slot stays busy until its process is gone and its labels are
+            // cleared, as in release, so the freed identity never inherits old state.
+            if let Some(index) = least_recently_used_idle(&state) {
+                let id = state.slots[index].id;
+                let evicted_key = state.slots[index].key.clone();
+                state.slots[index].busy = true;
+                let worker = state.slots[index].worker.take();
+                drop(state);
+                drop(worker);
+                self.reset_sensitivity_history(&evicted_key);
+                self.remove_slot(id);
+                continue;
+            }
+
+            // Every slot is serving a request: wait for one to be released, and give up
+            // with a capacity error once the pool's own wait budget has run out.
+            if capacity_until.is_some_and(|until| Instant::now() >= until) {
+                return Err(WorkerError::new(
+                    WorkerErrorKind::CapacityError,
+                    false,
+                    None,
+                    format!(
+                        "persistent worker pool capacity {} is full; request was not started",
+                        self.capacity
+                    ),
+                )
+                .into());
+            }
+            let wait = pool_deadline
+                .map(|until| until.saturating_duration_since(Instant::now()))
+                .unwrap_or(MAX_POOL_WAIT)
+                .min(IO_POLL_INTERVAL);
+            let (guard, _) = self
+                .changed
+                .wait_timeout(state, wait)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            drop(guard);
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn remove_slot(&self, id: u64) {
+        let mut state = self.lock_state();
+        if let Some(index) = state.slots.iter().position(|slot| slot.id == id) {
+            state.slots.remove(index);
+        }
+        self.changed.notify_all();
     }
 
     #[cfg(any(unix, windows))]
@@ -707,13 +749,17 @@ impl WorkerPool {
             let mut retired = None;
             {
                 let mut state = self.lock_state();
+                let tick = next_use_tick(&mut state);
                 if let Some(index) = state.slots.iter().position(|slot| slot.id == id) {
                     state.slots[index].worker = worker;
                     state.slots[index].busy = false;
+                    state.slots[index].last_used = tick;
                 } else {
                     retired = worker;
                 }
-                self.changed.notify_one();
+                // Waiters block on one condition variable for every identity, so wake all
+                // of them: notify_one could wake a waiter for a different identity.
+                self.changed.notify_all();
             }
             drop(retired);
             return;
@@ -736,8 +782,25 @@ impl WorkerPool {
         if let Some(index) = state.slots.iter().position(|slot| slot.id == id) {
             state.slots.remove(index);
         }
-        self.changed.notify_one();
+        self.changed.notify_all();
     }
+}
+
+#[cfg(any(unix, windows))]
+fn next_use_tick(state: &mut PoolState) -> u64 {
+    state.clock = state.clock.wrapping_add(1);
+    state.clock
+}
+
+#[cfg(any(unix, windows))]
+fn least_recently_used_idle(state: &PoolState) -> Option<usize> {
+    state
+        .slots
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| !slot.busy)
+        .min_by_key(|(_, slot)| slot.last_used)
+        .map(|(index, _)| index)
 }
 
 #[cfg(any(unix, windows))]
@@ -2175,8 +2238,10 @@ mod tests {
                 },
                 worker: None,
                 busy: false,
+                last_used: 0,
             }],
             next_id: u64::MAX,
+            clock: 0,
         };
 
         assert_eq!(next_slot_id(&mut state), 2);

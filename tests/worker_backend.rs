@@ -269,6 +269,14 @@ fn recorded_pid(directory: &TempDir) -> i32 {
         .expect("worker PID is numeric")
 }
 
+fn launch_pids(directory: &TempDir) -> Vec<i32> {
+    std::fs::read_to_string(directory.path().join("launches"))
+        .expect("worker launch markers")
+        .lines()
+        .map(|line| line.parse::<i32>().expect("numeric worker pid"))
+        .collect()
+}
+
 fn assert_reaped(pid: i32) {
     #[cfg(windows)]
     {
@@ -550,7 +558,7 @@ fn registry_lifetime_owns_persistent_worker_cleanup() {
 }
 
 #[test]
-fn pool_rejects_new_identities_at_capacity_without_evicting_state() {
+fn pool_evicts_least_recently_released_idle_worker_at_capacity() {
     let _guard = lock_worker_tests();
     let directory = TempDir::new().expect("temporary worker directory");
     let pool = WorkerPool::default();
@@ -582,47 +590,68 @@ fn pool_rejects_new_identities_at_capacity_without_evicting_state() {
         assert!(response.spawned_process);
     }
 
-    let rejected_request = request(&[], b"overflow");
-    let rejected_spawn_marker = rejected_request.spawned.clone();
-    let error = pool
-        .invoke(launch(&directory, "echo_input"), rejected_request)
-        .expect_err("a full pool must reject a new worker identity without eviction");
-    assert_eq!(
-        worker_error(&error).kind,
-        worker_backend::WorkerErrorKind::CapacityError
-    );
-    assert!(!worker_error(&error).uncertain_effect);
-    assert_eq!(worker_error(&error).completed_status, None);
-    assert!(!rejected_spawn_marker.load(Ordering::Relaxed));
-    assert!(error.to_string().contains("request was not started"));
+    let launched_before = launch_pids(&directory);
+    assert_eq!(launched_before.len(), 16);
 
-    let pids = std::fs::read_to_string(directory.path().join("launches"))
-        .expect("worker launch markers")
-        .lines()
-        .map(|line| line.parse::<i32>().expect("numeric worker pid"))
-        .collect::<HashSet<_>>();
-    let live_workers = pids.iter().filter(|pid| process_exists(**pid)).count();
+    // The first identity was released longest ago, so it is the idle worker evicted.
+    let overflow = pool
+        .invoke(launch(&directory, "echo_input"), request(&[], b"overflow"))
+        .expect("a full pool evicts its least recently released idle worker");
+    assert_eq!(overflow.output, b"overflow");
+    assert!(overflow.spawned_process);
+
+    let launched = launch_pids(&directory);
+    assert_eq!(launched.len(), 17);
+    assert_reaped(launched_before[0]);
+    let live_workers = launched[1..]
+        .iter()
+        .filter(|pid| process_exists(**pid))
+        .count();
     assert_eq!(live_workers, 16, "pool must retain at most 16 workers");
 
-    let continued = pool
+    // The evicted identity starts a fresh process, so its worker-local state is not restored.
+    let reloaded = pool
         .invoke(
             first_launch.expect("first worker launch"),
             request(&[], b"pool"),
         )
-        .expect("the first worker remains available after capacity rejection");
-    assert_eq!(
-        continued.output, b"2",
-        "worker-local state must be preserved"
-    );
-    assert!(!continued.spawned_process);
-    assert_eq!(
-        std::fs::read_to_string(directory.path().join("launches"))
-            .expect("worker launch markers")
-            .lines()
-            .count(),
-        16,
-        "capacity rejection and reuse must not launch or evict processes"
-    );
+        .expect("an evicted identity starts a fresh worker");
+    assert_eq!(reloaded.output, b"1");
+    assert!(reloaded.spawned_process);
+
+    let pids = launch_pids(&directory);
+    drop(pool);
+    for pid in pids {
+        assert_reaped(pid);
+    }
+}
+
+#[test]
+fn pool_runs_32_distinct_identities_in_one_pool_by_evicting_idle_workers() {
+    let _guard = lock_worker_tests();
+    let directory = TempDir::new().expect("temporary worker directory");
+    let pool = WorkerPool::default();
+
+    for index in 0..32 {
+        let mut worker_launch = launch(&directory, "sequence");
+        worker_launch
+            .environment
+            .retain(|(name, _)| name != OsStr::new("FLOW_WORKER_POOL_KEY"));
+        worker_launch.environment.push((
+            OsString::from("FLOW_WORKER_POOL_KEY"),
+            OsString::from(index.to_string()),
+        ));
+        let response = pool
+            .invoke(worker_launch, request(&[], b"identity"))
+            .expect("each distinct identity succeeds, evicting an idle worker when full");
+        assert_eq!(response.output, b"1");
+        assert!(response.spawned_process);
+    }
+
+    let pids = launch_pids(&directory);
+    assert_eq!(pids.len(), 32);
+    let live_workers = pids.iter().filter(|pid| process_exists(**pid)).count();
+    assert_eq!(live_workers, 16, "pool must retain at most 16 workers");
 
     drop(pool);
     for pid in pids {
@@ -653,21 +682,19 @@ fn isolated_pool_forks_capacity_but_not_retained_workers() {
     );
     assert_eq!(isolated_first.output, b"1");
 
-    let rejected = isolated
-        .invoke(launch(&directory, "echo_input"), request(&[], b"capacity"))
-        .expect_err("the isolated pool retains the configured capacity of one");
-    assert_eq!(
-        worker_error(&rejected).kind,
-        worker_backend::WorkerErrorKind::CapacityError
-    );
-    assert!(rejected.to_string().contains("capacity 1 is full"));
+    let evicting = isolated
+        .invoke(launch(&directory, "echo_input"), request(&[], b"evict"))
+        .expect("the isolated pool evicts its idle worker to admit a new identity");
+    assert_eq!(evicting.output, b"evict");
+    assert!(evicting.spawned_process);
 
-    let pids = std::fs::read_to_string(directory.path().join("launches"))
-        .expect("both pools should write worker launch markers")
-        .lines()
-        .map(|line| line.parse::<i32>().expect("numeric worker pid"))
-        .collect::<Vec<_>>();
-    assert_eq!(pids.len(), 2);
+    let pids = launch_pids(&directory);
+    assert_eq!(pids.len(), 3);
+    assert_reaped(pids[1]);
+    assert!(
+        process_exists(pids[0]),
+        "the source pool's retained worker must not be evicted"
+    );
     drop(isolated);
     drop(pool);
     for pid in pids {

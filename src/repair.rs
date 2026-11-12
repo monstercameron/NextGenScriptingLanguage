@@ -681,6 +681,22 @@ pub fn acquire_repair_lock(checkpoint: &Path) -> Result<RepairLock> {
     })
 }
 
+/// Refuse a plan whose program has changed since it was planned: the program
+/// on disk must still hold `plan.before`, the text the plan and its audit
+/// record's before hash were computed from. Callers check this under the
+/// [`RepairLock`], right before [`commit`], so a stale plan is never applied.
+pub fn ensure_program_unchanged(program_path: &Path, plan: &Plan) -> Result<()> {
+    let current =
+        fs::read(program_path).with_context(|| format!("reading {}", program_path.display()))?;
+    if current != plan.before.as_bytes() {
+        bail!(
+            "the program {} changed while this repair was planned; nothing was written, run repair again",
+            program_path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Write an applied plan: keep a copy of the program as it was, append the record
 /// to `repairs.jsonl` and sync it, and only then replace the program file
 /// atomically. The audit record is durable before the program changes, so a
@@ -1961,5 +1977,22 @@ mod tests {
 
         drop(held);
         let _reacquired = acquire_repair_lock(&checkpoint).unwrap();
+    }
+
+    #[test]
+    fn stale_plan_is_refused_when_the_program_changed_after_planning() {
+        let (_directory, checkpoint, program, plan) = commit_fixture();
+        let concurrent = "run fixture.count with count 9\n";
+        std::fs::write(&program, concurrent).unwrap();
+
+        let error = ensure_program_unchanged(&program, &plan)
+            .expect_err("a stale plan must be refused before commit");
+        assert!(error.to_string().contains("changed"), "{error:#}");
+        assert_eq!(std::fs::read_to_string(&program).unwrap(), concurrent);
+        assert!(std::fs::symlink_metadata(checkpoint.join(REPAIRS_FILE)).is_err());
+        ensure_program_unchanged(&program, &plan).expect_err("still stale");
+
+        std::fs::write(&program, &plan.before).unwrap();
+        ensure_program_unchanged(&program, &plan).unwrap();
     }
 }

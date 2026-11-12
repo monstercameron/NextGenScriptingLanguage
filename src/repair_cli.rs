@@ -122,6 +122,17 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         &operation,
         &registry,
     )?;
+    if !dry_run {
+        // Still under the lock: refuse a plan whose checkpoint state has moved
+        // since it was read, rather than applying a stale plan.
+        let (current_path, current_steps) = repair::repairable_program(&directory)?;
+        if current_path != program_path || current_steps != completed_steps {
+            bail!(
+                "the checkpoint {} changed while this repair was planned; nothing was written, run repair again",
+                directory.display()
+            );
+        }
+    }
     finish_repair(
         &directory,
         &program_path,
@@ -149,6 +160,14 @@ fn repair_from_record(
     dry_run: bool,
     registry: &flow::manifest::Registry,
 ) -> Result<()> {
+    // Hold the record directory's lock across the read, check and commit, so
+    // two repairs of the same record cannot both append to repairs.jsonl. A
+    // dry run writes nothing and takes no lock.
+    let _repair_lock = if dry_run {
+        None
+    } else {
+        Some(repair::acquire_repair_lock(record_directory)?)
+    };
     let record = flow::record::StoredRecord::open(record_directory)?;
     if record.run["result"]["ok"].as_bool() == Some(true) {
         bail!("the record completed successfully; there is no failed suffix to repair");
@@ -207,6 +226,10 @@ fn finish_repair(
         writeln!(out, "dry run: nothing was written")?;
         return Ok(());
     }
+    // The plan was made from `plan.before`. If the program on disk no longer
+    // matches it, the audit record would name a hash the file does not have,
+    // so refuse before anything is written.
+    repair::ensure_program_unchanged(program_path, plan)?;
     let sequence = repair::commit(directory, program_path, plan, operation_text)?;
     writeln!(
         out,
@@ -277,5 +300,30 @@ mod tests {
         )
         .unwrap();
         assert!(plan.after.contains("run \"true\"\n"));
+    }
+
+    #[test]
+    fn repair_from_record_refuses_while_the_record_lock_is_held() {
+        let directory = tempfile::tempdir().unwrap();
+        let record = directory.path().join("record");
+        fs::create_dir(&record).unwrap();
+        let path = directory.path().join("main.program");
+        let source = "run \"false\"\n";
+        fs::write(&path, source).unwrap();
+        let operation_text = "replace-command 1 run \"true\"";
+        let _held = repair::acquire_repair_lock(&record).unwrap();
+
+        let error = repair_from_record(
+            &record,
+            &path,
+            &Operation::parse(operation_text).unwrap(),
+            operation_text,
+            false,
+            &flow::manifest::Registry::default(),
+        )
+        .expect_err("a held record lock must refuse the repair");
+        assert!(format!("{error:#}").contains("locked"), "{error:#}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        assert!(!record.join(repair::REPAIRS_FILE).exists());
     }
 }

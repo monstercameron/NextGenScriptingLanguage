@@ -15,7 +15,8 @@
 
 use super::filesystem::resolve_path;
 use super::{invalid, io_error, required_string, AppletError, ExecutionContext};
-use serde_json::{Map, Value};
+use crate::terminal_text::{stream_facts, StreamFacts};
+use serde_json::{json, Map, Value};
 use std::fs::{self, Metadata};
 use std::io;
 use std::path::Path;
@@ -77,6 +78,33 @@ pub(super) fn test(
     };
     context.checkpoint()?;
     Ok(Value::Bool(answer))
+}
+
+/// `terminal.info`: whether the standard streams are terminals, the terminal size when the
+/// OS reports one, and the `NO_COLOR` and `TERM` environment values, as one JSON record.
+pub(super) fn terminal_info(
+    _args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
+    Ok(terminal_record(&stream_facts(), &|name| {
+        std::env::var(name).ok()
+    }))
+}
+
+/// Build the `terminal.info` record from injected stream facts and an injected environment
+/// lookup, so the result does not depend on the real terminal. `NO_COLOR` counts as set only
+/// when non-empty, as the no-color.org convention states. Unknown size reports `null`.
+fn terminal_record(streams: &StreamFacts, environment: &dyn Fn(&str) -> Option<String>) -> Value {
+    json!({
+        "stdin_tty": streams.stdin_tty,
+        "stdout_tty": streams.stdout_tty,
+        "stderr_tty": streams.stderr_tty,
+        "columns": streams.size.map(|(columns, _)| columns),
+        "rows": streams.size.map(|(_, rows)| rows),
+        "no_color": environment("NO_COLOR").is_some_and(|value| !value.is_empty()),
+        "term": environment("TERM"),
+    })
 }
 
 /// Stat `path`, returning `None` when it is absent. `NotADirectory` covers a
@@ -231,5 +259,76 @@ mod tests {
         assert_eq!(check("symlink", &link).unwrap(), json!(true));
         assert_eq!(check("exists", &link).unwrap(), json!(false));
         assert_eq!(check("file", &link).unwrap(), json!(false));
+    }
+
+    fn no_environment(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn piped_stdout_reports_not_a_terminal() {
+        let piped = StreamFacts {
+            stdin_tty: false,
+            stdout_tty: false,
+            stderr_tty: true,
+            size: None,
+        };
+        let record = terminal_record(&piped, &no_environment);
+        assert_eq!(record["stdout_tty"], json!(false));
+        assert_eq!(record["stdin_tty"], json!(false));
+        assert_eq!(record["stderr_tty"], json!(true));
+        assert_eq!(record["columns"], Value::Null);
+        assert_eq!(record["rows"], Value::Null);
+        assert_eq!(record["no_color"], json!(false));
+        assert_eq!(record["term"], Value::Null);
+    }
+
+    #[test]
+    fn no_color_set_in_the_environment_is_reported() {
+        let streams = StreamFacts {
+            stdin_tty: true,
+            stdout_tty: true,
+            stderr_tty: true,
+            size: Some((120, 40)),
+        };
+        let set = |name: &str| (name == "NO_COLOR").then(|| "1".to_string());
+        assert_eq!(terminal_record(&streams, &set)["no_color"], json!(true));
+        let empty = |name: &str| (name == "NO_COLOR").then(String::new);
+        assert_eq!(terminal_record(&streams, &empty)["no_color"], json!(false));
+        assert_eq!(
+            terminal_record(&streams, &no_environment)["no_color"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn known_size_and_term_are_reported() {
+        let streams = StreamFacts {
+            stdin_tty: true,
+            stdout_tty: true,
+            stderr_tty: true,
+            size: Some((120, 40)),
+        };
+        let term = |name: &str| (name == "TERM").then(|| "xterm-256color".to_string());
+        let record = terminal_record(&streams, &term);
+        assert_eq!(record["columns"], json!(120));
+        assert_eq!(record["rows"], json!(40));
+        assert_eq!(record["term"], json!("xterm-256color"));
+    }
+
+    #[test]
+    fn terminal_info_reports_every_field_for_the_real_process() {
+        let record = terminal_info(&Map::new(), &ExecutionContext::unrestricted()).unwrap();
+        for field in [
+            "stdin_tty",
+            "stdout_tty",
+            "stderr_tty",
+            "columns",
+            "rows",
+            "no_color",
+            "term",
+        ] {
+            assert!(record.get(field).is_some(), "missing {field}");
+        }
     }
 }

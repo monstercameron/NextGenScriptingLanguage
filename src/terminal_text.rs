@@ -123,6 +123,92 @@ fn is_unsafe_terminal_character(character: char) -> bool {
         )
 }
 
+/// What the process's standard streams report about the terminal attached to them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamFacts {
+    pub stdin_tty: bool,
+    pub stdout_tty: bool,
+    pub stderr_tty: bool,
+    /// Columns and rows of an attached terminal, when the OS reports them.
+    pub size: Option<(u16, u16)>,
+}
+
+/// Read the terminal facts of the process's standard streams. The size comes from the
+/// first standard stream that reports one (stdout, then stderr, then stdin).
+pub fn stream_facts() -> StreamFacts {
+    StreamFacts {
+        stdin_tty: std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        stdout_tty: stdout_is_terminal(),
+        stderr_tty: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        size: attached_size(),
+    }
+}
+
+#[cfg(unix)]
+fn attached_size() -> Option<(u16, u16)> {
+    use std::os::fd::AsRawFd;
+    [
+        std::io::stdout().as_raw_fd(),
+        std::io::stderr().as_raw_fd(),
+        std::io::stdin().as_raw_fd(),
+    ]
+    .into_iter()
+    .find_map(window_size_of_fd)
+}
+
+#[cfg(unix)]
+fn window_size_of_fd(fd: std::os::fd::RawFd) -> Option<(u16, u16)> {
+    let mut size = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: `fd` is a standard stream descriptor of this process, and TIOCGWINSZ writes at
+    // most one `winsize` through the pointer, which refers to the live local `size`.
+    let status = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size as *mut libc::winsize) };
+    if status != 0 || size.ws_col == 0 || size.ws_row == 0 {
+        return None;
+    }
+    Some((size.ws_col, size.ws_row))
+}
+
+#[cfg(windows)]
+fn attached_size() -> Option<(u16, u16)> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        GetConsoleScreenBufferInfo, GetStdHandle, CONSOLE_SCREEN_BUFFER_INFO, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+    [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+        .into_iter()
+        .find_map(|kind| {
+            // SAFETY: `kind` is a standard-handle constant. GetStdHandle takes no pointers and
+            // returns a handle this process does not own, which is only read here, never closed.
+            let handle = unsafe { GetStdHandle(kind) };
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            // SAFETY: CONSOLE_SCREEN_BUFFER_INFO is plain old data, so the all-zero bit pattern is
+            // a valid value that the call below overwrites when it succeeds.
+            let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { std::mem::zeroed() };
+            // SAFETY: `handle` came from GetStdHandle above, and `info` is a live out-parameter
+            // of the exact type the call writes.
+            if unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } == 0 {
+                return None;
+            }
+            let window = info.srWindow;
+            let columns = i32::from(window.Right) - i32::from(window.Left) + 1;
+            let rows = i32::from(window.Bottom) - i32::from(window.Top) + 1;
+            Some((u16::try_from(columns).ok()?, u16::try_from(rows).ok()?))
+        })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn attached_size() -> Option<(u16, u16)> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::escape_controls;
